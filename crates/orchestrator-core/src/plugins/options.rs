@@ -1,8 +1,8 @@
 //! Ownership of the plugin-defined keys written on `[[workflows]]` (#554).
 //!
 //! A workflow's keys are flat: `publish = "direct"` sits next to `profile` and
-//! `agent`, and the Orchestrator cannot tell whose it is — the workflow names a
-//! `source` **and** an `agent`, and either may define it. So it does not
+//! `agent`, and the Orchestrator cannot tell whose it is — the workflow reaches
+//! a task source **and** names an `agent`, and either may define it. So it does not
 //! decide. It hands the whole set to both plugins at `initialize` and asks each
 //! which keys it recognises ([`WorkflowOption`]); this module turns those
 //! answers into a verdict.
@@ -109,8 +109,16 @@ pub fn check_workflow_options(
         if wf.options.is_empty() {
             continue;
         }
+        // The source is the owner of the workflow's projects (#626), not a key
+        // on the workflow. A workflow whose projects do not resolve has no
+        // source to ask, which is a config-validation error already — skip it
+        // here rather than report its keys as unclaimed by nobody.
+        let Some(source) = cfg.workflow_source(wf) else {
+            continue;
+        };
+        let source = source.to_string();
         let (Some(source_claims), Some(agent_claims)) =
-            (claims.get(&wf.source), claims.get(&wf.agent))
+            (claims.get(&source), claims.get(&wf.agent))
         else {
             continue;
         };
@@ -118,13 +126,13 @@ pub fn check_workflow_options(
         // Deduplicate, or it would claim every key twice and every key would
         // read as ambiguous with itself. Not through a set: the message names
         // them in the order they were asked, and a set would sort them.
-        let mut asked: Vec<String> = vec![wf.source.clone()];
-        if wf.agent != wf.source {
+        let mut asked: Vec<String> = vec![source.clone()];
+        if wf.agent != source {
             asked.push(wf.agent.clone());
         }
         for key in wf.options.keys() {
             let mut claimants: Vec<String> = Vec::new();
-            for (plugin, claimed) in [(&wf.source, source_claims), (&wf.agent, agent_claims)] {
+            for (plugin, claimed) in [(&source, source_claims), (&wf.agent, agent_claims)] {
                 let claims_it = claimed
                     .iter()
                     .any(|c| c.workflow == wf.name && &c.key == key);
@@ -164,9 +172,13 @@ kind = "task_source"
 enabled = true
 kind = "agent_ide"
 
+[[projects]]
+name = "slack"
+source = "slack"
+
 [[workflows]]
 name = "reply"
-source = "slack"
+projects = ["slack"]
 agent = "herdr"
 profile = "answer"
 {extra}

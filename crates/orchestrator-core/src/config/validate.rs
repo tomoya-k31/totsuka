@@ -224,6 +224,38 @@ pub enum ValidationError {
     )]
     UnknownProjectRef { repo: String, project: String },
 
+    /// A `[[workflows]].projects` is empty (#626).
+    ///
+    /// There is nothing to route it to: the source is derived from the
+    /// projects, so an empty list names no plugin and the workflow could
+    /// never fire.
+    #[error(
+        "workflow `{workflow}` has projects = [] → a workflow draws from at least one [[projects]] entry, and its task source is the owner of them; name the entry to watch"
+    )]
+    WorkflowWithoutProjects { workflow: String },
+
+    /// A `[[workflows]].projects` entry names no `[[projects]]` entry (#626).
+    #[error(
+        "workflow `{workflow}` names project `{project}`, which no [[projects]] entry declares → add that entry, or fix the name"
+    )]
+    UnknownWorkflowProjectRef { workflow: String, project: String },
+
+    /// A `[[workflows]].projects` spans two task sources (#626).
+    ///
+    /// Refused rather than resolved: the workflow would have two plugins
+    /// polling it, and its unclaimed keys (#554) no single claimant, so
+    /// neither routing nor the option handshake has an answer.
+    #[error(
+        "workflow `{workflow}` names projects owned by different task sources (`{first}` owns `{first_project}`, `{second}` owns `{second_project}`) → one workflow draws from one source; split it into one workflow per source"
+    )]
+    WorkflowProjectsSpanSources {
+        workflow: String,
+        first: String,
+        first_project: String,
+        second: String,
+        second_project: String,
+    },
+
     /// A `[[projects]].source` names no enabled task_source (#554).
     ///
     /// The field is `plugin`, not `source`: thiserror reads a field literally
@@ -418,19 +450,48 @@ where
         }
     }
 
-    // Workflows: unique names + source/agent references.
+    // Workflows: unique names + project/agent references.
     let mut seen_workflows = HashSet::new();
     for wf in &cfg.workflows {
         if !seen_workflows.insert(wf.name.as_str()) {
             errors.push(ValidationError::DuplicateWorkflow(wf.name.clone()));
         }
-        check_plugin_ref(
-            cfg,
-            &format!("workflow `{}` source", wf.name),
-            &wf.source,
-            PluginKind::TaskSource,
-            &mut errors,
-        );
+        // `projects` replaced `source` in #626, so the plugin reference is
+        // checked one hop away: each name must resolve to an entry, and the
+        // entries must agree on an owner. `[[projects]].source` itself is
+        // checked against the roster above, so a resolvable workflow inherits
+        // that check rather than repeating it.
+        if wf.projects.is_empty() {
+            errors.push(ValidationError::WorkflowWithoutProjects {
+                workflow: wf.name.clone(),
+            });
+        }
+        let mut owner: Option<(&str, &str)> = None;
+        for name in &wf.projects {
+            let Some(project) = cfg.project(name) else {
+                errors.push(ValidationError::UnknownWorkflowProjectRef {
+                    workflow: wf.name.clone(),
+                    project: name.clone(),
+                });
+                continue;
+            };
+            match owner {
+                None => owner = Some((project.source.as_str(), name.as_str())),
+                Some((first, first_project)) if first != project.source => {
+                    errors.push(ValidationError::WorkflowProjectsSpanSources {
+                        workflow: wf.name.clone(),
+                        first: first.to_string(),
+                        first_project: first_project.to_string(),
+                        second: project.source.clone(),
+                        second_project: name.clone(),
+                    });
+                    // One finding per workflow: the rest of the list would
+                    // repeat the same mismatch against the same first entry.
+                    break;
+                }
+                Some(_) => {}
+            }
+        }
         check_plugin_ref(
             cfg,
             &format!("workflow `{}` agent", wf.name),
@@ -545,7 +606,7 @@ where
         })
         .collect();
 
-    let workflows = Workflow::from_configs(&cfg.workflows);
+    let workflows = Workflow::from_configs(&cfg.workflows, &cfg.projects);
     for issue in workflow::validate_workflows(&workflows, source_outputs) {
         findings.push(Finding {
             severity: match issue.severity {
@@ -1016,6 +1077,170 @@ project = "no-such-board"
         );
     }
 
+    /// A workflow's `projects` are checked one hop away from the roster
+    /// (#626): each name must resolve to a `[[projects]]` entry, the list may
+    /// not be empty, and the entries must agree on an owner.
+    ///
+    /// All three in one config because they are one property — "this workflow
+    /// has exactly one task source" — approached from its three failure
+    /// directions.
+    #[test]
+    fn a_workflows_projects_must_resolve_to_one_source() {
+        let cfg = RootConfig::from_toml_str(
+            r#"
+[plugins.github]
+enabled = true
+kind = "task_source"
+
+[plugins.slack]
+enabled = true
+kind = "task_source"
+
+[plugins.herdr]
+enabled = true
+kind = "agent_ide"
+
+[[projects]]
+name = "board"
+source = "github"
+
+[[projects]]
+name = "chat"
+source = "slack"
+
+[[workflows]]
+name = "empty"
+projects = []
+mode = "implement"
+agent = "herdr"
+output = "none"
+
+[[workflows]]
+name = "dangling"
+projects = ["no-such-board"]
+mode = "implement"
+agent = "herdr"
+output = "none"
+
+[[workflows]]
+name = "straddling"
+projects = ["board", "chat"]
+mode = "implement"
+agent = "herdr"
+output = "none"
+
+[[workflows]]
+name = "fine"
+projects = ["board"]
+mode = "implement"
+agent = "herdr"
+output = "none"
+"#,
+        )
+        .unwrap();
+        let named: Vec<String> = validate_static(&cfg, &env_from(&[]))
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert!(
+            named
+                .iter()
+                .any(|e| e.contains("`empty`") && e.contains("projects = []")),
+            "an empty list names no source, so it can never fire: {named:?}"
+        );
+        assert!(
+            named
+                .iter()
+                .any(|e| e.contains("`dangling`") && e.contains("`no-such-board`")),
+            "a dangling reference must be caught: {named:?}"
+        );
+        assert!(
+            named
+                .iter()
+                .any(|e| e.contains("`straddling`") && e.contains("different task sources")),
+            "two sources leave the option handshake without a claimant: {named:?}"
+        );
+        assert!(
+            !named.iter().any(|e| e.contains("`fine`")),
+            "a resolvable workflow must not be reported: {named:?}"
+        );
+    }
+
+    /// The straddling case is reported **once** per workflow, not once per
+    /// entry after the first: the rest of the list would repeat the same
+    /// mismatch against the same first entry.
+    #[test]
+    fn a_straddling_workflow_is_reported_once() {
+        let cfg = RootConfig::from_toml_str(
+            r#"
+[plugins.github]
+enabled = true
+kind = "task_source"
+
+[plugins.slack]
+enabled = true
+kind = "task_source"
+
+[plugins.herdr]
+enabled = true
+kind = "agent_ide"
+
+[[projects]]
+name = "board"
+source = "github"
+
+[[projects]]
+name = "chat"
+source = "slack"
+
+[[projects]]
+name = "chat2"
+source = "slack"
+
+[[workflows]]
+name = "straddling"
+projects = ["board", "chat", "chat2"]
+mode = "implement"
+agent = "herdr"
+output = "none"
+"#,
+        )
+        .unwrap();
+        let count = validate_static(&cfg, &env_from(&[]))
+            .iter()
+            .filter(|e| e.to_string().contains("different task sources"))
+            .count();
+        assert_eq!(count, 1, "one finding per workflow");
+    }
+
+    /// An old config — `source` on the workflow, no `projects` — does not
+    /// load at all (#626).
+    ///
+    /// The failure is serde's, on the **missing** field, and the message names
+    /// `projects`. The leftover `source` is not called out: `WorkflowConfig`
+    /// is deliberately not `deny_unknown_fields` (a plugin may define keys on
+    /// a workflow), so a migration hint would have to be hand-written, and
+    /// #626 chose not to — the ADR and the release notes carry the rewrite.
+    #[test]
+    fn a_pre_626_workflow_does_not_load() {
+        let err = RootConfig::from_toml_str(
+            r#"
+[[workflows]]
+name = "implement"
+source = "github"
+mode = "implement"
+agent = "herdr"
+output = "none"
+"#,
+        )
+        .expect_err("a workflow without `projects` must not load");
+        let text = err.to_string();
+        assert!(
+            text.contains("projects"),
+            "the error must name the field to write: {text}"
+        );
+    }
+
     /// `project` is optional (#554): a repository with none is the normal
     /// state, never a finding.
     #[test]
@@ -1054,9 +1279,13 @@ name = "totsuka"
 path = "{dir}"
 tool = "claude"
 
+[[projects]]
+name = "github"
+source = "github"
+
 [[workflows]]
 name = "impl"
-source = "github"
+projects = ["github"]
 trigger = {{ status = "todo" }}
 mode = "implement"
 agent = "herdr"
@@ -1079,9 +1308,13 @@ kind = "task_source"
 enabled = true
 kind = "agent_ide"
 
+[[projects]]
+name = "github"
+source = "github"
+
 [[workflows]]
 name = "impl"
-source = "github"
+projects = ["github"]
 trigger = { status = "todo" }
 mode = "implement"
 agent = "herdr"
@@ -1115,9 +1348,13 @@ kind = "task_source"
 enabled = true
 kind = "agent_ide"
 
+[[projects]]
+name = "github"
+source = "github"
+
 [[workflows]]
 name = "impl"
-source = "github"
+projects = ["github"]
 trigger = { status = "todo" }
 mode = "implement"
 agent = "herdr"
@@ -1150,9 +1387,13 @@ kind = "task_source"
 enabled = false
 kind = "agent_ide"
 
+[[projects]]
+name = "github"
+source = "github"
+
 [[workflows]]
 name = "impl"
-source = "github"
+projects = ["github"]
 mode = "implement"
 agent = "herdr"
 output = "none"
@@ -1176,9 +1417,13 @@ kind = "task_source"
 name = "missing"
 path = "/nonexistent/totsuka/repo"
 
+[[projects]]
+name = "github"
+source = "github"
+
 [[workflows]]
 name = "impl"
-source = "github"
+projects = ["github"]
 mode = "implement"
 agent = "github"
 output = "none"
@@ -1336,9 +1581,13 @@ kind = "task_source"
 enabled = true
 kind = "agent_ide"
 
+[[projects]]
+name = "slack"
+source = "slack"
+
 [[workflows]]
 name = "w"
-source = "slack"
+projects = ["slack"]
 agent = "herdr"
 {workflow_body}
 "#
@@ -1412,9 +1661,13 @@ agent = "herdr"
         // of valid names to drift out of step with `Profile`.
         let err = RootConfig::from_toml_str(
             r#"
+[[projects]]
+name = "s"
+source = "s"
+
 [[workflows]]
 name = "w"
-source = "s"
+projects = ["s"]
 profile = "reviewer"
 agent = "a"
 "#,
@@ -1446,9 +1699,13 @@ kind = "agent_ide"
 [tools.codex-cli]
 kind = "codex"
 
+[[projects]]
+name = "slack"
+source = "slack"
+
 [[workflows]]
 name = "w"
-source = "slack"
+projects = ["slack"]
 profile = "answer"
 agent = "herdr"
 tool = "codex-cli"
@@ -1485,9 +1742,13 @@ kind = "task_source"
 enabled = true
 kind = "agent_ide"
 
+[[projects]]
+name = "github"
+source = "github"
+
 [[workflows]]
 name = "cannot_publish"
-source = "github"
+projects = ["github"]
 trigger = { label = "x" }
 mode = "implement"
 agent = "herdr"
@@ -1495,7 +1756,7 @@ output = "source"
 
 [[workflows]]
 name = "rubric_without_llm"
-source = "github"
+projects = ["github"]
 trigger = { label = "y" }
 mode = "implement"
 agent = "herdr"
@@ -1544,9 +1805,13 @@ kind = "agent_ide"
     fn human_verification_without_notifier_warns() {
         let toml = format!(
             r#"{PLUGIN_PAIR}
+[[projects]]
+name = "github"
+source = "github"
+
 [[workflows]]
 name = "review"
-source = "github"
+projects = ["github"]
 mode = "implement"
 agent = "herdr"
 output = "none"
@@ -1569,9 +1834,13 @@ verification = "human"
 enabled = true
 kind = "notifier"
 
+[[projects]]
+name = "github"
+source = "github"
+
 [[workflows]]
 name = "review"
-source = "github"
+projects = ["github"]
 mode = "implement"
 agent = "herdr"
 output = "none"
@@ -1590,9 +1859,13 @@ verification = "human"
     fn missing_auth_token_ref_with_hook_capable_agent_warns() {
         let toml = format!(
             r#"{PLUGIN_PAIR}
+[[projects]]
+name = "github"
+source = "github"
+
 [[workflows]]
 name = "impl"
-source = "github"
+projects = ["github"]
 mode = "implement"
 agent = "herdr"
 output = "none"
@@ -1624,9 +1897,13 @@ output = "none"
 [hooks]
 auth_token_ref = "keychain:totsuka/hook-token"
 
+[[projects]]
+name = "github"
+source = "github"
+
 [[workflows]]
 name = "impl"
-source = "github"
+projects = ["github"]
 mode = "implement"
 agent = "herdr"
 output = "none"
@@ -1667,9 +1944,13 @@ name = "totsuka"
 path = "{dir}"
 tool = "opencode"
 
+[[projects]]
+name = "github"
+source = "github"
+
 [[workflows]]
 name = "impl"
-source = "github"
+projects = ["github"]
 mode = "implement"
 agent = "herdr"
 output = "none"
@@ -1712,9 +1993,13 @@ name = "totsuka"
 path = "{dir}"
 tool = "claude-fast"
 
+[[projects]]
+name = "github"
+source = "github"
+
 [[workflows]]
 name = "impl"
-source = "github"
+projects = ["github"]
 mode = "implement"
 agent = "herdr"
 output = "none"
@@ -1753,9 +2038,13 @@ tool = "claude"
 [tools.codex]
 kind = "codex"
 
+[[projects]]
+name = "github"
+source = "github"
+
 [[workflows]]
 name = "pinned"
-source = "github"
+projects = ["github"]
 mode = "implement"
 agent = "herdr"
 output = "none"
@@ -1782,9 +2071,13 @@ tool = "codex"
 [tools.codex]
 kind = "codex"
 
+[[projects]]
+name = "github"
+source = "github"
+
 [[workflows]]
 name = "unpinned"
-source = "github"
+projects = ["github"]
 mode = "implement"
 agent = "herdr"
 output = "none"
@@ -1803,9 +2096,13 @@ verification = "llm"
         // All-claude resolution -> no tool warning.
         let toml = format!(
             r#"{PLUGIN_PAIR}
+[[projects]]
+name = "github"
+source = "github"
+
 [[workflows]]
 name = "fine"
-source = "github"
+projects = ["github"]
 mode = "implement"
 agent = "herdr"
 output = "none"
@@ -1824,9 +2121,13 @@ verification = "llm"
     fn prompts_cfg(extra: &str) -> RootConfig {
         RootConfig::from_toml_str(&format!(
             r#"{PLUGIN_PAIR}
+[[projects]]
+name = "github"
+source = "github"
+
 [[workflows]]
 name = "reply"
-source = "github"
+projects = ["github"]
 mode = "implement"
 agent = "herdr"
 output = "none"
@@ -2026,9 +2327,13 @@ location = "/tmp/{{repo-name}}"
     fn rubric_without_llm_verification_warns() {
         let toml = format!(
             r#"{PLUGIN_PAIR}
+[[projects]]
+name = "github"
+source = "github"
+
 [[workflows]]
 name = "no_verify"
-source = "github"
+projects = ["github"]
 mode = "implement"
 agent = "herdr"
 output = "none"
@@ -2037,7 +2342,7 @@ rubric = "実調査に基づくこと"
 
 [[workflows]]
 name = "llm_verify"
-source = "github"
+projects = ["github"]
 mode = "implement"
 agent = "herdr"
 output = "none"

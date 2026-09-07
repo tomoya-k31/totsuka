@@ -339,37 +339,41 @@ mod tests {
     fn profiles_persist_the_mode_string_that_routes_cleanup() {
         let cfg = crate::config::RootConfig::from_toml_str(
             r#"
+[[projects]]
+name = "slack"
+source = "slack"
+
 [[workflows]]
 name = "answer"
-source = "slack"
+projects = ["slack"]
 trigger = { label = "a" }
 profile = "answer"
 agent = "herdr"
 
 [[workflows]]
 name = "triage"
-source = "slack"
+projects = ["slack"]
 trigger = { label = "t" }
 profile = "triage"
 agent = "herdr"
 
 [[workflows]]
 name = "design"
-source = "slack"
+projects = ["slack"]
 trigger = { label = "d" }
 profile = "design"
 agent = "herdr"
 
 [[workflows]]
 name = "implement"
-source = "slack"
+projects = ["slack"]
 trigger = { label = "i" }
 profile = "implement"
 agent = "herdr"
 "#,
         )
         .unwrap();
-        let workflows = crate::domain::Workflow::from_configs(&cfg.workflows);
+        let workflows = crate::domain::Workflow::from_configs(&cfg.workflows, &cfg.projects);
         for (wf, expected) in workflows.iter().zip(["plan", "plan", "plan", "implement"]) {
             assert_eq!(mode_str(wf.mode), expected, "{}", wf.name);
         }

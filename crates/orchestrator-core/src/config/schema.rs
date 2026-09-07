@@ -468,8 +468,9 @@ impl Profile {
 /// A plugin may define keys of its own on a workflow, written **flat**,
 /// alongside the Orchestrator's (#554) — see
 /// [`options`](Self::options). serde therefore cannot decide what is unknown,
-/// because the Orchestrator does not know either: a workflow names a `source`
-/// *and* an `agent`, and the key could be either one's.
+/// because the Orchestrator does not know either: a workflow reaches a task
+/// source (through its [`projects`](Self::projects)) *and* an `agent`, and the
+/// key could be either one's.
 ///
 /// The check moves to the plugins, which is the only place the answer exists.
 /// It is not weaker: a key **no** plugin claims is an error, so `profil` still
@@ -478,8 +479,19 @@ impl Profile {
 pub struct WorkflowConfig {
     /// Workflow name.
     pub name: String,
-    /// Task source instance name (must be an enabled `task_source`).
-    pub source: String,
+    /// The `[[projects]]` entries this workflow draws tasks from (#626), by
+    /// `name`. Always a list, and never empty — validation rejects `[]`.
+    ///
+    /// The task source is **derived** from these rather than written out:
+    /// every entry names its owning plugin, so a second spelling of the same
+    /// fact could only ever contradict it. Listing more than one entry is a
+    /// statement that those domains share a lane vocabulary, which
+    /// `config validate` then checks against each domain's own columns.
+    ///
+    /// All named entries must resolve to the same `source` — a workflow
+    /// straddling two plugins has no single claimant for its unclaimed keys
+    /// (see [`options`](Self::options)), so validation refuses it.
+    pub projects: Vec<String>,
     /// Trigger condition; kept raw (interpreted in #54).
     #[serde(default)]
     pub trigger: toml::Table,
@@ -820,6 +832,26 @@ impl RootConfig {
         self.plugins.get(name)
     }
 
+    /// Look up a `[[projects]]` entry by `name`.
+    pub fn project(&self, name: &str) -> Option<&ProjectConfig> {
+        self.projects.iter().find(|p| p.name == name)
+    }
+
+    /// The task source a workflow draws from, resolved through the first of
+    /// its [`projects`](WorkflowConfig::projects) (#626).
+    ///
+    /// Resolving from the *first* entry is sound because validation refuses a
+    /// workflow whose entries disagree on `source`; a config that reaches
+    /// runtime has one answer by then.
+    ///
+    /// `None` means the workflow names no project, or names one that does not
+    /// exist — both are config-validation errors, so a caller that meets one
+    /// should skip the workflow rather than guess an owner for it.
+    pub fn workflow_source(&self, workflow: &WorkflowConfig) -> Option<&str> {
+        self.project(workflow.projects.first()?)
+            .map(|p| p.source.as_str())
+    }
+
     /// A plugin's own uninterpreted settings (`[<name>]`), if it wrote any.
     ///
     /// Absent is normal — a plugin whose defaults suffice needs no table at
@@ -867,9 +899,13 @@ base_url = "https://openrouter.ai/api/v1"
 model = "anthropic/claude-3.5-haiku"
 api_key_ref = "keychain:totsuka/openrouter"
 
+[[projects]]
+name = "github"
+source = "github"
+
 [[workflows]]
 name = "design"
-source = "github"
+projects = ["github"]
 trigger = { status = "設計待ち" }
 mode = "plan"
 agent = "herdr"
@@ -878,7 +914,7 @@ on_success = { status = "設計レビュー待ち" }
 
 [[workflows]]
 name = "implement"
-source = "github"
+projects = ["github"]
 trigger = { status = "実装待ち" }
 mode = "implement"
 agent = "herdr"
@@ -975,9 +1011,13 @@ on_success = { status = "レビュー待ち" }
     fn workflow_options_hold_only_the_keys_core_does_not_name() {
         let cfg = RootConfig::from_toml_str(
             r#"
+[[projects]]
+name = "slack"
+source = "slack"
+
 [[workflows]]
 name = "reply"
-source = "slack"
+projects = ["slack"]
 agent = "herdr"
 profile = "answer"
 publish = "direct"
@@ -1049,9 +1089,13 @@ socket_path = "${XDG_RUNTIME_DIR}/totsuka/agent-events.sock"
 spool_dir = "${XDG_STATE_HOME}/totsuka/hooks/spool"
 block_retry_limit = 3
 
+[[projects]]
+name = "slack"
+source = "slack"
+
 [[workflows]]
 name = "slack-reply"
-source = "slack"
+projects = ["slack"]
 mode = "implement"
 agent = "herdr"
 output = "source"
@@ -1110,9 +1154,13 @@ rubric = "回答は対象リポジトリの実調査に基づくこと"
         assert!(
             RootConfig::from_toml_str(
                 r#"
+[[projects]]
+name = "s"
+source = "s"
+
 [[workflows]]
 name = "w"
-source = "s"
+projects = ["s"]
 mode = "implement"
 agent = "a"
 output = "none"
@@ -1183,9 +1231,13 @@ name = "totsuka"
 path = "/tmp"
 tool = "codex"
 
+[[projects]]
+name = "slack"
+source = "slack"
+
 [[workflows]]
 name = "reply"
-source = "slack"
+projects = ["slack"]
 mode = "plan"
 agent = "herdr"
 output = "source"

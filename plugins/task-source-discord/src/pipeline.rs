@@ -403,6 +403,7 @@ mod tests {
             .unwrap();
         let workflows = [plugin_protocol::methods::WorkflowInfo {
             workflow: "clip".into(),
+            projects: vec![],
             trigger,
             instructions_kind: None,
             task_id_prefix: None,

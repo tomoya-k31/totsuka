@@ -429,7 +429,7 @@ fn install_plugin(env: &Env, name: &str, kind: &str, binary: &Path) {
         dir.join("plugin.toml"),
         format!(
             "name = \"{name}\"\nkind = \"{kind}\"\nversion = \"0.1.0\"\n\
-             protocol_version = \">=0.6.0, <0.7\"\n\n[capabilities]\nstate_stream = true\n\
+             protocol_version = \">=0.6.0, <0.8\"\n\n[capabilities]\nstate_stream = true\n\
              outputs = [\"source\"]\n"
         ),
     )
@@ -487,9 +487,13 @@ plan_cleanup = "immediate"
 # The emoji workflow is defined **first**: reaction triggers are more
 # specific than the mention catch-all, and putting it last would make it
 # unreachable (#396, `validate_workflows` warns about exactly that).
+[[projects]]
+name = "slack"
+source = "slack"
+
 [[workflows]]
 name = "watch"
-source = "slack"
+projects = ["slack"]
 trigger = {{ reaction = "eyes" }}
 mode = "plan"
 agent = "mock_agent"
@@ -497,7 +501,7 @@ output = "none"
 
 [[workflows]]
 name = "reply"
-source = "slack"
+projects = ["slack"]
 trigger = {{}}
 mode = "plan"
 agent = "mock_agent"

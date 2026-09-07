@@ -845,9 +845,13 @@ mod tests {
     fn cfg(extra: &str) -> RootConfig {
         RootConfig::from_toml_str(&format!(
             r#"
+[[projects]]
+name = "slack"
+source = "slack"
+
 [[workflows]]
 name = "reply"
-source = "slack"
+projects = ["slack"]
 mode = "implement"
 agent = "herdr"
 output = "source"
@@ -862,9 +866,13 @@ verification = "llm"
     fn profile_cfg(profile: &str, extra: &str) -> RootConfig {
         RootConfig::from_toml_str(&format!(
             r#"
+[[projects]]
+name = "github"
+source = "github"
+
 [[workflows]]
 name = "w"
-source = "github"
+projects = ["github"]
 profile = "{profile}"
 agent = "herdr"
 {extra}

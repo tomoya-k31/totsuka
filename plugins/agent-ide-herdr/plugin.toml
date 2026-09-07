@@ -8,7 +8,9 @@ version = "0.1.0"
 # again: 0.6.0 renamed `InitializeParams.triggers` to `workflows`, which every
 # kind of plugin reads. Both floors are the same rule — depend on it, require
 # it — and F-54 is what enforces them.
-protocol_version = ">=0.6.0, <0.7"
+# The upper bound moved to `<0.8` for #626 (`WorkflowInfo.projects`), which
+# an agent plugin never reads — the floor is untouched.
+protocol_version = ">=0.6.0, <0.8"
 
 [capabilities]
 pane_control = true

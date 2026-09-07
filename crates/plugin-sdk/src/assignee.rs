@@ -371,6 +371,7 @@ mod tests {
     fn the_lane_warning_is_only_for_sources_that_mint_one() {
         let wf = |trigger| WorkflowInfo {
             workflow: "wf".into(),
+            projects: vec![],
             trigger,
             instructions_kind: None,
             task_id_prefix: None,
@@ -398,6 +399,7 @@ mod tests {
     fn unevaluable_conditions_stop_startup() {
         let wf = |trigger| WorkflowInfo {
             workflow: "wf".into(),
+            projects: vec![],
             trigger,
             instructions_kind: None,
             task_id_prefix: None,
@@ -457,6 +459,7 @@ mod tests {
     fn any_needs_no_people_property() {
         let wf = |trigger| WorkflowInfo {
             workflow: "wf".into(),
+            projects: vec![],
             trigger,
             instructions_kind: None,
             task_id_prefix: None,
@@ -505,6 +508,7 @@ mod tests {
         let (errors, _) = check(
             &[WorkflowInfo {
                 workflow: "wf".into(),
+                projects: vec![],
                 trigger: json!({ "assignee": "@none" }),
                 instructions_kind: None,
                 task_id_prefix: None,

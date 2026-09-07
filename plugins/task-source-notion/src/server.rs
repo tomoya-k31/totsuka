@@ -241,9 +241,10 @@ where
                     let condition = trigger.trigger.clone();
                     let kind = trigger.instructions_kind.clone();
                     let name = trigger.workflow.clone();
+                    let projects = trigger.projects.clone();
                     async move {
                         client
-                            .fetch(&condition, kind.as_deref(), &name)
+                            .fetch(&condition, kind.as_deref(), &name, &projects)
                             .await
                             .map_err(|e| e.to_string())
                     }

@@ -306,6 +306,7 @@ async fn poll_loop_fetches_every_trigger_and_survives_fetch_errors() {
     let triggers = vec![
         WorkflowInfo {
             workflow: "ok".into(),
+            projects: vec![],
             trigger: json!({}),
             instructions_kind: None,
             task_id_prefix: None,
@@ -313,6 +314,7 @@ async fn poll_loop_fetches_every_trigger_and_survives_fetch_errors() {
         },
         WorkflowInfo {
             workflow: "broken".into(),
+            projects: vec![],
             trigger: json!({}),
             instructions_kind: None,
             task_id_prefix: None,

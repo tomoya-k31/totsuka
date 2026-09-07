@@ -46,7 +46,7 @@ async fn launch(kind: &str, name: &str, init_config: serde_json::Value) -> Plugi
 name = "{name}"
 kind = "{kind}"
 version = "0.1.0"
-protocol_version = ">=0.6.0, <0.7"
+protocol_version = ">=0.6.0, <0.8"
 "#
     ))
     .unwrap();
@@ -73,9 +73,13 @@ protocol_version = ">=0.6.0, <0.7"
 fn workflows() -> Vec<Workflow> {
     let cfg = RootConfig::from_toml_str(
         r#"
+[[projects]]
+name = "mock_src"
+source = "mock_src"
+
 [[workflows]]
 name = "wf"
-source = "mock_src"
+projects = ["mock_src"]
 trigger = {}
 mode = "implement"
 agent = "mock_agent"
@@ -84,7 +88,7 @@ on_success = { status = "レビュー待ち" }
 "#,
     )
     .unwrap();
-    Workflow::from_configs(&cfg.workflows)
+    Workflow::from_configs(&cfg.workflows, &cfg.projects)
 }
 
 /// Engine settings over one repo, worktrees under `<base>/wt/`, immediate
@@ -129,9 +133,13 @@ fn engine_settings(repo_path: &Path) -> EngineSettings {
 fn workflows_with(mode: &str, output: &str) -> Vec<Workflow> {
     let cfg = RootConfig::from_toml_str(&format!(
         r#"
+[[projects]]
+name = "mock_src"
+source = "mock_src"
+
 [[workflows]]
 name = "wf"
-source = "mock_src"
+projects = ["mock_src"]
 trigger = {{}}
 mode = "{mode}"
 agent = "mock_agent"
@@ -141,7 +149,7 @@ on_failure = {{ status = "失敗" }}
 "#
     ))
     .unwrap();
-    Workflow::from_configs(&cfg.workflows)
+    Workflow::from_configs(&cfg.workflows, &cfg.projects)
 }
 
 /// One pushable task in the mock source's config shape. The `source` field
@@ -315,9 +323,13 @@ async fn on_start_moves_the_status_column_at_dispatch() {
     let mut settings = engine_settings(&repo);
     let cfg = RootConfig::from_toml_str(
         r#"
+[[projects]]
+name = "mock_src"
+source = "mock_src"
+
 [[workflows]]
 name = "wf"
-source = "mock_src"
+projects = ["mock_src"]
 trigger = {}
 mode = "implement"
 agent = "mock_agent"
@@ -327,7 +339,7 @@ on_success = { status = "レビュー待ち" }
 "#,
     )
     .unwrap();
-    settings.workflows = Workflow::from_configs(&cfg.workflows);
+    settings.workflows = Workflow::from_configs(&cfg.workflows, &cfg.projects);
     let mut engine = Engine::new(
         StateDb::open(&db_path).unwrap(),
         settings,
@@ -450,9 +462,13 @@ async fn claim_won_dispatches_and_is_asked_before_on_start() {
     let mut settings = engine_settings(&repo);
     let cfg = RootConfig::from_toml_str(
         r#"
+[[projects]]
+name = "mock_src"
+source = "mock_src"
+
 [[workflows]]
 name = "wf"
-source = "mock_src"
+projects = ["mock_src"]
 trigger = {}
 mode = "implement"
 agent = "mock_agent"
@@ -462,7 +478,7 @@ on_success = { status = "レビュー待ち" }
 "#,
     )
     .unwrap();
-    settings.workflows = Workflow::from_configs(&cfg.workflows);
+    settings.workflows = Workflow::from_configs(&cfg.workflows, &cfg.projects);
     let mut engine = Engine::new(
         StateDb::open(&db_path).unwrap(),
         settings,
@@ -583,9 +599,13 @@ async fn claim_forbidden_fails_without_the_failure_writeback() {
     let mut settings = engine_settings(&repo);
     let cfg = RootConfig::from_toml_str(
         r#"
+[[projects]]
+name = "mock_src"
+source = "mock_src"
+
 [[workflows]]
 name = "wf"
-source = "mock_src"
+projects = ["mock_src"]
 trigger = {}
 mode = "implement"
 agent = "mock_agent"
@@ -594,7 +614,7 @@ on_failure = { status = "失敗" }
 "#,
     )
     .unwrap();
-    settings.workflows = Workflow::from_configs(&cfg.workflows);
+    settings.workflows = Workflow::from_configs(&cfg.workflows, &cfg.projects);
     let mut engine = Engine::new(
         StateDb::open(&db_path).unwrap(),
         settings,
@@ -1182,9 +1202,13 @@ async fn a_workflow_cleanup_override_beats_the_mode_default() {
     settings.limits = Limits::global(1);
     let cfg = RootConfig::from_toml_str(
         r#"
+[[projects]]
+name = "mock_src"
+source = "mock_src"
+
 [[workflows]]
 name = "wf_keep"
-source = "mock_src"
+projects = ["mock_src"]
 trigger = {}
 mode = "plan"
 agent = "mock_agent"
@@ -1193,7 +1217,7 @@ cleanup = "manual"
 
 [[workflows]]
 name = "wf_sweep"
-source = "mock_src"
+projects = ["mock_src"]
 trigger = {}
 mode = "plan"
 agent = "mock_agent"
@@ -1201,7 +1225,7 @@ output = "none"
 "#,
     )
     .unwrap();
-    settings.workflows = Workflow::from_configs(&cfg.workflows);
+    settings.workflows = Workflow::from_configs(&cfg.workflows, &cfg.projects);
     settings.cleanup_plan = CleanupPolicy::Immediate;
     let mut engine = Engine::new(
         StateDb::open(&db_path).unwrap(),
@@ -2774,9 +2798,13 @@ async fn a_permanent_dispatch_failure_stops_after_three_and_notifies_once() {
 fn workflows_with_profile(profile: &str) -> Vec<Workflow> {
     let cfg = RootConfig::from_toml_str(&format!(
         r#"
+[[projects]]
+name = "mock_src"
+source = "mock_src"
+
 [[workflows]]
 name = "wf"
-source = "mock_src"
+projects = ["mock_src"]
 trigger = {{}}
 profile = "{profile}"
 agent = "mock_agent"
@@ -2784,7 +2812,7 @@ output = "none"
 "#
     ))
     .unwrap();
-    Workflow::from_configs(&cfg.workflows)
+    Workflow::from_configs(&cfg.workflows, &cfg.projects)
 }
 
 /// #410's last open item: a read-only profile whose worktree lands on a branch

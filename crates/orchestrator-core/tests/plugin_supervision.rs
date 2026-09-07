@@ -44,7 +44,7 @@ fn spec(kind: &str, name: &str, init_config: serde_json::Value) -> PluginSpec {
 name = "{name}"
 kind = "{kind}"
 version = "0.1.0"
-protocol_version = ">=0.6.0, <0.7"
+protocol_version = ">=0.6.0, <0.8"
 "#
     ))
     .unwrap();
@@ -79,9 +79,13 @@ async fn install(set: &mut PluginSet, kind: &str, name: &str, config: serde_json
 fn workflows() -> Vec<Workflow> {
     let cfg = RootConfig::from_toml_str(
         r#"
+[[projects]]
+name = "mock_src"
+source = "mock_src"
+
 [[workflows]]
 name = "wf"
-source = "mock_src"
+projects = ["mock_src"]
 trigger = {}
 mode = "implement"
 agent = "mock_agent"
@@ -89,7 +93,7 @@ output = "none"
 "#,
     )
     .unwrap();
-    Workflow::from_configs(&cfg.workflows)
+    Workflow::from_configs(&cfg.workflows, &cfg.projects)
 }
 
 /// Settings with a **zero backoff** — the seam that keeps these tests instant.
@@ -611,9 +615,17 @@ async fn a_parked_task_does_not_starve_a_healthy_agent() {
 
     let cfg = RootConfig::from_toml_str(
         r#"
+[[projects]]
+name = "src_down"
+source = "src_down"
+
+[[projects]]
+name = "src_up"
+source = "src_up"
+
 [[workflows]]
 name = "wf-down"
-source = "src_down"
+projects = ["src_down"]
 trigger = {}
 mode = "implement"
 agent = "agent_down"
@@ -621,7 +633,7 @@ output = "none"
 
 [[workflows]]
 name = "wf-up"
-source = "src_up"
+projects = ["src_up"]
 trigger = {}
 mode = "implement"
 agent = "agent_up"
@@ -631,7 +643,7 @@ output = "none"
     .unwrap();
 
     let mut settings = settings_with_backoff(5, Duration::from_secs(30));
-    settings.workflows = Workflow::from_configs(&cfg.workflows);
+    settings.workflows = Workflow::from_configs(&cfg.workflows, &cfg.projects);
     settings.repos = vec![RepoSettings {
         name: "clone".to_string(),
         path: repo.clone(),

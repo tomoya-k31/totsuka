@@ -1131,7 +1131,7 @@ fn seed_manifest(base: &Path, name: &str, capabilities: &str) {
         dir.join("plugin.toml"),
         format!(
             "name = \"{name}\"\nkind = \"agent_ide\"\nversion = \"0.1.0\"\n\
-             protocol_version = \"^0.6\"\n\n[capabilities]\n{capabilities}\n"
+             protocol_version = \">=0.6.0, <0.8\"\n\n[capabilities]\n{capabilities}\n"
         ),
     )
     .unwrap();
@@ -1301,7 +1301,7 @@ fn a_stale_roster_kind_cannot_reopen_the_hang() {
     std::fs::write(
         dir.join("plugin.toml"),
         "name = \"gh\"\nkind = \"task_source\"\nversion = \"0.1.0\"\n\
-         protocol_version = \"^0.6\"\n\n[capabilities]\n",
+         protocol_version = \">=0.6.0, <0.8\"\n\n[capabilities]\n",
     )
     .unwrap();
     // No `[gh]` table at all: the only op:// door is `[llm].api_key_ref`,
@@ -1408,7 +1408,8 @@ fn hook_config(agent: &str) -> String {
     format!(
         "[plugins.src]\nenabled = true\nkind = \"task_source\"\n\n\
          [plugins.{agent}]\nenabled = true\nkind = \"agent_ide\"\n\n\
-         [[workflows]]\nname = \"wf\"\nsource = \"src\"\nmode = \"implement\"\n\
+         [[projects]]\nname = \"src\"\nsource = \"src\"\n\n\
+         [[workflows]]\nname = \"wf\"\nprojects = [\"src\"]\nmode = \"implement\"\n\
          agent = \"{agent}\"\noutput = \"none\"\nverification = \"none\"\n"
     )
 }

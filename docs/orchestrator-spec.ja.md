@@ -1,7 +1,7 @@
 > 🌐 [English](orchestrator-spec.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/product/orchestrator-spec.ja.md sha256:052e5e7026f5a520b719a6121ff8f59fff265c5df52ec2ec335c9cc58b5ea6f9 -->
+<!-- generated-from: ai-docs/product/orchestrator-spec.ja.md sha256:bf3b654e854b9cbfc92d383631e722e6cbb69781f4441c17b224bac133dfc241 -->
 
 # totsuka とは
 
@@ -32,7 +32,7 @@ GitHub の Issue / Projects や Notion といったソースからタスクを�
 
 **そもそもタスクを拾うかどうかの判断はソースプラグインの仕事**であって、totsuka のものではない — 担当者や進行状況を見て、他の人が着手した作業には手を出さないようにする。人と人の間の厳密な排他は行わないが、占有（claim）に対応したソースには実行の直前に占有を要求する: チームメイトのインスタンスが先に取っていたら、手元のタスクは同じ作業を二重に走らせる代わりに `skipped` として退く（意図してやり直すなら `totsuka task retry`）。claim 非対応のソースは従来どおり。どの workflow に属するタスクかを決めるのもプラグインで、タスクを渡すときに一緒に伝える。
 
-**新しく起票する先は設定で決める。** `[[projects]]` の 1 エントリがトラッカー（GitHub Project、Notion のデータベース）を表し、各リポジトリは `project = "…"` でそのうち 1 つを指す。1 リポジトリの起票先は 1 つなので、Slack から来た依頼が issue になるとき、行き先は一意に決まる。
+**新しく起票する先は設定で決める。** `[[projects]]` の 1 エントリがトラッカー（GitHub Project、Notion のデータベース）を表し、各リポジトリは `project = "…"` でそのうち 1 つを指す。1 リポジトリの起票先は 1 つなので、Slack から来た依頼が issue になるとき、行き先は一意に決まる。同じエントリは反対側からワークフローが `projects` で指すもので、そちらは「どのボードからタスクを引くか」を表す。
 
 成果物を書き戻すソースもある。エージェント自身が書ける場合 —— `gh` でコメントする、Notion のページを書く —— はそちらが書き、ソースは関与しない。書き戻しの経路は、totsuka が仲介しなければならないソースのためにある。本人名義で出る Slack の返信がそれにあたる —— 既定では承認してから、`publish = "direct"` を設定した workflow では即時に投稿される。
 

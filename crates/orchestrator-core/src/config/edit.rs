@@ -142,8 +142,9 @@ pub struct WorkflowDraft<'a> {
     /// Identity within `config.toml` — an existing entry with this name is
     /// updated in place.
     pub name: &'a str,
-    /// Task source plugin name.
-    pub source: &'a str,
+    /// The `[[projects]]` entries this workflow draws from (#626). The task
+    /// source is their owner, so it is not written here.
+    pub projects: &'a [&'a str],
     /// Inline-table fragment, or `None` to match every task from the source.
     pub trigger: Option<&'a str>,
     /// One of the four archetypes (#394). When set, `mode` and `verification`
@@ -205,7 +206,7 @@ pub fn upsert_workflow(config_toml: &str, draft: &WorkflowDraft) -> Result<Strin
     let mut doc: DocumentMut = config_toml.parse()?;
     let entry = array_entry(&mut doc, "workflows", draft.name)?;
     set_value(entry, "name", draft.name);
-    set_value(entry, "source", draft.source);
+    set_array(entry, "projects", draft.projects);
     set_value(entry, "agent", draft.agent);
     // `put_value` rather than `set_value` for the three profile-owned keys: an
     // entry being rewritten from the spelled-out notation to a profile has to
@@ -306,6 +307,41 @@ fn set_value<V: Into<Value>>(table: &mut Table, key: &str, new: V) {
     }
     let decor = existing.map(|v| v.decor().clone());
     table[key] = Item::Value(new);
+    if let Some(decor) = decor
+        && let Some(v) = table.get_mut(key).and_then(Item::as_value_mut)
+    {
+        *v.decor_mut() = decor;
+    }
+}
+
+/// Assign `key = [new…]`, preserving the existing decor as [`set_value`] does.
+///
+/// Separate from `set_value` because `Value` has no `From<&[&str]>`: an array
+/// has to be built element by element, and comparing "unchanged" means
+/// comparing the elements rather than one scalar.
+fn set_array(table: &mut Table, key: &str, new: &[&str]) {
+    let mut array = toml_edit::Array::new();
+    for item in new {
+        array.push(*item);
+    }
+    let unchanged = table
+        .get(key)
+        .and_then(Item::as_array)
+        .is_some_and(|existing| {
+            existing.len() == new.len()
+                && existing
+                    .iter()
+                    .zip(new)
+                    .all(|(a, b)| a.as_str() == Some(*b))
+        });
+    if unchanged {
+        return;
+    }
+    let decor = table
+        .get(key)
+        .and_then(Item::as_value)
+        .map(|v| v.decor().clone());
+    table[key] = Item::Value(Value::Array(array));
     if let Some(decor) = decor
         && let Some(v) = table.get_mut(key).and_then(Item::as_value_mut)
     {
@@ -497,6 +533,19 @@ max_concurrency = 3
 
         let out = set_plugin_enabled(skeleton, "slack", true, Some("task_source")).unwrap();
         let out = set_plugin_enabled(&out, "herdr", true, Some("agent_ide")).unwrap();
+        // The domain the workflow below draws from (#626). A source with one
+        // of them still declares it, because a workflow names domains rather
+        // than plugins — which is what `setup` writes for every task source
+        // it installs.
+        let out = upsert_project(
+            &out,
+            &ProjectDraft {
+                name: "slack",
+                source: "slack",
+                options: "{}",
+            },
+        )
+        .unwrap();
         let out = upsert_repository(
             &out,
             &RepositoryDraft {
@@ -511,7 +560,7 @@ max_concurrency = 3
             &out,
             &WorkflowDraft {
                 name: "slack-reply",
-                source: "slack",
+                projects: &["slack"],
                 trigger: Some(r#"{ mention = true }"#),
                 profile: None,
                 mode: Some(WorkflowMode::Plan),
@@ -597,7 +646,7 @@ max_concurrency = 3
                 &out,
                 &WorkflowDraft {
                     name: "slack-reply",
-                    source: "slack",
+                    projects: &["slack"],
                     trigger: Some(r#"{ mention = true }"#),
                     profile: None,
                     mode: Some(WorkflowMode::Plan),
@@ -662,7 +711,7 @@ path = "/dotfiles"
                         "",
                         &WorkflowDraft {
                             name: "w",
-                            source: "s",
+                            projects: &["s"],
                             trigger: None,
                             profile: None,
                             mode: Some(mode),
@@ -700,7 +749,7 @@ path = "/dotfiles"
                 "",
                 &WorkflowDraft {
                     name: "w",
-                    source: "s",
+                    projects: &["s"],
                     trigger: None,
                     profile: Some(profile),
                     mode: None,
@@ -731,7 +780,7 @@ path = "/dotfiles"
             "",
             &WorkflowDraft {
                 name: "w",
-                source: "s",
+                projects: &["s"],
                 trigger: None,
                 profile: None,
                 mode: Some(WorkflowMode::Implement),
@@ -749,7 +798,7 @@ path = "/dotfiles"
             &spelled_out,
             &WorkflowDraft {
                 name: "w",
-                source: "s",
+                projects: &["s"],
                 trigger: None,
                 profile: Some(Profile::Design),
                 mode: None,
@@ -775,7 +824,7 @@ path = "/dotfiles"
             "",
             &WorkflowDraft {
                 name: "w",
-                source: "s",
+                projects: &["s"],
                 trigger: Some("not a table"),
                 profile: None,
                 mode: Some(WorkflowMode::Plan),
@@ -827,7 +876,7 @@ path = "/dotfiles"
             "",
             &WorkflowDraft {
                 name: "w",
-                source: "s",
+                projects: &["s"],
                 trigger: None,
                 profile: None,
                 mode: Some(WorkflowMode::Implement),
@@ -861,7 +910,7 @@ path = "/dotfiles"
             "",
             &WorkflowDraft {
                 name: "w",
-                source: "s",
+                projects: &["s"],
                 trigger: Some(r#"{ status = "実装待ち" }"#),
                 profile: None,
                 mode: Some(WorkflowMode::Implement),
@@ -879,7 +928,7 @@ path = "/dotfiles"
             &with_extras,
             &WorkflowDraft {
                 name: "w",
-                source: "s",
+                projects: &["s"],
                 trigger: None,
                 profile: None,
                 mode: Some(WorkflowMode::Implement),
@@ -944,7 +993,7 @@ path = "/dotfiles"
         let hand_written = concat!(
             "[[workflows]]\n",
             "name = \"migration\"\n",
-            "source = \"github\"\n",
+            "projects = [\"github\"]\n",
             "mode = \"implement\"\n",
             "agent = \"herdr\"\n",
             "output = \"source\"\n",
@@ -953,7 +1002,7 @@ path = "/dotfiles"
         );
         let draft = WorkflowDraft {
             name: "migration",
-            source: "github",
+            projects: &["github"],
             trigger: Some(r#"{ labels = ["migration", "high-risk"] }"#),
             profile: None,
             mode: Some(WorkflowMode::Implement),

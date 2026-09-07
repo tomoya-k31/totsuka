@@ -174,7 +174,7 @@ pub fn settings_from_config(
     Ok(EngineSettings {
         // Supplied by the caller (the CLI) after this returns, like `hook`.
         health_path: None,
-        workflows: Workflow::from_configs(&cfg.workflows),
+        workflows: Workflow::from_configs(&cfg.workflows, &cfg.projects),
         repos,
         limits,
         worktree_name_template: DEFAULT_WORKTREE_NAME_TEMPLATE.to_string(),

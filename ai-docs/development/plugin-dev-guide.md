@@ -4,7 +4,7 @@ title: プラグイン開発ガイド
 description: totsuka プラグインの作り方。plugin-protocol クレートの型、JSON-RPC(NDJSON/stdio) メソッド、plugin.toml マニフェスト、capability 宣言、開発ループ（plugin install --from-source）とビルド手順（bin 名 = plugin.toml の name という不変条件）、install/enable の流れ、参照実装。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/plugin-protocol
 tags: [plugin, protocol, json-rpc, manifest, guide]
-generated: { by: claude-code/opus-5, at: 2026-08-27T05:30:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-07T12:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -60,6 +60,8 @@ Orchestrator は起動前に `protocol_version` の互換性を検査し（F-54�
 
 上の例は下限を `>=0.6.0` に置いている。0.6.0 で `initialize` の `triggers` が `workflows` へ改名されたので、それより前を範囲に含めると **`workflows` を読むプラグインが空を受け取り、何も監視しない**まま起動してしまう（#554）。F-54 のゲートはこの形の失敗を起動拒否へ倒すためにある。
 
+**domain が複数ある task_source は下限を `>=0.7.0` にすること。** 0.7.0 で `WorkflowInfo.projects` が入り、ワークフローが「自分の持つ domain のうちどれを走査するか」を名指すようになった（#626、[ADR-0069](/decisions/adr-0069-workflow-projects.md)）。`WorkflowInfo` は `deny_unknown_fields` ではないので、0.6 世代のビルドはこのフィールドを**黙って無視して全 domain を走査する** —— 運用者が絞ったつもりの範囲が効かない。domain が 1 つしか無いソース（絞り込みが恒等）と agent / notifier は読まないので、下限は `>=0.6.0` のままでよく、上限だけ `<0.8` へ広げる。
+
 **下限も上限と同じくらい意味を持ち、「何に依存しているか」に従う。** プラグインの kind でも、その時点の最新プロトコルでもない。
 
 0.6.0 では**結果として同梱 7 本すべてが `>=0.6.0` に揃った**が、それは全部が同じものに依存しているからである —— `initialize` の改名は kind を問わず全プラグインが読む面だからで、「最新に合わせた」のではない。一律に見える状態を規則と読み違えないこと。
@@ -84,7 +86,7 @@ Orchestrator は起動前に `protocol_version` の互換性を検査し（F-54�
 
 | メソッド | 方向 | 内容 |
 |---|---|---|
-| `task/submit` | **P→O request** | プラグインが見つけたタスクを Orchestrator へ push（persist-before-ack）。**`workflow` を必ず名指す**（0.6.0、#554）— 受け取った `workflows` に対して first-match を走らせるのはプラグインで、Orchestrator は名前が実在しその `source` が自分かだけを検証する。応答は `accepted`（永続化）/ `duplicate`（冪等キー衝突、破棄してよい）/ `rejected`（恒久的に処理不能、reason 付き）のいずれかで**すべて最終**（同じタスクを reason で再送しない）。`NOT_ACCEPTING`/`SUBMIT_OVERLOADED`/`INTERNAL_ERROR` は再送可能（submit は冪等なのでバックオフ再送してよい） |
+| `task/submit` | **P→O request** | プラグインが見つけたタスクを Orchestrator へ push（persist-before-ack）。**`workflow` を必ず名指す**（0.6.0、#554）— 受け取った `workflows` に対して first-match を走らせるのはプラグインで、Orchestrator は名前が実在し、その workflow の `projects` の所有プラグインが自分かだけを検証する（#626）。応答は `accepted`（永続化）/ `duplicate`（冪等キー衝突、破棄してよい）/ `rejected`（恒久的に処理不能、reason 付き）のいずれかで**すべて最終**（同じタスクを reason で再送しない）。`NOT_ACCEPTING`/`SUBMIT_OVERLOADED`/`INTERNAL_ERROR` は再送可能（submit は冪等なのでバックオフ再送してよい） |
 | `task/update_status` | O→P | ソース側ステータス遷移（F-84） |
 | `result/publish` | O→P | 成果物をソースへ書き戻し（F-07） |
 
@@ -185,7 +187,7 @@ totsuka plugin install ./dist/github
 
 | 置き場所 | 所有の決め方 | プラグイン側の実装 |
 |---|---|---|
-| `[[workflows]]` | **聞いて決める。** 余ったキーは `source` と `agent` の両方に届き、ちょうど 1 つが引き取る | `InitializeResult.claimed_options` に `{workflow, key}` を返す。**消費しないキーを claim しない** — タイポを沈黙に変える |
+| `[[workflows]]` | **聞いて決める。** 余ったキーはタスクソース（`projects` の所有者）と `agent` の両方に届き、ちょうど 1 つが引き取る | `InitializeResult.claimed_options` に `{workflow, key}` を返す。**消費しないキーを claim しない** — タイポを沈黙に変える |
 | `[[projects]]` | **`source` が決める。** 要素はちょうど 1 つのプラグインを名指す | `deny_unknown_fields` の struct へデシリアライズするだけ。claim の握手は無い |
 
 `[[workflows]]` の引き取り手が 0 なら起動が止まる（タイポ）、2 なら曖昧として止まる。この検査があるので `WorkflowConfig` から `deny_unknown_fields` を外せた —— 検査の場所が serde から握手へ移っただけで、弱くはなっていない。

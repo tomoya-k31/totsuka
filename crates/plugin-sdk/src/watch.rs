@@ -390,6 +390,7 @@ mod tests {
     fn wf(name: &str, trigger: Value) -> WorkflowInfo {
         WorkflowInfo {
             workflow: name.to_string(),
+            projects: vec![],
             trigger,
             instructions_kind: None,
             task_id_prefix: None,

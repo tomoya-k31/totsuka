@@ -91,9 +91,13 @@ kind = "task_source"
 # `initialize`（= `totsuka config validate` の online パート）が拒否する。
 # 他人が同じ絵文字を付けても起動しない（緩和する設定は無い）。
 # 名前はコロン有無どちらでも可。👀 は eyes、👁 は eye で別物。
+[[projects]]
+name = "slack"
+source = "slack"
+
 [[workflows]]
 name = "slack-reaction"
-source = "slack"
+projects = ["slack"]
 trigger = { reaction = "eyes" }
 mode = "plan"
 agent = "herdr"
@@ -101,7 +105,7 @@ output = "source"
 
 [[workflows]]
 name = "slack-reply"
-source = "slack"
+projects = ["slack"]
 trigger = {}
 mode = "plan"            # 返信起案は plan（push/PR なし）で十分
 agent = "herdr"

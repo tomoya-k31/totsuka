@@ -690,9 +690,13 @@ mod tests {
         let profile_cfg = |profile: &str| {
             workflows_config(&format!(
                 r#"
+[[projects]]
+name = "slack"
+source = "slack"
+
 [[workflows]]
 name = "w"
-source = "slack"
+projects = ["slack"]
 profile = "{profile}"
 agent = "herdr"
 "#
@@ -730,9 +734,13 @@ agent = "herdr"
         .unwrap();
         let cfg = workflows_config(
             r#"
+[[projects]]
+name = "github"
+source = "github"
+
 [[workflows]]
 name = "implement"
-source = "github"
+projects = ["github"]
 mode = "implement"
 agent = "herdr"
 output = "source"
@@ -769,9 +777,13 @@ output = "source"
         .unwrap();
         let cfg = workflows_config(
             r#"
+[[projects]]
+name = "github"
+source = "github"
+
 [[workflows]]
 name = "implement"
-source = "github"
+projects = ["github"]
 mode = "implement"
 agent = "herdr"
 output = "source"
@@ -805,9 +817,13 @@ output = "source"
         .unwrap();
         let cfg = workflows_config(
             r#"
+[[projects]]
+name = "github"
+source = "github"
+
 [[workflows]]
 name = "implement"
-source = "github"
+projects = ["github"]
 mode = "implement"
 agent = "herdr"
 output = "source"
@@ -884,9 +900,13 @@ output = "source"
     fn llm_workflow_gets_prompt_hook_with_default_rubric() {
         let cfg = workflows_config(
             r#"
+[[projects]]
+name = "slack"
+source = "slack"
+
 [[workflows]]
 name = "reply"
-source = "slack"
+projects = ["slack"]
 mode = "implement"
 agent = "herdr"
 output = "source"
@@ -922,9 +942,13 @@ verification = "llm"
     fn llm_workflow_uses_custom_rubric_when_set() {
         let cfg = workflows_config(
             r#"
+[[projects]]
+name = "slack"
+source = "slack"
+
 [[workflows]]
 name = "reply"
-source = "slack"
+projects = ["slack"]
 mode = "implement"
 agent = "herdr"
 output = "source"
@@ -964,9 +988,13 @@ rubric = "回答は対象リポジトリの実調査に基づくこと"
         for profile in ["answer", "triage", "design", "implement"] {
             let cfg = workflows_config(&format!(
                 r#"
+[[projects]]
+name = "slack"
+source = "slack"
+
 [[workflows]]
 name = "w"
-source = "slack"
+projects = ["slack"]
 profile = "{profile}"
 agent = "herdr"
 "#
@@ -993,9 +1021,13 @@ agent = "herdr"
         ] {
             let cfg = workflows_config(&format!(
                 r#"
+[[projects]]
+name = "slack"
+source = "slack"
+
 [[workflows]]
 name = "w"
-source = "slack"
+projects = ["slack"]
 profile = "{profile}"
 agent = "herdr"
 "#
@@ -1026,9 +1058,13 @@ agent = "herdr"
         // The spelled-out notation gets none either — same line #440 drew.
         let cfg = workflows_config(
             r#"
+[[projects]]
+name = "slack"
+source = "slack"
+
 [[workflows]]
 name = "w"
-source = "slack"
+projects = ["slack"]
 mode = "implement"
 agent = "herdr"
 output = "none"
@@ -1177,9 +1213,13 @@ verification = "llm"
     fn a_read_only_profile_renders_its_deny_set_alongside_the_hooks() {
         let cfg = workflows_config(
             r#"
+[[projects]]
+name = "slack"
+source = "slack"
+
 [[workflows]]
 name = "w"
-source = "slack"
+projects = ["slack"]
 profile = "answer"
 agent = "herdr"
 "#,
@@ -1217,9 +1257,13 @@ agent = "herdr"
         // separate question and every profile answers it (#420).
         let cfg = workflows_config(
             r#"
+[[projects]]
+name = "slack"
+source = "slack"
+
 [[workflows]]
 name = "w"
-source = "slack"
+projects = ["slack"]
 profile = "implement"
 agent = "herdr"
 "#,
@@ -1240,9 +1284,13 @@ agent = "herdr"
         for profile in ["answer", "triage", "design", "implement"] {
             let cfg = workflows_config(&format!(
                 r#"
+[[projects]]
+name = "slack"
+source = "slack"
+
 [[workflows]]
 name = "w"
-source = "slack"
+projects = ["slack"]
 profile = "{profile}"
 agent = "herdr"
 "#
@@ -1266,9 +1314,13 @@ agent = "herdr"
     fn the_spelled_out_notation_gets_no_permission_mode() {
         let cfg = workflows_config(
             r#"
+[[projects]]
+name = "slack"
+source = "slack"
+
 [[workflows]]
 name = "w"
-source = "slack"
+projects = ["slack"]
 mode = "plan"
 agent = "herdr"
 "#,
@@ -1288,9 +1340,13 @@ agent = "herdr"
     fn the_spelled_out_notation_gets_no_deny_set() {
         let cfg = workflows_config(
             r#"
+[[projects]]
+name = "slack"
+source = "slack"
+
 [[workflows]]
 name = "w"
-source = "slack"
+projects = ["slack"]
 mode = "plan"
 agent = "herdr"
 output = "source"
@@ -1308,9 +1364,13 @@ output = "source"
     fn design_may_still_write_to_github() {
         let cfg = workflows_config(
             r#"
+[[projects]]
+name = "github"
+source = "github"
+
 [[workflows]]
 name = "w"
-source = "github"
+projects = ["github"]
 profile = "design"
 agent = "herdr"
 "#,
@@ -1330,9 +1390,13 @@ agent = "herdr"
         for mode in ["human", "none"] {
             let cfg = workflows_config(&format!(
                 r#"
+[[projects]]
+name = "github"
+source = "github"
+
 [[workflows]]
 name = "design"
-source = "github"
+projects = ["github"]
 mode = "plan"
 agent = "herdr"
 output = "none"
@@ -1358,9 +1422,13 @@ verification = "{mode}"
         for verification in ["llm", "human", "none"] {
             let cfg = workflows_config(&format!(
                 r#"
+[[projects]]
+name = "github"
+source = "github"
+
 [[workflows]]
 name = "wf"
-source = "github"
+projects = ["github"]
 mode = "implement"
 agent = "herdr"
 output = "source"
@@ -1385,9 +1453,13 @@ verification = "{verification}"
     fn render_wires_command_paths_under_the_hooks_dir() {
         let cfg = workflows_config(
             r#"
+[[projects]]
+name = "github"
+source = "github"
+
 [[workflows]]
 name = "implement"
-source = "github"
+projects = ["github"]
 mode = "implement"
 agent = "herdr"
 output = "source"

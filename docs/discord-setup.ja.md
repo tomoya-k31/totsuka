@@ -1,7 +1,7 @@
 > 🌐 [English](discord-setup.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/discord-quickstart.md sha256:623e032b56554be9e211ec6b91a9994e373d9ac8d2f8ffb2dac58a6af3f04132 -->
+<!-- generated-from: ai-docs/operations/discord-quickstart.md sha256:3ef2a232c07fa03c82dcf2bc435064a8e21105f52701e238034769f23e556ea5 -->
 
 # Discord ソースのセットアップ
 
@@ -52,9 +52,13 @@ command = "discord"
 bot_token = "op://Dev/Discord/bot_token"
 operator_user_id = "111111111111111111"
 
+[[projects]]
+name = "discord"  # domain を持たないソースもエントリが要る
+source = "discord"
+
 [[workflows]]
 name = "discord-clip"
-source = "discord"
+projects = ["discord"]
 agent = "herdr"
 profile = "implement"
 output = "source"

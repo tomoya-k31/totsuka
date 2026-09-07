@@ -7,6 +7,7 @@
     "workflows": [
       {
         "workflow": "design",
+        "projects": ["tomo-prj"],
         "trigger": { "status": "設計待ち" },
         "instructions_kind": "design",
         "options": { "publish": "direct" }

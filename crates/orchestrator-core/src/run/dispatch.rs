@@ -1481,6 +1481,7 @@ mod tests {
     fn workflow(name: &str, agent: &str, tool: Option<&str>) -> Workflow {
         Workflow {
             name: name.to_string(),
+            projects: vec!["github".to_string()],
             source: "github".to_string(),
             trigger: Trigger::new(toml::Table::new()),
             mode: WorkflowMode::Implement,

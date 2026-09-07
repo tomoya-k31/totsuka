@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](orchestrator-spec.ja.md)
 
-<!-- generated-from: ai-docs/product/orchestrator-spec.md sha256:27b5bbf15bec8f1755115fab37b7ff666859269e9e6cd65c5795449f554c565c -->
+<!-- generated-from: ai-docs/product/orchestrator-spec.md sha256:638c2d0a06299f8adbfa35dff5243e878d1fb4384c0db39c15cba7a0923f65f4 -->
 
 # What totsuka is
 
@@ -31,7 +31,7 @@ Sources push tasks as they find them. Field mapping and filter conditions are co
 
 **Deciding whether to pick a task up at all is the source plugin's job**, not totsuka's — checking assignees or in-progress status so that work another person has started is left alone. There is no strict mutual exclusion between people, but a source that supports claiming is asked to claim the task right before it runs: if a teammate's instance got there first, your copy of the task steps aside as `skipped` instead of running the same work twice (`totsuka task retry` re-enters it deliberately). Sources without claim support behave as before. The plugin also decides *which* of your workflows a task belongs to, and says so when it hands the task over.
 
-**Where a new item gets filed is your configuration.** A `[[projects]]` entry names a tracker — a GitHub Project, a Notion database — and each repository points at one of them with `project = "…"`. One repository files into one tracker, so a request that arrives through Slack and turns into an issue has exactly one place to go.
+**Where a new item gets filed is your configuration.** A `[[projects]]` entry names a tracker — a GitHub Project, a Notion database — and each repository points at one of them with `project = "…"`. One repository files into one tracker, so a request that arrives through Slack and turns into an issue has exactly one place to go. The same entries are what a workflow points at from the other side, with `projects`, to say which boards it draws tasks from.
 
 Some sources write the result back for you. Where the agent can write the deliverable itself — a `gh` comment, a Notion page — it does, and the source stays out of it; the write-back path exists for sources where totsuka has to mediate, like a Slack reply that goes out under your own name — after your approval by default, or immediately for a workflow you configure with `publish = "direct"`.
 

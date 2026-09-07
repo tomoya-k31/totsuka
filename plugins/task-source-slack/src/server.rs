@@ -866,6 +866,7 @@ mod tests {
     fn a_non_string_reaction_is_refused_not_read_as_no_reaction() {
         let wf = plugin_protocol::methods::WorkflowInfo {
             workflow: "books".into(),
+            projects: vec![],
             trigger: serde_json::json!({ "reaction": 42 }),
             instructions_kind: None,
             task_id_prefix: None,

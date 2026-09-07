@@ -1,7 +1,7 @@
 > 🌐 [English](slack-setup.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/slack-quickstart.md sha256:a186d905c6d5772826c66779a22220f93c7edf7e2ce7c7b9dc739899d2fba410 -->
+<!-- generated-from: ai-docs/operations/slack-quickstart.md sha256:0e70db572223eb6b9d5eb68f7b6f3ebd864a8ed188125f5f70b012409d5a9592 -->
 
 # Slack ソースのセットアップ
 
@@ -85,9 +85,13 @@ kind = "task_source"
 #（と `totsuka config validate`）に拒否される。
 # 他人が付けても起動せず、それを緩和する設定は無い。
 # 名前はコロン有無どちらでもよい。👀 は `eyes`、👁 は `eye` で別の絵文字。
+[[projects]]
+name = "slack"  # domain を持たないソースもエントリが要る
+source = "slack"
+
 [[workflows]]
 name = "slack-reaction"
-source = "slack"
+projects = ["slack"]
 trigger = { reaction = "eyes" }
 mode = "plan"
 agent = "herdr"
@@ -95,7 +99,7 @@ output = "source"
 
 [[workflows]]
 name = "slack-reply"
-source = "slack"
+projects = ["slack"]
 trigger = {}
 mode = "plan"            # 返信の起案に push も PR も要らない
 agent = "herdr"

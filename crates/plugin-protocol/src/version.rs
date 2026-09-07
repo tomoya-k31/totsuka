@@ -277,7 +277,34 @@ use semver::{Version, VersionReq};
 /// or send the flag to keep working — `Capabilities` deserializes with
 /// defaults, and the Orchestrator only calls what was declared. `>=0.6.0`
 /// manifests keep matching.
-pub const PROTOCOL_VERSION: &str = "0.6.1";
+///
+/// 0.7.0 (#626): a workflow names the domains it watches, not its plugin.
+///
+/// - [`WorkflowInfo`](crate::methods::WorkflowInfo) grows
+///   [`projects`](crate::methods::WorkflowInfo::projects): which of the
+///   plugin's [`InitializeParams::projects`](crate::methods::InitializeParams::projects)
+///   entries this workflow draws from. A source scans those and no others.
+/// - `[[workflows]].source` is **gone from `config.toml`**, derived instead
+///   from the owner of those projects. That half is invisible here — the
+///   field never travelled (routing was always the Orchestrator's, decided
+///   before a plugin is addressed), which is why this release note is about
+///   the field that arrived rather than the key that left.
+///
+/// **Minor, and it strands `<0.7` manifests of the plugins that own several
+/// domains — that is the intent, and only for those.** Adding a field is a
+/// compatible wire change in the abstract, but `WorkflowInfo` does not
+/// `deny_unknown_fields`, so a 0.6-era github or notion build receives the new
+/// field, ignores it, and goes on scanning **every** board it owns: an
+/// operator's narrowing silently not happening, which is the same class of
+/// failure as 0.6.0's `triggers` rename and gets the same remedy — F-54 turns
+/// it into a refusal to launch. Those two manifests move to `>=0.7.0, <0.8`.
+///
+/// The other five keep `>=0.6.0` and only widen the ceiling to `<0.8`. A
+/// source with one domain filters an identity, and agents and notifiers never
+/// read the field, so requiring 0.7.0 there would strand orchestrators they
+/// work with — the floor states a dependency, not a generation (the same
+/// distinction orca's manifest drew against herdr's for #411).
+pub const PROTOCOL_VERSION: &str = "0.7.0";
 
 /// [`PROTOCOL_VERSION`] parsed into a [`Version`].
 pub fn protocol_version() -> Version {
@@ -301,21 +328,23 @@ mod tests {
 
     #[test]
     fn current_version_parses() {
-        assert_eq!(protocol_version(), Version::new(0, 6, 1));
+        assert_eq!(protocol_version(), Version::new(0, 7, 0));
     }
 
     #[test]
     fn compatible_requirement_matches() {
-        // What the bundled plugins declare after the 0.6.0 boundary (#554).
-        // The lower bounds converge here: `initialize` renamed `triggers` to
-        // `workflows`, and no plugin — of any kind — reads the old spelling
-        // any more, so nothing is left that a wider bound could still serve.
-        let req = ">=0.6.0, <0.7";
-        let parsed = VersionReq::parse(req).unwrap();
-        assert!(
-            is_compatible_with_current(&parsed),
-            "{req} must be accepted by protocol 0.6.0"
-        );
+        // Both bounds the bundled plugins declare after #626. They differ on
+        // the floor and that is the point: a plugin requires the version it
+        // depends on, so only github and notion — which read
+        // `WorkflowInfo.projects` to pick the boards to scan — moved to
+        // `>=0.7.0`.
+        for req in [">=0.7.0, <0.8", ">=0.6.0, <0.8"] {
+            let parsed = VersionReq::parse(req).unwrap();
+            assert!(
+                is_compatible_with_current(&parsed),
+                "{req} must be accepted by protocol 0.7.0"
+            );
+        }
     }
 
     #[test]
@@ -348,7 +377,7 @@ mod tests {
         // the plugin any more. That is a claim about the *manifest range*, not
         // about the code, so it is asserted here: `>=0.2.3` excludes every
         // release that predates `tool_launch`.
-        let herdr = VersionReq::parse(">=0.2.3, <0.7").unwrap();
+        let herdr = VersionReq::parse(">=0.2.3, <0.8").unwrap();
         for pre_tool_launch in ["0.1.0", "0.1.6", "0.2.0", "0.2.2"] {
             let v = Version::parse(pre_tool_launch).unwrap();
             assert!(
@@ -360,7 +389,7 @@ mod tests {
 
         // The floor tracks the dependency, not the kind: orca is an agent_ide
         // too, reads no `tool_launch`, and keeps working with all of them.
-        let orca = VersionReq::parse(">=0.1.0, <0.7").unwrap();
+        let orca = VersionReq::parse(">=0.1.0, <0.8").unwrap();
         assert!(is_compatible(&orca, &Version::new(0, 1, 0)));
         assert!(is_compatible_with_current(&orca));
     }
@@ -377,10 +406,10 @@ mod tests {
             !is_compatible_with_current(&old_bound),
             "each generation's bound strands the previous one, by design"
         );
-        let bundled = VersionReq::parse(">=0.6.0, <0.7").unwrap();
-        assert!(is_compatible_with_current(&bundled), "0.6.0 is inside <0.7");
+        let bundled = VersionReq::parse(">=0.7.0, <0.8").unwrap();
+        assert!(is_compatible_with_current(&bundled), "0.7.0 is inside <0.8");
         assert!(
-            !is_compatible(&bundled, &Version::new(0, 7, 0)),
+            !is_compatible(&bundled, &Version::new(0, 8, 0)),
             "and the same boundary is waiting for the next removal"
         );
     }
@@ -399,6 +428,27 @@ mod tests {
                 "{req} must be refused by protocol 0.6.0"
             );
         }
+    }
+
+    /// The 0.7.0 boundary (#626), and why it strands only some manifests.
+    ///
+    /// `WorkflowInfo.projects` says which of a source's boards a workflow
+    /// watches. A 0.6-era build of a multi-board source ignores it and scans
+    /// them all, so an operator's narrowing silently does not happen — hence
+    /// the floor. A source with one board, and every agent and notifier, read
+    /// nothing new and keep a `>=0.6.0` floor with a widened ceiling.
+    #[test]
+    fn multi_board_sources_are_stranded_by_the_zero_seven_boundary() {
+        for req in ["^0.6", ">=0.6.0, <0.7", ">=0.6.1, <0.7"] {
+            let parsed = VersionReq::parse(req).unwrap();
+            assert!(
+                !is_compatible_with_current(&parsed),
+                "{req} must be refused by protocol 0.7.0"
+            );
+        }
+        // The widened ceiling is what keeps the other five launchable.
+        let widened = VersionReq::parse(">=0.6.0, <0.8").unwrap();
+        assert!(is_compatible_with_current(&widened));
     }
 
     /// The 0.5.0 boundary (#496), stated the way F-54 means it: every manifest

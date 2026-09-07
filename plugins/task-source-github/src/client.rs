@@ -132,12 +132,22 @@ impl<T: GithubTransport> GithubClient<T> {
         &self.config
     }
 
-    /// Fetch issues matching `trigger` from **every** configured board (#542),
-    /// normalize to [`Task`], and apply ingest gating: whoever `trigger`'s
-    /// `assignee` condition says may hold the task (#572 — which by default is
-    /// unassigned-or-mine, but `@any` and a named login deliberately take other
-    /// people's), plus the two things a workflow does not state — in-progress
-    /// statuses and repositories the board does not track (F-08).
+    /// Fetch issues matching `trigger` from the boards `projects` names
+    /// (#626), normalize to [`Task`], and apply ingest gating: whoever
+    /// `trigger`'s `assignee` condition says may hold the task (#572 — which by
+    /// default is unassigned-or-mine, but `@any` and a named login deliberately
+    /// take other people's), plus the two things a workflow does not state —
+    /// in-progress statuses and repositories the board does not track (F-08).
+    ///
+    /// `projects` are `[[projects]]` names from the workflow, and every board
+    /// not named is left alone. Until #626 a workflow named only its plugin
+    /// and this walked **all** of them (#542), which is what made two boards
+    /// with different Status vocabularies unusable: a column that exists on
+    /// one board and not the other matched nothing on the other, silently.
+    ///
+    /// A name that matches no configured board is skipped here — the
+    /// Orchestrator rejects an unresolvable reference before launch, so
+    /// reaching this with one means the config changed underneath us.
     ///
     /// One board failing fails the whole poll. The alternative — skip it and
     /// return the rest — would make a broken token or a deleted board look
@@ -148,11 +158,15 @@ impl<T: GithubTransport> GithubClient<T> {
         trigger: &Value,
         instructions_kind: Option<&str>,
         workflow: &str,
+        projects: &[String],
     ) -> Result<Vec<Task>, GithubError> {
         let filter = TriggerFilter::parse(trigger, instructions_kind, workflow)
             .map_err(GithubError::InvalidTrigger)?;
         let mut tasks = Vec::new();
         for (index, project) in self.config.projects.iter().enumerate() {
+            if !projects.iter().any(|name| name == &project.name) {
+                continue;
+            }
             self.fetch_project(index, project, &filter, &mut tasks)
                 .await?;
         }

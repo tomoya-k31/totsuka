@@ -171,9 +171,12 @@ summary = "zsh / mise / GNU Stow による dotfiles 管理。"
 tool = "codex"                         # このリポジトリだけ Codex CLI で作業（組み込み codex、#196 Phase 2）
 project = "tomo-prj"                   # 起票先トラッカー（[[projects]].name、#554）。無ければトラッカー無し
 
-# ── トラッカー（#554）──────────────────────────────────────
-# リポジトリの起票先。`name` と `source` は Orchestrator が読み、
+# ── domain（#554 / #626）──────────────────────────────────
+# ソースが持つ管轄単位。`name` と `source` は Orchestrator が読み、
 # 残りのキーはその task_source プラグインのもの（無解釈で渡る）。
+# リポジトリが `project` で起票先として、ワークフローが `projects` で
+# 取り込み元として、同じエントリを指す。domain を持たないソース
+# （slack / discord）も `name` + `source` の 2 行を書く。
 [[projects]]
 name = "tomo-prj"
 source = "github"
@@ -244,7 +247,7 @@ block_retry_limit = 3                                             # Stop フッ�
 # mode / output / verification は明示するか、profile（#394）でまとめて決めるかの二択。
 [[workflows]]
 name = "design"
-source = "github"                            # 必須。enabled な task_source 名
+projects = ["tomo-prj"]                      # 必須。[[projects]].name の配列（#626）
 trigger = { status = "設計待ち" }     # 省略すると全タスクにマッチ
 mode = "plan"                                # plan | implement
 agent = "herdr"                              # 必須。enabled な agent_ide 名
@@ -261,7 +264,7 @@ tool = "claude"                              # AI ツールの明示ピン（#19
 # （implement → none）がそのまま正しいので書かない。
 [[workflows]]
 name = "implement"
-source = "github"
+projects = ["tomo-prj"]
 trigger = { status = "実装待ち" }
 profile = "implement"                        # answer | triage | design | implement
 agent = "herdr"
@@ -273,7 +276,7 @@ rubric = "テストが追加されており、cargo clippy / cargo fmt が通っ
 # 人間へ問いかけるツールを使わせる指示は無人 pane でハングする → 運用者の責任。
 [[workflows]]
 name = "github-design"
-source = "github"
+projects = ["tomo-prj"]
 trigger = { status = "Design" }
 profile = "design"                           # 完了は人間の pane 上承認（#440）
 agent = "herdr"
@@ -324,9 +327,13 @@ initial_prompt = "/grill-me スキルを使用して、詳細設計を行って�
 | `implement` | implement | none | llm | 実装して PR を出す。**完了は人間が pane 上で承認**（#440） |
 
 ```toml
+[[projects]]
+name = "slack"                             # domain を持たないソースもエントリが要る（#626）
+source = "slack"
+
 [[workflows]]
 name = "gh-design"
-source = "github"
+projects = ["tomo-prj"]
 trigger = { status = "設計待ち" }
 profile = "design"                           # mode / verification は書かない（書くとエラー）
 agent = "herdr"
@@ -334,7 +341,7 @@ on_success = { status = "設計済み" }
 
 [[workflows]]
 name = "slack-implement"
-source = "slack"
+projects = ["slack"]
 profile = "implement"
 output = "source"                            # output だけは profile を上書きできる
 agent = "herdr"
@@ -393,16 +400,20 @@ PR の URL を Slack 返信に載せたい場合は、エージェントの最�
 Slack のリアクションでどのワークフローを起動するかを、config.toml 側だけで決める。
 
 ```toml
+[[projects]]
+name = "slack"                             # domain を持たないソースもエントリが要る（#626）
+source = "slack"
+
 [[workflows]]
 name = "slack-implement"
-source = "slack"
+projects = ["slack"]
 trigger = { reaction = "hammer" }   # 🔨 を自分で付けたら実装させる
 profile = "implement"
 agent = "herdr"
 
 [[workflows]]
 name = "slack-reply"                # メンション。catch-all なので必ず最後
-source = "slack"
+projects = ["slack"]
 trigger = {}
 profile = "answer"
 agent = "herdr"
@@ -607,9 +618,13 @@ repos = ["totsuka"]
 `clip` チャンネルに記事 URL を貼ると、その内容をドキュメントとして特定リポジトリに残す例。メンションもリアクションも要らず、**投稿することがトリガ**になる（→ [チャンネル監視トリガ](/glossary/channel-watch.md)）。
 
 ```toml
+[[projects]]
+name = "slack"                             # domain を持たないソースもエントリが要る（#626）
+source = "slack"
+
 [[workflows]]
 name = "clip"
-source = "slack"
+projects = ["slack"]
 agent = "herdr"
 profile = "implement"
 output = "source"
@@ -700,7 +715,7 @@ kind = "agent_ide"
 
 [[workflows]]
 name = "implement"
-source = "github"
+projects = ["tomo-prj"]
 trigger = { status = "実装待ち" }
 profile = "implement"
 agent = "herdr"
@@ -717,7 +732,7 @@ on_success = { status = "レビュー待ち" }
 ```toml
 [[workflows]]
 name = "design"
-source = "github"
+projects = ["tomo-prj"]
 trigger = { status = "設計待ち" }
 profile = "design"                              # push しない。output は none に解決される
 agent = "herdr"
@@ -725,7 +740,7 @@ on_success = { status = "設計レビュー待ち" }  # 人間のレビュー待
 
 [[workflows]]
 name = "implement"
-source = "github"
+projects = ["tomo-prj"]
 trigger = { status = "実装待ち" }        # 人がレビュー後に手で移す
 profile = "implement"
 agent = "herdr"
@@ -758,9 +773,13 @@ api_key_ref = "op://Dev/Openrouter/api_key"
 [hooks]
 auth_token_ref = "op://Dev/totsuka/hook-token"
 
+[[projects]]
+name = "slack"                             # domain を持たないソースもエントリが要る（#626）
+source = "slack"
+
 [[workflows]]
 name = "slack-reply"
-source = "slack"
+projects = ["slack"]
 mode = "implement"        # 調査のためにコードを読ませる。push は output で抑止
 agent = "herdr"
 output = "source"         # Slack スレッドへ返信
@@ -779,7 +798,7 @@ kind = "notifier"
 
 [[workflows]]
 name = "migration"
-source = "github"
+projects = ["tomo-prj"]
 trigger = { labels = ["migration", "high-risk"] }   # 両方のラベルが必要（AND）
 mode = "implement"
 agent = "herdr"

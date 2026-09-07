@@ -143,6 +143,22 @@ pub struct InitializeParams {
 pub struct WorkflowInfo {
     /// The workflow's `name` (`[[workflows]].name`).
     pub workflow: String,
+    /// The projects this workflow watches (`[[workflows]].projects`, #626),
+    /// naming entries from [`InitializeParams::projects`] — a source scans
+    /// **only** these and leaves its other domains alone.
+    ///
+    /// Empty for a plugin named as the workflow's `agent`, for the same
+    /// reason [`trigger`](Self::trigger) is: which domain a task came from is
+    /// the source's business.
+    ///
+    /// A source with a single domain may ignore this: filtering one entry by
+    /// name is the identity. Sources that own several (github, notion) must
+    /// honour it, and 0.7.0 raised the protocol floor so that a build which
+    /// predates the field cannot silently scan everything instead
+    /// (`WorkflowInfo` does not `deny_unknown_fields`, so it would simply not
+    /// see it).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub projects: Vec<String>,
     /// Trigger condition; plugin-defined shape, sent **verbatim** from
     /// `[[workflows]].trigger`. An empty object for a plugin named as the
     /// workflow's `agent` — triggers select tasks, which is the source's
@@ -930,6 +946,7 @@ mod tests {
             }),
             workflows: vec![WorkflowInfo {
                 workflow: "design".into(),
+                projects: vec!["board-a".into()],
                 trigger: serde_json::json!({"status": "設計待ち"}),
                 instructions_kind: Some("design".into()),
                 task_id_prefix: None,

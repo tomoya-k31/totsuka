@@ -691,7 +691,7 @@ async fn ingests_task_assigned_to_me_among_multiple_assignees() {
         "projects": projects,
         "repositories": repositories,
         "workflows": [
-            { "workflow": "design", "trigger": { "status": "実装待ち" } }
+            { "workflow": "design", "projects": ["board-1"], "trigger": { "status": "実装待ち" } }
         ],
     });
     call(&mut srv, 1, "initialize", params).await;
@@ -760,7 +760,7 @@ async fn initialize_with_triggers_polls_and_submits() {
         "projects": projects,
         "repositories": repositories,
         "workflows": [
-            { "workflow": "design", "trigger": { "status": "実装待ち" } }
+            { "workflow": "design", "projects": ["board-1"], "trigger": { "status": "実装待ち" } }
         ],
     });
     let resp = call(&mut srv, 1, "initialize", params).await;
@@ -802,7 +802,7 @@ async fn assignee_me_leaves_the_unassigned_alone() {
         "projects": projects,
         "repositories": repositories,
         "workflows": [
-            { "workflow": "impl", "trigger": { "status": "実装待ち", "assignee": "@me" } }
+            { "workflow": "impl", "projects": ["board-1"], "trigger": { "status": "実装待ち", "assignee": "@me" } }
         ],
     });
     let resp = call(&mut srv, 1, "initialize", params).await;
@@ -825,7 +825,7 @@ async fn assignee_none_takes_exactly_the_unassigned() {
         "projects": projects,
         "repositories": repositories,
         "workflows": [
-            { "workflow": "triage", "trigger": { "status": "実装待ち", "assignee": "@none" } }
+            { "workflow": "triage", "projects": ["board-1"], "trigger": { "status": "実装待ち", "assignee": "@none" } }
         ],
     });
     let resp = call(&mut srv, 1, "initialize", params).await;
@@ -899,7 +899,7 @@ async fn label_only_triggers_mint_no_message_key() {
         "projects": projects,
         "repositories": repositories,
         "workflows": [
-            { "workflow": "design", "trigger": { "label": "bug" } }
+            { "workflow": "design", "projects": ["board-1"], "trigger": { "label": "bug" } }
         ],
     });
     call(&mut srv, 1, "initialize", params).await;
@@ -944,7 +944,7 @@ async fn a_status_cell_without_updated_at_mints_no_message_key() {
         "projects": projects,
         "repositories": repositories,
         "workflows": [
-            { "workflow": "design", "trigger": { "status": "実装待ち" } }
+            { "workflow": "design", "projects": ["board-1"], "trigger": { "status": "実装待ち" } }
         ],
     });
     call(&mut srv, 1, "initialize", params).await;
@@ -979,10 +979,10 @@ fn web_app_page() -> Value {
     } } } } })
 }
 
-/// A poll visits **every** configured board, and each board's `repos` gates
-/// its own items (#542).
+/// A poll visits every board **the workflow names**, and each board's `repos`
+/// gates its own items (#542, narrowed to the workflow's list in #626).
 #[tokio::test]
-async fn a_poll_walks_every_board_and_each_board_gates_its_own_repos() {
+async fn a_poll_walks_every_named_board_and_each_board_gates_its_own_repos() {
     let shared = Shared::default();
     let (mut srv, mut harness) = server_with_harness(&shared);
 
@@ -996,7 +996,8 @@ async fn a_poll_walks_every_board_and_each_board_gates_its_own_repos() {
         "projects": projects,
         "repositories": repositories,
         "workflows": [
-            { "workflow": "design", "trigger": { "status": "実装待ち" } }
+            { "workflow": "design", "projects": ["board-1", "board-3"],
+              "trigger": { "status": "実装待ち" } }
         ],
     });
     let resp = call(&mut srv, 1, "initialize", params).await;
@@ -1031,6 +1032,54 @@ async fn a_poll_walks_every_board_and_each_board_gates_its_own_repos() {
             .unwrap()
             .contains("organization(login:")
     );
+}
+
+/// A workflow naming one of two boards polls **only** that board (#626).
+///
+/// This is the property the whole change exists for. Before it, a workflow
+/// named its plugin and every board was walked for it, so two boards with
+/// different Status vocabularies could not coexist: the column a workflow
+/// triggers on exists on one board and not the other, and the other simply
+/// matched nothing — no error, no warning, no log.
+///
+/// Asserted on the *requests*, not just the tasks: an unnamed board that was
+/// queried and happened to return nothing ingestable would look identical
+/// from the submit side.
+#[tokio::test]
+async fn a_workflow_polls_only_the_boards_it_names() {
+    let shared = Shared::default();
+    let (mut srv, mut harness) = server_with_harness(&shared);
+
+    // Only one canned response is queued. A second board query would consume
+    // the queue's empty state, so the request assertion below is what
+    // actually pins the count.
+    shared.push(Canned::Data(fetch_response()));
+    let (projects, repositories) = two_boards();
+    let params = json!({
+        "protocol_version": "0.5.1",
+        "config": init_config(),
+        "projects": projects,
+        "repositories": repositories,
+        "workflows": [
+            { "workflow": "design", "projects": ["board-1"],
+              "trigger": { "status": "実装待ち" } }
+        ],
+    });
+    let resp = call(&mut srv, 1, "initialize", params).await;
+    assert!(resp.error.is_none(), "initialize failed: {:?}", resp.error);
+
+    let first = harness.next_task().await;
+    assert_eq!(first["id"], "I_1", "board-1 is polled as usual");
+    harness.assert_no_task(Duration::from_millis(200)).await;
+
+    let requests = shared.all_requests();
+    assert_eq!(
+        requests.len(),
+        1,
+        "board-3 must not be queried at all: {requests:?}"
+    );
+    assert_eq!(requests[0]["variables"]["owner"], "me");
+    assert_eq!(requests[0]["variables"]["number"], 1);
 }
 
 /// `initialize` answers with the repository → board mapping (protocol 0.5.1),

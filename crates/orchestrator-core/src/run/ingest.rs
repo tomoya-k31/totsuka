@@ -537,6 +537,7 @@ mod tests {
         let mut engine = test_engine(Duration::from_secs(3600)).await;
         engine.settings.workflows = vec![Workflow {
             name: "implement".to_string(),
+            projects: vec!["slack".to_string()],
             source: "slack".to_string(),
             trigger: crate::domain::workflow::Trigger::new(toml::Table::new()),
             mode: WorkflowMode::Implement,

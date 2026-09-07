@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:4526abee8d6fa7210913bd1c58675e901904ecc876900e34ecf0555e55042d14 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:027485b13f7c01f98080fe964bf1e384f98c103d89bc6d13585a911c6b6e12be -->
 
 # Configuration reference
 
@@ -79,12 +79,16 @@ The guidance depends on which side is behind:
 
 ## `[[projects]]`
 
-Where a new item goes: a GitHub Project, a Notion database, and so on.
+One addressable domain of a task source: a GitHub Project board, a Notion database, a Slack workspace, a Discord guild.
+
+Two things point at an entry. A workflow's `projects` names the domains it **draws tasks from**; a repository's `project` names the tracker its new items are **filed into**. For GitHub and Notion these coincide, but they are different relations.
+
+**A source with a single domain still needs an entry.** Slack and Discord serve one each, so their entries are just the two keys below — but they cannot be left out, because a workflow points at a domain rather than at a plugin.
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
-| `name` | string | required | Stable id that `[[repositories]].project` points at |
-| `source` | string | required | The task source plugin that owns this tracker |
+| `name` | string | required | Stable id that `[[repositories]].project` and `[[workflows]].projects` point at |
+| `source` | string | required | The task source plugin that owns this domain |
 | everything else | — | — | Belongs to that plugin. totsuka passes it through without reading it |
 
 ```toml
@@ -133,7 +137,7 @@ The roster is also what makes a `[<name>]` table legitimate: **a top-level table
 | Key | Type | Default | Meaning |
 |---|---|---|---|
 | `name` | string | required | Workflow name |
-| `source` | string | required | Task source instance name |
+| `projects` | array of strings | required | The `[[projects]]` entries this workflow **draws tasks from**, by `name`. **The task source is not written here** — it is the owner of those domains. An empty list is an error (there would be nothing to route it to). Naming more than one states that those domains share a lane vocabulary; naming domains owned by different sources is an error. Note the plural: `[[repositories]].project` is a single value, this is a list |
 | `trigger` | table | `{}` | Trigger condition. **Deciding which tasks match is the source plugin's job** — it receives it and runs first-match. For GitHub's `status` triggers, **entering the column is the request**: even after completion, a human moving the card back into the trigger column re-runs the same workflow (who re-runs it is decided by the assignee and the claim). If the card lands in **another** workflow's trigger column, the conversation is handed over to that workflow — the next stage of a column pipeline continues with the same worktree and the same agent session. Only a finished conversation is handed over. A delivery that arrives while a stage is still running is passed over: with a **polling** source (github / notion) the next tick brings it back and the handoff happens then, but Slack acks first and never re-sends, so that trigger is lost — re-issue it once the run has finished. **An unknown key in this table is a hard startup failure.** A trigger is read key by key, so a key nobody reads is dropped and the condition simply goes away — which means a typo does not narrow the trigger, it *widens* it (write `assinee` and you get "no condition", firing on exactly the tasks you meant to exclude). The error lists the keys the source does read, so it doubles as migration guidance. `trigger = {}` (catch-all) has no keys and is always valid **`channel` is the channel watch trigger**: every top-level post in that channel becomes a task. It takes `channel_name` (required, checked against the live name so a rename is reported), `repo` (required, the repository those tasks go to) and `from` (extra people allowed to trigger it — **by default only your own posts do**). Writing it beside `reaction` is rejected, and so is writing the other three without `channel`. A watch workflow does not count as a mention catch-all, so it can sit alongside a `trigger = {}` reply workflow One key is totsuka's own: **`status`** names the source's status column, and totsuka reads it to build the column graph its cycle check walks — it only compares that string against an `on_*` write-back, and never uses it to match a task. Whether a source accepts the key is up to that source; Slack has no status column and rejects it as unknown. **`assignee` is the ingest gate for who may hold the task.** Write `"@me"`, `"@none"`, `"@any"`, a login, or a list of those (matched as an OR); **omitting it means `["@me", "@none"]`**, which is what totsuka did before the key existed. There is no second gate behind it, so a condition you write can never be overruled by one you did not. The `@` matters: `me`, `none` and `any` are all names a real account can have, so `assignee = "any"` means the user called `any`. **`@any` ingests other people's tasks too.** `@any` is also the one condition that does **not** read assignees, so on Notion you can write it even when `property_map.assignee` is unmapped — it is how you state that you do not filter by assignee. Every other value fails at startup without the mapping. What the names are matched against is source-specific — GitHub uses the issue's own assignees and `github_login`, Notion the property named by `property_map.assignee` and `notion_user_id`. On GitHub, an `assignee` with no `status` beside it gives its deliveries no lane identity, so that task runs **at most once** and re-assigning will not repeat it; a warning says so at startup. Notion mints no lane identity for any trigger, so adding a `status` there would not make a task repeatable — and no such warning is given, because it would not be advice that helps. |
 | `profile` | enum? | none | One of `answer`, `triage`, `design`, `implement`. Decides `mode`, `output`, and `verification` together |
 | `mode` | enum | required without `profile` | `plan` or `implement` |
@@ -156,9 +160,13 @@ Workflows are matched in definition order, first match wins — **and the source
 A plugin can add its own keys to a workflow, written **flat**, next to totsuka's:
 
 ```toml
+[[projects]]
+name = "slack"  # a source with one domain still declares it
+source = "slack"
+
 [[workflows]]
 name = "slack-books"
-source = "slack"
+projects = ["slack"]
 agent = "herdr"
 profile = "triage"
 publish = "direct"      # defined by the slack plugin
@@ -199,14 +207,14 @@ Every key is interpreted by the source plugin; totsuka passes the whole table th
 ```toml
 [[workflows]]
 name = "slack-implement"
-source = "slack"
+projects = ["slack"]
 trigger = { reaction = "hammer" }     # you react with :hammer: → implementation task
 profile = "implement"
 agent = "herdr"
 
 [[workflows]]
 name = "slack-reply"                  # mentions: the workflow with no reaction
-source = "slack"
+projects = ["slack"]
 trigger = {}
 profile = "answer"
 agent = "herdr"
@@ -223,7 +231,7 @@ agent = "herdr"
 ```toml
 [[workflows]]
 name = "github-design"
-source = "github"
+projects = ["tomo-prj"]
 trigger = { status = "Design" }
 profile = "design"
 agent = "herdr"
@@ -255,7 +263,7 @@ A profile names a combination of `mode`, `output`, and `verification` that fits 
 ```toml
 [[workflows]]
 name = "gh-design"
-source = "github"
+projects = ["tomo-prj"]
 trigger = { status = "Ready for design" }
 profile = "design"
 agent = "herdr"
@@ -268,7 +276,7 @@ on_success = { status = "Designed" }
 | `profile` plus `output` | **Allowed**, and `output` wins. This is a wiring choice rather than a permission, and a Slack-triggered implement workflow needs it to return the pull request URL to the thread |
 | No `profile` and no `mode` / `output` | **Error.** Either name a profile or write both |
 | `profile` plus `rubric`, `tool`, `timeout_secs`, `on_start`, `on_success`, `on_failure` | Allowed |
-| `status` write-backs that form a **cycle of columns** | **Error.** Columns are nodes and write-backs are edges; a cycle re-runs forever with **no human in it**, dispatching an agent every lap. Writing back into your own trigger column is the length-1 case. The error names the actual route; the fix is to route one hop through a column no workflow triggers on, so a person moves the card out of it. Checked per `source`, lexically only — two different boards that happen to share a column name are not a cycle, and `source` keeps them apart here |
+| `status` write-backs that form a **cycle of columns** | **Error.** Columns are nodes and write-backs are edges; a cycle re-runs forever with **no human in it**, dispatching an agent every lap. Writing back into your own trigger column is the length-1 case. The error names the actual route; the fix is to route one hop through a column no workflow triggers on, so a person moves the card out of it. Checked per `[[projects]]` entry, lexically only — two different boards that happen to share a column name are not a cycle, because the graph is kept separate per domain. A card does move between boards, but only because a person moved it, which needs a human every lap and so is not what this check is for. A workflow naming several domains contributes its write-backs to each of them, and one interlocking group is reported once, naming the board the check reached it on |
 
 Profiles are optional. Combinations they cannot express — `verification = "human"`, for instance, since all four resolve to `llm` — are written out explicitly.
 
@@ -344,7 +352,7 @@ Rather than widening a running task's permissions, react to it and start a separ
 ```toml
 [[workflows]]
 name = "slack-implement"
-source = "slack"
+projects = ["slack"]
 trigger = { reaction = "hammer" }
 profile = "implement"
 output = "source"                 # so the PR URL goes back to the thread
@@ -352,7 +360,7 @@ agent = "herdr"
 
 [[workflows]]
 name = "slack-reply"              # catch-all, must be last
-source = "slack"
+projects = ["slack"]
 trigger = {}
 profile = "answer"
 agent = "herdr"
@@ -557,7 +565,7 @@ The removed tables sat above and *between* these, which is how one global key co
 ```toml
 [[workflows]]
 name = "slack-reply"
-source = "slack"
+projects = ["slack"]
 mode = "implement"
 agent = "herdr"
 output = "source"
@@ -640,7 +648,7 @@ poll_interval_secs = 60   # 60 is also the default; 0 warns and falls back to it
 | `status_field` | string | `Status` | Name of the single-select field holding the status column. **Shared by every board** |
 | `github_login` | string | required | Your own login, used to detect self-assigned tasks and as the claim target (the login totsuka self-assigns when it takes a task). **One login = one instance**: running several totsuka instances under the same login is unsupported — the claim arbitration cannot tell them apart |
 | `in_progress_statuses` | string[] | `[]` | Status names treated as in progress and therefore skipped. **Shared by every board** |
-| `source_name` | string | `github` | The source name stamped on each task. Adding boards does not change it, so `[[workflows]].source = "github"` stays a single entry |
+| `source_name` | string | `github` | The source name stamped on each task. Adding boards does not change it — a task's `source` identifies the plugin and says nothing about which board it came from. Workflows name boards individually, with `projects` |
 | `api_url` | string | `https://api.github.com/graphql` | GraphQL endpoint, for GitHub Enterprise or testing |
 | `claim_verify_delay_ms` | int? | `750` | Milliseconds to wait between writing the claim (self-assign) and reading it back. The read-back is what detects both a race with a teammate and a silently ignored assignment, so it must not run before the API shows the write. `0` is honoured (a too-early read only costs one retry) |
 | `max_retries` | int | 3 | Retries for retryable API failures. **One call may sleep 90s in total**; if the next wait would exceed that, the call returns the real cause instead of retrying, so a long `retry-after` cannot look like a hang. Raising `max_retries` therefore does not raise the total wait |
@@ -791,7 +799,7 @@ filter = { property = "Sprint status", status = { equals = "Current" } }
 
 [[workflows]]
 name = "notion-implement"
-source = "notion"
+projects = ["design-db"]
 agent = "herdr"
 profile = "implement"
 trigger = { status = "Not started", assignee = "@me", filter = { and = [
@@ -1019,7 +1027,7 @@ A design-to-implementation handoff:
 ```toml
 [[workflows]]
 name = "design"
-source = "github"
+projects = ["tomo-prj"]
 trigger = { status = "Ready for design" }
 profile = "design"          # resolves mode, output and verification
 agent = "herdr"
@@ -1027,7 +1035,7 @@ on_success = { status = "Ready for design review" }
 
 [[workflows]]
 name = "implement"
-source = "github"
+projects = ["tomo-prj"]
 trigger = { status = "Ready to implement" }
 profile = "implement"
 agent = "herdr"

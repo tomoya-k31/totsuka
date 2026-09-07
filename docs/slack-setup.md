@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](slack-setup.ja.md)
 
-<!-- generated-from: ai-docs/operations/slack-quickstart.md sha256:a186d905c6d5772826c66779a22220f93c7edf7e2ce7c7b9dc739899d2fba410 -->
+<!-- generated-from: ai-docs/operations/slack-quickstart.md sha256:0e70db572223eb6b9d5eb68f7b6f3ebd864a8ed188125f5f70b012409d5a9592 -->
 
 # Setting up the Slack source
 
@@ -86,9 +86,13 @@ kind = "task_source"
 # Someone else reacting does not start anything, and there is no setting
 # that relaxes this. Names take or omit the colons; 👀 is `eyes` and
 # 👁 is `eye`, which are different emoji.
+[[projects]]
+name = "slack"  # a source with one domain still declares it
+source = "slack"
+
 [[workflows]]
 name = "slack-reaction"
-source = "slack"
+projects = ["slack"]
 trigger = { reaction = "eyes" }
 mode = "plan"
 agent = "herdr"
@@ -96,7 +100,7 @@ output = "source"
 
 [[workflows]]
 name = "slack-reply"
-source = "slack"
+projects = ["slack"]
 trigger = {}
 mode = "plan"            # drafting a reply needs no push or pull request
 agent = "herdr"
