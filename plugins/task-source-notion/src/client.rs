@@ -135,8 +135,11 @@ impl<T: NotionTransport> NotionClient<T> {
     /// for it, so a status option present in one database and absent from
     /// another matched nothing there without saying so.
     ///
-    /// A name matching no configured database is skipped: the Orchestrator
-    /// refuses an unresolvable reference before launch.
+    /// A name matching no configured database is **skipped with a warning**.
+    /// `totsuka run` refuses an unresolvable reference (a static config
+    /// error) and config is not re-read while running, so this is unreachable
+    /// through the normal path; the branch is defence in depth, and the
+    /// warning is what keeps the resulting partial poll from being silent.
     pub async fn fetch(
         &self,
         trigger: &Value,
@@ -154,6 +157,18 @@ impl<T: NotionTransport> NotionClient<T> {
             server_filter = Some(self.resolve_dynamic_refs(f, workflow).await?);
         }
         let mut tasks = Vec::new();
+        for name in projects {
+            if !self.config.databases.iter().any(|d| &d.name == name) {
+                tracing::warn!(
+                    workflow = %workflow,
+                    project = %name,
+                    "workflow names a database this plugin does not have → \
+                     skipping it (the rest are still queried). `totsuka run` \
+                     refuses this config, so seeing this means it was started \
+                     another way"
+                );
+            }
+        }
         for (index, database) in self.config.databases.iter().enumerate() {
             if !projects.iter().any(|name| name == &database.name) {
                 continue;

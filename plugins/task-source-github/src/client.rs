@@ -145,9 +145,14 @@ impl<T: GithubTransport> GithubClient<T> {
     /// with different Status vocabularies unusable: a column that exists on
     /// one board and not the other matched nothing on the other, silently.
     ///
-    /// A name that matches no configured board is skipped here — the
-    /// Orchestrator rejects an unresolvable reference before launch, so
-    /// reaching this with one means the config changed underneath us.
+    /// A name that matches no configured board is **skipped with a warning**.
+    /// `totsuka run` refuses to start on an unresolvable reference (it is a
+    /// static config error), and config is not re-read while running, so this
+    /// is unreachable through the normal path — the branch is defence in
+    /// depth for a caller that skipped that validation. Skipping rather than
+    /// failing keeps one bad name in a list from taking the whole poll down,
+    /// and the warning is what keeps the resulting partial poll from being
+    /// silent.
     ///
     /// One board failing fails the whole poll. The alternative — skip it and
     /// return the rest — would make a broken token or a deleted board look
@@ -163,6 +168,18 @@ impl<T: GithubTransport> GithubClient<T> {
         let filter = TriggerFilter::parse(trigger, instructions_kind, workflow)
             .map_err(GithubError::InvalidTrigger)?;
         let mut tasks = Vec::new();
+        for name in projects {
+            if !self.config.projects.iter().any(|p| &p.name == name) {
+                tracing::warn!(
+                    workflow = %workflow,
+                    project = %name,
+                    "workflow names a board this plugin does not have → \
+                     skipping it (the rest of the workflow's boards are still \
+                     polled). `totsuka run` refuses this config, so seeing \
+                     this means it was started another way"
+                );
+            }
+        }
         for (index, project) in self.config.projects.iter().enumerate() {
             if !projects.iter().any(|name| name == &project.name) {
                 continue;
