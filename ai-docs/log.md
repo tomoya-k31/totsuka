@@ -3,6 +3,7 @@
 ## 2026-09-07
 
 * **Update**: [task-source-slack](/components/task-source-slack.md) に `fallback_repo` を追加。`[[channel_groups]]` がどれもマッチしないチャンネルの行き先を 1 つ指定できるようにした。候補 1 件になるため LLM 分類を経由せず即確定し、組織横断の質問のように特定のコードリポジトリに属さないメンションの受け口になる。従来は不一致チャンネルは全 `[[repos]]` が候補として分類器に渡っていた（候補が増えるほど精度もトークンも悪化する）。`prefix = ""` は拒否されるため catch-all は `[[channel_groups]]` 側には書けない。マッチしたグループが候補ゼロに縮んだ場合も同じ経路へ合流する。設定キーの記述は [設定リファレンス](/development/config-reference.md) の `[slack]` 節。
+* **Update**: [task-source-slack](/components/task-source-slack.md) の `[[channel_groups]].prefix` が文字列配列も受けるようになった（`prefix = ["dev-", "team-"]`）。1 本の `repos` を複数 prefix で共有できるので、prefix ごとに同じ候補一覧を書き写す必要がなくなる。書き写しは片方だけ古くなったときに設定エラーではなく無言の誤ルーティングになるため、重複を消せること自体が目的である。実装は `ChannelPrefixes`（`#[serde(untagged)]`、core の `CleanupPolicyConfig` と同じ作法）で、単一文字列の既存設定はそのまま動く。untagged の代償で「どちらの形でもない値」の serde 診断が弱いぶん、空配列と配列内空文字は `static_config_errors` が名指しで弾く（後者は全チャンネルに当たり、グループが黙って catch-all になる）。外側の定義順 first-match は不変。設定キーの記述は [設定リファレンス](/development/config-reference.md) の `[slack]` 節。
 
 ## 2026-09-06
 
