@@ -4,14 +4,32 @@ title: ADR-0069 workflow は source ではなく projects で domain を名指�
 description: "同一 source の複数ボードで Status の option 集合が違う構成が動かない問題への決定。[[workflows]].source を廃止し projects（[[projects]].name の配列・必須）へ置き換え、source は [[projects]].source から導出する。[[projects]] の意味を「起票先トラッカー」から「ソースが持つ domain」へ広げ、slack / discord もキーなしのエントリを 1 本持つ。閉路検査のグラフを (domain, 列名) でキーし、protocol 0.7.0 で WorkflowInfo.projects / status_writebacks と TaskUpdateStatusParams.projects を追加する。走査範囲を絞るだけでは綴り違いが無言のままなので、status option の実在検査を config validate のオンライン部と doctor に error として入れる。改名・source の任意併記・スキーマ移動の同梱・移行案内の実装は不採用。"
 resource: https://github.com/tomoya-k31/totsuka/issues/626
 tags: [decision, config, workflow, projects, protocol, breaking, adr]
-generated: { by: claude-code/opus-5, at: 2026-09-07T12:00:00+09:00 }
-status: draft
+generated: { by: claude-code/fable-5, at: 2026-09-08T00:20:00+09:00 }
+verified:
+  - { by: human:tomoya-k31, at: 2026-09-08T00:14:00+09:00 }
+status: stable
 owner: tomoya-k31
 ---
 
 # Status
 
-draft。実装済み・テスト green（1,617 件）だが、実機検収（`live-e2e`）は未了。
+stable。実装済み・テスト green（1,617 件）。**実機（実 GitHub ProjectsV2 2 枚 + 実 herdr + 実 Claude Code）で検収完了**（2026-09-08、`live-e2e` S8）。`verified` はこの範囲についてのものである。
+
+確認できたこと:
+
+- **取り込みが名指した domain に閉じる**（§1・§5）。Status 語彙の違う 2 枚のボード（#7: `Todo … Done`、#8: `Backlog / Todo / In Progress / Done / Shipped`）に対し、`projects = ["e2e-board"]` の workflow は #8 の `Todo` カードを 2 poll を超えて取り込まず、`projects = ["e2e-board-b"]` / `trigger = { status = "Backlog" }` の workflow は #8 だけから取り込んで `Shipped` まで書き戻した。#7 に無い列名で回るレーンなので、旧 `(source, 列名)` の走査なら無言で 0 件になっていた構成
+- **書き戻しが由来のボードに着地する**（§8、メモが有効な経路）。同じ issue を #7 と #8 の両方に `Todo` で載せ、#7 由来のタスクの `on_start` / `on_success` が #7 の item だけを動かし、#8 の item は `Todo` のまま
+- **閉路検査が `(domain, 列名)` で分かれる**（§4）。`#7: Todo → Done` と `#8: Done → Todo` は valid。対照として #8 側を `e2e-board` に向けると閉路、`["e2e-board", "e2e-board-b"]` の配列でも閉路（報告は到達した `e2e-board` を名指して 1 件）
+- **表現不能にした 3 状態が `--offline` で落ちる**（§2）。空配列・source 混在・実在しない名前がそれぞれ別のメッセージで exit 1。旧 `source` を残した config は offline は通り、online で「どのプラグインも引き取らない」として落ちる（§6 の記述どおり）
+- **旧 config と旧プラグインが起動しない**（§5・§6）。`source = "github"` のままの実運用同形 config は ``missing field `projects` `` で `validate` / `doctor` とも exit 1。`>=0.6.0, <0.7` の github / herdr は F-54 で `protocol-incompatible` として拒否
+- **status option の実在検査**（§7）。#8 に無い `Design` / `Design Review`（`trigger.status` と書き戻し）と `triage_status = "Nope"` を、実在 option 一覧つきで error。`Backlog` / `Shipped` は通る
+- **domain を持たないソースのキーなしエントリ**（§3）。`[[projects]] name = "slack"` を経由する 4 本の slack workflow（`projects = ["slack"]`）で、メンション → 下書き → 承認 → 本人名義のスレッド返信、リアクション（answer）、`:books:` 起票の 3 経路が従来どおり動いた。`:books:` の起票は、解決先 repo（cli）の `[[repositories]].project` が指す #8 に `triage_status` の `Todo` で載り、#7 には載らなかった
+- **`setup` の生成物**。`--answers` で github recipe は `projects = ["github-board"]`、slack recipe は `[[projects]] name = "slack"` を吐き、両方 `validate --offline` を通る
+
+確認していないこと:
+
+- **§8 のメモが無い経路**（再起動後のフォールバック探索がスコープに閉じること）。両ボードに載せた issue の書き戻しは、fetch 時のメモが有効なまま完了した。取り違えが起きる条件そのもの（再起動 → メモ消失 → 設定順が不利）は結合テストまでの担保
+- **notion**。e2e のロスターに入っていないので、notion 側の `projects` 絞り込みと option 実在検査は単体/結合テストまでの担保
 
 実装は 3 本の PR に分かれている: `source` → `projects` の本体（#627）、status option の実在検査（§7、#628）、書き戻しのスコープ（§8）。
 
