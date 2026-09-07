@@ -4,7 +4,7 @@ title: 設定リファレンス（config.toml）
 description: "config.toml の全キー・デフォルト値・意味の一覧。設定ファイルは 1 本で、プラグイン個別設定もトップレベルの [<name>] テーブルに入る。シークレット参照、設定スキーマのバージョニング方針、[[projects]] のトラッカー宣言、ワークフローとプラグインが定義する追加プロパティ、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-github の [github]、task-source-notion の [notion]、task-source-slack の [slack]、agent-ide-herdr の [herdr] を含む。"
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
 tags: [config, reference, toml, secrets, workflow, worktree, github, notion, slack, hooks, versioning]
-generated: { by: claude-code/opus-5, at: 2026-08-27T06:45:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-07T12:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -1009,7 +1009,8 @@ kind = "task_source"
 | `[prompts]` | テーブル | — | このプラグインが送るプロンプト文の上書き（下記、#318） |
 | `source_name` | string | `slack` | `Task.source` に刻印するソース名 |
 | `[[repos]]` | 配列 | なし（省略可、#109） | リポジトリ候補。`name`（config.toml の `[[repositories]].name` と一致必須）/ `summary`?（LLM 分類の材料）/ `path`?（README 先頭を分類材料に追加）。**省略時は config.toml の `[[repositories]]`（name/summary/path）がそのまま候補になる**ため通常は書かなくてよい。明示した場合はそちらが優先（候補の絞り込み・summary の上書きに使う） |
-| `[[channel_groups]]` | 配列 | なし | チャンネル名 prefix → 候補 repos の絞り込みルール（定義順 first-match）。`prefix` / `repos`（`[[repos]]` に存在する名前のみ） |
+| `[[channel_groups]]` | 配列 | なし | チャンネル名 prefix → 候補 repos の絞り込みルール（定義順 first-match）。`prefix` / `repos`（`[[repos]]` に存在する名前のみ）。マッチは**前方一致だけ**で、`*` はリテラル文字として扱われる（glob・正規表現は無い）。`prefix = ""` は拒否されるので、**全チャンネルに当てる catch-all はここには書けない** —— それは `fallback_repo` の仕事 |
+| `fallback_repo` | string? | なし | `[[channel_groups]]` がどれもマッチしないチャンネルの行き先リポジトリ（`[[repos]]` に存在する名前）。**候補 1 件になるので LLM 分類を経由せず即確定**する。組織横断の質問のように特定のコードリポジトリに属さないメンションの受け口を 1 つ決めるためのキー。**省略時は従来どおり全リポジトリが候補**になり分類 LLM に渡る（候補が多いと精度もトークンも悪化する）。マッチしたグループが候補ゼロに縮んだ場合（`repos` が空／存在しない名前だけ）も「マッチしなかった」扱いでここへ落ちる。**このキーを置いても `[llm]` は省略できない** —— 必須判定は**宣言された候補数の素朴なカウント**（`config.repos.len() > 1`）で、このキーも `[[channel_groups]]` も読まない。したがって「全グループが 1 件ずつ挙げ、かつこのキーも設定済み」のように**分類器に到達しえない構成でも必須判定は成立する**。緩めるには到達可能な経路の証明が必要になるので、判定は意図的にそれより粗い。**存在しない名前を指すと起動しない** —— `initialize` がマージ後の候補一覧に対して検査するので `CONFIG_INVALID` になる（`[[channel_groups]]` の参照整合と同じ扱い）。`config validate` も同じ検査を持つが、`[[repos]]` 省略時は候補が確定しないため initialize まで保留される。空文字も拒否される（「フォールバックを置いたつもり」を黙って無効にしないため） |
 | `[llm]` | テーブル | なし（省略可、#119） | リポジトリ分類用 OpenAI 互換 LLM。`base_url` / `model` / `api_key` / `confidence_threshold`（既定 0.6、未満はエフェメラル選択へ）。**省略時は config.toml の `[llm]`（initialize で供給）が default になる**（`api_key_ref` 必須 — キーなし供給は採用されない。`confidence_threshold` は既定 0.6）。明示した場合はそちらが優先。候補 2 件以上でどちらにも無ければ initialize が `CONFIG_INVALID` |
 | `api_url` | string | `https://slack.com/api` | Web API ベース URL（テスト用上書き） |
 | `max_retries` | int | 3 | リトライ可能な API 失敗の最大再試行回数。**ただし 1 回の呼び出しで眠れる合計は 90 秒**で、次の待ち時間がそれを超えるなら再試行せず本当の原因を返す（スロットルの `retry-after` が長いときに「ハングしたように見える」のを避けるため）。したがって `max_retries` を大きくしても待ち時間の合計はこの予算で頭打ちになる |

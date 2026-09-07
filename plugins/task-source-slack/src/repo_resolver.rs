@@ -2,7 +2,10 @@
 //! repository a mention concerns, in three stages —
 //!
 //! 1. `[[channel_groups]]` prefix rules (first match in declaration order)
-//!    narrow the candidates; a single survivor resolves immediately.
+//!    narrow the candidates; a single survivor resolves immediately. With no
+//!    rule matching, `fallback_repo` — when set — *is* that single survivor,
+//!    so a channel no rule covers has one deliberate destination instead of
+//!    the whole catalogue.
 //! 2. The plugin's own LLM classifier ([`crate::llm`]) picks among several
 //!    candidates; a verdict at or above the confidence threshold resolves.
 //! 3. Otherwise the operator picks via an in-thread ephemeral (handled by
@@ -27,11 +30,17 @@ pub enum Resolution {
 
 /// Stage ①: the candidates after applying the channel-prefix rules. The
 /// first `[[channel_groups]]` whose `prefix` matches `channel_name` wins;
-/// with no match every configured repository is a candidate. A matching
-/// group that narrows to *nothing* (empty `repos`, or names that don't
-/// exist — `config/validate` flags both, but `initialize` does not re-run
-/// it) falls back to every repository rather than stranding the mention
-/// behind a picker with no buttons.
+/// with no match `unmatched_candidates` below decides.
+///
+/// A matching group that narrows to *nothing* (empty `repos`, or names that
+/// don't exist) is treated as no match at all, rather than stranding the
+/// mention behind a picker with no buttons. **A running plugin cannot be in
+/// that state**: `static_config_errors` rejects both shapes and `initialize`
+/// runs it against the merged candidate list, so an operator sees
+/// `CONFIG_INVALID` at startup instead. The branch is kept as a safety net
+/// for a caller that has not passed that gate — it is not a supported mode,
+/// and nothing here should be read as "a bad `repos` list degrades
+/// gracefully at runtime".
 pub fn prefix_candidates(config: &SlackConfig, channel_name: &str) -> Vec<RepoInfo> {
     for group in &config.channel_groups {
         if channel_name.starts_with(&group.prefix) {
@@ -46,14 +55,51 @@ pub fn prefix_candidates(config: &SlackConfig, channel_name: &str) -> Vec<RepoIn
                     prefix = group.prefix,
                     channel_name,
                     "matching [[channel_groups]] entry narrows to no repository \
-                     (fix its `repos` list); using every [[repos]] candidate"
+                     (fix its `repos` list); continuing as if no rule matched"
                 );
                 break;
             }
             return narrowed;
         }
     }
-    config.repos.clone()
+    unmatched_candidates(config, channel_name)
+}
+
+/// The candidates for a channel no `[[channel_groups]]` rule covers.
+///
+/// `fallback_repo` names one of them and short-circuits the classifier
+/// (`resolve` resolves a lone candidate outright).
+///
+/// A name matching no candidate falls through to the full catalogue, on the
+/// same safety-net terms as `prefix_candidates` above: `initialize` has
+/// already refused to start on that config (`CONFIG_INVALID`), so the branch
+/// is unreachable in a running plugin. `config/validate` alone cannot catch
+/// it — with `[[repos]]` omitted the candidates are unknown until the
+/// Orchestrator supplies them — which is why the check is written to run in
+/// both places rather than offline only.
+fn unmatched_candidates(config: &SlackConfig, channel_name: &str) -> Vec<RepoInfo> {
+    let Some(name) = &config.fallback_repo else {
+        return config.repos.clone();
+    };
+    match config.repos.iter().find(|r| &r.name == name) {
+        Some(repo) => {
+            tracing::debug!(
+                channel_name,
+                fallback_repo = name,
+                "no [[channel_groups]] match; using `fallback_repo`"
+            );
+            vec![repo.clone()]
+        }
+        None => {
+            tracing::warn!(
+                channel_name,
+                fallback_repo = name,
+                "`fallback_repo` names no declared repository (fix it); \
+                 using every [[repos]] candidate"
+            );
+            config.repos.clone()
+        }
+    }
 }
 
 /// Run stages ① and ② for one mention. Never errors: every failure mode of
@@ -251,5 +297,84 @@ mod tests {
                 vec!["web-app", "design-system", "backend-api"]
             );
         }
+    }
+
+    /// `config` plus a `fallback_repo`, which only applies when no group
+    /// matches.
+    fn config_with_fallback(groups: serde_json::Value, fallback: &str) -> SlackConfig {
+        let mut config = config(groups);
+        config.fallback_repo = Some(fallback.to_string());
+        config
+    }
+
+    #[test]
+    fn fallback_repo_is_the_sole_candidate_for_an_unmatched_channel() {
+        let config = config_with_fallback(
+            json!([{ "prefix": "dev-frontend-", "repos": ["web-app"] }]),
+            "backend-api",
+        );
+        // The whole point: not the three-repo catalogue that the same
+        // channel would have produced without the key.
+        assert_eq!(
+            names(prefix_candidates(&config, "random-talk")),
+            vec!["backend-api"]
+        );
+    }
+
+    #[test]
+    fn fallback_repo_never_overrides_a_matching_group() {
+        let config = config_with_fallback(
+            json!([{ "prefix": "dev-", "repos": ["web-app", "design-system"] }]),
+            "backend-api",
+        );
+        assert_eq!(
+            names(prefix_candidates(&config, "dev-infra")),
+            vec!["web-app", "design-system"]
+        );
+    }
+
+    #[test]
+    fn a_group_narrowing_to_nothing_lands_on_the_fallback_repo() {
+        // Also the safety net (`initialize` rejects both shapes): pinned so
+        // that if it is ever reached, the unusable rule reads as "no rule
+        // matched" and the fallback decides, instead of the full picker it
+        // produced before.
+        for groups in [
+            json!([{ "prefix": "ops-", "repos": [] }]),
+            json!([{ "prefix": "ops-", "repos": ["ghost"] }]),
+        ] {
+            let config = config_with_fallback(groups, "backend-api");
+            assert_eq!(
+                names(prefix_candidates(&config, "ops-alerts")),
+                vec!["backend-api"]
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_fallback_repo_degrades_to_every_candidate() {
+        // The safety net, not a supported mode: `initialize` rejects this
+        // config outright, so a running plugin never reaches here. Pinned so
+        // that a caller bypassing that gate still gets a working picker
+        // rather than none.
+        let config = config_with_fallback(json!([]), "ghost");
+        assert_eq!(
+            names(prefix_candidates(&config, "random-talk")),
+            vec!["web-app", "design-system", "backend-api"]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_fallback_repo_resolves_without_consulting_the_llm() {
+        // `FailingChat` errors on every call, so reaching the classifier
+        // would surface as `NeedsSelection`. Resolving proves stage ② was
+        // skipped — which is what makes the fallback cost nothing.
+        let mut config = config_with_llm();
+        config.fallback_repo = Some("backend-api".into());
+        let chat = FailingChat(crate::llm::ChatError::transport("must not be called"));
+        assert_eq!(
+            resolve(&chat, &config, "random-talk", "who owns onboarding?", "").await,
+            Resolution::Resolved("backend-api".to_string())
+        );
     }
 }
