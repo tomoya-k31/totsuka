@@ -485,8 +485,8 @@ pub struct WorkflowConfig {
     /// The task source is **derived** from these rather than written out:
     /// every entry names its owning plugin, so a second spelling of the same
     /// fact could only ever contradict it. Listing more than one entry is a
-    /// statement that those domains share a lane vocabulary, which
-    /// `config validate` then checks against each domain's own columns.
+    /// statement that those domains share a lane vocabulary — the columns a
+    /// workflow names have to exist on every domain it lists.
     ///
     /// All named entries must resolve to the same `source` — a workflow
     /// straddling two plugins has no single claimant for its unclaimed keys
@@ -597,7 +597,9 @@ pub struct WorkflowConfig {
     /// care about.
     ///
     /// Ownership is resolved by asking instead: the whole set goes to the
-    /// workflow's `source` and `agent` at `initialize`, and each answers which
+    /// workflow's task source (the owner of its
+    /// [`projects`](WorkflowConfig::projects)) and its `agent` at
+    /// `initialize`, and each answers which
     /// keys are its own (`InitializeResult::claimed_options`). **Exactly one**
     /// claimant is required — zero is a typo, two is an ambiguity the
     /// Orchestrator will not settle by picking.

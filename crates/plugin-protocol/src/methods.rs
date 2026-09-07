@@ -185,7 +185,8 @@ pub struct WorkflowInfo {
     /// The keys written on `[[workflows]]` that are **not** the Orchestrator's
     /// own (#554), verbatim.
     ///
-    /// The Orchestrator cannot tell whose they are: a workflow names a source
+    /// The Orchestrator cannot tell whose they are: a workflow reaches a task
+    /// source (through its [`projects`](Self::projects))
     /// *and* an agent, and either may define a key. So it hands the whole set
     /// to both and asks each which ones it recognises — see
     /// [`InitializeResult::claimed_options`]. A key nobody claims is a typo

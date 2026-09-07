@@ -41,7 +41,7 @@ fetch（`poll_loop` の各 tick が呼ぶ `GithubClient::fetch`。0.2.0 で `tas
 
 # capabilities（F-83）
 
-manifest（`plugins/task-source-github/plugin.toml`、`protocol_version = ">=0.6.0, <0.7"`）と `initialize` 応答で `kind = task_source` を宣言する。**`task_claim = true`**（#556、protocol 0.6.1）— `task/claim` に上記の self-assign で答える。**`outputs` は空**（#398）—— 成果物はエージェントが `gh` で自分で書くので、このプラグインは何も publish しない。`output = "source"` を書いた workflow は `config validate` が弾く（F-83）。
+manifest（`plugins/task-source-github/plugin.toml`、`protocol_version = ">=0.7.0, <0.8"`（#626: 複数 domain を持つので `WorkflowInfo.projects` に依存する。無視すると全ボードを走査してしまうため下限を上げた））と `initialize` 応答で `kind = task_source` を宣言する。**`task_claim = true`**（#556、protocol 0.6.1）— `task/claim` に上記の self-assign で答える。**`outputs` は空**（#398）—— 成果物はエージェントが `gh` で自分で書くので、このプラグインは何も publish しない。`output = "source"` を書いた workflow は `config validate` が弾く（F-83）。
 
 # テスト
 

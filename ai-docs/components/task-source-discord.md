@@ -51,7 +51,7 @@ Discord の[チャンネル監視トリガ](/glossary/channel-watch.md)を totsu
 
 # プロトコル下限
 
-`protocol_version = ">=0.6.0, <0.7"`。監視トリガは `InitializeParams.workflows`（0.6.0、#554）で届き、このプラグインには他に監視対象を知る手段が無い。それより古いホストでは**何もしないまま起動してしまう**ので、F-54 のゲートで起動拒否に倒している。
+`protocol_version = ">=0.6.0, <0.8"`（#626 で上限のみ拡張。domain が 1 つなので `WorkflowInfo.projects` の絞り込みは恒等で、下限は据え置き）。監視トリガは `InitializeParams.workflows`（0.6.0、#554）で届き、このプラグインには他に監視対象を知る手段が無い。それより古いホストでは**何もしないまま起動してしまう**ので、F-54 のゲートで起動拒否に倒している。
 
 # レート制限
 

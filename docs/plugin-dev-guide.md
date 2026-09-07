@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](plugin-dev-guide.ja.md)
 
-<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:f1c6b5400486e94ae078dd066b5c709a6d0e36a3f47a96c44015dfdf8fd90c46 -->
+<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:616dfde53ef36e3208315095cbc1e78a4bdae7a35d0a6bd70f91a95234cfa0a1 -->
 
 # Plugin development guide
 
@@ -51,7 +51,7 @@ Before starting your plugin, the orchestrator checks `protocol_version` for comp
 
 ### Choosing the range
 
-The **upper bound** goes at the next major or minor after the breaking change you want to stay below — currently `<0.8`. A manifest capping at `<0.3` is refused by a 0.3.0 orchestrator, one capping at `<0.4` is refused by 0.4.0, `<0.5` by 0.5.0, `<0.6` by 0.6.0, and so on.
+The **upper bound** goes at the next major or minor after the breaking change you want to stay below — currently `<0.8`. A manifest capping at `<0.3` is refused by a 0.3.0 orchestrator, one capping at `<0.4` is refused by 0.4.0, `<0.5` by 0.5.0, `<0.6` by 0.6.0, `<0.7` by 0.7.0, and so on.
 
 **The lower bound matters just as much, and it follows what you depend on — not your plugin's kind, and not whatever protocol version is newest.**
 

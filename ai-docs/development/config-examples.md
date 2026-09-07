@@ -447,7 +447,7 @@ trigger のキーは、`status` を除いて**プラグインが解釈する**�
 ```toml
 [[workflows]]
 name       = "github-implement"
-source     = "github"
+projects   = ["tomo-prj"]
 trigger    = { status = "🤖 実装・受入検証", assignee = "@me" }
 profile    = "implement"
 on_start   = { status = "🚧 実装中" }
@@ -851,7 +851,9 @@ totsuka doctor                     # 依存コマンド・ソケット・シー�
 | 症状 | 原因 |
 |---|---|
 | `unknown field` | キーの typo（`deny_unknown_fields`） |
-| プラグイン参照エラー | workflow の `source` / `agent` が未定義、`enabled = false`、または `kind` 違い |
+| プラグイン参照エラー | workflow の `agent` や `[[projects]].source` が未定義、`enabled = false`、または `kind` 違い |
+| ``missing field `projects` `` | `[[workflows]]` に `projects` が無い（#626 で `source` を置き換えた。旧 config はここで落ちる） |
+| workflow の `projects` が空 / 未解決 / source 混在 | `projects = []`、実在しない `[[projects]].name`、異なる source の domain を 1 つの workflow に混ぜた（#626） |
 | リポジトリパス不在 | `path` の展開結果がディスク上に存在しない |
 | プレースホルダエラー | `worktree_location` に `{repo}` / `{repo_name}` / `{worktree_name}` / `{task_id}` / `{source}` 以外を使った（`{branch}` は廃止済みで専用のエラーになる） |
 | 環境変数未設定 | `${VAR}` 参照先が export されていない |

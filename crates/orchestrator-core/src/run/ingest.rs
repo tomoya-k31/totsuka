@@ -303,9 +303,12 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             return Ok(TaskSubmitResult {
                 status: TaskSubmitStatus::Rejected,
                 reason: Some(format!(
-                    "workflow `{workflow}` has source = `{}`, but `{}` submitted \
-                     the task → a plugin may only submit to its own workflows",
-                    wf.source, task.source
+                    "workflow `{workflow}` draws from `{}`, whose projects belong to \
+                     `{}`, but `{}` submitted the task → a plugin may only submit to \
+                     its own workflows",
+                    wf.projects.join(", "),
+                    wf.source,
+                    task.source
                 )),
             });
         }

@@ -50,7 +50,7 @@ fetch（`poll_loop` の各 tick が呼ぶ `NotionClient::fetch`。0.2.0 で `tas
 
 # capabilities（F-83）
 
-manifest（`plugins/task-source-notion/plugin.toml`、`protocol_version = ">=0.6.0, <0.7"`）と `initialize` 応答で `kind = task_source` を宣言する。**`outputs` は空**（#398）—— 成果物はエージェントが Notion MCP で自分で書くので、このプラグインは何も publish しない。
+manifest（`plugins/task-source-notion/plugin.toml`、`protocol_version = ">=0.7.0, <0.8"`（#626: github と同じ理由で下限を上げた））と `initialize` 応答で `kind = task_source` を宣言する。**`outputs` は空**（#398）—— 成果物はエージェントが Notion MCP で自分で書くので、このプラグインは何も publish しない。
 
 # テスト
 

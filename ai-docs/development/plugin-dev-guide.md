@@ -33,7 +33,7 @@ plugin-protocol = { git = "https://github.com/tomoya-k31/totsuka" }
 name = "github"                 # インスタンスバイナリ名と一致
 kind = "task_source"            # task_source | agent_ide | notifier
 version = "0.1.0"               # プラグイン自身の版
-protocol_version = ">=0.6.0, <0.7"  # 対応する Orchestrator プロトコル範囲(F-54)
+protocol_version = ">=0.6.0, <0.8"  # 対応する Orchestrator プロトコル範囲(F-54)
 
 [capabilities]                  # 実際に対応する機能だけ宣言(F-33)
 state_stream = true             # agent: state/subscribe ストリーム(F-38)
@@ -56,7 +56,7 @@ outputs = ["source"]            # result/publish に対応するなら宣言す�
 `resume_session` は `hook_completion` に**置き換わった**ので、フック経由で完了を
 報告する agent は新しい名前で宣言し直すこと。
 
-Orchestrator は起動前に `protocol_version` の互換性を検査し（F-54）、宣言された capability のみ要求する。**プロトコル 0.2.0 以降、task_source は push 専用**（`tasks/fetch` は削除済み。起動できる task_source は例外なく push 型なので、0.5.0 でこれを宣言する `task_submit` は情報量ゼロとして削除された）。`^0.1` を宣言する manifest は 0.2.0 の Orchestrator に、`<0.3` を上限とする manifest は **0.3.0**（#264 の `Task.thread_key` 削除）に、`<0.4` を上限とする manifest は **0.4.0**（#411 の `TaskDispatchParams.hook` / `Capabilities.design_preview` 削除）に、`<0.5` を上限とする manifest は **0.5.0**（#496 の到達不能な宣言 5 件の削除）に、`<0.6` を上限とする manifest は **0.6.0**（#554 の `initialize.triggers` → `workflows` 改名）に、それぞれ起動拒否される — 上限は超えたい破壊的バンプの**次**のメジャー/マイナーに置く（現行なら `<0.7`）。
+Orchestrator は起動前に `protocol_version` の互換性を検査し（F-54）、宣言された capability のみ要求する。**プロトコル 0.2.0 以降、task_source は push 専用**（`tasks/fetch` は削除済み。起動できる task_source は例外なく push 型なので、0.5.0 でこれを宣言する `task_submit` は情報量ゼロとして削除された）。`^0.1` を宣言する manifest は 0.2.0 の Orchestrator に、`<0.3` を上限とする manifest は **0.3.0**（#264 の `Task.thread_key` 削除）に、`<0.4` を上限とする manifest は **0.4.0**（#411 の `TaskDispatchParams.hook` / `Capabilities.design_preview` 削除）に、`<0.5` を上限とする manifest は **0.5.0**（#496 の到達不能な宣言 5 件の削除）に、`<0.6` を上限とする manifest は **0.6.0**（#554 の `initialize.triggers` → `workflows` 改名）に、`<0.7` を上限とする manifest は **0.7.0**（#626 の `WorkflowInfo.projects` 追加。無視すると全 domain を走査してしまうので破壊的扱い）に、それぞれ起動拒否される — 上限は超えたい破壊的バンプの**次**のメジャー/マイナーに置く（現行なら `<0.8`）。
 
 上の例は下限を `>=0.6.0` に置いている。0.6.0 で `initialize` の `triggers` が `workflows` へ改名されたので、それより前を範囲に含めると **`workflows` を読むプラグインが空を受け取り、何も監視しない**まま起動してしまう（#554）。F-54 のゲートはこの形の失敗を起動拒否へ倒すためにある。
 
