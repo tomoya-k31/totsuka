@@ -145,7 +145,15 @@ pub fn workflow_infos(cfg: &RootConfig, name: &str, is_source: bool) -> Vec<Work
             // and no others; an old plugin that ignored this field would scan
             // every board it owns, which is why the protocol floor moved to
             // 0.7.0 rather than defaulting the field.
-            projects: w.projects.clone(),
+            //
+            // Empty for an agent, like `trigger` below: which domain a task
+            // came from is the source's business, and an agent that received
+            // the list would have to be trusted to ignore it.
+            projects: if is_source {
+                w.projects.clone()
+            } else {
+                Vec::new()
+            },
             // An agent is sent an empty object rather than `null`: a plugin
             // reading `.get("…")` off `null` mis-branches, which is the same
             // reason the catch-all trigger is `{}` (#396). A source gets the
@@ -374,6 +382,24 @@ agent = "herdr"
         // The catch-all is an empty object, never `null`: a plugin reading
         // `.get("reaction")` on `null` would panic or mis-branch.
         assert!(triggers[1].trigger.is_object());
+
+        // #626: the source is told which of its domains to scan, and the
+        // **agent is told nothing** — like the trigger, that is the source's
+        // business, and an agent receiving the list would have to be trusted
+        // to ignore it.
+        assert_eq!(triggers[0].projects, vec!["slack".to_string()]);
+        let for_agent = workflow_infos(&cfg, "herdr", false);
+        assert!(
+            !for_agent.is_empty(),
+            "the agent is named by these workflows"
+        );
+        for info in &for_agent {
+            assert!(
+                info.projects.is_empty(),
+                "workflow `{}` leaked its domains to the agent",
+                info.workflow
+            );
+        }
     }
 
     /// The plugin-owned `[[workflows]]` keys reach the plugins the workflow
