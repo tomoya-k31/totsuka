@@ -316,6 +316,19 @@ pub struct SlackConfig {
     /// Channel-prefix rules, checked before the LLM (first match wins).
     #[serde(default)]
     pub channel_groups: Vec<ChannelGroup>,
+    /// The repository a mention falls back to when no [`ChannelGroup`] covers
+    /// its channel. Being a single candidate it resolves without an LLM call,
+    /// which turns the channels no rule mentions from "classify among every
+    /// repository" into one deliberate destination — the place org-wide
+    /// questions get answered.
+    ///
+    /// Absent keeps the original behaviour: every repository stays a
+    /// candidate and the classifier picks. It does **not** remove the
+    /// `[llm]` requirement, which is judged on the candidate count
+    /// (see `server`) because a `[[channel_groups]]` entry listing two
+    /// repositories still needs a classifier.
+    #[serde(default)]
+    pub fallback_repo: Option<String>,
     /// Candidate repositories. Optional since #109: when omitted, the
     /// orchestrator's `[[repositories]]` (supplied at `initialize`) become
     /// the candidates; an explicit list here always wins.
@@ -487,6 +500,24 @@ pub fn static_config_errors(config: &SlackConfig) -> Vec<String> {
             errors.push(format!(
                 "`llm.confidence_threshold` is {} → use a value between 0.0 and 1.0",
                 llm.confidence_threshold
+            ));
+        }
+    }
+
+    // Same deferral as `[[channel_groups]]` below: with no explicit
+    // `[[repos]]` the candidates are unknown until `initialize` supplies
+    // them, so only the shape is checkable offline.
+    if let Some(fallback) = &config.fallback_repo {
+        if fallback.is_empty() {
+            errors.push(
+                "`fallback_repo` is empty → name the repository that channels with no \
+                 `[[slack.channel_groups]]` match should fall back to, or remove the key"
+                    .into(),
+            );
+        } else if !names.is_empty() && !names.contains(&fallback.as_str()) {
+            errors.push(format!(
+                "`fallback_repo` names `{fallback}` which is not declared in `[[slack.repos]]` \
+                 → add it there or fix the name"
             ));
         }
     }
@@ -809,6 +840,9 @@ mod tests {
         assert!(cfg.reply_style.is_none());
         assert!(cfg.llm.is_none());
         assert!(cfg.channel_groups.is_empty());
+        // Opt-in: absent keeps every repository a candidate for channels no
+        // rule covers.
+        assert!(cfg.fallback_repo.is_none());
         // The nudge is opt-in: no `bot_token` is a valid config (#305).
         assert!(cfg.bot_token.is_none());
         assert!(static_config_errors(&cfg).is_empty());
@@ -913,6 +947,48 @@ mod tests {
         let errors = static_config_errors(&parse(value));
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert!(errors[0].contains("ghost"), "{errors:?}");
+    }
+
+    #[test]
+    fn fallback_repo_referencing_unknown_repo_is_flagged() {
+        let mut value = minimal();
+        value["fallback_repo"] = json!("ghost");
+        let errors = static_config_errors(&parse(value));
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("ghost"), "{errors:?}");
+    }
+
+    #[test]
+    fn a_declared_fallback_repo_is_accepted() {
+        let mut value = minimal();
+        value["fallback_repo"] = json!("web-app");
+        assert!(static_config_errors(&parse(value)).is_empty());
+    }
+
+    #[test]
+    fn an_empty_fallback_repo_is_flagged() {
+        // Distinguishable from omitting the key, and silently ignoring it
+        // would leave the operator believing the fallback is in place.
+        let mut value = minimal();
+        value["fallback_repo"] = json!("");
+        let errors = static_config_errors(&parse(value));
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("`fallback_repo` is empty")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn fallback_repo_defers_to_initialize_without_an_explicit_repos_list() {
+        // Same shape as the channel_groups reference check: the candidates
+        // arrive from the orchestrator at initialize (#109), so an unknown
+        // name is not knowable offline.
+        let mut value = minimal();
+        value["repos"] = json!([]);
+        value["fallback_repo"] = json!("ghost");
+        assert!(static_config_errors(&parse(value)).is_empty());
     }
 
     #[test]
