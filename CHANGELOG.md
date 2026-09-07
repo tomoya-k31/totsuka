@@ -11,6 +11,31 @@ Note: the plugin protocol is versioned independently of the application (see
 `crates/plugin-protocol`); a totsuka release does not imply a protocol-version
 change.
 
+## [0.7.0](https://github.com/tomoya-k31/totsuka/compare/v0.6.4...v0.7.0) (2026-09-07)
+
+
+### ⚠ BREAKING CHANGES
+
+* **config:** [[workflows]].source を廃止し projects で domain を名指す ([#627](https://github.com/tomoya-k31/totsuka/issues/627))
+
+### Features
+
+* **config:** [[workflows]].source を廃止し projects で domain を名指す ([#627](https://github.com/tomoya-k31/totsuka/issues/627)) ([198fc28](https://github.com/tomoya-k31/totsuka/commit/198fc288298141777746d25ef3e2666753e3049e)), closes [#626](https://github.com/tomoya-k31/totsuka/issues/626)
+* **config:** status の書き戻しも workflow の projects に閉じる ([#630](https://github.com/tomoya-k31/totsuka/issues/630)) ([0bba736](https://github.com/tomoya-k31/totsuka/commit/0bba7367604523c8fa068a8060848f0d77f740f1)), closes [#626](https://github.com/tomoya-k31/totsuka/issues/626)
+* **config:** ボードに存在しない status を validate / doctor で拒否する ([#628](https://github.com/tomoya-k31/totsuka/issues/628)) ([45c8194](https://github.com/tomoya-k31/totsuka/commit/45c81947999420967c9a17178806fe3bb2997b6b)), closes [#626](https://github.com/tomoya-k31/totsuka/issues/626)
+* **task-source-slack:** channel_groups の prefix を配列でも書けるように ([#625](https://github.com/tomoya-k31/totsuka/issues/625)) ([4a43782](https://github.com/tomoya-k31/totsuka/commit/4a43782b7302803cd11bf4a269509aad13641e47))
+* **task-source-slack:** channel_groups 不一致時のフォールバックリポジトリ ([#623](https://github.com/tomoya-k31/totsuka/issues/623)) ([7c529b2](https://github.com/tomoya-k31/totsuka/commit/7c529b2ac68ed67fc4c6dfdab1e63296d461de37))
+
+
+### Bug Fixes
+
+* **task-source-slack:** 返信に写された自分宛メンションを除去し、&lt;@B&gt; &lt;@A&gt; の二重メンションを直す ([#633](https://github.com/tomoya-k31/totsuka/issues/633)) ([cbe4e4a](https://github.com/tomoya-k31/totsuka/commit/cbe4e4ad42db75df73c449451b79e27c6daab90e))
+
+
+### Documentation
+
+* **adr:** ADR-0069 を実機検収済み（stable）にし、live-e2e に S8 を足す ([#631](https://github.com/tomoya-k31/totsuka/issues/631)) ([a3d3a00](https://github.com/tomoya-k31/totsuka/commit/a3d3a003c791c1d417024d056439f9d4480dbe5d))
+
 ## [0.6.4](https://github.com/tomoya-k31/totsuka/compare/v0.6.3...v0.6.4) (2026-09-05)
 
 
