@@ -1034,7 +1034,7 @@ kind = "task_source"
 | `implement_instructions` | **profile 既定**: `implement`。実装して PR を作り、その URL を報告文に含めさせる | — |
 | `triage_instructions` | **profile 既定**: `triage`（`:books:` の起票フロー、#450）。Issue を起票し、その URL を報告文に含めさせる | — |
 | `reply_style_suffix` | `reply_style` が設定されているときだけ `reply_instructions` に追記される | `{style}` |
-| `body_template` | ペインに表示されるタスク本文。`{text}` は元メッセージから **自分（`target_user_id`）宛のメンションタグを除いた**もの（#632。生の `<@U…>` を見せるとエージェントが返信に写す） | `{sender}` `{channel}` `{text}` |
+| `body_template` | ペインに表示されるタスク本文。メンション由来のタスクでは `{text}` は元メッセージから **自分（`target_user_id`）宛のメンションタグを除いた**もの（#632。生の `<@U…>` を見せるとエージェントが本人名義の返信に写す）。チャンネル監視のタスクは bot 名義で答えるので、運用者宛のタグも内容として残る | `{sender}` `{channel}` `{text}` |
 | `body_thread_header` | スレッド文脈セクションの見出し | `{count}` |
 | `body_thread_line` | スレッド文脈 1 行ぶん | `{line}` |
 | `body_thread_unavailable` | 文脈取得に失敗したときにセクションごと差し替わる文 | — |

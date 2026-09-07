@@ -75,9 +75,9 @@ pub async fn publish_direct<T: SlackTransport>(
     task_id: &str,
     content: &str,
     post_as: PostAs,
-    self_user_id: &str,
+    operator_user_id: &str,
 ) -> Result<(), String> {
-    let text = strip_leading_mentions(&remove_mention_of(&extract_reply(content), self_user_id));
+    let text = sanitize_reply(content, post_as, operator_user_id);
     if text.is_empty() {
         return Err(format!(
             "task {task_id} published an empty result → nothing to post as a reply"
@@ -135,10 +135,7 @@ pub async fn publish_draft<T: SlackTransport>(
 ) -> Result<(), String> {
     // Validate the content BEFORE consuming the pending entry: a rejected
     // publish must leave the coordinates in place so a retry can still land.
-    let text = strip_leading_mentions(&remove_mention_of(
-        &extract_reply(content),
-        &config.target_user_id,
-    ));
+    let text = sanitize_reply(content, PostAs::Operator, &config.target_user_id);
     if text.is_empty() {
         return Err(format!(
             "task {task_id} published an empty result → nothing to propose as a reply"
@@ -578,6 +575,25 @@ fn clipped(text: &str) -> String {
     format!("{head}\n…（表示上省略。承認時は全文が送信されます）")
 }
 
+/// The reply text to post: log noise trimmed off the edges, then the mention
+/// tags the agent echoed from its prompt removed (#632), in the order the
+/// mechanical `<@sender>` prefix expects.
+///
+/// Which tags are echoes depends on who posts. A reply going out **as the
+/// operator** can never legitimately mention the operator, so that tag goes
+/// wherever it sits. A reply going out **as the bot** (a watched channel,
+/// #617) is another author's voice, and "ask <@operator>" is real content
+/// there — only the run of tags in front of the text is an echo (the caller
+/// prefixes the asker's mention for both identities).
+fn sanitize_reply(content: &str, post_as: PostAs, operator_user_id: &str) -> String {
+    let text = extract_reply(content);
+    let text = match post_as {
+        PostAs::Operator => remove_mention_of(&text, operator_user_id),
+        PostAs::Bot => text,
+    };
+    strip_leading_mentions(&text)
+}
+
 /// Drop every `<@user>` / `<@user|label>` tag of `user_id` from `text` (#632).
 ///
 /// The agent sees the mention it is answering in its prompt and sometimes
@@ -775,6 +791,21 @@ mod tests {
         let doubled = "<@U_B> <@U_ME> 本文";
         let text = strip_leading_mentions(&remove_mention_of(doubled, "U_ME"));
         assert_eq!(text, "本文");
+    }
+
+    /// The identity decides which tags are echoes: as the operator, a mention
+    /// of the operator is always one; as the bot, only the leading run is.
+    #[test]
+    fn a_bot_post_keeps_an_inner_mention_of_the_operator() {
+        let content = "<@U_ASKER> まず <@U_ME> に確認してください。";
+        assert_eq!(
+            sanitize_reply(content, PostAs::Operator, "U_ME"),
+            "まず に確認してください。"
+        );
+        assert_eq!(
+            sanitize_reply(content, PostAs::Bot, "U_ME"),
+            "まず <@U_ME> に確認してください。"
+        );
     }
 
     #[test]

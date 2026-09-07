@@ -1220,10 +1220,17 @@ fn build_task(
     // here, before substitution, so an override that drops the leading `> `
     // still gets sane continuation lines.
     //
-    // The operator's own tag is dropped from the quoted body first (#632): the
-    // body already says it is a mention, and leaving the raw `<@U_ME>` in
-    // front of the text is exactly what the agent then copies into its reply.
-    let text = crate::approval::remove_mention_of(&mention.text, &config.target_user_id);
+    // For a mention-driven task the operator's own tag is dropped from the
+    // quoted body first (#632): the body already says it is a mention, and
+    // leaving the raw `<@U_ME>` in front of the text is exactly what the agent
+    // then copies into a reply that goes out *as* the operator. A watched
+    // channel's task is answered as the bot, and there a mention of the
+    // operator is content the agent may need — it stays.
+    let text = if mention.repo_pin.is_none() {
+        crate::approval::remove_mention_of(&mention.text, &config.target_user_id)
+    } else {
+        mention.text.clone()
+    };
     let quoted = text.trim().replace('\n', "\n> ");
     let mut body = template::render(
         &p.body_template,

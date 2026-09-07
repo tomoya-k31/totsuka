@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:35f383ec4b43d650136a1872e1d3d5f0bbd5bd4fa496ccf3f490b329c54d0794 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:4ba07f21dc1d423a401b4f741aff96259f4080ec574d67b4543d200c665b2585 -->
 
 # 設定リファレンス
 
@@ -919,7 +919,7 @@ kind = "task_source"
 | `implement_instructions` | `implement` の既定。実装してプルリクエストを作り、その URL を報告に含めさせる | — |
 | `triage_instructions` | `triage` の既定。issue を起票し、その URL を報告に含めさせる | — |
 | `reply_style_suffix` | `reply_style` が設定されているときだけ返信指示に追記される | `{style}` |
-| `body_template` | pane に表示されるタスク本文。`{text}` は元メッセージから **自分（`target_user_id`）宛のメンションタグを除いた**もの（生の `<@U…>` を見せるとエージェントが返信に写す） | `{sender}` `{channel}` `{text}` |
+| `body_template` | pane に表示されるタスク本文。メンション由来のタスクでは `{text}` は元メッセージから **自分（`target_user_id`）宛のメンションタグを除いた**もの（生の `<@U…>` を見せるとエージェントが本人名義の返信に写す）。チャンネル監視のタスクは bot 名義で答えるので、運用者宛のタグも内容として残る | `{sender}` `{channel}` `{text}` |
 | `body_thread_header` | スレッド文脈セクションの見出し | `{count}` |
 | `body_thread_line` | スレッド文脈 1 行ぶん | `{line}` |
 | `body_thread_unavailable` | 文脈の取得に失敗したときにセクションごと差し替わる文 | — |
