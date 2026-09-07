@@ -33,13 +33,79 @@ pub struct LlmConfig {
     pub confidence_threshold: f64,
 }
 
+/// One or more channel-name prefixes as written in config:
+/// `prefix = "dev-frontend-"`, or `prefix = ["dev-", "team-"]` when several
+/// prefixes share one candidate list.
+///
+/// The array form exists because the single form forced the `repos` list to
+/// be repeated once per prefix, and a stale copy in one of those repetitions
+/// is a silent routing bug rather than a config error.
+///
+/// Untagged, matching the Orchestrator's `CleanupPolicyConfig`. The cost is
+/// serde's diagnostic on a value that is neither shape ("data did not match
+/// any variant"), which is why [`ChannelPrefixes::is_empty`] and
+/// [`ChannelPrefixes::empty_entry`] carry the actionable checks instead.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum ChannelPrefixes {
+    /// A single prefix.
+    One(String),
+    /// Several prefixes sharing one `repos` list; any one matching is a hit.
+    Many(Vec<String>),
+}
+
+impl ChannelPrefixes {
+    /// Every declared prefix. The single form borrows in place, so matching
+    /// one channel name against a group allocates nothing.
+    pub fn as_slice(&self) -> &[String] {
+        match self {
+            Self::One(prefix) => std::slice::from_ref(prefix),
+            Self::Many(prefixes) => prefixes,
+        }
+    }
+
+    /// Whether the entry declares no prefix at all (`prefix = []`).
+    ///
+    /// Distinct from [`empty_entry`](Self::empty_entry): this one is "the rule
+    /// names nothing", which is dead config, while that one is "one of the
+    /// names is blank", which would match *every* channel.
+    pub fn is_empty(&self) -> bool {
+        self.as_slice().is_empty()
+    }
+
+    /// The first blank prefix, if any. A blank prefix is a `starts_with("")`
+    /// against every channel name, so it would quietly turn its group into
+    /// the catch-all that `fallback_repo` is for.
+    pub fn empty_entry(&self) -> Option<usize> {
+        self.as_slice().iter().position(|p| p.is_empty())
+    }
+
+    /// The prefixes rendered for an operator-facing message.
+    pub fn describe(&self) -> String {
+        self.as_slice()
+            .iter()
+            .map(|p| format!("`{p}`"))
+            .collect::<Vec<_>>()
+            .join(" / ")
+    }
+
+    /// The first declared prefix `channel_name` starts with.
+    pub fn matched<'a>(&'a self, channel_name: &str) -> Option<&'a str> {
+        self.as_slice()
+            .iter()
+            .find(|p| channel_name.starts_with(p.as_str()))
+            .map(String::as_str)
+    }
+}
+
 /// A channel-name prefix rule narrowing repository candidates (first match in
 /// declaration order wins).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ChannelGroup {
-    /// Channel-name prefix (e.g. `dev-frontend-`).
-    pub prefix: String,
+    /// Channel-name prefix, or a list of them (e.g. `"dev-frontend-"`,
+    /// `["dev-", "team-"]`).
+    pub prefix: ChannelPrefixes,
     /// Candidate repository names; each must exist in [`SlackConfig::repos`].
     pub repos: Vec<String>,
 }
@@ -537,16 +603,25 @@ pub fn static_config_errors(config: &SlackConfig) -> Vec<String> {
     for group in &config.channel_groups {
         if group.prefix.is_empty() {
             errors.push(
-                "a `[[slack.channel_groups]]` entry has an empty `prefix` → set the channel-name \
-                 prefix it should match"
+                "a `[[slack.channel_groups]]` entry has an empty `prefix` list → set the \
+                 channel-name prefix it should match, or a list of them"
                     .into(),
             );
+        } else if let Some(i) = group.prefix.empty_entry() {
+            // Reported apart from the whole-list case: a blank entry matches
+            // *every* channel, so the group silently becomes the catch-all
+            // instead of doing nothing.
+            errors.push(format!(
+                "`[[slack.channel_groups]]` has a blank `prefix` at position {i} → a blank \
+                 prefix matches every channel; remove it, or use `[slack].fallback_repo` \
+                 for the channels no rule covers"
+            ));
         }
         if group.repos.is_empty() {
             errors.push(format!(
-                "`[[slack.channel_groups]]` (prefix `{}`) has an empty `repos` list → list the \
-                 candidate repositories that prefix should narrow to",
-                group.prefix
+                "`[[slack.channel_groups]]` (prefix {}) has an empty `repos` list → list the \
+                 candidate repositories those prefixes should narrow to",
+                group.prefix.describe()
             ));
         }
         // With no explicit `[[repos]]` the candidates are not known until
@@ -557,11 +632,11 @@ pub fn static_config_errors(config: &SlackConfig) -> Vec<String> {
         for repo in &group.repos {
             if !names.contains(&repo.as_str()) {
                 errors.push(format!(
-                    "`[[slack.channel_groups]]` (prefix `{}`) references repo `{repo}`, which \
+                    "`[[slack.channel_groups]]` (prefix {}) references repo `{repo}`, which \
                      is not one of the repository candidates → fix the name, or add the \
                      repository to `[[slack.repos]]` (or to the Orchestrator's \
                      `[[repositories]]` when that is where the candidates come from)",
-                    group.prefix
+                    group.prefix.describe()
                 ));
             }
         }
@@ -961,6 +1036,59 @@ mod tests {
         let errors = static_config_errors(&parse(value));
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert!(errors[0].contains("ghost"), "{errors:?}");
+    }
+
+    #[test]
+    fn a_prefix_array_is_accepted_and_reported_by_all_its_entries() {
+        let mut value = minimal();
+        value["channel_groups"] = json!([{ "prefix": ["dev-", "team-"], "repos": ["web-app"] }]);
+        assert!(static_config_errors(&parse(value)).is_empty());
+
+        // The message must name every prefix, or an operator with a dozen
+        // grouped prefixes cannot tell which entry to open.
+        let mut value = minimal();
+        value["channel_groups"] = json!([{ "prefix": ["dev-", "team-"], "repos": ["ghost"] }]);
+        let errors = static_config_errors(&parse(value));
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("`dev-` / `team-`"), "{errors:?}");
+    }
+
+    #[test]
+    fn an_empty_prefix_list_is_flagged() {
+        let mut value = minimal();
+        value["channel_groups"] = json!([{ "prefix": [], "repos": ["web-app"] }]);
+        let errors = static_config_errors(&parse(value));
+        assert!(
+            errors.iter().any(|e| e.contains("empty `prefix` list")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn a_blank_entry_inside_a_prefix_list_is_flagged_with_its_position() {
+        // Distinct from an empty list: a blank entry matches every channel,
+        // so the group would quietly become the catch-all.
+        let mut value = minimal();
+        value["channel_groups"] = json!([{ "prefix": ["dev-", ""], "repos": ["web-app"] }]);
+        let errors = static_config_errors(&parse(value));
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(
+            errors[0].contains("blank `prefix` at position 1"),
+            "{errors:?}"
+        );
+        assert!(errors[0].contains("fallback_repo"), "{errors:?}");
+    }
+
+    #[test]
+    fn the_single_prefix_form_still_reports_the_blank_case() {
+        let mut value = minimal();
+        value["channel_groups"] = json!([{ "prefix": "", "repos": ["web-app"] }]);
+        let errors = static_config_errors(&parse(value));
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(
+            errors[0].contains("blank `prefix` at position 0"),
+            "{errors:?}"
+        );
     }
 
     #[test]
