@@ -4,7 +4,7 @@ title: ADR-0069 workflow は source ではなく projects で domain を名指�
 description: "同一 source の複数ボードで Status の option 集合が違う構成が動かない問題への決定。[[workflows]].source を廃止し projects（[[projects]].name の配列・必須）へ置き換え、source は [[projects]].source から導出する。[[projects]] の意味を「起票先トラッカー」から「ソースが持つ domain」へ広げ、slack / discord もキーなしのエントリを 1 本持つ。閉路検査のグラフを (domain, 列名) でキーし、protocol 0.7.0 で WorkflowInfo.projects / status_writebacks と TaskUpdateStatusParams.projects を追加する。走査範囲を絞るだけでは綴り違いが無言のままなので、status option の実在検査を config validate のオンライン部と doctor に error として入れる。改名・source の任意併記・スキーマ移動の同梱・移行案内の実装は不採用。"
 resource: https://github.com/tomoya-k31/totsuka/issues/626
 tags: [decision, config, workflow, projects, protocol, breaking, adr]
-generated: { by: claude-code/opus-5, at: 2026-09-07T12:00:00+09:00 }
+generated: { by: claude-code/fable-5, at: 2026-09-08T00:20:00+09:00 }
 verified:
   - { by: human:tomoya-k31, at: 2026-09-08T00:14:00+09:00 }
 status: stable
