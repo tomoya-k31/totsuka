@@ -491,6 +491,23 @@ pub struct TaskUpdateStatusParams {
     pub task_id: String,
     /// Target status value (source-defined).
     pub status: String,
+    /// The domains the task's workflow draws from
+    /// ([`WorkflowInfo::projects`]), so the write lands on one of **those**
+    /// and not on whichever of the plugin's domains happens to hold an item
+    /// with this id (#626).
+    ///
+    /// Before this field a source searched every domain it owned, which was
+    /// sound only while they all shared one status vocabulary — the
+    /// assumption `projects` exists to break. With two boards carrying the
+    /// same issue, a write meant for one could land on the other, or fail
+    /// naming a board the task never came from.
+    ///
+    /// Empty means "no scope given" and a source should keep its previous
+    /// behaviour (search everything): that is what an older Orchestrator
+    /// sends, and refusing the write would be worse than the imprecision it
+    /// replaces.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub projects: Vec<String>,
 }
 
 /// `task/claim` params (O→P, 0.6.1, #556): claim `task_id` for exclusive
@@ -1058,6 +1075,7 @@ mod tests {
         round_trip(&TaskUpdateStatusParams {
             task_id: "42".into(),
             status: "レビュー待ち".into(),
+            projects: vec!["tomo-prj".into()],
         });
         round_trip(&TaskClaimParams {
             task_id: "I_node".into(),

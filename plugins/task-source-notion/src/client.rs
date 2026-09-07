@@ -255,6 +255,12 @@ impl<T: NotionTransport> NotionClient<T> {
     /// options in turn would accept an option that exists on some *other*
     /// database, turning a clear "unknown status" error into a confusing
     /// failure from the Notion API on the patch.
+    /// Unlike github's boards, this needs no workflow scope (#626). A Notion
+    /// page has **exactly one** parent database, and that parent is what this
+    /// resolves — from the ingest memo, else by reading the page. github's
+    /// relation is many-to-many (one issue can sit on several boards), which
+    /// is why its write-back has to be confined to the workflow's `projects`
+    /// and this one does not.
     async fn database_of(&self, page_id: &str) -> Result<&DatabaseConfig, NotionError> {
         if let Some(index) = self
             .page_database

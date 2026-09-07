@@ -1,7 +1,7 @@
 ---
 type: Decision
 title: ADR-0069 workflow は source ではなく projects で domain を名指す
-description: "同一 source の複数ボードで Status の option 集合が違う構成が動かない問題への決定。[[workflows]].source を廃止し projects（[[projects]].name の配列・必須）へ置き換え、source は [[projects]].source から導出する。[[projects]] の意味を「起票先トラッカー」から「ソースが持つ domain」へ広げ、slack / discord もキーなしのエントリを 1 本持つ。閉路検査のグラフを (domain, 列名) でキーし、protocol 0.7.0 で WorkflowInfo.projects と status_writebacks を追加する。走査範囲を絞るだけでは綴り違いが無言のままなので、status option の実在検査を config validate のオンライン部と doctor に error として入れる。改名・source の任意併記・スキーマ移動の同梱・移行案内の実装は不採用。"
+description: "同一 source の複数ボードで Status の option 集合が違う構成が動かない問題への決定。[[workflows]].source を廃止し projects（[[projects]].name の配列・必須）へ置き換え、source は [[projects]].source から導出する。[[projects]] の意味を「起票先トラッカー」から「ソースが持つ domain」へ広げ、slack / discord もキーなしのエントリを 1 本持つ。閉路検査のグラフを (domain, 列名) でキーし、protocol 0.7.0 で WorkflowInfo.projects / status_writebacks と TaskUpdateStatusParams.projects を追加する。走査範囲を絞るだけでは綴り違いが無言のままなので、status option の実在検査を config validate のオンライン部と doctor に error として入れる。改名・source の任意併記・スキーマ移動の同梱・移行案内の実装は不採用。"
 resource: https://github.com/tomoya-k31/totsuka/issues/626
 tags: [decision, config, workflow, projects, protocol, breaking, adr]
 generated: { by: claude-code/opus-5, at: 2026-09-07T12:00:00+09:00 }
@@ -13,7 +13,7 @@ owner: tomoya-k31
 
 draft。実装済み・テスト green（1,617 件）だが、実機検収（`live-e2e`）は未了。
 
-実装は 2 本の PR に分かれている: `source` → `projects` の本体（#627）と、status option の実在検査（§7）。
+実装は 3 本の PR に分かれている: `source` → `projects` の本体（#627）、status option の実在検査（§7、#628）、書き戻しのスコープ（§8）。
 
 [ADR-0058](/decisions/adr-0058-config-ownership-boundary.md) の「`[[projects]]` はリポジトリの起票先トラッカーである」を**この 1 点について改訂する**。ADR-0058 は全体としては有効で、`deprecated` にはしない（[ADR-0062](/decisions/adr-0062-status-vocabulary.md) が `trigger.status` について同じ形の 1 点改訂をしている）。
 
@@ -148,7 +148,17 @@ missing field `projects`
 
 コストは「workflow が名指した domain の数」× 1 クエリ。名指されていないボードは 1 度も叩かない。**検査できなかったこと（transport 失敗）はエラーとして報告する** —— 「検査できていない」が「検査して問題なし」と読まれないため。
 
-## 8. スキーマ `version` は上げない
+## 8. 書き戻しも `projects` に閉じる（github のみ）
+
+**読みを絞って書きを絞らないと、非対称が意味を持ってしまう。** #542 の「メモが外れても遅いだけで間違わない」は、**全ボードが同じ Status 語彙を共有していたから**成り立っていた —— この決定がまさに壊す前提である。
+
+github の issue とボードの関係は**多対多**（1 つの issue が複数のボードに載る）。再起動でメモが消えた状態で、同じ issue が 2 枚に載っていて設定順が不利なら、board-a 由来のタスクの書き戻しが board-b の item に着地する。語彙が違えば、board-b に option が無くて**board-b を名指すハードエラー**になる —— タスクが由来しないボードの名前が出る。
+
+`TaskUpdateStatusParams.projects` を足し、探索をそのスコープに閉じる。スコープ内では従来どおりメモ優先で、スコープ外を指すメモは**その意味で stale** なので捨てる。**空のスコープは #626 以前の挙動（全ボード探索）**に戻す —— 0.6 世代の Orchestrator はこのフィールドを送れないので、拒否するほうが不正確さより悪い。
+
+**notion は変更不要。** Notion のページは親データベースが**ちょうど 1 つ**で、`database_of` がそれを（メモ、無ければページ読み取りで）解決する。多対多でないので取り違えが起きない。この非対称は構造の違いであって実装の不足ではないので、`database_of` の doc に理由を書いた。
+
+## 9. スキーマ `version` は上げない
 
 ADR-0062 と同じ理由。上げると「移行方式」と「`version` 省略時の既定」の 2 決定を先に片づける義務が付き、それに見合う対価がない。
 
@@ -168,6 +178,7 @@ ADR-0062 と同じ理由。上げると「移行方式」と「`version` 省略�
 - **`[[projects]]` エントリが増える。** 非トラッカーのソースごとに 2 行
 - **workflow が増えうる。** ボードごとに別のレーンを敷くなら (ボード × レーン) 本になる。同じレーンを複数ボードに敷くなら配列 1 本で済む
 - **`source` を読んでいた 13 箇所は無変更で済んだ。** `Workflow::from_config` が profile を解決する「唯一の場所」であるという既存の設計に、source の導出を相乗りさせたため（`Workflow.source` は解決済みフィールドとして残る）
+- **書き戻しが由来のボードに着地するようになった**（§8）。読みだけを絞ると、#542 が「遅いだけ」と評価していた探索が「間違いうる」に変わってしまう
 - **綴り違いが起動時に大声になった**（§7）。`projects` の絞り込みだけでは「無言で 0 件」は直らないので、これが対になっている
 - **`[[projects]]` の意味が 2 つの関係を持つ。** `[[repositories]].project` は起票先、`[[workflows]].projects` は取り込み元。github / notion では一致するが、slack の domain を `[[repositories]].project` に書ける状態が生まれた（下記）
 
