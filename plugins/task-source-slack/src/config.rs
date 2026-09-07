@@ -44,7 +44,7 @@ pub struct LlmConfig {
 /// Untagged, matching the Orchestrator's `CleanupPolicyConfig`. The cost is
 /// serde's diagnostic on a value that is neither shape ("data did not match
 /// any variant"), which is why [`ChannelPrefixes::is_empty`] and
-/// [`ChannelPrefixes::empty_entry`] carry the actionable checks instead.
+/// [`ChannelPrefixes::blank_entries`] carry the actionable checks instead.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
 pub enum ChannelPrefixes {
@@ -66,22 +66,37 @@ impl ChannelPrefixes {
 
     /// Whether the entry declares no prefix at all (`prefix = []`).
     ///
-    /// Distinct from [`empty_entry`](Self::empty_entry): this one is "the rule
-    /// names nothing", which is dead config, while that one is "one of the
-    /// names is blank", which would match *every* channel.
+    /// Distinct from [`blank_entries`](Self::blank_entries): this one is "the
+    /// rule names nothing", which is dead config, while that one is "one of
+    /// the names is blank", which would match *every* channel.
     pub fn is_empty(&self) -> bool {
         self.as_slice().is_empty()
     }
 
-    /// The first blank prefix, if any. A blank prefix is a `starts_with("")`
+    /// Every blank prefix, by index. A blank prefix is a `starts_with("")`
     /// against every channel name, so it would quietly turn its group into
     /// the catch-all that `fallback_repo` is for.
-    pub fn empty_entry(&self) -> Option<usize> {
-        self.as_slice().iter().position(|p| p.is_empty())
+    ///
+    /// All of them, not the first: reporting one at a time would make the
+    /// operator restart once per blank, and each fix shifts the indices of
+    /// the ones still to come — so the second failure cites a different
+    /// number for the same mistake.
+    pub fn blank_entries(&self) -> Vec<usize> {
+        self.as_slice()
+            .iter()
+            .enumerate()
+            .filter_map(|(i, p)| p.is_empty().then_some(i))
+            .collect()
     }
 
     /// The prefixes rendered for an operator-facing message.
+    ///
+    /// Never empty: an empty list has its own error, but it must not leave
+    /// the *other* errors on the same group identifying nothing.
     pub fn describe(&self) -> String {
+        if self.is_empty() {
+            return "none declared".to_string();
+        }
         self.as_slice()
             .iter()
             .map(|p| format!("`{p}`"))
@@ -607,31 +622,36 @@ pub fn static_config_errors(config: &SlackConfig) -> Vec<String> {
                  channel-name prefix it should match, or a list of them"
                     .into(),
             );
-        } else if let Some(i) = group.prefix.empty_entry() {
+        } else {
             // Reported apart from the whole-list case: a blank entry matches
             // *every* channel, so the group silently becomes the catch-all
-            // instead of doing nothing.
+            // instead of doing nothing. Every blank is reported, matching how
+            // the `repos` loop below reports every bad reference.
             //
             // The two forms get different wording. "position 0" is noise for
             // a bare string, and a bare index leaves the operator guessing
             // whether it counts from 0 or 1 — "entry 2 of 3" cannot be read
             // two ways.
-            let where_ = match &group.prefix {
-                ChannelPrefixes::One(_) => " is an empty string".to_string(),
-                ChannelPrefixes::Many(prefixes) => {
-                    format!(" list has a blank entry {} of {}", i + 1, prefixes.len())
-                }
-            };
-            errors.push(format!(
-                "`[[slack.channel_groups]]`'s `prefix`{where_} → a blank prefix matches every \
-                 channel; remove it, or use `[slack].fallback_repo` for the channels no rule \
-                 covers"
-            ));
+            let total = group.prefix.as_slice().len();
+            for i in group.prefix.blank_entries() {
+                let where_ = match &group.prefix {
+                    ChannelPrefixes::One(_) => " is an empty string".to_string(),
+                    ChannelPrefixes::Many(_) => {
+                        format!(" list has a blank entry {} of {total}", i + 1)
+                    }
+                };
+                errors.push(format!(
+                    "`[[slack.channel_groups]]`'s `prefix`{where_} → a blank prefix matches \
+                     every channel; remove it, or use `[slack].fallback_repo` for the channels \
+                     no rule covers"
+                ));
+            }
         }
         if group.repos.is_empty() {
+            // Number-neutral: the same sentence serves one prefix and twelve.
             errors.push(format!(
                 "`[[slack.channel_groups]]` (prefix {}) has an empty `repos` list → list the \
-                 candidate repositories those prefixes should narrow to",
+                 candidate repositories this rule should narrow to",
                 group.prefix.describe()
             ));
         }
@@ -1087,6 +1107,41 @@ mod tests {
         // counted from zero, which a bare index can.
         assert!(errors[0].contains("blank entry 2 of 2"), "{errors:?}");
         assert!(errors[0].contains("fallback_repo"), "{errors:?}");
+    }
+
+    #[test]
+    fn every_blank_entry_in_a_prefix_list_is_reported_at_once() {
+        // One error per blank, not just the first. Reporting one at a time
+        // costs a restart each, and every fix renumbers the ones still to
+        // come — so the second failure cites a different entry for the same
+        // mistake.
+        let mut value = minimal();
+        value["channel_groups"] =
+            json!([{ "prefix": ["dev-", "", "team-", ""], "repos": ["web-app"] }]);
+        let errors = static_config_errors(&parse(value));
+        assert_eq!(errors.len(), 2, "{errors:?}");
+        assert!(errors[0].contains("blank entry 2 of 4"), "{errors:?}");
+        assert!(errors[1].contains("blank entry 4 of 4"), "{errors:?}");
+    }
+
+    #[test]
+    fn an_empty_prefix_list_still_identifies_the_group_in_its_other_errors() {
+        // `describe()` must not render as an empty parenthetical — the
+        // `repos` error would then point at nothing at all.
+        let mut value = minimal();
+        value["channel_groups"] = json!([{ "prefix": [], "repos": [] }]);
+        let errors = static_config_errors(&parse(value));
+        assert_eq!(errors.len(), 2, "{errors:?}");
+        assert!(
+            errors.iter().any(|e| e.contains("empty `prefix` list")),
+            "{errors:?}"
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("(prefix none declared) has an empty `repos` list")),
+            "{errors:?}"
+        );
     }
 
     #[test]
