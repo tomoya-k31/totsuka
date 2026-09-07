@@ -43,7 +43,11 @@ pub enum Resolution {
 /// gracefully at runtime".
 pub fn prefix_candidates(config: &SlackConfig, channel_name: &str) -> Vec<RepoInfo> {
     for group in &config.channel_groups {
-        if channel_name.starts_with(&group.prefix) {
+        // A group may declare several prefixes sharing one `repos` list; any
+        // one of them matching is a hit. The one that did is logged, since
+        // "which rule caught this channel" is the question a surprising
+        // routing raises.
+        if let Some(prefix) = group.prefix.matched(channel_name) {
             let narrowed: Vec<RepoInfo> = config
                 .repos
                 .iter()
@@ -52,13 +56,19 @@ pub fn prefix_candidates(config: &SlackConfig, channel_name: &str) -> Vec<RepoIn
                 .collect();
             if narrowed.is_empty() {
                 tracing::warn!(
-                    prefix = group.prefix,
+                    prefix,
                     channel_name,
                     "matching [[channel_groups]] entry narrows to no repository \
                      (fix its `repos` list); continuing as if no rule matched"
                 );
                 break;
             }
+            tracing::debug!(
+                prefix,
+                channel_name,
+                candidates = narrowed.len(),
+                "[[channel_groups]] prefix matched"
+            );
             return narrowed;
         }
     }
@@ -362,6 +372,62 @@ mod tests {
             names(prefix_candidates(&config, "random-talk")),
             vec!["web-app", "design-system", "backend-api"]
         );
+    }
+
+    #[test]
+    fn a_prefix_array_matches_on_any_of_its_entries() {
+        // The reason the array form exists: one `repos` list, several
+        // prefixes, no copy to keep in step.
+        let config = config(json!([
+            { "prefix": ["mikasa", "qc-mikasa", "ms-"], "repos": ["web-app", "design-system"] },
+        ]));
+        for channel in ["mikasa", "mikasa-dev", "qc-mikasa", "ms-kikaku"] {
+            assert_eq!(
+                names(prefix_candidates(&config, channel)),
+                vec!["web-app", "design-system"],
+                "{channel}"
+            );
+        }
+        // Nothing in the array matches → the unmatched path, as before.
+        assert_eq!(
+            names(prefix_candidates(&config, "random-talk")),
+            vec!["web-app", "design-system", "backend-api"]
+        );
+    }
+
+    #[test]
+    fn the_single_and_array_forms_are_interchangeable() {
+        // Back-compat pinned: an existing `prefix = "…"` config keeps its
+        // exact behaviour, and spelling it as a one-element array is the
+        // same rule.
+        let single = config(json!([{ "prefix": "dev-", "repos": ["web-app"] }]));
+        let array = config(json!([{ "prefix": ["dev-"], "repos": ["web-app"] }]));
+        for channel in ["dev-infra", "release-notes"] {
+            assert_eq!(
+                names(prefix_candidates(&single, channel)),
+                names(prefix_candidates(&array, channel)),
+                "{channel}"
+            );
+        }
+    }
+
+    #[test]
+    fn declaration_order_still_decides_across_groups_with_arrays() {
+        // First matching *group* wins, whichever of its prefixes hit — the
+        // array must not reorder the outer first-match rule.
+        let config = config(json!([
+            { "prefix": ["dev-frontend-", "ui-"], "repos": ["web-app"] },
+            { "prefix": ["dev-", "backend-"], "repos": ["backend-api"] },
+        ]));
+        assert_eq!(
+            names(prefix_candidates(&config, "dev-frontend-general")),
+            vec!["web-app"]
+        );
+        assert_eq!(
+            names(prefix_candidates(&config, "dev-infra")),
+            vec!["backend-api"]
+        );
+        assert_eq!(names(prefix_candidates(&config, "ui-kit")), vec!["web-app"]);
     }
 
     #[tokio::test]
