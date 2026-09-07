@@ -585,6 +585,71 @@ impl<T: NotionTransport> NotionClient<T> {
             .collect())
     }
 
+    /// Check that every status a workflow names exists on the databases it
+    /// names (#626), plus each database's own `triage_status`.
+    ///
+    /// The counterpart of the github check, and it exists for the same reason:
+    /// a trigger on an option the database does not have matches nothing, and
+    /// nothing says so. Narrowing a workflow to one database did not fix that
+    /// on its own, because a misspelling behaves identically.
+    ///
+    /// Skipped entirely when `property_map.status` is unmapped — then there is
+    /// no column to compare against, and `validate` already reports the
+    /// missing mapping for the workflows that need it.
+    ///
+    /// One request per database, and only for databases some workflow names.
+    pub async fn validate_statuses(
+        &self,
+        workflows: &[plugin_protocol::methods::WorkflowInfo],
+    ) -> Result<Vec<String>, NotionError> {
+        let Some(status_prop) = self.config.property_map.status.as_deref() else {
+            return Ok(Vec::new());
+        };
+        let mut errors = Vec::new();
+        for database in &self.config.databases {
+            let mut wanted: Vec<(String, String)> = Vec::new();
+            for wf in workflows {
+                if !wf.projects.iter().any(|n| n == &database.name) {
+                    continue;
+                }
+                if let Some(status) = wf.trigger.get("status").and_then(Value::as_str) {
+                    wanted.push((
+                        status.to_string(),
+                        format!("workflow `{}` の trigger.status", wf.workflow),
+                    ));
+                }
+                for status in &wf.status_writebacks {
+                    wanted.push((
+                        status.clone(),
+                        format!("workflow `{}` の書き戻し", wf.workflow),
+                    ));
+                }
+            }
+            if let Some(status) = &database.triage_status {
+                wanted.push((status.clone(), "triage_status".to_string()));
+            }
+            if wanted.is_empty() {
+                continue;
+            }
+            let options = self.status_options(database, status_prop).await?;
+            for (status, who) in wanted {
+                if options.contains(&status) {
+                    continue;
+                }
+                errors.push(format!(
+                    "{who} の \"{status}\" は database `{}` のプロパティ `{status_prop}` に存在しない → 存在する option: {}",
+                    database.name,
+                    if options.is_empty() {
+                        "（なし）".to_string()
+                    } else {
+                        options.join(" / ")
+                    }
+                ));
+            }
+        }
+        Ok(errors)
+    }
+
     /// Confirm the token works (`users/me`) and every mapped property exists on
     /// the database (F-59). Static config problems are reported separately by
     /// [`static_config_errors`].
@@ -1253,6 +1318,7 @@ mod tests {
         WorkflowInfo {
             workflow: name.to_string(),
             projects: vec![],
+            status_writebacks: vec![],
             trigger,
             instructions_kind: None,
             task_id_prefix: None,

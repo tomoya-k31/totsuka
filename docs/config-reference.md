@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:027485b13f7c01f98080fe964bf1e384f98c103d89bc6d13585a911c6b6e12be -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:9ca658603a41e5629719449708f14203ba3e81f5b77b36b724be4068f9b9b852 -->
 
 # Configuration reference
 
@@ -276,6 +276,7 @@ on_success = { status = "Designed" }
 | `profile` plus `output` | **Allowed**, and `output` wins. This is a wiring choice rather than a permission, and a Slack-triggered implement workflow needs it to return the pull request URL to the thread |
 | No `profile` and no `mode` / `output` | **Error.** Either name a profile or write both |
 | `profile` plus `rubric`, `tool`, `timeout_secs`, `on_start`, `on_success`, `on_failure` | Allowed |
+| A `status` the board does not have | **Error.** `trigger.status`, the `on_start` / `on_success` / `on_failure` write-backs, and each `[[projects]].triage_status` are checked against the board's real options. This runs in the **online part of `config validate` and in `doctor`** — not at startup, so removing one column from a board does not stop unrelated workflows. It needs the network, so `--offline` skips it. Only the domains a workflow actually names are queried, one request each. `in_progress_statuses` is not checked: it is shared across all of a source's domains, so a value absent from one board can still be right. **Without this check a misspelling stays silent** — narrowing a workflow to one board does not help, because a column name that does not exist simply never matches, with no error, no warning and no log line |
 | `status` write-backs that form a **cycle of columns** | **Error.** Columns are nodes and write-backs are edges; a cycle re-runs forever with **no human in it**, dispatching an agent every lap. Writing back into your own trigger column is the length-1 case. The error names the actual route; the fix is to route one hop through a column no workflow triggers on, so a person moves the card out of it. Checked per `[[projects]]` entry, lexically only — two different boards that happen to share a column name are not a cycle, because the graph is kept separate per domain. A card does move between boards, but only because a person moved it, which needs a human every lap and so is not what this check is for. A workflow naming several domains contributes its write-backs to each of them, and one interlocking group is reported once, naming the board the check reached it on |
 
 Profiles are optional. Combinations they cannot express — `verification = "human"`, for instance, since all four resolve to `llm` — are written out explicitly.

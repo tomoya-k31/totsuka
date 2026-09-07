@@ -86,7 +86,14 @@ pub const OUTCOME_ACTION_KEYS: &[&str] = &["status"];
 
 impl OutcomeAction {
     /// Interpret an `on_success`/`on_failure` table.
-    fn from_table(table: &toml::Table) -> Self {
+    ///
+    /// `pub(crate)` so the one place that reads the `status` key stays the one
+    /// place: `plugins::spec` derives a workflow's write-back columns for
+    /// `WorkflowInfo.status_writebacks` through this, rather than reaching
+    /// into the table itself (#626). `OUTCOME_ACTION_KEYS` beside it is what
+    /// makes the vocabulary true, and a second reader would be able to drift
+    /// from it silently.
+    pub(crate) fn from_table(table: &toml::Table) -> Self {
         Self {
             status: table
                 .get("status")

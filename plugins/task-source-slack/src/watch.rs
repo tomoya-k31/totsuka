@@ -232,6 +232,7 @@ mod tests {
         let workflows = [WorkflowInfo {
             workflow: "clip".into(),
             projects: vec![],
+            status_writebacks: vec![],
             trigger,
             instructions_kind: Some("implement".into()),
             task_id_prefix: Some("impl".into()),

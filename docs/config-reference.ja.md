@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:027485b13f7c01f98080fe964bf1e384f98c103d89bc6d13585a911c6b6e12be -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:9ca658603a41e5629719449708f14203ba3e81f5b77b36b724be4068f9b9b852 -->
 
 # 設定リファレンス
 
@@ -277,6 +277,7 @@ on_success = { status = "設計済み" }
 | `profile` + `output` | **可。** `output` が勝つ。権限ではなく配線先の選択であり、Slack 起点の implement がプルリクエストの URL をスレッドへ返すのに要る |
 | `profile` 無しで `mode` / `output` が欠けている | **エラー。** profile を書くか、両方を明示する |
 | `profile` + `rubric` / `tool` / `timeout_secs` / `on_start` / `on_success` / `on_failure` | 可 |
+| ボードに存在しない `status` を名指す | **エラー**。`trigger.status` と `on_start` / `on_success` / `on_failure` の書き戻し、各 `[[projects]].triage_status` を、ボードの実際の option と突き合わせる。走るのは **`config validate` のオンライン部と `doctor`** で、起動時ではない（ボードから列を 1 つ消しただけで無関係なワークフローまで止めないため）。ネットワークが要るので `--offline` では走らない。検査するのは workflow が名指した domain だけで、1 domain 1 リクエスト。`in_progress_statuses` は対象外 —— そのソースの全 domain で共通の値なので、あるボードに無い値が正しいこともある。**この検査が無いと綴り違いは無言のまま**である —— ワークフローを 1 ボードに絞っても直らない。存在しない列名は単に一致しないだけで、エラーも警告もログも出ない |
 | `status` の書き戻しが作る**列の閉路** | **エラー**。列を節点・書き戻しを辺とするグラフに閉路があると、**人間が 1 人も挟まらないまま永久に再実行**され、毎周エージェントが起動する。自分のトリガー列へ書き戻すのはその長さ 1 の場合。エラー文は実際の経路を名指しする。直し方は「どのワークフローもトリガーにしていない列を 1 hop 挟む」（人がそこからカードを動かす）。検査は `[[projects]]` エントリごと・字面の一致のみ — 列名がたまたま同じだけの別のボードは閉路ではなく、グラフが domain ごとに分かれている。ボード間のカード移動は実在するが動かすのは人間で、毎周人手が要るのでこの検査の対象ではない。複数の domain を名指したワークフローは各 domain に書き戻しの辺を張るが、絡み合った 1 グループは 1 件として報告され、検査が到達したボードを名指す |
 
 profile は必須ではない。4 原型で表せない組み合わせ（たとえば `verification = "human"` — 4 原型はいずれも `llm` に解決する）は明示記法で書く。

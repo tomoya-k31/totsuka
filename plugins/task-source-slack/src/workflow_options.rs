@@ -120,6 +120,7 @@ mod tests {
         WorkflowInfo {
             workflow: name.to_string(),
             projects: vec![],
+            status_writebacks: vec![],
             trigger: json!({}),
             instructions_kind: None,
             task_id_prefix: None,

@@ -1,7 +1,7 @@
 ---
 type: Decision
 title: ADR-0069 workflow は source ではなく projects で domain を名指す
-description: "同一 source の複数ボードで Status の option 集合が違う構成が動かない問題への決定。[[workflows]].source を廃止し projects（[[projects]].name の配列・必須）へ置き換え、source は [[projects]].source から導出する。[[projects]] の意味を「起票先トラッカー」から「ソースが持つ domain」へ広げ、slack / discord もキーなしのエントリを 1 本持つ。閉路検査のグラフを (domain, 列名) でキーし、protocol 0.7.0 で WorkflowInfo.projects を追加する。改名・source の任意併記・スキーマ移動の同梱・移行案内の実装は不採用。"
+description: "同一 source の複数ボードで Status の option 集合が違う構成が動かない問題への決定。[[workflows]].source を廃止し projects（[[projects]].name の配列・必須）へ置き換え、source は [[projects]].source から導出する。[[projects]] の意味を「起票先トラッカー」から「ソースが持つ domain」へ広げ、slack / discord もキーなしのエントリを 1 本持つ。閉路検査のグラフを (domain, 列名) でキーし、protocol 0.7.0 で WorkflowInfo.projects と status_writebacks を追加する。走査範囲を絞るだけでは綴り違いが無言のままなので、status option の実在検査を config validate のオンライン部と doctor に error として入れる。改名・source の任意併記・スキーマ移動の同梱・移行案内の実装は不採用。"
 resource: https://github.com/tomoya-k31/totsuka/issues/626
 tags: [decision, config, workflow, projects, protocol, breaking, adr]
 generated: { by: claude-code/opus-5, at: 2026-09-07T12:00:00+09:00 }
@@ -11,7 +11,9 @@ owner: tomoya-k31
 
 # Status
 
-draft。実装済み・テスト green（1,611 件）だが、実機検収（`live-e2e`）は未了。
+draft。実装済み・テスト green（1,617 件）だが、実機検収（`live-e2e`）は未了。
+
+実装は 2 本の PR に分かれている: `source` → `projects` の本体（#627）と、status option の実在検査（§7）。
 
 [ADR-0058](/decisions/adr-0058-config-ownership-boundary.md) の「`[[projects]]` はリポジトリの起票先トラッカーである」を**この 1 点について改訂する**。ADR-0058 は全体としては有効で、`deprecated` にはしない（[ADR-0062](/decisions/adr-0062-status-vocabulary.md) が `trigger.status` について同じ形の 1 点改訂をしている）。
 
@@ -105,6 +107,10 @@ github はボード、notion はデータベース、slack はワークスペー
 
 **`source` の廃止自体はワイヤに出ない。** `WorkflowInfo` にも `ProjectInfo` にも `source` は元々載っていない（どのプラグインに配るかは core が決めてから宛先を選ぶ）。バージョンが動く理由は追加側にある。
 
+`projects` と対で **`WorkflowInfo.status_writebacks`** も 0.7.0 で入る（下記「status option の実在検査」）。`on_start` / `on_success` / `on_failure` から core が導出した列名の重複なしリストで、**`on_*` のテーブル自体はプラグインへ渡さない** —— プラグインがそれを解釈して動くことは無く（何をいつ書くかは `task/update_status` が伝える）、渡すのは「ボードと突き合わせられるのはプラグインだけ」という 1 点のためである。`status` が core 所有でありながらプラグインに見えるキーであること（ADR-0062 §3）と同じ配置で、向きが逆になっただけ。
+
+**`projects` は agent には送らない。** `trigger` と同じ理由で、どの domain 由来かはソースの領分である。実装では 1 度これを取り違えて無条件に送っていた（doc は「agent には空」と書いていたのに）—— 宣言した契約が実装に無い状態で、`status_writebacks` のテストが捕まえた。
+
 **minor にして下限を上げるのは github / notion だけ。** フィールドの追加は形式上は互換だが、`WorkflowInfo` は `deny_unknown_fields` ではないので、0.6 世代のビルドは新しいフィールドを無視して**自分の全ボードを走査し続ける** —— 運用者が絞ったつもりの範囲が黙って効かない。0.6.0 の `triggers` → `workflows` 改名と同じクラスの失敗なので、同じ手当て（F-54 のゲートで起動拒否）を採る。
 
 残る 5 本（slack / discord / herdr / orca / macos）は**下限を据え置き、上限だけ `<0.8` へ広げる**。domain が 1 つのソースでは絞り込みが恒等であり、agent と notifier はこのフィールドを読まない。下限は依存を表すもので世代を表すものではない（#411 で orca の下限を herdr と違えたのと同じ判断）。
@@ -124,7 +130,25 @@ missing field `projects`
 
 `missing field` 側で落ちるので、書くべきキー名はメッセージに出る。残った `source` は名指されない —— `WorkflowConfig` は意図的に `deny_unknown_fields` ではない（プラグインが workflow にキーを定義できる）ので、案内は手書きになる。**書き換え手順はこの ADR とリリースノートが唯一の案内である。**
 
-## 7. スキーマ `version` は上げない
+## 7. status option の実在検査を入れる（`validate` / `doctor` で error）
+
+**`projects` で走査範囲を絞っても、綴り間違いは「無言で 0 件」のまま残る。** 走査先を絞ることは検査ではない —— 存在しない列名は「一致しない」だけで、エラーも警告もログも出ない。動機になった症状の半分はここにある。
+
+検査するのは、列の値を名指すキーのうち **domain 単位で意味が確定するもの**:
+
+| キー | 所有 | 壊れ方 |
+|---|---|---|
+| `trigger.status` | workflow | **無言で 0 件**。動機そのもの |
+| `on_start` / `on_success` / `on_failure` | workflow（core） | 実行時に `NotFound` で**大声で**失敗する。検査するのは「エージェントが働いた後」ではなく「働く前」に落とすため |
+| `[[projects]].triage_status` | domain | 無言で Status なしのまま起票される |
+
+**`in_progress_statuses` は対象外。** `[github]` / `[notion]` の全 domain 共通なので、あるボードに無い値が正しく存在しうる（2 枚のボードの実行中列名を union で列挙する運用が成立する）。per-domain 化を決めたら対象に入る。
+
+**置き場所は各プラグインの `config/validate`。** ボードの option 一覧を取れるのはプラグインだけである。`doctor` は同じ RPC を叩くので追加実装なしで乗る。`initialize` では落とさない —— ボードから列を 1 つ消しただけでオーケストレータ全体が起動しなくなり、無関係なワークフローまで止まる。ネットワークが要るので `--offline` では走らない（参照の実在は従来どおり offline で検査する）。
+
+コストは「workflow が名指した domain の数」× 1 クエリ。名指されていないボードは 1 度も叩かない。**検査できなかったこと（transport 失敗）はエラーとして報告する** —— 「検査できていない」が「検査して問題なし」と読まれないため。
+
+## 8. スキーマ `version` は上げない
 
 ADR-0062 と同じ理由。上げると「移行方式」と「`version` 省略時の既定」の 2 決定を先に片づける義務が付き、それに見合う対価がない。
 
@@ -144,6 +168,7 @@ ADR-0062 と同じ理由。上げると「移行方式」と「`version` 省略�
 - **`[[projects]]` エントリが増える。** 非トラッカーのソースごとに 2 行
 - **workflow が増えうる。** ボードごとに別のレーンを敷くなら (ボード × レーン) 本になる。同じレーンを複数ボードに敷くなら配列 1 本で済む
 - **`source` を読んでいた 13 箇所は無変更で済んだ。** `Workflow::from_config` が profile を解決する「唯一の場所」であるという既存の設計に、source の導出を相乗りさせたため（`Workflow.source` は解決済みフィールドとして残る）
+- **綴り違いが起動時に大声になった**（§7）。`projects` の絞り込みだけでは「無言で 0 件」は直らないので、これが対になっている
 - **`[[projects]]` の意味が 2 つの関係を持つ。** `[[repositories]].project` は起票先、`[[workflows]].projects` は取り込み元。github / notion では一致するが、slack の domain を `[[repositories]].project` に書ける状態が生まれた（下記）
 
 ## 意図的に残した穴
@@ -163,6 +188,5 @@ ADR-0062 と同じ理由。上げると「移行方式」と「`version` 省略�
 | 0.6.x のマイナー追加（`#[serde(default)]` のまま据え置き） | 旧プラグインが `projects` を無視して全 domain を走査する。無言の誤スコープで、F-54 が存在する理由そのもの |
 | 全 `plugin.toml` の下限を一律 `>=0.7.0` にする | 読まないプラグインまで動作するオーケストレータを拒否することになる。下限は依存を表す（#411 の orca / herdr の判断） |
 | `status_field` / `in_progress_statuses` / `property_map` の per-domain 化を同梱する | 本件の動機（option 集合の不一致）とは独立で、しかも共通値で運用可能（`in_progress_statuses` は membership 検査なので両ボードの列名を union で列挙すれば動く）。PR を分ける |
-| status option の実在検査を同梱する | 独立した改善で、`projects` を絞っても綴り間違いは「無言で 0 件」のまま残る。別 PR で入れる |
 | ボードの列名を揃える運用で解決する | ボードごとに別プロセスという要求そのものを否定する |
 | エラーメッセージで旧キーの移行先を名指す（`removed_keys_in` 相当） | ADR-0034 に先例はあるが、#554 / ADR-0062 の「移行案内は実装しない」に揃える。`missing field` が書くべきキー名を出すので、案内は ADR とリリースノートに置く |

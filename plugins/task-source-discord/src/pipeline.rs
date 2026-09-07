@@ -404,6 +404,7 @@ mod tests {
         let workflows = [plugin_protocol::methods::WorkflowInfo {
             workflow: "clip".into(),
             projects: vec![],
+            status_writebacks: vec![],
             trigger,
             instructions_kind: None,
             task_id_prefix: None,

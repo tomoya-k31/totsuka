@@ -372,6 +372,7 @@ mod tests {
         let wf = |trigger| WorkflowInfo {
             workflow: "wf".into(),
             projects: vec![],
+            status_writebacks: vec![],
             trigger,
             instructions_kind: None,
             task_id_prefix: None,
@@ -400,6 +401,7 @@ mod tests {
         let wf = |trigger| WorkflowInfo {
             workflow: "wf".into(),
             projects: vec![],
+            status_writebacks: vec![],
             trigger,
             instructions_kind: None,
             task_id_prefix: None,
@@ -460,6 +462,7 @@ mod tests {
         let wf = |trigger| WorkflowInfo {
             workflow: "wf".into(),
             projects: vec![],
+            status_writebacks: vec![],
             trigger,
             instructions_kind: None,
             task_id_prefix: None,
@@ -509,6 +512,7 @@ mod tests {
             &[WorkflowInfo {
                 workflow: "wf".into(),
                 projects: vec![],
+                status_writebacks: vec![],
                 trigger: json!({ "assignee": "@none" }),
                 instructions_kind: None,
                 task_id_prefix: None,

@@ -645,6 +645,180 @@ async fn config_validate_reports_invalid_token() {
     );
 }
 
+/// A status a workflow names but the board does not have is an **error** at
+/// `config/validate` (#626).
+///
+/// This is the check the whole issue is about. A trigger on a column the board
+/// lacks matches nothing and says nothing — no error, no warning, no log — so
+/// narrowing a workflow to one board did not by itself make a misspelling
+/// visible. The message must name the option that does not exist *and* the
+/// ones that do, since "which did I mean" is the actual question.
+#[tokio::test]
+async fn config_validate_rejects_a_status_the_board_does_not_have() {
+    let shared = Shared::default();
+    let mut srv = server(&shared);
+
+    shared.push(Canned::Data(
+        json!({ "data": { "viewer": { "login": "me" } } }),
+    ));
+    shared.push(Canned::Data(json!({ "data": { "user": { "projectV2": {
+        "field": { "options": [ { "name": "Todo" }, { "name": "Done" } ] }
+    } } } })));
+    let resp = call(
+        &mut srv,
+        1,
+        "config/validate",
+        json!({
+            "config": init_config(),
+            "projects": one_board().0,
+            "repositories": one_board().1,
+            "workflows": [
+                { "workflow": "impl", "projects": ["board-1"],
+                  "trigger": { "status": "Redy" },
+                  "status_writebacks": ["Done"] }
+            ],
+        }),
+    )
+    .await;
+    let result = resp
+        .result
+        .expect("config/validate answers at the RPC level");
+    assert_eq!(result["valid"], false, "{result}");
+    let errors = result["errors"].as_array().unwrap();
+    assert_eq!(errors.len(), 1, "only the trigger is wrong: {errors:?}");
+    let error = errors[0].as_str().unwrap();
+    for needle in ["impl", "Redy", "board-1", "Todo", "Done"] {
+        assert!(
+            error.contains(needle),
+            "the message must name `{needle}`: {error}"
+        );
+    }
+}
+
+/// A write-back naming a missing column is caught too (#626), even though it
+/// would also fail at runtime — failing before the agent runs beats failing
+/// after it did the work.
+#[tokio::test]
+async fn config_validate_rejects_a_writeback_the_board_does_not_have() {
+    let shared = Shared::default();
+    let mut srv = server(&shared);
+
+    shared.push(Canned::Data(
+        json!({ "data": { "viewer": { "login": "me" } } }),
+    ));
+    shared.push(Canned::Data(json!({ "data": { "user": { "projectV2": {
+        "field": { "options": [ { "name": "Todo" } ]
+    } } } } })));
+    let resp = call(
+        &mut srv,
+        1,
+        "config/validate",
+        json!({
+            "config": init_config(),
+            "projects": one_board().0,
+            "repositories": one_board().1,
+            "workflows": [
+                { "workflow": "impl", "projects": ["board-1"],
+                  "trigger": { "status": "Todo" },
+                  "status_writebacks": ["In review"] }
+            ],
+        }),
+    )
+    .await;
+    let result = resp.result.unwrap();
+    assert_eq!(result["valid"], false, "{result}");
+    let errors = result["errors"].as_array().unwrap();
+    assert!(
+        errors.iter().any(|e| {
+            let e = e.as_str().unwrap();
+            e.contains("In review") && e.contains("書き戻し")
+        }),
+        "{errors:?}"
+    );
+}
+
+/// A correct config passes, and a board **no workflow names** is not queried
+/// at all (#626) — the check costs one request per board in use, not per
+/// board configured.
+#[tokio::test]
+async fn config_validate_passes_and_skips_boards_no_workflow_names() {
+    let shared = Shared::default();
+    let mut srv = server(&shared);
+
+    let (projects, repositories) = two_boards();
+    shared.push(Canned::Data(
+        json!({ "data": { "viewer": { "login": "me" } } }),
+    ));
+    shared.push(Canned::Data(json!({ "data": { "user": { "projectV2": {
+        "field": { "options": [ { "name": "Todo" }, { "name": "Done" } ] }
+    } } } })));
+    let resp = call(
+        &mut srv,
+        1,
+        "config/validate",
+        json!({
+            "config": init_config(),
+            "projects": projects,
+            "repositories": repositories,
+            "workflows": [
+                { "workflow": "impl", "projects": ["board-1"],
+                  "trigger": { "status": "Todo" },
+                  "status_writebacks": ["Done"] }
+            ],
+        }),
+    )
+    .await;
+    let result = resp.result.unwrap();
+    assert_eq!(result["valid"], true, "{result}");
+    // viewer ping + board-1 only. board-3 is configured but unnamed.
+    assert_eq!(
+        shared.all_requests().len(),
+        2,
+        "board-3 must not be queried: {:?}",
+        shared.all_requests()
+    );
+}
+
+/// A board whose Status **field** is missing gets a different message from a
+/// missing option: the fault is `status_field` (or that board spelling its
+/// column differently), not the workflow.
+#[tokio::test]
+async fn config_validate_names_the_field_when_the_board_has_no_such_field() {
+    let shared = Shared::default();
+    let mut srv = server(&shared);
+
+    shared.push(Canned::Data(
+        json!({ "data": { "viewer": { "login": "me" } } }),
+    ));
+    shared.push(Canned::Data(
+        json!({ "data": { "user": { "projectV2": { "field": null } } } }),
+    ));
+    let resp = call(
+        &mut srv,
+        1,
+        "config/validate",
+        json!({
+            "config": init_config(),
+            "projects": one_board().0,
+            "repositories": one_board().1,
+            "workflows": [
+                { "workflow": "impl", "projects": ["board-1"],
+                  "trigger": { "status": "Todo" } }
+            ],
+        }),
+    )
+    .await;
+    let result = resp.result.unwrap();
+    assert_eq!(result["valid"], false, "{result}");
+    let errors = result["errors"].as_array().unwrap();
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.as_str().unwrap().contains("status_field")),
+        "the fault is the field name, not the workflow: {errors:?}"
+    );
+}
+
 #[tokio::test]
 async fn config_validate_flags_static_problem_without_network() {
     let shared = Shared::default();

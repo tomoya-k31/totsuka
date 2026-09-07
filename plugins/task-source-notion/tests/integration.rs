@@ -835,6 +835,61 @@ async fn config_validate_flags_missing_mapped_property() {
     );
 }
 
+/// A status option a workflow names but the database does not have is an
+/// **error** at `config/validate` (#626).
+///
+/// The counterpart of the github check, and the same silent failure: a trigger
+/// on an option the database lacks matches nothing and reports nothing.
+///
+/// Three requests: the token ping, the mapped-property check `validate` runs,
+/// and the status-option read. They hit the same endpoint but are separate
+/// reads, so the fixture queues one response each.
+#[tokio::test]
+async fn config_validate_rejects_a_status_the_database_does_not_have() {
+    let shared = Shared::default();
+    let mut srv = server(&shared);
+
+    let properties = json!({ "properties": {
+        "Name": { "type": "title" },
+        "Status": { "type": "status", "status": { "options": [
+            { "name": "未着手" }, { "name": "完了" }
+        ] } },
+        "Owner": { "type": "people" },
+        "Priority": { "type": "select" },
+        "Repo": { "type": "rich_text" }
+    } });
+    shared.push(Canned::Data(json!({ "type": "bot" })));
+    shared.push(Canned::Data(properties.clone()));
+    shared.push(Canned::Data(properties));
+    let resp = call(
+        &mut srv,
+        1,
+        "config/validate",
+        json!({
+            "config": init_config(),
+            "projects": one_database().0,
+            "repositories": one_database().1,
+            "workflows": [
+                { "workflow": "impl", "projects": ["db-1"],
+                  "trigger": { "status": "未着手" },
+                  "status_writebacks": ["完了しました"] }
+            ],
+        }),
+    )
+    .await;
+    let result = resp.result.unwrap();
+    assert_eq!(result["valid"], false, "{result}");
+    let errors = result["errors"].as_array().unwrap();
+    assert_eq!(errors.len(), 1, "only the write-back is wrong: {errors:?}");
+    let error = errors[0].as_str().unwrap();
+    for needle in ["impl", "完了しました", "db-1", "未着手", "完了"] {
+        assert!(
+            error.contains(needle),
+            "the message must name `{needle}`: {error}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn config_validate_flags_static_problem_without_network() {
     let shared = Shared::default();
