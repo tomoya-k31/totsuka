@@ -364,12 +364,28 @@ impl<T: GithubTransport> GithubClient<T> {
     /// orchestrator-side name; it is mapped to a project option via config, and
     /// an unknown option is a hard error rather than a silent no-op.
     ///
-    /// With several boards configured (#542) the request does not say which one
-    /// holds the item — `TaskUpdateStatusParams` is `{task_id, status}` — so
-    /// the board is recovered from the ingest-time memo, and failing that by
-    /// trying each board in config order.
-    pub async fn update_status(&self, task_id: &str, status: &str) -> Result<(), GithubError> {
-        for index in self.project_search_order(task_id) {
+    /// `projects` are the domains the task's workflow draws from (#626), and
+    /// the search is confined to them. That confinement is what makes the
+    /// write land on the board the task came from: an issue can sit on several
+    /// of this plugin's boards, so with two boards carrying it, a write meant
+    /// for one could otherwise land on the other — or fail naming a board the
+    /// task never came from, once the boards stopped sharing one status
+    /// vocabulary.
+    ///
+    /// **Empty `projects` restores the pre-#626 behaviour** (search every
+    /// board). That is what an older Orchestrator sends, and refusing the
+    /// write would be worse than the imprecision it replaces.
+    ///
+    /// Within the scope the board is still recovered from the ingest-time memo
+    /// first (#542) and the rest tried after: the memo is an optimisation, and
+    /// an item genuinely does move between boards.
+    pub async fn update_status(
+        &self,
+        task_id: &str,
+        status: &str,
+        projects: &[String],
+    ) -> Result<(), GithubError> {
+        for index in self.project_search_order(task_id, projects) {
             let project_config = &self.config.projects[index];
             if self
                 .update_status_in(index, project_config, task_id, status)
@@ -378,33 +394,58 @@ impl<T: GithubTransport> GithubClient<T> {
                 return Ok(());
             }
         }
+        let searched: Vec<String> = self
+            .project_search_order(task_id, projects)
+            .into_iter()
+            .filter_map(|i| self.config.projects.get(i))
+            .map(|p| format!("`{}`（#{}）", p.name, p.project_number))
+            .collect();
         Err(GithubError::NotFound(format!(
-            "issue `{task_id}` is not an item of any board this plugin polls \
-             ({}) → check that the issue is still on one of those boards",
-            self.config
-                .projects
-                .iter()
-                .map(|p| format!("#{}", p.project_number))
-                .collect::<Vec<_>>()
-                .join(", "),
+            "issue `{task_id}` is not an item of any board this workflow draws from \
+             ({}) → check that the issue is still on one of those boards, or that the \
+             workflow's `projects` names the board it is on",
+            if searched.is_empty() {
+                "（該当なし）".to_string()
+            } else {
+                searched.join(", ")
+            },
         )))
     }
 
     /// Which boards to try for `task_id`, remembered board first.
     ///
-    /// Always yields **every** board, not just the remembered one: the memo
-    /// says where the item was at ingest, and an item can be moved between
-    /// boards afterwards. Ordering it first makes the common case one board's
-    /// worth of calls; keeping the rest makes a stale memo slow, not wrong.
-    fn project_search_order(&self, task_id: &str) -> Vec<usize> {
+    /// Yields every board **in scope**, remembered one first: the memo says
+    /// where the item was at ingest, and an item can be moved between boards
+    /// afterwards. Ordering it first makes the common case one board's worth
+    /// of calls; keeping the rest makes a stale memo slow, not wrong.
+    ///
+    /// `scope` is the workflow's `projects` (#626); an empty scope means every
+    /// board, which is the pre-#626 behaviour an older Orchestrator gets. The
+    /// remembered board is dropped when it is out of scope — a memo pointing
+    /// somewhere this workflow does not draw from is stale in the way that
+    /// matters.
+    fn project_search_order(&self, task_id: &str, scope: &[String]) -> Vec<usize> {
+        let in_scope = |index: usize| {
+            scope.is_empty()
+                || self
+                    .config
+                    .projects
+                    .get(index)
+                    .is_some_and(|p| scope.iter().any(|name| name == &p.name))
+        };
         let remembered = self
             .item_project
             .lock()
             .ok()
             .and_then(|memo| memo.get(task_id).copied())
-            .filter(|index| *index < self.config.projects.len());
+            .filter(|index| *index < self.config.projects.len())
+            .filter(|index| in_scope(*index));
         let mut order: Vec<usize> = remembered.into_iter().collect();
-        order.extend((0..self.config.projects.len()).filter(|i| Some(*i) != remembered));
+        order.extend(
+            (0..self.config.projects.len())
+                .filter(|i| Some(*i) != remembered)
+                .filter(|i| in_scope(*i)),
+        );
         order
     }
 

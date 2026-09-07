@@ -586,6 +586,163 @@ async fn claim_on_a_deleted_issue_is_an_error() {
     assert!(err.message.contains("task cancel"), "{}", err.message);
 }
 
+/// A write-back goes to the board **the workflow draws from**, not to
+/// whichever board happens to carry an item with that id (#626).
+///
+/// The hazard this fixes: an issue can sit on several boards, so with the
+/// ingest memo gone (a restart) the search used to walk every board in config
+/// order. Here `board-3` comes second in config but is the only one the
+/// workflow names, and `board-1` also carries `I_1` — without the scope the
+/// write would land on `board-1`, the board this task never came from. Once
+/// the boards stopped sharing one status vocabulary (the whole point of
+/// #626), that also meant failing with an error naming the wrong board.
+#[tokio::test]
+async fn a_writeback_goes_to_the_board_the_workflow_draws_from() {
+    let shared = Shared::default();
+    let mut srv = server(&shared);
+
+    // Two boards configured, no ingest first — so nothing is memoised and the
+    // scope is the only thing that can decide.
+    let resp = call(
+        &mut srv,
+        1,
+        "initialize",
+        init_params_two_boards_at("0.7.0"),
+    )
+    .await;
+    assert!(resp.error.is_none(), "initialize failed: {:?}", resp.error);
+
+    // The only board queried answers as the organization-rooted board-3.
+    shared.push(Canned::Data(
+        json!({ "data": { "organization": { "projectV2": {
+        "id": "PROJ_3",
+        "field": { "id": "FIELD_3", "options": [
+            { "id": "OPT_done", "name": "Done" } ] },
+        "items": { "nodes": [ { "id": "ITEM_3", "content": { "id": "I_1" } } ] }
+    } } } }),
+    ));
+    shared.push(Canned::Data(
+        json!({ "data": { "updateProjectV2ItemFieldValue": {
+        "projectV2Item": { "id": "ITEM_3" } } } }),
+    ));
+    let resp = call(
+        &mut srv,
+        2,
+        "task/update_status",
+        json!({ "task_id": "I_1", "status": "Done", "projects": ["board-3"] }),
+    )
+    .await;
+    assert!(resp.error.is_none(), "update failed: {:?}", resp.error);
+
+    // board-1 is first in config order and also carries `I_1`, so an
+    // unscoped search would have queried it first and written there.
+    let requests = shared.all_requests();
+    assert_eq!(
+        requests.len(),
+        2,
+        "one resolve + one mutation: {requests:?}"
+    );
+    assert_eq!(requests[0]["variables"]["number"], 3);
+    assert!(
+        requests[0]["query"]
+            .as_str()
+            .unwrap()
+            .contains("organization(login:"),
+        "the org-rooted board is the one named"
+    );
+    assert_eq!(shared.last_request()["variables"]["project"], "PROJ_3");
+}
+
+/// With no scope (an older Orchestrator sends none), the search still covers
+/// every board — the pre-#626 behaviour (#542).
+///
+/// Pinned because the alternative reading of "scope the write-back" is to
+/// refuse an unscoped one, and that would break every 0.6-era Orchestrator
+/// for a field it cannot know to send.
+#[tokio::test]
+async fn an_unscoped_writeback_still_searches_every_board() {
+    let shared = Shared::default();
+    let mut srv = server(&shared);
+
+    let resp = call(
+        &mut srv,
+        1,
+        "initialize",
+        init_params_two_boards_at("0.7.0"),
+    )
+    .await;
+    assert!(resp.error.is_none());
+
+    // board-1 does not hold the item; board-3 does. Both are searched.
+    shared.push(Canned::Data(json!({ "data": { "user": { "projectV2": {
+        "id": "PROJ_1",
+        "field": { "id": "FIELD_1", "options": [ { "id": "OPT_done", "name": "Done" } ] },
+        "items": { "nodes": [] }
+    } } } })));
+    shared.push(Canned::Data(
+        json!({ "data": { "organization": { "projectV2": {
+        "id": "PROJ_3",
+        "field": { "id": "FIELD_3", "options": [ { "id": "OPT_done3", "name": "Done" } ] },
+        "items": { "nodes": [ { "id": "ITEM_3", "content": { "id": "I_1" } } ] }
+    } } } }),
+    ));
+    shared.push(Canned::Data(
+        json!({ "data": { "updateProjectV2ItemFieldValue": {
+        "projectV2Item": { "id": "ITEM_3" } } } }),
+    ));
+    let resp = call(
+        &mut srv,
+        2,
+        "task/update_status",
+        json!({ "task_id": "I_1", "status": "Done" }),
+    )
+    .await;
+    assert!(resp.error.is_none(), "update failed: {:?}", resp.error);
+    assert_eq!(
+        shared.all_requests().len(),
+        3,
+        "both boards resolved, then the mutation"
+    );
+}
+
+/// When the item is on no board **in scope**, the error names the boards the
+/// workflow draws from — not every board the plugin owns (#626).
+#[tokio::test]
+async fn a_writeback_outside_the_scope_names_the_scope() {
+    let shared = Shared::default();
+    let mut srv = server(&shared);
+
+    let resp = call(
+        &mut srv,
+        1,
+        "initialize",
+        init_params_two_boards_at("0.7.0"),
+    )
+    .await;
+    assert!(resp.error.is_none());
+
+    shared.push(Canned::Data(
+        json!({ "data": { "organization": { "projectV2": {
+        "id": "PROJ_3",
+        "field": { "id": "FIELD_3", "options": [ { "id": "OPT_done", "name": "Done" } ] },
+        "items": { "nodes": [] }
+    } } } }),
+    ));
+    let resp = call(
+        &mut srv,
+        2,
+        "task/update_status",
+        json!({ "task_id": "I_404", "status": "Done", "projects": ["board-3"] }),
+    )
+    .await;
+    let message = resp.error.expect("not found").message;
+    assert!(message.contains("board-3"), "{message}");
+    assert!(
+        !message.contains("board-1"),
+        "a board outside the scope must not be named: {message}"
+    );
+}
+
 #[tokio::test]
 async fn update_status_rejects_unknown_option() {
     let shared = Shared::default();

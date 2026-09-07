@@ -246,6 +246,10 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         let params = TaskUpdateStatusParams {
             task_id: record.source_task_id.clone(),
             status: status.clone(),
+            // Scope the write to the domains this workflow draws from (#626).
+            // The source cannot derive it: `task/update_status` names a task,
+            // and an issue can sit on several of the plugin's boards.
+            projects: wf.projects.clone(),
         };
         match source
             .call::<_, Value>(method::TASK_UPDATE_STATUS, &params)

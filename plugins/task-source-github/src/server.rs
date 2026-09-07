@@ -317,7 +317,7 @@ where
         };
         match session
             .client
-            .update_status(&parsed.task_id, &parsed.status)
+            .update_status(&parsed.task_id, &parsed.status, &parsed.projects)
             .await
         {
             Ok(()) => Reply::respond(Response::result(id, Value::Null)),
