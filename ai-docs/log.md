@@ -1,5 +1,9 @@
 # Bundle Update Log
 
+## 2026-09-08
+
+* **Verified**: [ADR-0069](/decisions/adr-0069-workflow-projects.md)（2026-09-08）。実機（Status 語彙の違う実 GitHub ProjectsV2 2 枚 + 実 herdr + 実 Claude Code）で #626 の検収項目を全件通し、`status` を `stable` にした。**取り込みが名指した domain に閉じる**ことは、#8 だけに置いた `Todo` カードを `projects = ["e2e-board"]` の workflow が 2 poll を超えて拾わず、#7 に無い `Backlog → Shipped` のレーンが #8 だけから取り込んで書き戻したことで確認。**書き戻しが由来のボードに着地する**ことは、同じ issue を両ボードに載せて #7 側だけが動いたことで確認（メモが有効な経路のみ。再起動後のフォールバック探索は結合テストまで）。閉路検査は `#7: Todo → Done` + `#8: Done → Todo` が valid で、#8 側を `e2e-board` に向けると閉路。旧 config は ``missing field `projects` ``、旧プラグイン（`<0.7`）は F-54 の `protocol-incompatible` で、どちらも起動しない。#628 の option 実在検査は #8 に無い列名 3 種を実在一覧つきで error にした。**notion は e2e のロスターに無く対象外。** 手順は live-e2e スキルの S8 に残した
+
 ## 2026-09-07
 
 * **Update**: [ADR-0069](/decisions/adr-0069-workflow-projects.md) §8 / [task-source-github](/components/task-source-github.md) / [plugin-protocol](/components/plugin-protocol.md) — #626: **status の書き戻しも workflow が引く domain に閉じた。** 取り込みだけを絞ると、#542 の「メモが外れても遅いだけで間違わない」が成立しなくなる —— あれは全ボードが同じ Status 語彙を共有していたから言えたことで、#626 がその前提を壊した。github の issue とボードは多対多なので、再起動でメモが消えた状態で同じ issue が 2 枚に載っていると、由来しないボードの item へ着地する（語彙が違えば、由来しないボードを名指すハードエラーになる）。`TaskUpdateStatusParams.projects`（protocol 0.7.0）で探索をスコープに閉じ、スコープ外を指すメモは stale として捨てる。**空のスコープは従来どおり全ボード探索**（0.6 世代の Orchestrator はこのフィールドを送れないので、拒否するほうが不正確さより悪い）

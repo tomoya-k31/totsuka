@@ -197,6 +197,54 @@ C-3（herdr 内部の 5 秒下限）は独立に測れない。dispatch のロ�
 live-e2e にも存在しない。測るなら database を 2 つ作るところから要る — 測っていない
 ことを報告に明記する。
 
+## S8. ボード単位のレーン語彙（#626 / ADR-0069）🤖
+
+**設定形式が `[[workflows]].source` → `projects` に変わったので、まず S1 が通ること
+（1 ボード構成の等価性）を確かめてから回す。** 検収済み（2026-09-08、全項目 PASS）。
+
+サンドボックスには **Status 語彙の違う 2 枚目のボード Project #8「totsuka e2e B (#626)」**
+がある（`Backlog / Todo / In Progress / Done / Shipped`。#7 に無い `Backlog` / `Shipped` と、
+#8 に無い `Design` / `Design Review` / `Review` が対照になる）。`github.sh` は
+`E2E_GH_PROJECT` を見ているので、**#8 を叩くときは環境変数で上書きする**
+（キャッシュのキーにも project 番号が入るので混ざらない）:
+
+```bash
+E2E_GH_PROJECT=8 bash .claude/skills/live-e2e/scripts/github.sh status
+E2E_GH_PROJECT=8 bash .claude/skills/live-e2e/scripts/github.sh seed cli <n> Backlog
+E2E_GH_PROJECT=8 bash .claude/skills/live-e2e/scripts/github.sh wait cli <n>
+```
+
+`verify` は `Done` 決め打ちなので #8 の `Shipped` レーンには使えない。`status` で列を読む。
+
+**3 枚のカードで 1 周する**（2 本の implement が並列に走るので `max_concurrency = 2` が要る）:
+
+| カード | 置き場所 | 期待 | 何の検収か |
+|---|---|---|---|
+| web issue | **#7 と #8 の両方**に `Todo` | `github-task`（`projects = ["e2e-board"]`）が拾い、**#7 だけ** `In Progress → Done`。#8 の同じ issue は `Todo` のまま | 書き戻しが由来のボードに閉じる（§8。**メモが有効な経路のみ** — 再起動後のフォールバックは結合テストまで） |
+| cli issue | #8 だけに `Backlog` | `board-b-backlog`（`projects = ["e2e-board-b"]`）が拾い、#8 で `In Progress → Shipped` | #7 に無い列名のレーンが動く（旧 `(source, 列名)` なら無言で 0 件） |
+| cli issue | #8 だけに `Todo` | **どの workflow にも拾われない**（`tt task list --json` の `source_task_id` に issue の node id が現れない）。2 poll 以上待つ | 取り込みが名指した domain に閉じる |
+
+**3 枚目は cli でなければならない。** web repo は `[[repositories]].project = "e2e-board"`
+なので、#8 に載せても repo の紐づけで落ちる —— それでは `projects` の絞り込みを測った
+ことにならない。cli repo は `project = "e2e-board-b"` に紐づけてある。
+
+`tt run` を起動する前に、`--config` で別ファイルを指して**オフライン/オンラインの検査だけ**を
+先に済ませる（人間の関与ゼロ。online は `[slack]` の `op://` を含まない github だけの
+config で回すこと）:
+
+| 検証点 | やり方 | 期待 |
+|---|---|---|
+| 旧 config が落ちる | `source = "github"` のままの config で `config validate --offline` | ``missing field `projects` `` で exit 1 |
+| 旧プラグインの拒否（F-54） | 移行後 config + `<0.7` の github で `config validate`（online） | `protocol-incompatible … orchestrator is 0.7.0` |
+| 表現不能な 3 状態 | `projects = []` / `["e2e-board", "slack"]` / `["no-such-board"]` を `--offline` | 3 つとも別のメッセージで exit 1 |
+| 閉路検査が domain で分かれる | `#7: Todo → Done` と `#8: Done → Todo`（`trigger = Done`, `on_success = Todo`） | valid。対照として #8 側を `e2e-board` に向けると閉路 |
+| option の実在検査（#628） | #8 の workflow に `trigger = { status = "Design" }` / `triage_status = "Nope"` を書いて online validate | 実在 option 一覧つきで error。**#8 に紐づく repo が 1 つも無いと先に「no repository is bound」で落ちる**ので、cli を紐づけてから |
+| `setup` の生成物 | `--answers` で github / slack recipe | `projects = ["github-board"]` と `[[projects]] name = "slack"` が出て `validate --offline` を通る |
+
+> `updateProjectV2Field` で Status の option を書き換えるとき、入力に `projectId` は
+> 無い（`fieldId` だけ）。option 全体を並べ直すので、既存の option も省略せず書く。
+> **既存 item が付いている option を落とすとその item の Status が消える。**
+
 ## S6. 未検証（今回踏めていない領域）
 
 次の機会に足す。**「やっていない」ことを報告に明記する**こと:
