@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](slack-setup.ja.md)
 
-<!-- generated-from: ai-docs/operations/slack-quickstart.md sha256:0e70db572223eb6b9d5eb68f7b6f3ebd864a8ed188125f5f70b012409d5a9592 -->
+<!-- generated-from: ai-docs/operations/slack-quickstart.md sha256:54a60d7edd7d5bc2f4ed2e3c95cb8b60ba13012459772372a379e1bbd59c9042 -->
 
 # Setting up the Slack source
 
@@ -154,7 +154,7 @@ To try it end to end, have someone mention you. After the agent finishes, a draf
 | `doctor` reports `invalid_auth` or `token_revoked` | The token was revoked. Reissue it and update wherever you stored it |
 | `doctor` reports an identity mismatch | The token belongs to someone else, or `target_user_id` is wrong. This is refused on purpose, to prevent posting as another person |
 | Mentions do not become tasks | Check that the mention is `@you` (only channels you are in are visible), that `run --watch` is running, and that the message is a plain post — edits and bot posts are ignored |
-| Reacting does not create a task | Check that a workflow has `trigger = { reaction = "…" }`, that it sits **before** the catch-all `trigger = {}` (`totsuka config validate` warns about this and names the fix), that the emoji name matches (👀 is `eyes`, 👁 is `eye`; a custom emoji arrives under the name actually clicked, so list aliases too), that **you** were the one who reacted, that the app was reinstalled with a manifest containing `reactions:read` — without that scope the event never arrives **and nothing reports an error** — and that the message was not **already handled as a mention**: both paths share one set of processed messages, so reacting to a message that already became a task does nothing |
+| Reacting does not create a task | Check that a workflow has `trigger = { reaction = "…" }` (**order in the file does not matter** — mentions and reactions arrive on separate event paths, so a reaction workflow written after the catch-all is not hidden by it), that the emoji name matches (👀 is `eyes`, 👁 is `eye`; a custom emoji arrives under the name actually clicked, so list aliases too), that **you** were the one who reacted, that the app was reinstalled with a manifest containing `reactions:read` — without that scope the event never arrives **and nothing reports an error** — and that the message was not **already handled as a mention**: both paths share one set of processed messages, so reacting to a message that already became a task does nothing |
 | Re-adding a reaction does not re-run it | Intended. A message that was handled successfully is not handled again, so removing and re-adding a reaction cannot start a second agent. A message whose fetch **failed** can be retried this way |
 | The draft arrives but the buttons no longer work | They expire after 24 hours, or were evicted once more than 1024 drafts accumulated. Reply by hand from the self-DM copy, or mention again. Drafts survive a restart |
 | You changed the app's scopes | A scope change requires reinstalling the app, which **reissues both `xoxp-` and `xoxb-`**. Update both stored values, then run `doctor`. Updating only one leaves the app half-broken |
