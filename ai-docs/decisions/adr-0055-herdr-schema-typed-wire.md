@@ -3,7 +3,7 @@ type: Decision
 title: ADR-0055 herdr Socket API を下限版の schema から生成した型で受け、互換を CI で機械検査する
 description: "herdr のレスポンスを serde 型で受け、互換を CI の schema 差分で機械検査する決定。型は下限版（0.7.5）のスライス済み schema から 1 組だけ生成し、版ごとの分岐は作らない。protocol 整数は互換の信号として使わず version の semver 判定へ置き換える。実行時は寛容（追加を無視）・CI は厳格（削除と required 追加で落とす）。最新版から生成する案・未知メソッドを試す案・実行時に schema を読む案は却下。"
 tags: [decision, herdr, socket-api, schema, codegen, compatibility, ci, adr]
-generated: { by: claude-code/opus-5, at: 2026-08-23T00:00:00Z }
+generated: { by: claude-code/opus-5, at: 2026-09-10T00:00:00Z }
 verified:
   - { by: claude-code/opus-5, at: 2026-08-23T00:00:00Z }
 status: stable
@@ -58,7 +58,7 @@ serde 構造体が 1 つも無かった**。すべて `serde_json::Value` を
 移行前のガードは `MIN_HERDR_PROTOCOL = 17`。`ping` の `protocol` が 17 未満なら
 起動を拒否していた。**この `protocol` は herdr のバイナリ client↔server wire
 形式の版**（herdr repo の `src/protocol/wire.rs`）で、totsuka が使う NDJSON
-Socket API の版ではない。5 版を実測すると、**両方向に外れている**:
+Socket API の版ではない。6 版を実測すると、**両方向に外れている**:
 
 | 遷移 | protocol | totsuka が使う NDJSON API の実変化 |
 |---|---|---|
@@ -66,12 +66,16 @@ Socket API の版ではない。5 版を実測すると、**両方向に外れ�
 | 0.7.4 → 0.7.5 | 16 → 17 | **`agent.send` 削除** → `agent.prompt` / `agent.wait` 他 5 追加 |
 | 0.7.5 → 0.8.0 | 17 → 19 | メソッド +1（`workspace.move_block`）のみ |
 | 0.8.0 → 0.8.2 | 19 → 20 | メソッド +1（`pane.input.set`）のみ |
+| 0.8.2 → 0.9.0 | 20 → **22** | メソッドの増減 0。任意プロパティの追加のみ（`workspace.close` の params が `WorkspaceTarget` → `WorkspaceCloseParams` に差し替わり `close_group` が増えた・`workspace.create` に `source_workspace_id`・`ping` の capabilities に 3 つ） |
 
-- **上がっても壊れていない**: 17 → 20 の 3 回の bump で、22 メソッドの request
-  形状の変更 0 件・result 型の削除 0 件・`required` の追加 0 件
+- **上がっても壊れていない**: 17 → 22 の 4 回の bump で、22 メソッドの request
+  形状の変更 0 件・result 型の削除 0 件・`required` の追加 0 件。protocol が 2 つ
+  上がった 0.9.0 でさえ増えたのは任意プロパティだけで、params の `$ref` が別の def
+  に差し替わった `workspace.close` も `workspace_id` 必須は同じ（totsuka が送る形は
+  変わらない）
 - **上がらずに壊れた**: `custom_status` の削除は protocol 16 → 16 で起きた
 
-スキーマ自身の版 `schema_version` も 5 版を通して `1` のままで、これも信号に
+スキーマ自身の版 `schema_version` も 6 版を通して `1` のままで、これも信号に
 ならない（スキーマの*形式*の版であって内容の版ではない）。
 
 つまり、**下限を課したい対象を追跡していない数値では下限を表現できない**。

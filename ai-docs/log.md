@@ -1,5 +1,9 @@
 # Bundle Update Log
 
+## 2026-09-10
+
+* **Update**: herdr **0.9.0** の schema スライスを取り込み、`wire::NEWEST_CHECKED` を 0.8.2 → 0.9.0 に上げた（#635）。[ADR-0055](/decisions/adr-0055-herdr-schema-typed-wire.md) の protocol 実測表に 0.8.2 → 0.9.0 の行を足した — **protocol は 20 → 22 と 2 つ上がったが、22 メソッドの実変化は任意プロパティの追加だけ**（`workspace.close` の params が `WorkspaceTarget` → `WorkspaceCloseParams` に差し替わって `close_group` が増え、`workspace.create` に `source_workspace_id`、`ping` の capabilities に 3 つ）。**totsuka が送る形は変わらない**（`workspace_id` 必須は同じ）ので、下限 0.7.5 から生成した型のままで読み書きできる。`herdr-schema-check.sh` は 0 error（下限 0.7.5 / 上位 3 版 / 22 メソッド）。
+
 ## 2026-09-08
 
 * **Fix**: [task-source-slack](/components/task-source-slack.md) — #632: メンション経路の返信が `<@B> <@A> 本文` と 2 つのメンションで始まっていた。B への前置きはプラグインの機械的なもので正しく、`<@A>`（運用者自身 = 投稿者）はエージェントがプロンプト内の元メッセージを写したもの。2026-09-08 の live-e2e で 2/2 再現（8/23 は出ず、モデル依存）。出口で `<@target_user_id>` を位置を問わず、返信先頭に連なるタグを機械的に除去し、入口で `body_template` の `{text}` から自分宛タグを消して指示文に「前置きは自動、タグや `> ` を書くな」を足した。文中の第三者宛メンションは内容なので残す
