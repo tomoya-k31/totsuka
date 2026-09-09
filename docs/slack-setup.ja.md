@@ -1,7 +1,7 @@
 > 🌐 [English](slack-setup.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/slack-quickstart.md sha256:27d2252cf2a2beff348a776a346d6bfaec55196d03be11a30ce4c37c70e1070e -->
+<!-- generated-from: ai-docs/operations/slack-quickstart.md sha256:54a60d7edd7d5bc2f4ed2e3c95cb8b60ba13012459772372a379e1bbd59c9042 -->
 
 # Slack ソースのセットアップ
 

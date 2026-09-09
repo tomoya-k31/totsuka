@@ -4,7 +4,7 @@ title: Slack セットアップ Quickstart（task-source-slack）
 description: manifest からの Slack アプリ作成 → トークン発行 → トークン保管 → totsuka setup → doctor → run --watch までの導入手順と、手で書く場合のフォールバック、トークン失効・スコープ変更時の対処。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-slack
 tags: [slack, setup, runbook, secrets, doctor]
-generated: { by: claude-code/opus-5, at: 2026-09-10T00:00:00Z }
+generated: { by: claude-code/opus-5, at: 2026-09-10T03:20:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
