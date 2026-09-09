@@ -3,9 +3,10 @@ type: Decision
 title: ADR-0055 herdr Socket API を下限版の schema から生成した型で受け、互換を CI で機械検査する
 description: "herdr のレスポンスを serde 型で受け、互換を CI の schema 差分で機械検査する決定。型は下限版（0.7.5）のスライス済み schema から 1 組だけ生成し、版ごとの分岐は作らない。protocol 整数は互換の信号として使わず version の semver 判定へ置き換える。実行時は寛容（追加を無視）・CI は厳格（削除と required 追加で落とす）。最新版から生成する案・未知メソッドを試す案・実行時に schema を読む案は却下。"
 tags: [decision, herdr, socket-api, schema, codegen, compatibility, ci, adr]
-generated: { by: claude-code/opus-5, at: 2026-09-10T00:00:00Z }
+generated: { by: claude-code/opus-5, at: 2026-09-10T02:45:00+09:00 }
 verified:
   - { by: claude-code/opus-5, at: 2026-08-23T00:00:00Z }
+  - { by: process:herdr-schema-check, at: 2026-09-10T02:45:00+09:00 }
 status: stable
 owner: tomoya-k31
 sources:
