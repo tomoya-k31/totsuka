@@ -30,7 +30,7 @@ pub const FLOOR: &str = "0.7.5";
 /// これより新しい herdr は*未検証*である — 動く公算が高いが、確かめられて
 /// いない。区別できるようにしておくと、動かなかったときに最初に見る場所が
 /// 決まる。
-pub const NEWEST_CHECKED: &str = "0.8.2";
+pub const NEWEST_CHECKED: &str = "0.9.0";
 
 /// totsuka が herdr へ**送る**型。
 ///
