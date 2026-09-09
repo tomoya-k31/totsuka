@@ -1,0 +1,1 @@
+* **Update**: [slack-quickstart](/operations/slack-quickstart.md) のトラブルシュート表から、#554 以前の「リアクション workflow は catch-all より前に置け」を除いた。この制約は Orchestrator が 1 本のリストを first-match していたことに由来し、判定が Slack プラグインへ移ってメンションとリアクションが別のイベント経路になった時点で消えている（[config-reference](/development/config-reference.md) は既にそう書いてあった）。同じファイルの設定例のコメントが「並び順は関係ない」と言う一方で表は逆を言っており、リアクションが無反応なときに**存在しない原因を最初に疑わせる**状態だった。
