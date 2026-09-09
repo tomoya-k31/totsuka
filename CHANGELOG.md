@@ -11,6 +11,13 @@ Note: the plugin protocol is versioned independently of the application (see
 `crates/plugin-protocol`); a totsuka release does not imply a protocol-version
 change.
 
+## [0.7.1](https://github.com/tomoya-k31/totsuka/compare/v0.7.0...v0.7.1) (2026-09-09)
+
+
+### Documentation
+
+* **slack:** quickstart のリアクション順序制約の記述を現状に合わせる ([#637](https://github.com/tomoya-k31/totsuka/issues/637)) ([e5baa49](https://github.com/tomoya-k31/totsuka/commit/e5baa49dd1d4f36de0c761ca22e6535ae2077a03))
+
 ## [0.7.0](https://github.com/tomoya-k31/totsuka/compare/v0.6.4...v0.7.0) (2026-09-07)
 
 
