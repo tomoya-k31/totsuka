@@ -68,8 +68,30 @@ fn value_patterns() -> &'static [(Regex, &'static str)] {
     PATTERNS.get_or_init(|| {
         vec![
             // Authorization scheme + credential -> keep the scheme, drop token.
+            //
+            // The credential must **contain a digit**, or be a 20+ character
+            // run. Without that the pattern ate the next English word after
+            // any occurrence of "token": `user token granted scopes` was
+            // logged as `user token *** scopes`, and `token rotation_enabled`
+            // would go the same way. `Bearer` and `Basic` are rare in prose,
+            // but `token` is not, and the rule has to be one pattern.
+            //
+            // The cost is a credential that is **all letters and shorter than
+            // 20 characters** — those are no longer redacted here. Real
+            // bearer/basic credentials are base64, hex or JWT and carry
+            // digits; the provider-shape pattern below and the secret
+            // *field-name* rule still cover the realistic cases. Widening
+            // this back would re-break plain English, so a genuinely
+            // alphabetic short secret needs a secret-named field, not a
+            // looser value regex.
+            //
+            // (Written as two alternatives rather than a lookahead: the
+            // `regex` crate has no lookaround.)
             (
-                Regex::new(r"(?i)\b(Bearer|Basic|Token)\s+[A-Za-z0-9._~+/=\-]+").unwrap(),
+                Regex::new(
+                    r"(?i)\b(Bearer|Basic|Token)\s+(?:[A-Za-z._~+/=\-]*[0-9][A-Za-z0-9._~+/=\-]*|[A-Za-z0-9._~+/=\-]{20,})",
+                )
+                .unwrap(),
                 "$1 ***",
             ),
             // Provider token shapes -> fully redacted.
@@ -147,6 +169,40 @@ mod tests {
             ("token ghp_0123456789abcdefghijABCD used", "token *** used"),
             ("key sk-abcdefghij0123456789 here", "key *** here"),
             ("slack xoxb-123456789-abcdefg rotated", "slack *** rotated"),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(redact_value(input), expected, "input: {input}");
+        }
+    }
+
+    /// The scheme pattern must not eat an ordinary word after "token".
+    ///
+    /// This is a regression test for a real log line: the Slack plugin's
+    /// startup message `user token granted scopes` reached the log file as
+    /// `user token *** scopes`, which reads as though a credential had been
+    /// caught — it had not, the redactor had simply swallowed the word
+    /// "granted".
+    #[test]
+    fn an_english_word_after_token_is_not_a_credential() {
+        for input in [
+            "user token granted scopes",
+            "token rotation_enabled: false",
+            "Bearer authentication is required",
+            "the token expires soon",
+        ] {
+            assert_eq!(redact_value(input), input, "input: {input}");
+        }
+    }
+
+    /// …but anything that could actually be a credential still goes.
+    #[test]
+    fn credential_shapes_after_a_scheme_are_still_redacted() {
+        let cases = [
+            // carries digits
+            ("auth: Bearer abc123DEF.ghi", "auth: Bearer ***"),
+            ("Basic dXNlcjpwYXNz1", "Basic ***"),
+            // no digits, but far longer than any word that follows "token"
+            ("Bearer abcdefghijklmnopqrstuvwxyz", "Bearer ***"),
         ];
         for (input, expected) in cases {
             assert_eq!(redact_value(input), expected, "input: {input}");
