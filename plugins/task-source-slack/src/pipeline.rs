@@ -1383,19 +1383,20 @@ fn describe_file(file: &SlackFile) -> String {
 
 /// Bytes as the pane shows them (`2.8 KB`), matching how Slack labels a file.
 fn human_size(bytes: u64) -> String {
-    const KB: f64 = 1024.0;
-    const MB: f64 = KB * 1024.0;
-    const GB: f64 = MB * 1024.0;
-    let size = bytes as f64;
-    if size < KB {
-        format!("{bytes} B")
-    } else if size < MB {
-        format!("{:.1} KB", size / KB)
-    } else if size < GB {
-        format!("{:.1} MB", size / MB)
-    } else {
-        format!("{:.1} GB", size / GB)
+    const UNITS: [&str; 3] = ["KB", "MB", "GB"];
+    if bytes < 1024 {
+        return format!("{bytes} B");
     }
+    let mut size = bytes as f64 / 1024.0;
+    let mut unit = 0;
+    // Step up while the *rounded* value would read 1024.0: comparing the raw
+    // value against the next threshold instead labels a file one byte short of
+    // a megabyte "1024.0 KB", which is a unit the reader then has to convert.
+    while unit + 1 < UNITS.len() && (size * 10.0).round() >= 10240.0 {
+        size /= 1024.0;
+        unit += 1;
+    }
+    format!("{size:.1} {}", UNITS[unit])
 }
 
 /// The last `thread_context_limit` thread messages before the mention, as
@@ -1745,11 +1746,15 @@ mod tests {
     }
 
     /// No files, no section — the body of an ordinary mention is unchanged.
+    ///
+    /// Asserted on the section header, not the bare word 「添付」: a mention
+    /// whose own text says "添付します" is content, not a rendered section,
+    /// and matching the word would fail on it.
     #[test]
     fn a_mention_without_attachments_renders_no_section() {
         let (task, _pending) = build_task(&slack_config(), &enriched("300.0"), None);
         let body = task.body.expect("body is set");
-        assert!(!body.contains("添付"), "body: {body}");
+        assert!(!body.contains("## 添付ファイル"), "body: {body}");
     }
 
     /// A file Slack described sparsely (no MIME type, no size, no permalink)
@@ -1775,6 +1780,10 @@ mod tests {
         assert_eq!(human_size(2867), "2.8 KB");
         assert_eq!(human_size(5 * 1024 * 1024), "5.0 MB");
         assert_eq!(human_size(3 * 1024 * 1024 * 1024), "3.0 GB");
+        // One byte short of the next unit: rounding to one decimal would read
+        // "1024.0 KB" / "1024.0 MB" without the step-up above.
+        assert_eq!(human_size(1024 * 1024 - 1), "1.0 MB");
+        assert_eq!(human_size(1024 * 1024 * 1024 - 1), "1.0 GB");
     }
 
     fn slack_config() -> SlackConfig {

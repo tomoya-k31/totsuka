@@ -50,10 +50,12 @@ pub struct SlackFile {
 
 /// Parse a message's `files` array, tolerating absent fields.
 ///
-/// Public because both delivery paths need it and neither has a
-/// [`SlackMessage`]: a live `message` event is a raw `Value`
-/// ([`crate::mention::MentionFilter::assess`]), while the reaction path
-/// re-fetches the message through `parse_message`.
+/// Public because the two live-event paths have only a raw `Value`, not a
+/// [`SlackMessage`]: mention detection
+/// ([`crate::mention::MentionFilter::assess`]) and the channel watch's live
+/// path (`crate::watch`). The reaction path and the watch's startup backfill
+/// need no access — both already hold a `SlackMessage`, whose `files` field
+/// `parse_message` filled with this.
 ///
 /// A message with no `files` key yields an empty vec, which is the
 /// overwhelmingly common case and renders nothing.
