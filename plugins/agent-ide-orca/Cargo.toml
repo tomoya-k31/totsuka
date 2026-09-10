@@ -25,6 +25,10 @@ path = "src/main.rs"
 
 [dependencies]
 plugin-protocol.workspace = true
+# For `runtime::init_tracing` only — the one place that knows how a
+# plugin's stderr logging must be set up (RUST_LOG honoured, ANSI off
+# when the host is capturing the pipe).
+plugin-sdk.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 semver = { workspace = true, features = ["serde"] }
@@ -37,4 +41,3 @@ thiserror.workspace = true
 # built-in fallbacks baked into the binary.
 toml.workspace = true
 tracing.workspace = true
-tracing-subscriber.workspace = true

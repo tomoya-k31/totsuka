@@ -34,4 +34,3 @@ thiserror.workspace = true
 # fallbacks baked into the binary.
 toml.workspace = true
 tracing.workspace = true
-tracing-subscriber.workspace = true

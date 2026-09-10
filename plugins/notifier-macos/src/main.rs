@@ -24,9 +24,7 @@ impl SenderFactory for BackendFactory {
 #[tokio::main]
 async fn main() {
     // Logs go to stderr so they never corrupt the stdout NDJSON channel.
-    tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
-        .init();
+    plugin_sdk::runtime::init_tracing();
 
     let mut server = Server::new(BackendFactory);
     let mut lines = BufReader::new(tokio::io::stdin()).lines();

@@ -18,6 +18,39 @@ use crate::dispatch::Reply;
 use crate::lookup::LookupClient;
 use crate::submit::SubmitClient;
 
+/// Install the plugin's tracing subscriber on **stderr**, honouring
+/// `RUST_LOG` and colouring only for a human.
+///
+/// Every plugin used to write this by hand as
+/// `tracing_subscriber::fmt().with_writer(stderr).init()`, and that spelling
+/// is wrong in two ways that are silent:
+///
+/// - **`RUST_LOG` was ignored.** Only the *free function* `fmt::init()` reads
+///   the environment; the **builder**'s `.init()` pins the level at INFO. So
+///   `RUST_LOG=my_plugin=debug` produced no error, no warning, and no debug
+///   output — the flag looked accepted and did nothing. Every `debug!` in
+///   every plugin was unreachable.
+/// - **ANSI was always on.** The host captures this stderr through a pipe and
+///   re-emits each line as a JSON log record, so the escape sequences were
+///   embedded verbatim and reached the log file as `\u001b[2m…`, which is
+///   unreadable at exactly the moment someone is reading logs to debug
+///   something. `fmt` does no terminal detection of its own.
+///
+/// Call this once, first thing in `main`.
+pub fn init_tracing() {
+    use std::io::IsTerminal;
+
+    tracing_subscriber::fmt()
+        // stderr so logs never corrupt the stdout JSON-RPC channel.
+        .with_writer(std::io::stderr)
+        .with_ansi(std::io::stderr().is_terminal())
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
+}
+
 /// A clonable handle onto the shared writer task; each `send` is one NDJSON
 /// line on stdout. Send failures mean the host is gone — callers treat them
 /// as shutdown, not errors.
