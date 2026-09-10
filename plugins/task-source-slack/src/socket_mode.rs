@@ -64,9 +64,9 @@ pub struct SocketModeOptions {
     /// the session reconnects. Slack pings every few seconds; a healthy
     /// connection never goes this quiet.
     pub idle_timeout: Duration,
-    /// Connected for this long, across all sessions, with **`hello` and
-    /// nothing else** → warn once that event delivery may be switched off
-    /// app-side. See `eventless_warning`.
+    /// This long since the **first `hello`**, across all sessions, with
+    /// `hello` and nothing else → warn once that event delivery may be
+    /// switched off app-side. See `eventless_warning`.
     pub eventless_warn_after: Duration,
 }
 
@@ -98,22 +98,28 @@ impl Default for SocketModeOptions {
 /// most once per process — the caller latches `already_warned`.
 fn eventless_warning(
     saw_event: bool,
-    connected_for: Duration,
+    since_hello: Option<Duration>,
     threshold: Duration,
     already_warned: bool,
 ) -> Option<String> {
-    if saw_event || already_warned || connected_for < threshold {
+    // `None` = no `hello` has ever arrived, so the socket never proved it
+    // speaks Socket Mode at all. That is an outage or a misrouted endpoint,
+    // not a delivery switch, and saying "received `hello` only" there would
+    // both be false and hide the real failure. The clock is deliberately
+    // "since the first `hello`" for the same reason.
+    let since_hello = since_hello?;
+    if saw_event || already_warned || since_hello < threshold {
         return None;
     }
     Some(format!(
-        "socket mode: connected for {}m and received `hello` only — no events at all. \
+        "socket mode: connected (hello) {}m ago and received `hello` only — no events at all. \
          If you expect mentions or reaction triggers, check the Slack app's Event \
          Subscriptions: **Enable Events** is a separate switch from Socket Mode, and \
          with it off the connection succeeds and nothing is ever delivered (the \
          subscribed-event list still shows in the UI). Adding events also needs a \
          Reinstall to Workspace. A quiet workspace looks the same, so this is only a \
          hint — it is not repeated.",
-        connected_for.as_secs() / 60
+        since_hello.as_secs() / 60
     ))
 }
 
@@ -157,7 +163,7 @@ async fn run<T: SlackTransport>(
     // Eventless-connection advisory state, kept across sessions: a run that
     // reconnects every minute must not restart the clock each time, or the
     // threshold is never reached.
-    let mut first_connected_at: Option<std::time::Instant> = None;
+    let mut first_hello_at: Option<std::time::Instant> = None;
     let mut saw_event = false;
     let mut warned_eventless = false;
     loop {
@@ -183,17 +189,21 @@ async fn run<T: SlackTransport>(
             }
         };
 
-        first_connected_at.get_or_insert_with(std::time::Instant::now);
-        let outcome = session(&url, &tx, options.idle_timeout, &mut saw_event).await;
+        let outcome = session(
+            &url,
+            &tx,
+            options.idle_timeout,
+            &mut saw_event,
+            &mut first_hello_at,
+        )
+        .await;
 
-        if let Some(started) = first_connected_at
-            && let Some(warning) = eventless_warning(
-                saw_event,
-                started.elapsed(),
-                options.eventless_warn_after,
-                warned_eventless,
-            )
-        {
+        if let Some(warning) = eventless_warning(
+            saw_event,
+            first_hello_at.map(|at| at.elapsed()),
+            options.eventless_warn_after,
+            warned_eventless,
+        ) {
             warned_eventless = true;
             tracing::warn!("{warning}");
         }
@@ -247,6 +257,11 @@ async fn session(
     // than `hello` arrives, and never cleared. Drives the eventless-
     // connection advisory (see `eventless_warning`).
     saw_event: &mut bool,
+    // Also latched across sessions: when the **first** `hello` arrived. The
+    // eventless advisory measures from here, not from the first connection
+    // attempt — a socket that never reaches `hello` is an outage, and must
+    // not be described as one that only ever received `hello`.
+    first_hello_at: &mut Option<std::time::Instant>,
 ) -> SessionEnd {
     let (mut stream, _) = match connect_async(url).await {
         Ok(ok) => ok,
@@ -304,7 +319,9 @@ async fn session(
             .get("type")
             .and_then(serde_json::Value::as_str)
             .unwrap_or("?");
-        if envelope_type != "hello" {
+        if envelope_type == "hello" {
+            first_hello_at.get_or_insert_with(std::time::Instant::now);
+        } else {
             *saw_event = true;
         }
         tracing::debug!(
@@ -397,7 +414,7 @@ mod tests {
         let past = Duration::from_secs(20 * 60);
 
         // The shape it is for: long enough, nothing but `hello`, not yet said.
-        let warning = super::eventless_warning(false, past, threshold, false)
+        let warning = super::eventless_warning(false, Some(past), threshold, false)
             .expect("an eventless connection past the threshold warns");
         assert!(
             warning.contains("Enable Events"),
@@ -406,11 +423,17 @@ mod tests {
 
         // Any real envelope means delivery works — a quiet workspace after
         // that is not this problem.
-        assert!(super::eventless_warning(true, past, threshold, false).is_none());
+        assert!(super::eventless_warning(true, Some(past), threshold, false).is_none());
         // Before the threshold, silence is just silence.
-        assert!(super::eventless_warning(false, threshold / 2, threshold, false).is_none());
+        assert!(super::eventless_warning(false, Some(threshold / 2), threshold, false).is_none());
         // Once per process, not once per reconnect.
-        assert!(super::eventless_warning(false, past, threshold, true).is_none());
+        assert!(super::eventless_warning(false, Some(past), threshold, true).is_none());
+        // **No `hello` ever** is an outage, not a delivery switch. Saying
+        // "received `hello` only" there is both false and covers up the real
+        // failure — `SessionEnd::Failed` includes "connect failed" and
+        // "closed before hello", so this arm is reached by a socket that
+        // never connected at all.
+        assert!(super::eventless_warning(false, None, threshold, false).is_none());
     }
 
     use super::*;
