@@ -11,6 +11,14 @@ Note: the plugin protocol is versioned independently of the application (see
 `crates/plugin-protocol`); a totsuka release does not imply a protocol-version
 change.
 
+## [0.7.2](https://github.com/tomoya-k31/totsuka/compare/v0.7.1...v0.7.2) (2026-09-10)
+
+
+### Bug Fixes
+
+* **plugins:** プラグインの RUST_LOG を効くようにし、Slack リアクションの無言 drop に理由ログを入れる ([#639](https://github.com/tomoya-k31/totsuka/issues/639)) ([0c0caab](https://github.com/tomoya-k31/totsuka/commit/0c0caab5e66ba7f9da48eb1a773194822f14b12f))
+* **task-source-slack:** 無言で起きる設定ミス・誤検知 3 件に信号を足す ([#641](https://github.com/tomoya-k31/totsuka/issues/641)) ([a2ee10c](https://github.com/tomoya-k31/totsuka/commit/a2ee10ce2ddf6af920abbde0cdf0fc36e79a1958))
+
 ## [0.7.1](https://github.com/tomoya-k31/totsuka/compare/v0.7.0...v0.7.1) (2026-09-09)
 
 
