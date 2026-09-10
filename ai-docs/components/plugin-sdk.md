@@ -4,7 +4,7 @@ title: plugin-sdk クレート
 description: task_source プラグイン作成用のヘルパークレート。単一 writer タスクの stdio ランタイム・JSON-RPC dispatch ボイラープレート（TaskSourceHandler）・task/submit クライアント（バックオフ再送）・ポーリング型ソース向け poll_loop・trigger キーの未知検査・trigger.assignee 条件の解釈・チャンネル監視トリガ（trigger.channel）の解釈とバックフィル窓の定義を提供する。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/plugin-sdk
 tags: [rust, crate, plugin, sdk, task-source, push]
-generated: { by: claude-code/opus-5, at: 2026-09-06T04:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-10T11:40:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -17,7 +17,7 @@ owner: tomoya-k31
 
 | モジュール | 内容 |
 |---|---|
-| `runtime` | stdio NDJSON ランタイム。**単一 writer タスク（mpsc）が stdout を専有**し、返信行とバックグラウンドの `task/submit` リクエスト行が部分行で交錯しないことを構造的に保証（従来の read ループ内 inline 書き込みの恒久修正）。`serve()` は response 行（`id` + result/error、`method` なし）を `SubmitClient` へ、それ以外を `LineHandler` へ配路。`Writer::from_channel` でテスト/カスタムトランスポートにも載る |
+| `runtime` | stdio NDJSON ランタイム。**`init_tracing()` が全プラグイン共通のログ初期化**（#639）—— stderr 出力・`RUST_LOG` 準拠（未設定なら `info`）・**ANSI は stderr が TTY のときだけ**。各プラグインが手書きしていた `tracing_subscriber::fmt().with_writer(stderr).init()` は 2 点で黙って壊れていた: `RUST_LOG` を読むのは*自由関数*の `fmt::init()` だけで**ビルダーの `.init()` は INFO 固定**（`debug!` が全プラグインで到達不能だった）、かつ ANSI が常時 on なので**ホストがパイプ経由で拾って JSON ログにエスケープ列（`\u001b[2m` 等）を埋め込んでいた**。どちらもエラーも警告も出ないので、ログを見て調べようとした人が静かに空振りする。**単一 writer タスク（mpsc）が stdout を専有**し、返信行とバックグラウンドの `task/submit` リクエスト行が部分行で交錯しないことを構造的に保証（従来の read ループ内 inline 書き込みの恒久修正）。`serve()` は response 行（`id` + result/error、`method` なし）を `SubmitClient` へ、それ以外を `LineHandler` へ配路。`Writer::from_channel` でテスト/カスタムトランスポートにも載る |
 | `dispatch` | `Reply` / `request_id` / `parse_params` と、型付き **`TaskSourceHandler`** trait（initialize / config_validate / update_status / result_publish）。`TaskSourceServer` が trait を `LineHandler` に変換し、PARSE_ERROR・notification 無応答・shutdown・METHOD_NOT_FOUND を含む wire protocol 全体を実装。**0.2.0（#190）**: `tasks_fetch` は trait・dispatch とも削除済み — 全 task_source は push（`task/submit`）専用 |
 | `submit` | **`SubmitClient`**: `task/submit` を送り persist-before-ack の結果を待つ。ack 3 値（`accepted`/`duplicate`/`rejected`）は**最終**（再送しない）。JSON-RPC error（`NOT_ACCEPTING`/`SUBMIT_OVERLOADED`/`INTERNAL_ERROR`）・writer 喪失・ack timeout（30s）は指数バックオフ（1s→…→30s、最大 5 回）で再送 — submit は冪等なので再送は常に安全（ack 喪失後の再送は `duplicate` で吸収）。5 回で `GaveUp`（ソースシステムが durable origin なので恒久喪失なし）。clone 共有の pending map を `serve()` が解決 |
 | `lookup` | **`LookupClient`**: `task/lookup` を送り「この会話は既知か / どのリポジトリか」を得る（0.2.4、#242）。**失敗はエラー条件ではない** — `submit` と違い最終的に通す必要がなく、タイムアウトやエラーは単に「答えが無い」なので、**リトライもバックオフもしない**（1 回・タイムアウト・`Lookup::Unknown`）。再試行しても呼び出し側が同じフォールバックを待たされるだけ。`Lookup::{Known{repo}, New, Unknown{reason}}` の 3 値で、`skips_resolution()` が true になるのは `Known` のみ — **未応答を「既知」と読むと会話がリポジトリ無しでディスパッチされる**ため、`Unknown` は必ず false。orchestrator はエンジンループで応答するので `git fetch` 等で数秒待たされうる（タイムアウト前提の設計） |

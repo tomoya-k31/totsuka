@@ -7,6 +7,7 @@ name = "agent-ide-herdr"
 version = "0.7.1"
 dependencies = [
  "plugin-protocol",
+ "plugin-sdk",
  "semver",
  "serde",
  "serde_json",
@@ -14,7 +15,6 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -22,6 +22,7 @@ name = "agent-ide-orca"
 version = "0.7.1"
 dependencies = [
  "plugin-protocol",
+ "plugin-sdk",
  "semver",
  "serde",
  "serde_json",
@@ -29,7 +30,6 @@ dependencies = [
  "tokio",
  "toml",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -864,13 +864,13 @@ name = "notifier-macos"
 version = "0.7.1"
 dependencies = [
  "plugin-protocol",
+ "plugin-sdk",
  "semver",
  "serde",
  "serde_json",
  "thiserror",
  "tokio",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -1030,6 +1030,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -1453,7 +1454,6 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -1470,7 +1470,6 @@ dependencies = [
  "tokio",
  "toml",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -1487,7 +1486,6 @@ dependencies = [
  "tokio",
  "toml",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -1506,7 +1504,6 @@ dependencies = [
  "tokio-tungstenite",
  "toml",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

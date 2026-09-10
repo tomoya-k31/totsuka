@@ -681,11 +681,35 @@ async fn check_scopes<T: SlackTransport>(
     reactions: &ReactionTriggers,
 ) {
     let scopes = match api.granted_scopes().await {
-        Ok(Some(scopes)) => scopes,
-        // Unreadable or unsupported: say nothing rather than guess.
-        Ok(None) => return,
+        Ok(Some(scopes)) => {
+            // The scope list itself, so a silent feature (a reaction trigger
+            // that never fires) can be told apart from a missing grant
+            // without another round of guessing. Scope *names* are not a
+            // credential; the token never reaches a log.
+            //
+            // The wording avoids the word `token` followed by another word:
+            // the log redactor rewrites `(Bearer|Basic|Token)\s+<word>` to
+            // `$1 ***`, so "user token granted scopes" printed as
+            // "user token *** scopes" — it ate a plain English word.
+            tracing::debug!(scopes = %scopes.join(" "), "slack user OAuth scopes");
+            scopes
+        }
+        // Unreadable or unsupported: skip the checks — but say so. Staying
+        // silent here made a startup with no warnings look like a startup
+        // that had been verified, which is the opposite of what happened.
+        Ok(None) => {
+            tracing::warn!(
+                "could not read `x-oauth-scopes` off `auth.test` → the scope checks below did \
+                 NOT run. A missing scope will not be reported; verify by hand in the app's \
+                 OAuth & Permissions page."
+            );
+            return;
+        }
         Err(e) => {
-            tracing::debug!(error = %e, "could not read the token's scopes; skipping the scope check");
+            tracing::warn!(
+                error = %e,
+                "could not read the token's scopes → the scope checks below did NOT run"
+            );
             return;
         }
     };

@@ -229,6 +229,26 @@ async fn session(
             continue;
         };
 
+        // Every envelope, before the ack and before any dispatch. This is the
+        // only place that answers "is Slack sending us anything at all" —
+        // below here each unhandled shape is dropped silently, so an
+        // undelivered subscription and a network that swallows server frames
+        // look identical from the outside. `hello` arrives on every connect
+        // and proves nothing on its own.
+        tracing::debug!(
+            envelope = value
+                .get("type")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("?"),
+            event = value
+                .get("payload")
+                .and_then(|p| p.get("event"))
+                .and_then(|e| e.get("type"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("-"),
+            "socket mode: envelope received"
+        );
+
         // Ack FIRST: Slack redelivers envelopes not acked within ~3s, and the
         // ack must never wait on downstream processing.
         if let Some(envelope_id) = value.get("envelope_id").and_then(Value::as_str) {

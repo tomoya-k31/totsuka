@@ -28,9 +28,7 @@ impl TransportFactory for SocketFactory {
 #[tokio::main]
 async fn main() {
     // Logs go to stderr so they never corrupt the stdout NDJSON channel.
-    tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
-        .init();
+    plugin_sdk::runtime::init_tracing();
 
     // Single writer task owns stdout; the server and its stream tasks enqueue
     // lines here so responses and notifications never interleave mid-line.

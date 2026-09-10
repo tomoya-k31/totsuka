@@ -492,12 +492,33 @@ where
                 // the same way a mention does. The event carries no message
                 // body, so the filter runs either side of a re-fetch.
                 SocketEvent::Reaction(event) => {
+                    // Arrival is logged before any filtering (#639): every
+                    // rejection below is a `continue`, so without this line a
+                    // reaction that produced no task is indistinguishable from
+                    // one Slack never delivered — which is exactly the split
+                    // an operator needs first.
+                    tracing::debug!(
+                        user = event.get("user").and_then(|v| v.as_str()).unwrap_or("?"),
+                        reaction = event
+                            .get("reaction")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("?"),
+                        "reaction event received"
+                    );
                     let Some(target) =
                         reaction_target(&event, filter.target_user_id(), &trigger_reactions)
                     else {
+                        tracing::debug!(
+                            "reaction ignored: not the operator, not a configured trigger emoji, \
+                             or not a message item"
+                        );
                         continue;
                     };
                     if filter.is_self_dm_channel(&target.channel) {
+                        tracing::debug!(
+                            channel = target.channel,
+                            "reaction ignored: the self-DM channel is excluded"
+                        );
                         continue;
                     }
                     // Skip a known duplicate without paying for the round trip,
@@ -511,6 +532,11 @@ where
                     // cleared the LRU.
                     let dedup_key = target.dedup_key();
                     if filter.already_processed(&dedup_key) {
+                        tracing::debug!(
+                            dedup_key,
+                            "reaction ignored: this message already produced a task \
+                             (restart clears the LRU)"
+                        );
                         continue;
                     }
                     let fetched = match api.fetch_message(&target.channel, &target.ts).await {
@@ -537,6 +563,12 @@ where
                         }
                     };
                     let Some(mention) = to_mention(&target, fetched) else {
+                        tracing::debug!(
+                            channel = target.channel,
+                            ts = target.ts,
+                            "reaction ignored: the reacted-to message is a bot post or carries \
+                             a subtype (edit, join, share, ...)"
+                        );
                         continue;
                     };
                     // Only now is the trigger definitely going to produce a
@@ -546,6 +578,7 @@ where
                     // keeps the mention path's contract (one message, one
                     // task) even if the two ever race.
                     if !filter.remember(dedup_key) {
+                        tracing::debug!("reaction ignored: the task was claimed by another path");
                         continue;
                     }
                     // From here the two triggers are the same code path.

@@ -27,10 +27,7 @@ impl TransportFactory for ReqwestFactory {
 
 #[tokio::main]
 async fn main() {
-    // Logs go to stderr so they never corrupt the stdout JSON-RPC channel.
-    tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
-        .init();
+    plugin_sdk::runtime::init_tracing();
 
     let stdio = plugin_sdk::runtime::stdio();
     let server = Server::new(ReqwestFactory, stdio.submit.clone(), stdio.lookup.clone());
