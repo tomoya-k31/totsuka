@@ -27,6 +27,60 @@ pub struct AuthIdentity {
     pub user_id: String,
 }
 
+/// One file attached to a message.
+///
+/// **Metadata only.** The manifest asks for no `files:read` scope, so nothing
+/// here can be downloaded and the content never reaches the agent. Carrying
+/// the metadata anyway is what stops the silent version of that: before this,
+/// a message reading "md ファイルにしました" arrived as text with the file
+/// erased from the payload entirely, and the agent answered as if the message
+/// had no attachment at all.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlackFile {
+    /// File name as Slack reports it (`name`, falling back to `title`).
+    pub name: String,
+    /// MIME type (`mimetype`), absent on a tombstone (deleted) file.
+    pub mimetype: Option<String>,
+    /// Size in bytes (`size`).
+    pub size: Option<u64>,
+    /// Slack permalink to the file — the only handle the operator can follow
+    /// by hand, since the agent cannot fetch it.
+    pub permalink: Option<String>,
+}
+
+/// Parse a message's `files` array, tolerating absent fields.
+///
+/// Public because both delivery paths need it and neither has a
+/// [`SlackMessage`]: a live `message` event is a raw `Value`
+/// ([`crate::mention::MentionFilter::assess`]), while the reaction path
+/// re-fetches the message through `parse_message`.
+///
+/// A message with no `files` key yields an empty vec, which is the
+/// overwhelmingly common case and renders nothing.
+pub fn parse_files(value: &Value) -> Vec<SlackFile> {
+    let Some(files) = value.get("files").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    files
+        .iter()
+        .map(|file| {
+            let text = |field: &str| file.get(field).and_then(Value::as_str);
+            SlackFile {
+                // `title` is what a snippet carries instead of `name`; the
+                // last fallback keeps an unnamed file visible rather than
+                // dropping it, which is the whole point of this type.
+                name: text("name")
+                    .or_else(|| text("title"))
+                    .unwrap_or("(名前不明)")
+                    .to_string(),
+                mimetype: text("mimetype").map(str::to_string),
+                size: file.get("size").and_then(Value::as_u64),
+                permalink: text("permalink").map(str::to_string),
+            }
+        })
+        .collect()
+}
+
 /// One message out of a conversation history / thread.
 #[derive(Debug, Clone)]
 pub struct SlackMessage {
@@ -43,6 +97,9 @@ pub struct SlackMessage {
     pub subtype: Option<String>,
     /// Posting bot id, when a bot (or workflow) posted the message.
     pub bot_id: Option<String>,
+    /// Attached files, metadata only ([`SlackFile`]). Empty for a message
+    /// with no attachment.
+    pub files: Vec<SlackFile>,
 }
 
 /// Arguments for `chat.postMessage`.
@@ -598,5 +655,66 @@ fn parse_message(value: &Value) -> SlackMessage {
         thread_ts: text("thread_ts"),
         subtype: text("subtype"),
         bot_id: text("bot_id"),
+        files: parse_files(value),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// The shape `conversations.replies` returns for a message with one
+    /// attachment — the case that arrived as plain text before, with the file
+    /// erased from the payload.
+    #[test]
+    fn a_message_with_files_keeps_their_metadata() {
+        let message = parse_message(&json!({
+            "user": "U1",
+            "text": "md ファイルにしました",
+            "ts": "1.0",
+            "files": [{
+                "name": "auth-flow.md",
+                "mimetype": "text/plain",
+                "size": 2867,
+                "permalink": "https://example.slack.com/files/U1/F1/auth-flow.md"
+            }]
+        }));
+        assert_eq!(message.files.len(), 1);
+        let file = &message.files[0];
+        assert_eq!(file.name, "auth-flow.md");
+        assert_eq!(file.mimetype.as_deref(), Some("text/plain"));
+        assert_eq!(file.size, Some(2867));
+        assert_eq!(
+            file.permalink.as_deref(),
+            Some("https://example.slack.com/files/U1/F1/auth-flow.md")
+        );
+    }
+
+    /// A message with no attachment is the common case and must stay empty —
+    /// the body's attachment section is emitted on `!files.is_empty()`.
+    #[test]
+    fn a_message_without_files_yields_none() {
+        let message = parse_message(&json!({"user": "U1", "text": "hi", "ts": "1.0"}));
+        assert!(message.files.is_empty());
+    }
+
+    /// Every field but the name is optional, and the name itself falls back to
+    /// `title` (what a snippet carries) and then to a placeholder. Dropping an
+    /// under-described file would defeat the point of the type: the agent has
+    /// to learn that *something* was attached.
+    #[test]
+    fn sparse_file_objects_survive_with_fallbacks() {
+        let files = parse_files(&json!({
+            "files": [
+                {"title": "スニペット"},
+                {"mode": "tombstone"}
+            ]
+        }));
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0].name, "スニペット");
+        assert_eq!(files[0].mimetype, None);
+        assert_eq!(files[0].size, None);
+        assert_eq!(files[1].name, "(名前不明)");
     }
 }

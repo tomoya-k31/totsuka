@@ -111,6 +111,35 @@ body_template = """
 > {text}
 """
 
+# Header for the attachment section, emitted only when the message carried
+# files.
+#
+# Placeholders: {count}
+#
+# The "中身は取得していません" sentence is load-bearing, not decoration: the
+# plugin has no `files:read` scope, so it can name a file and nothing more. An
+# agent handed "md ファイルにしました" with the file erased answered as if the
+# message had no attachment; this section is what stops it inventing the
+# content instead of saying it could not read it.
+body_attachment_header = """
+
+## 添付ファイル（{count} 件）
+
+（ファイルの中身は取得していません。名前・種類・サイズだけが分かっています。内容が必要な場合は推測で補わず、添付を読めていないことを返信に書いてください）
+
+"""
+
+# One attachment line. Rendered once per file.
+#
+# Placeholders: {file}
+#
+# `{file}` arrives fully composed (name, MIME type, size, permalink) because
+# every part but the name is optional — same reason `body_thread_line` takes a
+# whole `{line}`.
+body_attachment_line = """
+- {file}
+"""
+
 # Header for the thread-context section, emitted only when context lines were
 # fetched.
 #

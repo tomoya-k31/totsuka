@@ -304,6 +304,10 @@ pub fn to_mention(target: &ReactionTarget, message: SlackMessage) -> Option<Ment
         repo_pin: None,
         task_id_prefix: target.task_id_prefix.clone(),
         instructions_kind: target.instructions_kind.clone(),
+        // Metadata only — see `SlackFile`. The reacted-to message is the one
+        // the operator pointed at, so its attachments are exactly what the
+        // body must not omit.
+        files: message.files,
     })
 }
 
@@ -394,6 +398,7 @@ mod tests {
             thread_ts: None,
             subtype: None,
             bot_id: None,
+            files: Vec::new(),
         }
     }
 

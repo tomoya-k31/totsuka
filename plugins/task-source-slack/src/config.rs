@@ -182,6 +182,8 @@ struct EmbeddedPrompts {
     triage_instructions: String,
     reply_style_suffix: String,
     body_template: String,
+    body_attachment_header: String,
+    body_attachment_line: String,
     body_thread_header: String,
     body_thread_line: String,
     body_thread_unavailable: String,
@@ -222,6 +224,15 @@ pub struct SlackPrompts {
     /// The visible task body. Placeholders: `{sender}` `{channel}` `{text}`.
     #[serde(default = "default_body_template")]
     pub body_template: String,
+    /// Attachment-section header, emitted only when the message carried
+    /// files. Placeholder: `{count}`. States that the content was **not**
+    /// fetched — the plugin has no `files:read` scope.
+    #[serde(default = "default_body_attachment_header")]
+    pub body_attachment_header: String,
+    /// One attachment line. Placeholder: `{file}` (name, MIME type, size and
+    /// permalink, already composed).
+    #[serde(default = "default_body_attachment_line")]
+    pub body_attachment_line: String,
     /// Thread-context section header. Placeholder: `{count}`.
     #[serde(default = "default_body_thread_header")]
     pub body_thread_header: String,
@@ -251,6 +262,8 @@ impl Default for SlackPrompts {
             triage_instructions: DEFAULTS.triage_instructions.clone(),
             reply_style_suffix: DEFAULTS.reply_style_suffix.clone(),
             body_template: DEFAULTS.body_template.clone(),
+            body_attachment_header: DEFAULTS.body_attachment_header.clone(),
+            body_attachment_line: DEFAULTS.body_attachment_line.clone(),
             body_thread_header: DEFAULTS.body_thread_header.clone(),
             body_thread_line: DEFAULTS.body_thread_line.clone(),
             body_thread_unavailable: DEFAULTS.body_thread_unavailable.clone(),
@@ -272,6 +285,10 @@ impl SlackPrompts {
         ("triage_instructions", &[]),
         ("reply_style_suffix", &["style"]),
         ("body_template", &["sender", "channel", "text"]),
+        ("body_attachment_header", &["count"]),
+        // One placeholder, carrying the whole composed line — same shape as
+        // `body_thread_line`, for the same reason (optional fields).
+        ("body_attachment_line", &["file"]),
         ("body_thread_header", &["count"]),
         ("body_thread_line", &["line"]),
         ("body_thread_unavailable", &[]),
@@ -300,6 +317,8 @@ impl SlackPrompts {
             ("triage_instructions", &self.triage_instructions),
             ("reply_style_suffix", &self.reply_style_suffix),
             ("body_template", &self.body_template),
+            ("body_attachment_header", &self.body_attachment_header),
+            ("body_attachment_line", &self.body_attachment_line),
             ("body_thread_header", &self.body_thread_header),
             ("body_thread_line", &self.body_thread_line),
             ("body_thread_unavailable", &self.body_thread_unavailable),
@@ -343,6 +362,12 @@ fn default_reply_style_suffix() -> String {
 }
 fn default_body_template() -> String {
     DEFAULTS.body_template.clone()
+}
+fn default_body_attachment_header() -> String {
+    DEFAULTS.body_attachment_header.clone()
+}
+fn default_body_attachment_line() -> String {
+    DEFAULTS.body_attachment_line.clone()
 }
 fn default_body_thread_header() -> String {
     DEFAULTS.body_thread_header.clone()
@@ -814,6 +839,23 @@ mod tests {
                 ],
             ),
             "## メンション\n\n- 送信者: 太郎\n- チャンネル: #dev\n- 本文:\n\n> こんにちは\n"
+        );
+        // Not a #318 re-baseline: these two keys are new. Pinned here anyway
+        // because the header's "content not fetched" sentence is the behaviour,
+        // not decoration — an override that drops it puts the agent back to
+        // guessing what the attachment said.
+        let attachments = crate::template::render(&p.body_attachment_header, &[("count", "2")]);
+        assert!(
+            attachments.contains("## 添付ファイル（2 件）"),
+            "{attachments}"
+        );
+        assert!(
+            attachments.contains("中身は取得していません"),
+            "{attachments}"
+        );
+        assert_eq!(
+            crate::template::render(&p.body_attachment_line, &[("file", "a.md（text/plain）")]),
+            "- a.md（text/plain）\n"
         );
         assert_eq!(
             crate::template::render(&p.body_thread_header, &[("count", "3")]),
