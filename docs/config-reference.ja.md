@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:4cca690f679f8ef7ab766b4e865d894ba764812a113e78c8d29a37948688c4c4 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:e7445d80e1a673490b205e206ef3c069392107ba653c3c82d7d41d431bec0399 -->
 
 # 設定リファレンス
 
@@ -361,7 +361,7 @@ output = "source"                 # プルリクエストの URL をスレッド
 agent = "herdr"
 
 [[workflows]]
-name = "slack-reply"              # catch-all。必ず最後
+name = "slack-reply"              # catch-all（順序は無関係）
 projects = ["slack"]
 trigger = {}
 profile = "answer"

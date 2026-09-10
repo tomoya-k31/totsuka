@@ -466,8 +466,9 @@ impl SlackConfig {
 const REMOVED_KEYS: &[(&str, &str)] = &[(
     "trigger_reactions",
     "reaction triggers are declared as `[[workflows]].trigger = { reaction = \"<emoji>\" }` \
-     in the orchestrator config since #396; define each one **above** the mention catch-all \
-     (`trigger = {}` matches everything, so anything below it is unreachable)",
+     in the orchestrator config since #396. Definition order does not matter: mentions and \
+     reactions arrive on separate event paths, and this plugin picks the workflow by emoji, \
+     so a reaction workflow written after the mention catch-all is not hidden by it",
 )];
 
 /// The removed keys present in a raw plugin-config object, rendered as

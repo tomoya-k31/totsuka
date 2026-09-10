@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:4cca690f679f8ef7ab766b4e865d894ba764812a113e78c8d29a37948688c4c4 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:e7445d80e1a673490b205e206ef3c069392107ba653c3c82d7d41d431bec0399 -->
 
 # Configuration reference
 
@@ -360,7 +360,7 @@ output = "source"                 # so the PR URL goes back to the thread
 agent = "herdr"
 
 [[workflows]]
-name = "slack-reply"              # catch-all, must be last
+name = "slack-reply"              # catch-all (order does not matter)
 projects = ["slack"]
 trigger = {}
 profile = "answer"
