@@ -412,7 +412,7 @@ profile = "implement"
 agent = "herdr"
 
 [[workflows]]
-name = "slack-reply"                # メンション。catch-all なので必ず最後
+name = "slack-reply"                # メンション。catch-all（順序は無関係）
 projects = ["slack"]
 trigger = {}
 profile = "answer"

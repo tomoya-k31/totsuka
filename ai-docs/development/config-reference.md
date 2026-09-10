@@ -249,7 +249,7 @@ profile = "implement"
 agent = "herdr"
 
 [[workflows]]
-name = "slack-reply"                  # メンション: catch-all。必ず最後
+name = "slack-reply"                  # メンション: catch-all（順序は無関係）
 projects = ["slack"]
 trigger = {}
 profile = "answer"
@@ -414,7 +414,7 @@ output = "source"                 # PR の URL をスレッドへ返すため（
 agent = "herdr"
 
 [[workflows]]
-name = "slack-reply"              # catch-all。必ず最後
+name = "slack-reply"              # catch-all（順序は無関係）
 projects = ["slack"]
 trigger = {}
 profile = "answer"

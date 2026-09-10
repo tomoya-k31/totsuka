@@ -484,9 +484,11 @@ location = "{state}/wt/{{repo_name}}/{{worktree_name}}"
 cleanup = "immediate"
 plan_cleanup = "immediate"
 
-# The emoji workflow is defined **first**: reaction triggers are more
-# specific than the mention catch-all, and putting it last would make it
-# unreachable (#396, `validate_workflows` warns about exactly that).
+# The emoji workflow happens to be defined first. Order carries nothing:
+# since #554 the plugin picks the workflow by emoji and mentions arrive on a
+# separate event path, so a reaction workflow after the catch-all is still
+# reached. (The overlap warning this comment used to cite was removed with
+# the ordering rule it described.)
 [[projects]]
 name = "slack"
 source = "slack"
