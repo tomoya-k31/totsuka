@@ -30,6 +30,7 @@ fn sample_task(id: &str) -> Task {
         assignee: None,
         message_key: None,
         instructions: None,
+        handle: None,
     }
 }
 

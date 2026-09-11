@@ -280,6 +280,12 @@ impl<G: GitRunner, L: LlmRouter + 'static> Engine<G, L> {
                     .worktree_location
                     .clone()
                     .unwrap_or_else(|| self.settings.location_template.clone());
+                // The handle (0.7.2, #646) lives in the source's payload, so
+                // it is read back through `task_from_record` rather than off a
+                // column — the same rebuild the dispatch itself does a few
+                // lines later, and the reason the worktree's leaf can carry
+                // the same name the agent will.
+                let handle = task_from_record(record).handle;
                 let request = CreateRequest {
                     repo_path: &repo.path,
                     repo_name: &repo.name,
@@ -287,6 +293,7 @@ impl<G: GitRunner, L: LlmRouter + 'static> Engine<G, L> {
                     task_id: &record.source_task_id,
                     existing_branch: record.branch.as_deref(),
                     task_number: Some(record.id),
+                    handle: handle.as_deref(),
                     location_template: &location_template,
                     base_branch: None,
                     env: &self.settings.env,

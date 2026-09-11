@@ -69,11 +69,13 @@ if c.is_ascii_alphanumeric() {
 ## D-1: 名前は `<prefix><task 番号><sep><hash8>`、core を全ツールで一致させる
 
 ```text
-core        = <task 番号>-<hash8>        hash8 = sha256("<source>\0<source_task_id>") 先頭 8 hex
-herdr       = t-3-9f3c2a1e               32 文字・[a-z][a-z0-9_-]
-orca        = totsuka-3-9f3c2a1e
-worktree 葉 = 3-9f3c2a1e                 <state>/totsuka/worktrees/<repo_name>/3-9f3c2a1e
+core        = <task 番号>[-<handle>]-<hash8>   hash8 = sha256("<source>\0<source_task_id>") 先頭 8 hex
+herdr       = t-3-web-42-9f3c2a1e              32 文字・[a-z][a-z0-9_-]
+orca        = totsuka-3-web-42-9f3c2a1e
+worktree 葉 = 3-web-42-9f3c2a1e                <state>/totsuka/worktrees/<repo_name>/3-web-42-9f3c2a1e
 ```
+
+`handle` は任意で、D-7（0.7.2 / #646）で足した。初版は `<task 番号>-<hash8>` だけだった。
 
 **読める半分は内部 task 番号**（`state.db` の `tasks.id`）。ログ・`status`・`retry <n>` と同じ番号なので、名前から**タスクへ戻れる**。source id を切り詰めたものには戻る先が無かった。
 
@@ -135,6 +137,25 @@ pub trait IdentifierPolicy {
 
 既存の worktree に移行は要らない。掃除・孤児検出・`doctor`・再利用ガードはいずれも `tasks.worktree_path` に記録された**フルパス**を読み、**名前を parse して task を復元している箇所は 1 つも無い**。
 
+## D-7: 読める半分の隣に、ソースが名付ける `handle` を置く（0.7.2 / #646）
+
+D-1 の名前は「どのタスクか」に答えるが、「**何の**タスクか」には答えない。`t-3-9f3c2a1e` を見て `totsuka status` は引けても、それが web リポジトリの issue 42 なのか Slack の #dev-support なのかは分からない。herdr の 32 文字にはまだ 20 文字ほど余っている。
+
+そこで [`Task.handle: Option<String>`](https://github.com/tomoya-k31/totsuka/blob/main/crates/plugin-protocol/src/task.rs) を protocol 0.7.2 で足し、**ソースが人間向けの短い名前を書く**。識別子では task 番号とダイジェストの間に入る。
+
+**切られるのは handle だけ。** 番号は `totsuka status` へ戻る手段で、ダイジェストは一意性の担い手なので、予算が足りないときに落とせるのは可読性だけである。切り詰めは末尾から行うので、**ソースは識別性の高い順に並べる**（`web-app-42` であって `42-web-app` ではない）。
+
+各ソースが何を入れるか、そして**何も入れないこと**も正しい答えである:
+
+| ソース | handle | 理由 |
+|---|---|---|
+| GitHub Projects | `{repo}-{issue 番号}` | 人が呼ぶ名前そのもの。`Task.id` は base64 の node id で、これになれない。1 つのボードが複数 repo を追うので番号だけでは曖昧 |
+| Slack | チャンネル**名**（`dev-support`） | 人は `#dev-support` を読み、`C0ABCDEF12` は読まない。ts は**入れない** — 予算で数字の途中で切られるうえ、それが区別するもの（同一チャンネルの 2 スレッド）は task 番号が既に区別している |
+| Discord | チャンネル**名** | 同上。Discord の id は全て snowflake で、名前だけが人の読むもの |
+| Notion | **無し** | page id は UUID、title は散文。短く・安定し・パス安全という条件を満たすものが無い。title から作ると**改名可能な文字列が識別子に入る** |
+
+**一意性は要求しない。** それはダイジェストの仕事なので、重複する handle は何も壊さない。逆に言えば handle は**識別子ではない**ので、これで dedup する経路を作ってはならない。
+
 # Consequences
 
 ## 良くなること
@@ -168,7 +189,7 @@ pub trait IdentifierPolicy {
 | trait ではなく値（`IdentifierRule` 構造体）で宣言する | 実装としてはほぼ同じだが、ツール固有の事情（将来 `agent.start` が別の形を要求する等）を型で表現する余地が無くなる。required を制約に限れば手順の分岐は防げる |
 | `plugin-sdk` に置く | core（worktree 名）から使えない。core が sdk に依存すると「sdk はプラグイン作者向け」という層が逆転する |
 | worktree 名テンプレートを残し、`{task_number}` / `{hash}` プレースホルダで葉を組む | 葉がポリシーの出力ではなくなり、3 ツールの core 一致がテンプレート文字列の偶然の一致に落ちる。到達不能な設定を残す対価としては高い（D-6） |
-| task_source が読める handle を提供する | 有用だが本 ADR の範囲外。余った予算に足す設計として #646 に分離した |
+| ~~task_source が読める handle を提供する~~ | **採択した**（D-7、#646）。初版では範囲外としていたが、余った予算の使い道として分離したまま放置する理由が無かった。Slack の handle だけは当初案（`{channel}-{ts 秒}`）を採らず、チャンネル**名**にしている |
 
 # 関連
 

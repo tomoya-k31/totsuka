@@ -4,7 +4,7 @@ title: task-source-slack プラグイン
 description: 自分宛の Slack メンションをタスク化し本人名義で代理返信する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。設定スキーマ・TokenGuard（auth.test + apps.connections.open + 任意の bot probe）・Web API / Socket Mode クライアント・メンション検知と Task 正規化・プラグイン内 3 段階リポジトリ解決・下書き提示・承認フロー・bot ナッジ DM 通知（#305）・チャンネル監視トリガと起動時バックフィル（#617）に加え、manifest 雛形・CLI レベル E2E・運用ドキュメントまで完備。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-slack
 tags: [rust, crate, plugin, task-source, slack, socket-mode, token-guard, conversation-identity, conversation-continuity]
-generated: { by: claude-code/opus-5, at: 2026-09-10T18:10:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-12T23:10:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -96,6 +96,10 @@ owner: tomoya-k31
 
 - **submit 失敗時のロールバックは自分の配送に限る**（`discard_pending_delivery(task_id, mention_ts)`）。1 通目が受理されてタスクが走っている最中に 2 通目の submit が恒久失敗すると、素朴な `take_pending` はスレッド唯一のエントリを消し、**正常に完走した 1 通目のタスクが `result/publish` で座標を見つけられず返信を失う**。`mention_ts` で自分の配送かを確かめてから消す
 - **上書きは退避順を更新する**。#242 以前は上書き自体がほぼ起きなかったため順序を触らなくても等価だったが、いま順序を据え置くと**活発なスレッドが 1 通目の古さのまま固定**され、誰も触っていないスレッドより先に `PENDING_CAP` 超過で evict されうる
+
+# handle（#646）
+
+`Task.handle` に**チャンネル名**（`dev-support`）を入れる（protocol 0.7.2、[ADR-0071](/decisions/adr-0071-task-identifier-naming.md) D-7）。人が読むのは `#dev-support` であって `C0ABCDEF12` ではなく、名前は title のために既に引いてある。**ts は入れない** — 識別子の予算で数字の途中で切られるうえ、それが区別するもの（同一チャンネルの 2 スレッド）は task 番号が既に区別している。チャンネルが改名されれば以後のタスクの見え方が変わるだけで、既存のものは何も変わらない（同一性はダイジェストが持つ）。
 
 # capabilities（F-83）
 

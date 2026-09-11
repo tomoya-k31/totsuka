@@ -575,6 +575,7 @@ mod tests {
             assignee: None,
             message_key: message_key.map(str::to_string),
             instructions: None,
+            handle: None,
         }
     }
 

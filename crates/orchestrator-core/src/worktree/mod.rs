@@ -215,6 +215,7 @@ fn location_core<'a>(ctx: &LocationContext<'a>) -> IdentifierCore<'a> {
         task_number: ctx.task_number,
         source: ctx.source,
         source_task_id: ctx.task_id,
+        handle: ctx.handle,
     }
 }
 
@@ -231,11 +232,13 @@ pub struct LocationContext<'a> {
     pub task_id: &'a str,
     /// The Orchestrator's own task number (`tasks.id`), for `{task_number}`.
     pub task_number: Option<i64>,
+    /// The source's short name for the task (0.7.2, #646), for `{handle}`.
+    pub handle: Option<&'a str>,
 }
 
 /// Render a worktree location from a template (F-22). `${ENV}` is expanded from
 /// `env`; `{repo}` / `{repo_name}` / `{worktree_name}` / `{task_id}` /
-/// `{source}` / `{task_number}` / `{hash}` are substituted.
+/// `{source}` / `{task_number}` / `{hash}` / `{handle}` are substituted.
 ///
 /// `worktree_name` is expected to come from [`WorktreeLeaf`], which is what
 /// makes it safe as a path component. `{task_id}` and `{source}` are
@@ -273,6 +276,7 @@ pub fn render_location(
             &ctx.task_number.map(|n| n.to_string()).unwrap_or_default(),
         )
         .replace("{hash}", &location_core(ctx).hash())
+        .replace("{handle}", ctx.handle.unwrap_or_default())
         .replace("{task_id}", ctx.task_id)
         .replace("{source}", ctx.source);
     // A leading `~` expands to `$HOME` (e.g. `worktree_location = "~/.worktrees/{worktree_name}"`).
@@ -339,6 +343,9 @@ pub struct CreateRequest<'a> {
     /// The Orchestrator's own task number (`tasks.id`), which becomes the
     /// readable half of the leaf name (ADR-0071 D-1).
     pub task_number: Option<i64>,
+    /// The source's short name for the task (0.7.2, #646), which follows the
+    /// number in the leaf when it fits.
+    pub handle: Option<&'a str>,
     /// Location template (use [`default_location_template`] for the default).
     pub location_template: &'a str,
     /// Base branch override; `None` detects `origin`'s default (F-25).
@@ -419,6 +426,7 @@ impl<G: GitRunner> WorktreeManager<G> {
             source: req.source,
             task_id: req.task_id,
             task_number: req.task_number,
+            handle: req.handle,
         };
         let worktree_name = WorktreeLeaf.identifier(&location_core(&ctx));
         let path = render_location(req.location_template, &ctx, &worktree_name, req.env)?;
@@ -1174,6 +1182,7 @@ mod tests {
                 task_number: number,
                 source,
                 source_task_id: id,
+                handle: None,
             })
         };
         let safe = |name: &str| {
@@ -1214,6 +1223,7 @@ mod tests {
             task_number: Some(123),
             source: "github",
             source_task_id: "123",
+            handle: None,
         });
         assert!(name.starts_with("123-"), "{name}");
 
@@ -1223,6 +1233,7 @@ mod tests {
             source: "github",
             task_id: "123",
             task_number: Some(1),
+            handle: None,
         };
         // An operator-written template with a `${ENV}` reference — the shape
         // the built-in default used to have, kept here because user config
@@ -1276,6 +1287,7 @@ mod tests {
             source: "slack",
             task_id: "C1:100.1",
             task_number: Some(42),
+            handle: None,
         };
         let loc = render_location(
             "/wt/{task_number}_{hash}/{task_id}/{source}",
@@ -1320,6 +1332,7 @@ mod tests {
             source: "slack",
             task_id: "C1:100.1",
             task_number: Some(1),
+            handle: None,
         };
         let name = WorktreeLeaf.identifier(&location_core(&ctx));
         // Rendering succeeds against an *empty* environment.
@@ -1351,6 +1364,7 @@ mod tests {
             source: "github",
             task_id: "123",
             task_number: Some(1),
+            handle: None,
         };
         let name = WorktreeLeaf.identifier(&location_core(&ctx));
         let new = render_location(
@@ -1378,6 +1392,7 @@ mod tests {
             source: "github",
             task_id: "1",
             task_number: Some(1),
+            handle: None,
         };
         let loc = render_location(
             "{repo}/../.worktrees/{worktree_name}",
@@ -1801,6 +1816,7 @@ mod tests {
             source: "github",
             task_id: "1",
             task_number: Some(1),
+            handle: None,
         };
         let loc = render_location(
             "~/.worktrees/{worktree_name}",
@@ -1822,6 +1838,7 @@ mod tests {
             source: "s",
             task_id: "1",
             task_number: Some(1),
+            handle: None,
         };
         assert!(render_location("${MISSING}/{worktree_name}", &ctx, "b", &env(&[])).is_err());
     }

@@ -192,6 +192,7 @@ pub(super) fn task_from_record(record: &TaskRecord) -> Task {
             assignee: None,
             message_key: None,
             instructions: None,
+            handle: None,
         })
 }
 
@@ -256,6 +257,7 @@ mod tests {
             assignee: Some("me".into()),
             message_key: None,
             instructions: None,
+            handle: None,
         };
         let db = StateDb::open_in_memory().unwrap();
         let id = db

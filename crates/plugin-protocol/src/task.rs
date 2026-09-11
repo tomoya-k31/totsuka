@@ -59,6 +59,33 @@ pub struct Task {
     /// Agents that don't understand the field just see them absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instructions: Option<String>,
+    /// 0.7.2 (#646): a **short, human-readable** name for this task, for the
+    /// identifiers an `agent_ide` gives what it creates
+    /// ([`IdentifierPolicy`](crate::identifier::IdentifierPolicy)).
+    ///
+    /// [`id`](Self::id) cannot serve: it is the source's own key, and the
+    /// shapes that reach totsuka (a Slack `channel:ts`, a base64 GitHub node
+    /// id, a Notion UUID) identify nothing to a person, least of all
+    /// truncated. This is the source's chance to say what a person would call
+    /// the task — `web-42` for an issue, `C0ABCDEF12-1700000000` for a thread.
+    ///
+    /// Three properties make one usable, and the source owns all three:
+    ///
+    /// - **Short.** It shares a budget with the task number and the digest, and
+    ///   it is the part that gets cut. Around 20 characters survive in the
+    ///   tightest tool (herdr's 32).
+    /// - **Most-identifying part first.** Truncation keeps the head, so put the
+    ///   repository or channel before the number or timestamp.
+    /// - **Not unique.** Uniqueness is the digest's job. A handle that repeats
+    ///   costs nothing.
+    ///
+    /// `None` is a normal answer, not a gap — a source whose ids carry nothing
+    /// a person reads (Notion's UUIDs, Discord's snowflakes) should leave it
+    /// unset rather than inventing one. Punctuation, case and length are
+    /// normalized by the policy, so a source writes the string it would show a
+    /// human and nothing more.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handle: Option<String>,
 }
 
 #[cfg(test)]
@@ -80,6 +107,7 @@ mod tests {
             assignee: None,
             message_key: None,
             instructions: None,
+            handle: None,
         };
         // Parse to a JSON object and assert on keys (robust against values
         // that might contain field-name substrings).
@@ -113,6 +141,7 @@ mod tests {
             assignee: None,
             message_key: Some("C0123456789:1718000000.000300".into()),
             instructions: None,
+            handle: None,
         };
         let value = serde_json::to_value(&task).unwrap();
         assert_eq!(
@@ -145,6 +174,7 @@ mod tests {
             assignee: None,
             message_key: None,
             instructions: Some("返信案を日本語で作成してください。".into()),
+            handle: None,
         };
         let value = serde_json::to_value(&task).unwrap();
         assert_eq!(

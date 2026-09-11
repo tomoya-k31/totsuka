@@ -94,6 +94,16 @@ pub struct IdentifierCore<'a> {
     /// id, a Notion page id). Hashed in full, whatever the readable half ends
     /// up being.
     pub source_task_id: &'a str,
+    /// 0.7.2 (#646): the source's short, human-readable name for the task
+    /// ([`Task::handle`](crate::task::Task::handle)), placed between the task
+    /// number and the digest.
+    ///
+    /// **It is the part that gets cut**, because it is the only part that can
+    /// be: the number is what carries a name back to `totsuka status`, and the
+    /// digest is what makes the name unique. A handle that does not fit is
+    /// truncated from its tail, and one that does not fit at all is dropped —
+    /// the identifier stays legal and unique either way, only less legible.
+    pub handle: Option<&'a str>,
 }
 
 impl<'a> IdentifierCore<'a> {
@@ -103,6 +113,7 @@ impl<'a> IdentifierCore<'a> {
             task_number: params.task_number,
             source: &params.task.source,
             source_task_id: &params.task.id,
+            handle: params.task.handle.as_deref(),
         }
     }
 
@@ -186,7 +197,8 @@ pub trait IdentifierPolicy {
     }
 }
 
-/// The shared procedure: readable half, then the budget, then the hash.
+/// The shared procedure: the readable parts in priority order, then the
+/// budget, then the hash.
 ///
 /// Free rather than inlined into the trait so that an implementation which
 /// *does* override [`IdentifierPolicy::identifier`] can still reach it.
@@ -203,18 +215,22 @@ pub fn build(
     // it — the same shape as the bug this module replaced.
     let sep_len = separator.map_or(0, char::len_utf8);
 
-    let readable = core.readable(case, separator);
+    // **Order is priority.** The task number comes first because it is what
+    // carries the name back to `totsuka status`; the handle (0.7.2) follows
+    // because it is legibility, which is the thing worth losing when the two
+    // do not both fit.
+    let parts = [
+        core.readable(case, separator),
+        core.handle
+            .map(|h| sanitize(h, case, separator))
+            .unwrap_or_default(),
+    ];
 
-    // The separator between the readable half and the hash is spent **here**,
-    // before the truncation, not after it. Spending it afterwards is the
-    // off-by-one this module exists to make unrepeatable (#645).
-    let readable = match max_len {
-        Some(max) => {
-            let reserved = prefix.len() + sep_len + HASH_CHARS;
-            truncate(&readable, max.saturating_sub(reserved), separator)
-        }
-        None => readable,
-    };
+    // The separator before the hash is spent **here**, before any truncation,
+    // not after it. Spending it afterwards is the off-by-one this module
+    // exists to make unrepeatable (#645).
+    let budget = max_len.map(|max| max.saturating_sub(prefix.len() + sep_len + HASH_CHARS));
+    let readable = fit(&parts, budget, sep_len, separator);
 
     let mut out = String::with_capacity(prefix.len() + readable.len() + sep_len + HASH_CHARS);
     out.push_str(prefix);
@@ -225,6 +241,43 @@ pub fn build(
         }
     }
     out.push_str(&hash);
+    out
+}
+
+/// Join the non-empty `parts` with `separator`, stopping at `budget` bytes.
+///
+/// A part that does not fit whole is truncated into whatever is left and ends
+/// the join; one with nothing left for it is dropped. Empty parts never
+/// contribute a separator, so an absent handle leaves no trace.
+fn fit(parts: &[String], budget: Option<usize>, sep_len: usize, separator: Option<char>) -> String {
+    let mut out = String::new();
+    for part in parts.iter().filter(|p| !p.is_empty()) {
+        let lead = if out.is_empty() { 0 } else { sep_len };
+        let room = match budget {
+            // `checked_sub`, so a budget already spent drops the part rather
+            // than wrapping into a huge one.
+            Some(max) => match max.checked_sub(out.len() + lead) {
+                Some(room) => room,
+                None => break,
+            },
+            None => part.len(),
+        };
+        let cut = truncate(part, room, separator);
+        if cut.is_empty() {
+            break;
+        }
+        if !out.is_empty()
+            && let Some(sep) = separator
+        {
+            out.push(sep);
+        }
+        out.push_str(&cut);
+        if cut.len() < part.len() {
+            // Truncated: the budget is spent, and a later part would read as a
+            // continuation of this one.
+            break;
+        }
+    }
     out
 }
 
@@ -361,6 +414,20 @@ mod tests {
             task_number,
             source,
             source_task_id: id,
+            handle: None,
+        }
+    }
+
+    /// [`core`] with a handle, for the 0.7.2 cases.
+    fn cored<'a>(
+        task_number: Option<i64>,
+        source: &'a str,
+        id: &'a str,
+        handle: &'a str,
+    ) -> IdentifierCore<'a> {
+        IdentifierCore {
+            handle: Some(handle),
+            ..core(task_number, source, id)
         }
     }
 
@@ -460,6 +527,41 @@ mod tests {
             name.strip_prefix("t-"),
             "{orca} vs {name}"
         );
+    }
+
+    /// The handle (0.7.2) sits between the number and the digest, so a name
+    /// says *which* task in the source's own words without giving up the
+    /// number that leads back to `totsuka status`.
+    #[test]
+    fn the_handle_sits_between_the_number_and_the_hash() {
+        let name = Herdr.identifier(&cored(Some(3), "github", "I_kwDOabc", "web-42"));
+        assert!(name.starts_with("t-3-web-42-"), "{name}");
+        is_legal(&Herdr, &name).unwrap();
+
+        // Absent, it leaves no trace — no doubled separator, no empty segment.
+        let without = Herdr.identifier(&core(Some(3), "github", "I_kwDOabc"));
+        assert!(without.starts_with("t-3-"), "{without}");
+        assert_eq!(without.matches("--").count(), 0, "{without}");
+        // …and the digest is the same either way: the handle is legibility,
+        // not identity.
+        assert_eq!(
+            name.rsplit('-').next().unwrap(),
+            without.rsplit('-').next().unwrap()
+        );
+    }
+
+    /// The handle is the part that gets cut, because it is the only part that
+    /// can be: the number leads back to the task and the digest keeps the name
+    /// unique.
+    #[test]
+    fn a_long_handle_is_cut_and_never_the_number_or_the_hash() {
+        let long = "a-very-long-repository-name-nobody-would-type-42";
+        let name = Herdr.identifier(&cored(Some(1234), "github", "I_kwDOabc", long));
+        assert!(name.len() <= 32, "{name} is {}", name.len());
+        assert!(name.starts_with("t-1234-a-very-long"), "{name}");
+        let hash = Herdr.identifier(&core(Some(1234), "github", "I_kwDOabc"));
+        assert!(name.ends_with(hash.rsplit('-').next().unwrap()), "{name}");
+        is_legal(&Herdr, &name).unwrap();
     }
 
     /// Truncation is what makes the readable half unsafe on its own, so the

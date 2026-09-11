@@ -407,6 +407,7 @@ mod tests {
                 assignee: None,
                 message_key: None,
                 instructions: None,
+                handle: None,
             },
             worktree_path: "/wt".into(),
             mode: plugin_protocol::methods::ExecutionMode::Plan,

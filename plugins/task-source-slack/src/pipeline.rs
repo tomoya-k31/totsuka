@@ -1309,6 +1309,14 @@ fn build_task(
 
     let task = Task {
         id: mention.task_id(),
+        // The handle (0.7.2, #646): the channel's **name**, not its id — a
+        // person reads `#dev-support`, never `C0ABCDEF12`, and the name is
+        // already looked up for the title. The timestamp is deliberately left
+        // out: it would be cut mid-number by the identifier's budget, and what
+        // it distinguishes (two threads in one channel) the task number
+        // already distinguishes. A rename makes new tasks read differently and
+        // changes nothing about old ones, because identity is the digest's.
+        handle: Some(enriched.channel_name.clone()),
         source: config.source_name.clone(),
         title,
         body: Some(body),
@@ -1815,6 +1823,19 @@ mod tests {
         let (task, _pending) = build_task(&slack_config(), &enriched("200.0"), None);
         assert_eq!(task.id, "C1:200.0");
         assert_eq!(task.message_key.as_deref(), Some(task.id.as_str()));
+    }
+
+    /// The handle (0.7.2, #646) is the channel's **name**. `Task::id` has to
+    /// be `{channel}:{ts}` — which reads as nothing — so this is the source's
+    /// only chance to say where the task came from in words.
+    #[test]
+    fn a_task_carries_the_channel_name_as_its_handle() {
+        let (task, _pending) = build_task(&slack_config(), &enriched("200.0"), None);
+        assert_eq!(task.handle.as_deref(), Some("general"));
+        // Deliberately no timestamp: the identifier would cut it mid-number,
+        // and what it would separate — two threads in one channel — the task
+        // number already separates.
+        assert!(!task.handle.unwrap().contains("200.0"));
     }
 
     #[test]
