@@ -20,6 +20,8 @@ use std::collections::{HashSet, VecDeque};
 
 use serde_json::Value;
 
+use crate::slack_api::{SlackFile, parse_files};
+
 /// Bound on the processed-id set. Old entries fall out FIFO; a redelivery
 /// arriving after 1024 newer mentions is caught by the orchestrator's
 /// idempotent ingest instead.
@@ -70,6 +72,11 @@ pub struct Mention {
     ///
     /// Always `None` on the mention and reaction paths, which resolve.
     pub repo_pin: Option<String>,
+    /// Files attached to the message, **metadata only**
+    /// ([`SlackFile`]): the plugin has no
+    /// `files:read` scope, so the body names them and says the content was
+    /// not fetched. Empty for a message with no attachment.
+    pub files: Vec<SlackFile>,
 }
 
 impl Mention {
@@ -258,6 +265,7 @@ impl MentionFilter {
             // A mention resolves its repository; only a channel watch pins
             // one (#617).
             repo_pin: None,
+            files: parse_files(event),
         })
     }
 
@@ -297,6 +305,7 @@ mod tests {
             reaction: Some("hammer".into()),
             task_id_prefix: prefix.map(str::to_string),
             instructions_kind: None,
+            files: Vec::new(),
         }
     }
 
@@ -365,6 +374,28 @@ mod tests {
         assert_eq!(mention.message_key(), "C1:100.1");
         assert_eq!(mention.reply_ts(), "100.0");
         assert_eq!(mention.user, "U_OTHER");
+    }
+
+    /// A file upload with a mention as its comment: the `files` array rides
+    /// the same `message` event, and dropping it is what left the agent
+    /// answering "md ファイルにしました" with no file in sight.
+    #[test]
+    fn a_mention_carrying_a_file_keeps_its_metadata() {
+        let mut event = mention_event();
+        event.as_object_mut().unwrap().insert(
+            "files".into(),
+            json!([{"name": "auth-flow.md", "mimetype": "text/plain", "size": 2867}]),
+        );
+        let mention = filter().assess(&event).expect("a mention");
+        assert_eq!(mention.files.len(), 1);
+        assert_eq!(mention.files[0].name, "auth-flow.md");
+    }
+
+    /// The overwhelmingly common case: no `files` key at all.
+    #[test]
+    fn a_plain_mention_carries_no_files() {
+        let mention = filter().assess(&mention_event()).expect("a mention");
+        assert!(mention.files.is_empty());
     }
 
     #[test]

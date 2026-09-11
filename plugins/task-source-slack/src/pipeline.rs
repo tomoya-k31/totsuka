@@ -28,7 +28,7 @@ use crate::llm::ChatTransport;
 use crate::mention::{Mention, MentionFilter};
 use crate::reaction::{ReactionTriggers, reaction_target, to_mention};
 use crate::repo_resolver::{Resolution, resolve};
-use crate::slack_api::{PostEphemeral, SlackApi};
+use crate::slack_api::{PostEphemeral, SlackApi, SlackFile};
 use crate::socket_mode::SocketEvent;
 use crate::template;
 use crate::transport::SlackTransport;
@@ -1273,6 +1273,23 @@ fn build_task(
             ("text", quoted.as_str()),
         ],
     );
+    // Before the thread context, because an attachment belongs to the
+    // mention itself. Metadata only: with no `files:read` scope the content
+    // cannot be fetched, and the header says so — an agent told "md ファイル
+    // にしました" and handed nothing else answers as if the file did not
+    // exist.
+    if !mention.files.is_empty() {
+        body.push_str(&template::render(
+            &p.body_attachment_header,
+            &[("count", mention.files.len().to_string().as_str())],
+        ));
+        for file in &mention.files {
+            body.push_str(&template::render(
+                &p.body_attachment_line,
+                &[("file", describe_file(file).as_str())],
+            ));
+        }
+    }
     match &enriched.context_lines {
         Some(lines) if !lines.is_empty() => {
             body.push_str(&template::render(
@@ -1334,6 +1351,52 @@ fn build_task(
         },
     };
     (task, pending)
+}
+
+/// One attachment as its body line: name, the metadata Slack supplied, and
+/// the permalink.
+///
+/// Composed here rather than as template placeholders for the same reason
+/// `body_thread_line` takes a whole `{line}`: every field but the name is
+/// optional, and a four-placeholder template would render `（・）` for a
+/// tombstone file that carries neither MIME type nor size.
+fn describe_file(file: &SlackFile) -> String {
+    let mut meta = Vec::new();
+    if let Some(mimetype) = &file.mimetype {
+        meta.push(mimetype.clone());
+    }
+    if let Some(size) = file.size {
+        meta.push(human_size(size));
+    }
+    let mut line = file.name.clone();
+    if !meta.is_empty() {
+        line.push_str(&format!("（{}）", meta.join("・")));
+    }
+    // The permalink is the operator's own handle on the file: the agent
+    // cannot fetch it, but the human reading the pane can open it.
+    if let Some(permalink) = &file.permalink {
+        line.push(' ');
+        line.push_str(permalink);
+    }
+    line
+}
+
+/// Bytes as the pane shows them (`2.8 KB`), matching how Slack labels a file.
+fn human_size(bytes: u64) -> String {
+    const UNITS: [&str; 3] = ["KB", "MB", "GB"];
+    if bytes < 1024 {
+        return format!("{bytes} B");
+    }
+    let mut size = bytes as f64 / 1024.0;
+    let mut unit = 0;
+    // Step up while the *rounded* value would read 1024.0: comparing the raw
+    // value against the next threshold instead labels a file one byte short of
+    // a megabyte "1024.0 KB", which is a unit the reader then has to convert.
+    while unit + 1 < UNITS.len() && (size * 10.0).round() >= 10240.0 {
+        size /= 1024.0;
+        unit += 1;
+    }
+    format!("{size:.1} {}", UNITS[unit])
 }
 
 /// The last `thread_context_limit` thread messages before the mention, as
@@ -1417,7 +1480,16 @@ async fn thread_context<T: SlackTransport>(
         } else {
             message.text.clone()
         };
-        lines.push(format!("{speaker}: {}", text.replace('\n', " ")));
+        // A context message's attachment would vanish the same way the
+        // mention's did. Names only, and no download — this is the same
+        // metadata-only contract as the body's section.
+        let attached = if message.files.is_empty() {
+            String::new()
+        } else {
+            let names: Vec<&str> = message.files.iter().map(|f| f.name.as_str()).collect();
+            format!("（添付: {}）", names.join(", "))
+        };
+        lines.push(format!("{speaker}: {}{attached}", text.replace('\n', " ")));
     }
     Some(lines)
 }
@@ -1495,6 +1567,7 @@ mod tests {
             reaction: prefix.map(|_| "hammer".to_string()),
             task_id_prefix: prefix.map(str::to_string),
             instructions_kind: None,
+            files: Vec::new(),
         }
     }
 
@@ -1529,6 +1602,31 @@ mod tests {
             10,
             "the prefixed task must see the whole thread, not `thread_context_limit`: {lines:?}"
         );
+    }
+
+    /// A file posted **earlier in the thread** is the same hole as one on the
+    /// mention itself: the context line is where the agent learns it exists.
+    /// Names only — nothing on this path downloads anything either.
+    #[tokio::test]
+    async fn a_context_message_names_its_attachment() {
+        let script = vec![
+            Ok(json!({"ok": true, "messages": [{
+                "user": "U_OTHER",
+                "text": "これです",
+                "ts": "1.0",
+                "files": [{"name": "auth-flow.md", "mimetype": "text/plain", "size": 2867}]
+            }]})),
+            Ok(
+                json!({"ok": true, "user": {"name": "alice", "profile": {"display_name": "アリス"}}}),
+            ),
+        ];
+        let api = scripted(script);
+        let config = small_limit_config();
+        let mut names = NameCache::default();
+        let lines = thread_context(&api, &config, &mut names, &threaded_mention(None))
+            .await
+            .expect("context fetched");
+        assert_eq!(lines, vec!["アリス: これです（添付: auth-flow.md）"]);
     }
 
     /// …and an ordinary mention still gets the window it always got.
@@ -1607,12 +1705,85 @@ mod tests {
                 reaction: None,
                 task_id_prefix: None,
                 instructions_kind: None,
+                files: Vec::new(),
             },
             sender_name: "alice".into(),
             channel_name: "general".into(),
             permalink: None,
             context_lines: Some(Vec::new()),
         }
+    }
+
+    /// The whole point of the section: the file is named, and the body says
+    /// out loud that its content was not fetched — so an agent that needs the
+    /// content says so instead of inventing it.
+    #[test]
+    fn an_attachment_is_named_in_the_body_with_its_content_marked_unfetched() {
+        let mut enriched = enriched("300.0");
+        enriched.mention.files = vec![SlackFile {
+            name: "auth-flow.md".into(),
+            mimetype: Some("text/plain".into()),
+            size: Some(2867),
+            permalink: Some("https://example.slack.com/files/U1/F1/auth-flow.md".into()),
+        }];
+        let (task, _pending) = build_task(&slack_config(), &enriched, None);
+        let body = task.body.expect("body is set");
+
+        assert!(body.contains("## 添付ファイル（1 件）"), "body: {body}");
+        assert!(body.contains("中身は取得していません"), "body: {body}");
+        assert!(
+            body.contains("- auth-flow.md（text/plain・2.8 KB）"),
+            "body: {body}"
+        );
+        assert!(
+            body.contains("https://example.slack.com/files/U1/F1/auth-flow.md"),
+            "the operator's own handle on the file must be in the body: {body}"
+        );
+        // The attachment belongs to the mention, so it precedes the thread
+        // context rather than trailing the whole body.
+        let attachments = body.find("## 添付ファイル").expect("section present");
+        assert!(attachments > body.find("## メンション").expect("header"));
+    }
+
+    /// No files, no section — the body of an ordinary mention is unchanged.
+    ///
+    /// Asserted on the section header, not the bare word 「添付」: a mention
+    /// whose own text says "添付します" is content, not a rendered section,
+    /// and matching the word would fail on it.
+    #[test]
+    fn a_mention_without_attachments_renders_no_section() {
+        let (task, _pending) = build_task(&slack_config(), &enriched("300.0"), None);
+        let body = task.body.expect("body is set");
+        assert!(!body.contains("## 添付ファイル"), "body: {body}");
+    }
+
+    /// A file Slack described sparsely (no MIME type, no size, no permalink)
+    /// still gets a line, with no empty parenthetical.
+    #[test]
+    fn a_sparse_attachment_renders_its_name_alone() {
+        let line = describe_file(&SlackFile {
+            name: "(名前不明)".into(),
+            mimetype: None,
+            size: None,
+            permalink: None,
+        });
+        assert_eq!(line, "(名前不明)");
+    }
+
+    /// Sizes are labelled the way Slack labels them, so the pane and Slack
+    /// agree about the same file.
+    #[test]
+    fn sizes_are_human_readable() {
+        assert_eq!(human_size(0), "0 B");
+        assert_eq!(human_size(1023), "1023 B");
+        assert_eq!(human_size(1024), "1.0 KB");
+        assert_eq!(human_size(2867), "2.8 KB");
+        assert_eq!(human_size(5 * 1024 * 1024), "5.0 MB");
+        assert_eq!(human_size(3 * 1024 * 1024 * 1024), "3.0 GB");
+        // One byte short of the next unit: rounding to one decimal would read
+        // "1024.0 KB" / "1024.0 MB" without the step-up above.
+        assert_eq!(human_size(1024 * 1024 - 1), "1.0 MB");
+        assert_eq!(human_size(1024 * 1024 * 1024 - 1), "1.0 GB");
     }
 
     fn slack_config() -> SlackConfig {

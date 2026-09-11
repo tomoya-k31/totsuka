@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:e7445d80e1a673490b205e206ef3c069392107ba653c3c82d7d41d431bec0399 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:a7c4bdc4758b3fb4a01061a4cc469f3207044c74f769652481ed8d8588d5b83b -->
 
 # Configuration reference
 
@@ -392,7 +392,7 @@ The Slack source reads the same signal and picks from its own three keys. **The 
 
 **The built-in defaults are English, and they never name a language.** The language of the deliverable is decided by a rule the agent follows — write the reply in the same language as the thread, the issue, or the page it came from. When you override these keys, prefer to leave the language unnamed too: naming one overrides both your agent's own settings and the language of the source message. Name a language only when you want to force it.
 
-The labels in the task **body** (`body_template` and the thread-context keys of the Slack source) are a separate decision and are left in Japanese: a human reads those in the pane, while the instructions above are read only by the agent.
+The labels in the task **body** (`body_template` and the attachment / thread-context keys of the Slack source) are a separate decision and are left in Japanese: a human reads those in the pane, while the instructions above are read only by the agent.
 
 Expansion is single-pass: an issue title or page name is written by someone else, so a `{placeholder}` in it is inserted as text and never becomes an instruction.
 
@@ -921,6 +921,8 @@ Per-key overrides for the prompts this plugin sends; the key name is the setting
 | `triage_instructions` | The default for `triage`: file an issue, report the URL | — |
 | `reply_style_suffix` | Appended to the reply instructions only when `reply_style` is set | `{style}` |
 | `body_template` | The task body shown in the pane. For a mention-driven task, `{text}` is the original message with **your own (`target_user_id`) mention tag removed**: when the agent sees the raw `<@U…>` tag, it copies it into a reply that is posted as you. A channel-watch task is answered as the bot, so a mention of you stays there as content | `{sender}`, `{channel}`, `{text}` |
+| `body_attachment_header` | Heading of the attachment section, emitted only when the message carried files. The default text states that the **content was not fetched**: the plugin has no `files:read` scope, so only the name, type and size are known. Without that sentence the agent guesses what the attachment said, so keep it if you override the key | `{count}` |
+| `body_attachment_line` | One attachment line. `{file}` arrives **already composed** from the name, MIME type, size and permalink — each of those but the name can be missing, so four separate placeholders would leave an empty `（・）` behind | `{file}` |
 | `body_thread_header` | Heading of the thread context section | `{count}` |
 | `body_thread_line` | One line of thread context | `{line}` |
 | `body_thread_unavailable` | Replaces the whole section when the context could not be fetched | — |

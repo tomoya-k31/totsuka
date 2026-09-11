@@ -97,6 +97,7 @@ impl WatchTriggers {
             .channels
             .iter()
             .find(|w| w.trigger.channel == channel)?;
+        let files = crate::slack_api::parse_files(event);
         self.admit(
             watched,
             &MessagePost {
@@ -106,6 +107,7 @@ impl WatchTriggers {
                 thread_ts: text_of("thread_ts"),
                 has_subtype: event.get("subtype").is_some(),
                 has_bot_id: event.get("bot_id").is_some(),
+                files: &files,
             },
             filter,
         )
@@ -133,6 +135,7 @@ impl WatchTriggers {
                 thread_ts: message.thread_ts.as_deref(),
                 has_subtype: message.subtype.is_some(),
                 has_bot_id: message.bot_id.is_some(),
+                files: &message.files,
             },
             filter,
         )
@@ -201,6 +204,9 @@ impl WatchTriggers {
             // The whole point of a watched channel: the repository is settled
             // by config, so no lookup and no classifier runs.
             repo_pin: Some(watched.trigger.repo.clone()),
+            // A clipped article is exactly the kind of post that carries a
+            // file, so this path needs the metadata as much as a mention does.
+            files: post.files.to_vec(),
         })
     }
 }
@@ -214,6 +220,9 @@ struct MessagePost<'a> {
     thread_ts: Option<&'a str>,
     has_subtype: bool,
     has_bot_id: bool,
+    /// Attachment metadata, borrowed: the live path parses it out of the
+    /// event, the backfill path already has it on the `SlackMessage`.
+    files: &'a [crate::slack_api::SlackFile],
 }
 
 #[cfg(test)]
