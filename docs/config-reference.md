@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:a7c4bdc4758b3fb4a01061a4cc469f3207044c74f769652481ed8d8588d5b83b -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:42ff838af2abf8d6c70c1fe9d0e6be9e09cd31b4ef6269702bf8601788da01b0 -->
 
 # Configuration reference
 
@@ -590,7 +590,7 @@ Assumes an OpenAI-compatible `/chat/completions`. Used to pick a repository for 
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
-| `location` | string? | `<state dir>/worktrees/{repo_name}/{worktree_name}` | Placement template. Expands `{repo}`, `{repo_name}`, `{worktree_name}`, `{task_id}`, `{source}`, `${ENV}`, and `~`. **`{branch}` was removed** — the agent chooses the branch after the worktree exists, so it cannot appear in the directory name. Leaving it in stops startup |
+| `location` | string? | `<state dir>/worktrees/{repo_name}/{worktree_name}` | Placement template. Expands `{repo}`, `{repo_name}`, `{worktree_name}`, `{task_id}`, `{source}`, `{task_number}`, `{hash}`, `${ENV}`, and `~`. `{worktree_name}` is `<task number>-<8 hex>` — the number `totsuka status` and `totsuka task retry <n>` use, and the first 8 hex characters of a digest over the source and its task id. The two halves are also available separately, so you can join them differently or drop one. `{task_id}` is the **source's own** id (for Slack, `{channel}:{ts}`). **`{branch}` was removed** — the agent chooses the branch after the worktree exists, so it cannot appear in the directory name. Leaving it in stops startup |
 | `cleanup` | policy? | `manual` | Cleanup policy for implement mode |
 | `plan_cleanup` | policy? | `immediate` | Cleanup policy for plan mode |
 

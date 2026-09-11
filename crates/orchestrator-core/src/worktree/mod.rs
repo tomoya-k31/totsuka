@@ -11,18 +11,53 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+use plugin_protocol::identifier::{Case, IdentifierCore, IdentifierPolicy};
+
 use crate::config::resolve::{ResolveError, expand_env};
 use crate::paths::Paths;
 use crate::ports::git::GitRunner;
 
-/// Default worktree-directory-name template (F-22 addendum).
+/// The worktree directory's leaf name: `<task number>-<8 hex>`
+/// ([ADR-0071](https://github.com/tomoya-k31/totsuka/blob/main/ai-docs/decisions/adr-0071-task-identifier-naming.md)).
 ///
-/// The directory name is derived from `(source, task_id)` directly rather than
-/// from the branch: the branch is about to stop being something the
-/// orchestrator picks, and a path that depends on it could not be rendered
-/// before the agent has chosen a name. `(source, task_id)` is known at
-/// creation time and is already unique per task, which is all the path needs.
-pub const DEFAULT_WORKTREE_NAME_TEMPLATE: &str = "{source}-{task_id}";
+/// Not derived from the branch — that is the agent's to name (ADR-0026), and a
+/// path depending on it could not be rendered before the agent had chosen. Not
+/// derived from the source's id either, since #645: the leaf carries the
+/// **same core** as the agent herdr starts and the worktree orca creates, so
+/// one `3-9f3c2a1e` finds all three, and the number in it is the one
+/// `totsuka status` and `totsuka task retry <n>` take.
+///
+/// `max_len` is `None` because no filesystem totsuka targets has a component
+/// limit this can reach, and [`Case::Preserve`] because a directory is the one
+/// place case costs nothing — it shows only in the pre-0.7.1 fallback, where
+/// it keeps the source's id looking like itself.
+///
+/// **This replaces a template.** The leaf used to be rendered from
+/// `"{source}-{task_id}"` through a git-ref legalizer, carried as a settings
+/// field that nothing ever set to anything else. The policy emits
+/// `[A-Za-z0-9_-]` only — a strict subset of both git-ref and path-component
+/// legality — so the legalizer had nothing left to do, and a template whose
+/// output had to coincide with two other tools' names is a coincidence
+/// maintained by hand.
+pub struct WorktreeLeaf;
+
+impl IdentifierPolicy for WorktreeLeaf {
+    fn prefix(&self) -> &str {
+        ""
+    }
+
+    fn max_len(&self) -> Option<usize> {
+        None
+    }
+
+    fn case(&self) -> Case {
+        Case::Preserve
+    }
+
+    fn extra_allowed(&self) -> &[char] {
+        &['-', '_']
+    }
+}
 
 /// Default worktree location template — centralized under XDG state (F-22).
 ///
@@ -171,83 +206,15 @@ pub struct Worktree {
     pub base_commit: String,
 }
 
-/// Flatten a name into a single path component: `/` becomes `-`, so
-/// `agent/github-123` maps to `agent-github-123` rather than nesting one
-/// directory deeper than the template says (F-22 addendum).
-pub fn sanitize_branch_for_path(branch: &str) -> String {
-    branch.replace('/', "-")
-}
-
-/// Render a worktree directory name from a template (F-22 addendum).
-/// Placeholders: `{source}`, `{task_id}`.
+/// The identifier inputs a [`LocationContext`] carries.
 ///
-/// Uses the git-ref legalization the orchestrator applied to branch names
-/// before naming moved to the agent, rather than a path-specific allowlist.
-/// Those rules are a strict superset of what a single path component needs —
-/// they already remove control characters, whitespace, `:` (which a Slack task
-/// id always carries) and a leading `-` (which would be read as an option by
-/// any command taking the name). The `/` that git-ref rules deliberately
-/// preserve is then folded by [`sanitize_branch_for_path`], because a path
-/// component must not nest.
-pub fn render_worktree_name(template: &str, source: &str, task_id: &str) -> String {
-    sanitize_branch_for_path(&render_legalized(template, source, task_id))
-}
-
-/// Substitute `{source}` / `{task_id}` and legalize the result for git.
-///
-/// Task ids are source-defined and may carry characters `git
-/// check-ref-format` forbids (Slack ids are `{channel}:{ts}`), so the
-/// git-level constraint is enforced once here at the git boundary rather than
-/// in every plugin.
-fn render_legalized(template: &str, source: &str, task_id: &str) -> String {
-    let rendered = template
-        .replace("{source}", source)
-        .replace("{task_id}", task_id);
-    let cleaned: String = rendered
-        .chars()
-        .map(|c| {
-            // `/` stays (hierarchical branch names are the point of the
-            // template); the rest of git's forbidden set becomes `-`.
-            if c.is_whitespace() || c.is_control() || ":~^?*[\\".contains(c) {
-                '-'
-            } else {
-                c
-            }
-        })
-        .collect();
-    // Characters alone are not enough: `git check-ref-format` also rejects
-    // sequences and affixes — empty components (`//`, leading/trailing `/`),
-    // `..`, `@{`, a lone `@`, a `.lock` suffix, and components starting or
-    // ending with `.`.
-    let legalized = cleaned
-        .split('/')
-        .filter(|component| !component.is_empty())
-        .map(|component| {
-            let mut c = component.replace("..", "--").replace("@{", "-{");
-            if c == "@" {
-                c = "-".to_string();
-            }
-            if let Some(rest) = c.strip_suffix(".lock") {
-                c = format!("{rest}-lock");
-            }
-            if let Some(rest) = c.strip_prefix('.') {
-                c = format!("-{rest}");
-            }
-            if let Some(rest) = c.strip_suffix('.') {
-                c = format!("{rest}-");
-            }
-            c
-        })
-        .collect::<Vec<_>>()
-        .join("/");
-    // Never empty (an all-`/` render) and never dash-led (`git worktree add
-    // -b <branch>` would parse it as an option).
-    if legalized.is_empty() {
-        "task".to_string()
-    } else if legalized.starts_with('-') {
-        format!("b{legalized}")
-    } else {
-        legalized
+/// One place, so the leaf name and the `{hash}` placeholder cannot be built
+/// from different arguments.
+fn location_core<'a>(ctx: &LocationContext<'a>) -> IdentifierCore<'a> {
+    IdentifierCore {
+        task_number: ctx.task_number,
+        source: ctx.source,
+        source_task_id: ctx.task_id,
     }
 }
 
@@ -260,19 +227,29 @@ pub struct LocationContext<'a> {
     pub repo_name: &'a str,
     /// Source plugin name.
     pub source: &'a str,
-    /// Task id.
+    /// Task id as the source spells it.
     pub task_id: &'a str,
+    /// The Orchestrator's own task number (`tasks.id`), for `{task_number}`.
+    pub task_number: Option<i64>,
 }
 
 /// Render a worktree location from a template (F-22). `${ENV}` is expanded from
 /// `env`; `{repo}` / `{repo_name}` / `{worktree_name}` / `{task_id}` /
-/// `{source}` are substituted.
+/// `{source}` / `{task_number}` / `{hash}` are substituted.
 ///
-/// `worktree_name` is expected to come from [`render_worktree_name`], which is
-/// what makes it safe as a path component. `{task_id}` and `{source}` are
+/// `worktree_name` is expected to come from [`WorktreeLeaf`], which is what
+/// makes it safe as a path component. `{task_id}` and `{source}` are
 /// substituted raw — they are an escape hatch for operators who want a
 /// different shape, and normalizing them here would silently change the
 /// meaning of an existing custom template.
+///
+/// `{task_number}` and `{hash}` (0.7.1, #645) are the two halves of the default
+/// leaf, offered separately so an operator can rebuild it with their own
+/// separator or drop one half. **`{task_id}` keeps its old meaning** — the
+/// source's id — because changing what an existing template renders is exactly
+/// what an operator's custom path must never do. `{task_number}` renders empty
+/// against an Orchestrator that has no number for the task, which cannot
+/// happen here (core always has one) but keeps the substitution total.
 pub fn render_location(
     template: &str,
     ctx: &LocationContext<'_>,
@@ -285,7 +262,12 @@ pub fn render_location(
         .replace("{repo_name}", ctx.repo_name)
         .replace("{worktree_name}", worktree_name)
         .replace("{task_id}", ctx.task_id)
-        .replace("{source}", ctx.source);
+        .replace("{source}", ctx.source)
+        .replace(
+            "{task_number}",
+            &ctx.task_number.map(|n| n.to_string()).unwrap_or_default(),
+        )
+        .replace("{hash}", &location_core(ctx).hash());
     // A leading `~` expands to `$HOME` (e.g. `worktree_location = "~/.worktrees/{worktree_name}"`).
     if let Some(rest) = rendered.strip_prefix("~/") {
         let home = env
@@ -347,10 +329,9 @@ pub struct CreateRequest<'a> {
     /// committed work from being stranded when a cleaned-up task is dispatched
     /// again.
     pub existing_branch: Option<&'a str>,
-    /// Worktree directory-name template (use
-    /// [`DEFAULT_WORKTREE_NAME_TEMPLATE`]); fills `{worktree_name}` in
-    /// `location_template`.
-    pub name_template: &'a str,
+    /// The Orchestrator's own task number (`tasks.id`), which becomes the
+    /// readable half of the leaf name (ADR-0071 D-1).
+    pub task_number: Option<i64>,
     /// Location template (use [`default_location_template`] for the default).
     pub location_template: &'a str,
     /// Base branch override; `None` detects `origin`'s default (F-25).
@@ -425,13 +406,14 @@ impl<G: GitRunner> WorktreeManager<G> {
         }
         let base_commit = rev.stdout.trim().to_string();
 
-        let worktree_name = render_worktree_name(req.name_template, req.source, req.task_id);
         let ctx = LocationContext {
             repo_path: req.repo_path,
             repo_name: req.repo_name,
             source: req.source,
             task_id: req.task_id,
+            task_number: req.task_number,
         };
+        let worktree_name = WorktreeLeaf.identifier(&location_core(&ctx));
         let path = render_location(req.location_template, &ctx, &worktree_name, req.env)?;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -1168,74 +1150,72 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn render_legalizes_forbidden_ref_characters() {
-        // Slack task ids are `{channel}:{ts}` — `:` is invalid in a git ref
-        // and unwelcome in a path.
-        assert_eq!(
-            render_legalized("{source}-{task_id}", "slack", "C1:100.1"),
-            "slack-C1-100.1"
-        );
-        assert_eq!(
-            render_legalized("{task_id}", "s", "a b\t~^?*[\\c"),
-            "a-b-------c"
-        );
-    }
-
-    /// A prefixed task id (#397) has **two** colons, not one, and lands here
-    /// with no special case.
+    /// The leaf reaches the filesystem, so what the policy does **not** emit
+    /// is the point: a Slack id's `:` is a separator in `PATH`-shaped
+    /// variables and a host/path delimiter to `scp`/`rsync`, a `/` would nest
+    /// the worktree a directory deeper than the location template says, and a
+    /// leading `-` is read as an option by every command taking the name.
     ///
-    /// Worth pinning rather than assuming: [#108] shipped a `render_branch`
-    /// that mishandled the single `:` in a Slack id, and `impl:C1:100.0`
-    /// reaches the same code by a path nobody exercised before. The point is
-    /// that normalisation stays centralised at the git boundary — the prefix
-    /// needed no change anywhere else.
-    ///
-    /// [#108]: https://github.com/tomoya-k31/totsuka/issues/108
+    /// This used to be a git-ref legalizer (`..`, `@{`, `.lock`, dot-led
+    /// components…) because the leaf was once a branch name. Since ADR-0026 it
+    /// is not, and since #645 the policy emits `[A-Za-z0-9_-]` only — a strict
+    /// subset of both rule sets — so the cases below are the whole surface.
     #[test]
-    fn a_prefixed_task_id_normalizes_without_a_special_case() {
-        assert_eq!(
-            render_worktree_name("{source}-{task_id}", "slack", "impl:C1:100.0"),
-            "slack-impl-C1-100.0"
-        );
-        assert_eq!(
-            render_worktree_name("{source}-{task_id}", "slack", "books:C1:100.0"),
-            "slack-books-C1-100.0"
-        );
-        // …and the unprefixed form is unchanged, so adding the prefix did not
-        // move the directory of an existing task.
-        assert_eq!(
-            render_worktree_name("{source}-{task_id}", "slack", "C1:100.0"),
-            "slack-C1-100.0"
-        );
-    }
+    fn the_leaf_is_safe_as_a_path_component() {
+        let leaf = |number: Option<i64>, source: &str, id: &str| {
+            WorktreeLeaf.identifier(&IdentifierCore {
+                task_number: number,
+                source,
+                source_task_id: id,
+            })
+        };
+        let safe = |name: &str| {
+            !name.is_empty()
+                && !name.starts_with('-')
+                && name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        };
 
-    #[test]
-    fn render_legalizes_forbidden_ref_sequences() {
-        // check-ref-format rejects more than single characters: `..`, `@{`,
-        // a lone `@`, `.lock` suffixes, dot-led/dot-trailed components,
-        // empty components, and a dash-led name (option injection).
-        assert_eq!(render_legalized("{task_id}", "s", "a..b...c"), "a--b--.c");
-        assert_eq!(render_legalized("{task_id}", "s", "x.lock"), "x-lock");
-        assert_eq!(render_legalized("{task_id}", "s", "a@{b/@"), "a-{b/-");
-        // Dot-led becomes dash-led, which then gets the option-injection
-        // guard's `b` prefix (a dash-led *name* is also rejected by git).
-        assert_eq!(render_legalized("{task_id}", "s", ".hidden."), "b-hidden-");
-        assert_eq!(render_legalized("a//{task_id}/", "s", "1"), "a/1");
-        assert_eq!(render_legalized("{task_id}", "s", "///"), "task");
-        assert_eq!(render_legalized("{task_id}", "s", "-rf"), "b-rf");
+        // The shape production always takes: number plus digest, and nothing
+        // from the id can reach the path at all.
+        let name = leaf(Some(3), "slack", "C0ABCDEF12:1720000000.123456");
+        assert!(name.starts_with("3-"), "{name}");
+        assert!(safe(&name), "{name}");
+
+        // Without a number (an Orchestrator predating 0.7.1) the id *is* the
+        // readable half, so every character of it goes through the sanitizer.
+        for id in [
+            "C0ABCDEF12:1720000000.123456", // Slack: colons and a dot
+            "impl:C1:100.0",                // #397 prefixed: two colons
+            "a/b",                          // Notion: a slash would nest
+            "-rf",                          // option injection
+            "///",                          // nothing legal at all
+            "",                             // nothing at all
+            ".hidden.",
+            "x.lock",
+            "a@{b/@",
+        ] {
+            let name = leaf(None, "notion", id);
+            assert!(safe(&name), "{id:?} produced {name}");
+        }
     }
 
     #[test]
     fn renders_default_location() {
-        let name = render_worktree_name(DEFAULT_WORKTREE_NAME_TEMPLATE, "github", "123");
-        assert_eq!(name, "github-123");
+        let name = WorktreeLeaf.identifier(&IdentifierCore {
+            task_number: Some(123),
+            source: "github",
+            source_task_id: "123",
+        });
+        assert!(name.starts_with("123-"), "{name}");
 
         let ctx = LocationContext {
             repo_path: Path::new("/repos/totsuka"),
             repo_name: "totsuka",
             source: "github",
             task_id: "123",
+            task_number: Some(1),
         };
         // An operator-written template with a `${ENV}` reference — the shape
         // the built-in default used to have, kept here because user config
@@ -1249,32 +1229,43 @@ mod tests {
         .unwrap();
         assert_eq!(
             loc,
-            PathBuf::from("/state/totsuka/worktrees/totsuka/github-123")
+            PathBuf::from(format!("/state/totsuka/worktrees/totsuka/{name}"))
         );
     }
 
+    /// The two halves of the leaf are offered to `location` separately
+    /// (0.7.1, #645) so an operator can rebuild it with their own separator —
+    /// while `{task_id}` keeps meaning the **source's** id, because changing
+    /// what an existing custom template renders is the one thing this must not
+    /// do.
     #[test]
-    fn worktree_name_is_legalized_and_flattened() {
-        // The `:` of a Slack task id would otherwise reach the filesystem,
-        // where it is a separator in `PATH`-shaped variables and a host/path
-        // delimiter to `scp`/`rsync`.
+    fn location_offers_both_halves_and_leaves_task_id_alone() {
+        let ctx = LocationContext {
+            repo_path: Path::new("/repos/totsuka"),
+            repo_name: "totsuka",
+            source: "slack",
+            task_id: "C1:100.1",
+            task_number: Some(42),
+        };
+        let loc = render_location(
+            "/wt/{task_number}_{hash}/{task_id}/{source}",
+            &ctx,
+            &WorktreeLeaf.identifier(&location_core(&ctx)),
+            &HashMap::new(),
+        )
+        .unwrap();
+        let hash = location_core(&ctx).hash();
         assert_eq!(
-            render_worktree_name(
-                DEFAULT_WORKTREE_NAME_TEMPLATE,
-                "slack",
-                "C0ABCDEF12:1720000000.123456"
-            ),
-            "slack-C0ABCDEF12-1720000000.123456"
+            loc,
+            PathBuf::from(format!("/wt/42_{hash}/C1:100.1/slack")),
+            "{loc:?}"
         );
-        // Any `/` a task id carries is folded rather than nesting the worktree
-        // one directory deeper than the template says.
+        // The leaf is those same two halves, joined — so a template that spells
+        // them out lands beside the default rather than somewhere unrelated.
         assert_eq!(
-            render_worktree_name(DEFAULT_WORKTREE_NAME_TEMPLATE, "notion", "a/b"),
-            "notion-a-b"
+            WorktreeLeaf.identifier(&location_core(&ctx)),
+            format!("42-{hash}")
         );
-        // The option-injection and empty-render guards apply here too.
-        assert_eq!(render_worktree_name("{task_id}", "s", "-rf"), "b-rf");
-        assert_eq!(render_worktree_name("{task_id}", "s", "///"), "task");
     }
 
     #[test]
@@ -1298,13 +1289,16 @@ mod tests {
             repo_name: "totsuka",
             source: "slack",
             task_id: "C1:100.1",
+            task_number: Some(1),
         };
-        let name = render_worktree_name(DEFAULT_WORKTREE_NAME_TEMPLATE, ctx.source, ctx.task_id);
+        let name = WorktreeLeaf.identifier(&location_core(&ctx));
         // Rendering succeeds against an *empty* environment.
         let loc = render_location(&template, &ctx, &name, &HashMap::new()).unwrap();
         assert_eq!(
             loc,
-            PathBuf::from("/home/t/.local/state/totsuka/worktrees/totsuka/slack-C1-100.1")
+            PathBuf::from(format!(
+                "/home/t/.local/state/totsuka/worktrees/totsuka/{name}"
+            ))
         );
     }
 
@@ -1326,8 +1320,9 @@ mod tests {
             repo_name: "totsuka",
             source: "github",
             task_id: "123",
+            task_number: Some(1),
         };
-        let name = render_worktree_name(DEFAULT_WORKTREE_NAME_TEMPLATE, ctx.source, ctx.task_id);
+        let name = WorktreeLeaf.identifier(&location_core(&ctx));
         let new = render_location(
             &default_location_template(&paths),
             &ctx,
@@ -1352,6 +1347,7 @@ mod tests {
             repo_name: "totsuka",
             source: "github",
             task_id: "1",
+            task_number: Some(1),
         };
         let loc = render_location(
             "{repo}/../.worktrees/{worktree_name}",
@@ -1361,12 +1357,6 @@ mod tests {
         )
         .unwrap();
         assert_eq!(loc, PathBuf::from("/repos/totsuka/../.worktrees/github-1"));
-    }
-
-    #[test]
-    fn sanitize_flattens_slashes() {
-        assert_eq!(sanitize_branch_for_path("agent/github-1"), "agent-github-1");
-        assert_eq!(sanitize_branch_for_path("plain"), "plain");
     }
 
     #[test]
@@ -1780,6 +1770,7 @@ mod tests {
             repo_name: "r",
             source: "github",
             task_id: "1",
+            task_number: Some(1),
         };
         let loc = render_location(
             "~/.worktrees/{worktree_name}",
@@ -1800,6 +1791,7 @@ mod tests {
             repo_name: "r",
             source: "s",
             task_id: "1",
+            task_number: Some(1),
         };
         assert!(render_location("${MISSING}/{worktree_name}", &ctx, "b", &env(&[])).is_err());
     }

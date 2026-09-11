@@ -71,8 +71,8 @@ use crate::repo_select::{ReadmeCache, RepoCandidate, RepoDecision, SelectConfig,
 use crate::scheduler::{Limits, ReadyTask, SlotManager, counts_toward_slot, plan_dispatch};
 use crate::tool::{LaunchInputs, ToolProfile};
 use crate::worktree::{
-    CleanupDecision, CleanupOutcome, CleanupPolicy, CreateRequest, DEFAULT_WORKTREE_NAME_TEMPLATE,
-    WorktreeError, WorktreeManager, default_location_template,
+    CleanupDecision, CleanupOutcome, CleanupPolicy, CreateRequest, WorktreeError, WorktreeManager,
+    default_location_template,
 };
 
 mod dispatch;
@@ -1135,7 +1135,6 @@ pub(crate) async fn test_engine_with<L: LlmRouter + 'static>(
         workflows: Vec::new(),
         repos: Vec::new(),
         limits: Limits::global(1),
-        worktree_name_template: DEFAULT_WORKTREE_NAME_TEMPLATE.to_string(),
         location_template: "/tmp/totsuka-sweep/{repo_name}/{worktree_name}".to_string(),
         cleanup_implement: CleanupPolicy::Manual,
         cleanup_plan: CleanupPolicy::Immediate,

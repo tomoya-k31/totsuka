@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use orchestrator_core::adapters::git::SystemGitRunner;
 use orchestrator_core::paths::Paths;
 use orchestrator_core::worktree::{
-    CleanupDecision, CleanupOutcome, CleanupPolicy, CleanupRequest, CreateRequest,
-    DEFAULT_WORKTREE_NAME_TEMPLATE, WorktreeManager, default_location_template,
+    CleanupDecision, CleanupOutcome, CleanupPolicy, CleanupRequest, CreateRequest, WorktreeManager,
+    default_location_template,
 };
 
 use test_support::{bare_origin_and_clone as setup, git, scratch};
@@ -38,7 +38,7 @@ fn request<'a>(
         source: "github",
         task_id,
         existing_branch: None,
-        name_template: DEFAULT_WORKTREE_NAME_TEMPLATE,
+        task_number: Some(1),
         location_template: ENV_LOCATION_TEMPLATE,
         base_branch: None,
         env,
@@ -90,7 +90,7 @@ fn default_location_creates_a_worktree_without_xdg_state_home() {
             source: "slack",
             task_id: "C0ABCDEF12:1720000000.123456",
             existing_branch: None,
-            name_template: DEFAULT_WORKTREE_NAME_TEMPLATE,
+            task_number: Some(1),
             location_template: &template,
             base_branch: None,
             env: &HashMap::new(),
@@ -102,12 +102,19 @@ fn default_location_creates_a_worktree_without_xdg_state_home() {
     assert_eq!(wt.branch, None);
     assert_eq!(mgr.head_branch(&wt.path), None);
     assert!(wt.path.is_dir(), "worktree dir must exist");
-    // The directory is named from `(source, task_id)`, not from the branch —
-    // and the `:` a Slack task id carries never reaches the filesystem.
+    // The directory is named from the task number and a digest (ADR-0071),
+    // not from the branch and no longer from the source's id — so the `:` a
+    // Slack task id carries cannot reach the filesystem at all.
+    let leaf = wt.path.file_name().unwrap().to_str().unwrap();
+    assert!(leaf.starts_with("1-"), "{leaf}");
+    assert!(
+        leaf.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
+        "{leaf}"
+    );
     assert_eq!(
-        wt.path,
+        wt.path.parent().unwrap(),
         home.join(".local/state/totsuka/worktrees/myrepo")
-            .join("slack-C0ABCDEF12-1720000000.123456")
     );
     // The base commit is reported so cleanup can later prove the branch it is
     // about to delete descends from this worktree's starting point.
@@ -127,7 +134,12 @@ fn create_cleanup_and_orphan_detection() {
     let wt = mgr.create(&request(&clone, "123", &env)).unwrap();
     assert_eq!(wt.branch, None, "created detached");
     assert!(wt.path.is_dir(), "worktree dir must exist");
-    assert_eq!(wt.path, state.join("totsuka/worktrees/myrepo/github-123"));
+    let leaf = wt.path.file_name().unwrap().to_str().unwrap().to_string();
+    assert!(leaf.starts_with("1-"), "{leaf}");
+    assert_eq!(
+        wt.path,
+        state.join(format!("totsuka/worktrees/myrepo/{leaf}"))
+    );
     // It is based on origin/main.
     let head = git(&wt.path, &["rev-parse", "HEAD"]);
     let origin_main = git(&clone, &["rev-parse", "origin/main"]);

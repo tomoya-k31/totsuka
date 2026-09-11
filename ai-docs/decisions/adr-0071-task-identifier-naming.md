@@ -124,9 +124,14 @@ pub trait IdentifierPolicy {
 
 **区切り文字の予算は切り詰めの前に引く。** これが今回のバグを表現不能にする 1 行で、`max_len - (prefix + sep + hash)` を可読半分の予算とする。結果として予算が区切りの位置でちょうど尽きると名前は上限より 1 文字短くなる（例の id で 31 文字）。誰も読まない id の 1 文字と引き換えに、はみ出しが起こり得なくなる。
 
-## D-6: worktree の葉は既定を変え、`location` にはプレースホルダを足す
+## D-6: worktree の葉はテンプレートをやめて識別子にし、`location` にはプレースホルダを足す
 
-`{worktree_name}`（葉）の既定を `{source}-{task_id}` から `<task 番号>-<hash8>` へ変える。`[worktrees].location` には `{task_number}` / `{hash}` を**追加**し、**`{task_id}`（source id）と `{source}` の意味は変えない** — 意味の差し替えは既存の設定の出力を黙って変える。
+葉（`{worktree_name}`）は `WorktreeLeaf`（`IdentifierPolicy`）の出力 `<task 番号>-<hash8>` にする。**テンプレート機構そのものを削除する** — `DEFAULT_WORKTREE_NAME_TEMPLATE`（`{source}-{task_id}`）・`render_worktree_name` / `render_legalized` / `sanitize_branch_for_path`・設定フィールド `worktree_name_template` を落とす。理由は 2 つある。
+
+- **合法化に仕事が無くなった。** あの git ref 合法化（`:` 空白 `~^?*[\`、`..`・`.lock`・`@{`、先頭 `-`）は葉がブランチ名だった頃の遺産で、[ADR-0026](/decisions/adr-0026-agent-owned-branch-and-push.md) 以降そうではない。ポリシーが出すのは `[A-Za-z0-9_-]` だけで、git ref 規則にもパス要素規則にも**厳密に収まる**
+- **1 つの値しか取らない設定は設定ではない。** `worktree_name_template` は `config.toml` から到達できず、既定値以外が入ることは無かった。残したまま葉をポリシーに変えると、「3 ツールが同じ core を持つ」性質が**テンプレート文字列の偶然の一致**として手で維持されることになる
+
+`[worktrees].location` には `{task_number}` / `{hash}` を**追加**する（葉の 2 つの半分を別々に置き、運用者が区切りを変えたり片方を落としたりできる形にする）。**`{task_id}`（source id）と `{source}` の意味は変えない** — 意味の差し替えは既存の設定の出力を黙って変える。
 
 既存の worktree に移行は要らない。掃除・孤児検出・`doctor`・再利用ガードはいずれも `tasks.worktree_path` に記録された**フルパス**を読み、**名前を parse して task を復元している箇所は 1 つも無い**。
 
@@ -162,6 +167,7 @@ pub trait IdentifierPolicy {
 | ハッシュを `max_len` のあるツールだけに付ける | 一意性の担い手が切り詰めの有無で変わることになる。別インスタンスの同番号が衝突する（D-4） |
 | trait ではなく値（`IdentifierRule` 構造体）で宣言する | 実装としてはほぼ同じだが、ツール固有の事情（将来 `agent.start` が別の形を要求する等）を型で表現する余地が無くなる。required を制約に限れば手順の分岐は防げる |
 | `plugin-sdk` に置く | core（worktree 名）から使えない。core が sdk に依存すると「sdk はプラグイン作者向け」という層が逆転する |
+| worktree 名テンプレートを残し、`{task_number}` / `{hash}` プレースホルダで葉を組む | 葉がポリシーの出力ではなくなり、3 ツールの core 一致がテンプレート文字列の偶然の一致に落ちる。到達不能な設定を残す対価としては高い（D-6） |
 | task_source が読める handle を提供する | 有用だが本 ADR の範囲外。余った予算に足す設計として #646 に分離した |
 
 # 関連

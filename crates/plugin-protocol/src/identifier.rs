@@ -105,6 +105,28 @@ impl<'a> IdentifierCore<'a> {
             source_task_id: &params.task.id,
         }
     }
+
+    /// The [`HASH_CHARS`]-character digest half of this task's identifiers.
+    ///
+    /// Public because a caller may need it on its own — the worktree
+    /// *location* template offers it as `{hash}` — and computing the same
+    /// digest a second time elsewhere is exactly what this module exists to
+    /// prevent.
+    pub fn hash(&self) -> String {
+        hash8(self.source, self.source_task_id)
+    }
+
+    /// The readable half: the task number when there is one, else the source's
+    /// id, sanitized for `case` and `separator`.
+    ///
+    /// Public for the same reason as [`hash`](Self::hash) — a caller that
+    /// wants only this half must not re-derive it.
+    pub fn readable(&self, case: Case, separator: Option<char>) -> String {
+        match self.task_number {
+            Some(n) => sanitize(&n.to_string(), case, separator),
+            None => sanitize(self.source_task_id, case, separator),
+        }
+    }
 }
 
 /// The constraints one tool puts on the identifiers it accepts.
@@ -175,16 +197,13 @@ pub fn build(
     separator: Option<char>,
     core: &IdentifierCore<'_>,
 ) -> String {
-    let hash = hash8(core.source, core.source_task_id);
+    let hash = core.hash();
     // `len_utf8`, not 1: a policy may declare a non-ASCII separator, and a
     // budget counted in characters against a limit counted in bytes overflows
     // it — the same shape as the bug this module replaced.
     let sep_len = separator.map_or(0, char::len_utf8);
 
-    let readable = match core.task_number {
-        Some(n) => sanitize(&n.to_string(), case, separator),
-        None => sanitize(core.source_task_id, case, separator),
-    };
+    let readable = core.readable(case, separator);
 
     // The separator between the readable half and the hash is spent **here**,
     // before the truncation, not after it. Spending it afterwards is the
