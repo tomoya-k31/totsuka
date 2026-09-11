@@ -47,7 +47,7 @@ pub enum ValidationError {
 
     /// A worktree location template uses an unknown `{placeholder}` (F-22).
     #[error(
-        "{referrer} uses unknown placeholder `{{{placeholder}}}` → allowed: {{repo}}, {{repo_name}}, {{worktree_name}}, {{task_id}}, {{source}}, {{task_number}}, {{hash}}"
+        "{referrer} uses unknown placeholder `{{{placeholder}}}` → allowed: {{repo}}, {{repo_name}}, {{worktree_name}}, {{task_id}}, {{source}}, {{task_number}}, {{hash}}, {{handle}}"
     )]
     UnknownWorktreePlaceholder {
         referrer: String,
@@ -295,6 +295,11 @@ const ALLOWED_WORKTREE_PLACEHOLDERS: &[&str] = &[
     // 0.7.1 (#645): the two halves of the leaf name.
     "task_number",
     "hash",
+    // 0.7.2 (#646): the source's short name for the task. Renders **empty**
+    // when the source offers none, which is a normal answer — so a template
+    // using it alone as a path component is an operator error this list
+    // cannot catch.
+    "handle",
 ];
 
 /// Run all static checks, returning every problem found (empty = valid).
@@ -1488,17 +1493,17 @@ worktree_location = "{{repo}}/../.worktrees/{{bogus}}"
         )));
     }
 
-    /// The two halves of the leaf are placeholders an operator may write
-    /// (0.7.1, #645). The renderer substitutes them; **this validator decides
-    /// whether the config is even accepted**, so a placeholder added to one
-    /// half only is rejected before the other half runs.
+    /// The parts of the leaf are placeholders an operator may write (0.7.1
+    /// #645, 0.7.2 #646). The renderer substitutes them; **this validator
+    /// decides whether the config is even accepted**, so a placeholder added
+    /// to one half only is rejected before the other half runs.
     #[test]
     fn worktree_templates_accept_the_leafs_own_placeholders() {
         let dir = env!("CARGO_MANIFEST_DIR");
         let toml = format!(
             r#"
 [worktree]
-location = "/wt/{{task_number}}_{{hash}}/{{repo_name}}"
+location = "/wt/{{task_number}}_{{handle}}_{{hash}}/{{repo_name}}"
 
 [[repositories]]
 name = "totsuka"
