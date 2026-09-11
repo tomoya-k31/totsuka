@@ -4,7 +4,7 @@ title: 設定例集（config.toml）
 description: そのまま貼って動く config.toml の完全版注釈付き例と、選択肢を持つキー（kind・mode・output・verification・cleanup・trigger・シークレット参照・並列上限）の選び分け基準、TOTSUKA_* 環境変数オーバーライドの対応表、および最小構成／GitHub Projects／Slack／設計→実装ハンドオフのシナリオ別レシピ。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-cli/src/init_cmd.rs
 tags: [config, toml, examples, recipes, workflow, secrets, slack, github, herdr, environment]
-generated: { by: claude-code/opus-5, at: 2026-08-27T05:30:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-13T00:20:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -490,7 +490,7 @@ notion では `property_map.assignee` が必須で、`@me` を使うなら `noti
 
 いずれの場合も**未コミット変更のある worktree は決して削除されない**ので、作業中のものを失う心配はない。
 
-`location` テンプレートで使えるプレースホルダは `{repo}` / `{repo_name}` / `{worktree_name}` / `{task_id}` / `{source}` のみ。`{worktree_name}` は `{source}-{task_id}` を git ref 規則で正規化し `/` を潰したもの（Slack なら `slack-C0ABCDEF12-1720000000.123456`）。**`{branch}` は廃止された** — worktree を作る時点でブランチ名はまだ存在しない（エージェントがリポジトリの規約に従って後から決める）ため、ディレクトリ名には使えない。残っていると専用のエラーで起動を止める。
+`location` テンプレートで使えるプレースホルダは `{repo}` / `{repo_name}` / `{worktree_name}` / `{task_id}` / `{source}` / `{task_number}` / `{hash}` のみ。`{worktree_name}` は **`<task 番号>-<hash8>`**（例 `3-9f3c2a1e`）で、`{task_number}`（`totsuka status` / `totsuka task retry <n>` が使う番号）と `{hash}`（`sha256(source ∥ ソース側 id)` の先頭 8 桁）を `-` で繋いだもの → [ADR-0071](/decisions/adr-0071-task-identifier-naming.md)。2 つを別々に置いてあるのは、区切りを変えたり片方を落としたりできるようにするため。`{task_id}` は従来どおり**ソース側の id**（Slack なら `{channel}:{ts}`）で、意味は変わっていない。**`{branch}` は廃止された** — worktree を作る時点でブランチ名はまだ存在しない（エージェントがリポジトリの規約に従って後から決める）ため、ディレクトリ名には使えない。残っていると専用のエラーで起動を止める。
 それ以外を書くとバリデーションエラーになる（`${ENV}` と `~` はプレースホルダとは別枠で展開される）。
 ブランチ名テンプレートは設定不可で、`agent/{source}-{task_id}` 固定。
 
@@ -855,7 +855,7 @@ totsuka doctor                     # 依存コマンド・ソケット・シー�
 | ``missing field `projects` `` | `[[workflows]]` に `projects` が無い（#626 で `source` を置き換えた。旧 config はここで落ちる） |
 | workflow の `projects` が空 / 未解決 / source 混在 | `projects = []`、実在しない `[[projects]].name`、異なる source の domain を 1 つの workflow に混ぜた（#626） |
 | リポジトリパス不在 | `path` の展開結果がディスク上に存在しない |
-| プレースホルダエラー | `worktree_location` に `{repo}` / `{repo_name}` / `{worktree_name}` / `{task_id}` / `{source}` 以外を使った（`{branch}` は廃止済みで専用のエラーになる） |
+| プレースホルダエラー | `worktree_location` に `{repo}` / `{repo_name}` / `{worktree_name}` / `{task_id}` / `{source}` / `{task_number}` / `{hash}` 以外を使った（`{branch}` は廃止済みで専用のエラーになる） |
 | 環境変数未設定 | `${VAR}` 参照先が export されていない |
 
 **警告**（実行は止まらない）の代表例: トリガーの重複、`verification = "human"` なのに notifier が無い、

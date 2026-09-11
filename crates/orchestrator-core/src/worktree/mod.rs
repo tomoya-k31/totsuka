@@ -257,17 +257,24 @@ pub fn render_location(
     env: &HashMap<String, String>,
 ) -> Result<PathBuf, WorktreeError> {
     let expanded = expand_env(template, &|k: &str| env.get(k).cloned())?;
+    // **The two raw substitutions go last.** This is a `.replace()` chain, so
+    // each pass re-scans what the previous one produced — and `{task_id}` /
+    // `{source}` are the only values that can carry a literal `{…}` (they are
+    // the source's, unnormalized on purpose). Substituted before the newer
+    // placeholders, a task id containing the text `{hash}` would be rewritten
+    // by the pass after it, which is precisely the "their meaning is
+    // unchanged" promise above. Last, nothing re-scans them.
     let rendered = expanded
         .replace("{repo}", &ctx.repo_path.display().to_string())
         .replace("{repo_name}", ctx.repo_name)
         .replace("{worktree_name}", worktree_name)
-        .replace("{task_id}", ctx.task_id)
-        .replace("{source}", ctx.source)
         .replace(
             "{task_number}",
             &ctx.task_number.map(|n| n.to_string()).unwrap_or_default(),
         )
-        .replace("{hash}", &location_core(ctx).hash());
+        .replace("{hash}", &location_core(ctx).hash())
+        .replace("{task_id}", ctx.task_id)
+        .replace("{source}", ctx.source);
     // A leading `~` expands to `$HOME` (e.g. `worktree_location = "~/.worktrees/{worktree_name}"`).
     if let Some(rest) = rendered.strip_prefix("~/") {
         let home = env
@@ -1231,6 +1238,29 @@ mod tests {
             loc,
             PathBuf::from(format!("/state/totsuka/worktrees/totsuka/{name}"))
         );
+    }
+
+    /// A source id is substituted **raw**, so it can carry text that looks
+    /// like another placeholder. Rendering it before the others would let the
+    /// next pass rewrite it — the one thing the raw substitution promises not
+    /// to do.
+    #[test]
+    fn a_placeholder_inside_a_task_id_is_not_re_substituted() {
+        let ctx = LocationContext {
+            repo_path: Path::new("/repos/totsuka"),
+            repo_name: "totsuka",
+            source: "slack",
+            task_id: "C1:{hash}",
+            task_number: Some(7),
+        };
+        let loc = render_location(
+            "/wt/{task_id}",
+            &ctx,
+            &WorktreeLeaf.identifier(&location_core(&ctx)),
+            &HashMap::new(),
+        )
+        .unwrap();
+        assert_eq!(loc, PathBuf::from("/wt/C1:{hash}"), "{loc:?}");
     }
 
     /// The two halves of the leaf are offered to `location` separately

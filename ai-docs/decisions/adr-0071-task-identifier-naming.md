@@ -4,7 +4,7 @@ title: ADR-0071 タスク識別子の命名 — 内部 task 番号を読める�
 description: "herdr の agent name・orca の worktree 名・Orchestrator の worktree ディレクトリ名を 1 つの規則に揃える決定。名前は <prefix><task 番号><sep><sha256(source ∥ source id) 先頭 8 hex> とし、制約（prefix・長さ上限・大小・許可文字）だけを各ツールが IdentifierPolicy で宣言して sanitize・切り詰め・ハッシュ付与の手順は plugin-protocol が持つ。読める半分を source id から内部 task 番号へ移すため protocol 0.7.1 で TaskDispatchParams.task_number を足し、job_id は使わない。session row を含めない理由、ハッシュを常に付ける理由、worktree の葉とプレースホルダの扱いを含む。"
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/plugin-protocol/src/identifier.rs
 tags: [decision, adr, naming, identifier, plugin-protocol, herdr, orca, worktree]
-generated: { by: claude-code/opus-5, at: 2026-09-12T20:30:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-13T00:20:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
