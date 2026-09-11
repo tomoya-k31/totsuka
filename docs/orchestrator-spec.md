@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](orchestrator-spec.ja.md)
 
-<!-- generated-from: ai-docs/product/orchestrator-spec.md sha256:638c2d0a06299f8adbfa35dff5243e878d1fb4384c0db39c15cba7a0923f65f4 -->
+<!-- generated-from: ai-docs/product/orchestrator-spec.md sha256:fb24bb5b61fa527b81eaf1809d43d84f4689a7aa8851752baee34b19244441ee -->
 
 # What totsuka is
 
@@ -41,6 +41,8 @@ If the task says which repository it belongs to, that wins. Otherwise totsuka cl
 
 LLM calls go through an OpenAI-compatible API, so pointing `base_url` at a gateway such as OpenRouter or LiteLLM is all it takes to switch providers. A cheap, fast model is assumed. The model reports a confidence alongside its choice; when candidates are close, totsuka asks you rather than guessing.
 
+totsuka also keeps an eye on whether the gateway is alive. It sends the cheapest request the gateway will answer — the same one `totsuka doctor --online` sends — once at startup, again right after the machine wakes from sleep, and whenever ten minutes pass without any call to the gateway (every minute while it is down). Real calls count as contact, so a busy run never spends a probe. A gateway that is not answering shows as `⚠` in the menu bar and under `degraded:` in `totsuka status`, with a short reason (unreachable, timed out, or a server error), and clears by itself as soon as the gateway answers anything at all. Nothing waits on the probe: a gateway that is down never holds up startup, and totsuka keeps running without it.
+
 ### Managing worktrees
 
 A worktree is created when a task starts. Immediately before, totsuka fetches and checks out the remote default branch detached, so work never starts from a stale local branch. The base branch is overridable per repository, and the starting commit is recorded so cleanup can tell your branches from the task's.
@@ -73,7 +75,7 @@ Notifier plugins deliver events — waiting for input, done, failed, pending. A 
 
 That number counts five states — `pending`, `waiting_input`, `verifying`, `escalated`, and `queued` with a recorded reason — and nothing else. Finished tasks are never counted, so the number returns to zero once you have dealt with everything. Clicking a task row brings its pane to the front; nothing in the menu changes a task's state.
 
-The glyph has a third state, `⚠`: totsuka is running but cannot do its whole job. It covers four things it can re-check every cycle — the hook receiver failed to bind (nothing can report completion for that run), a plugin is down, hook signals are stuck in the spool, or the LLM gateway rejected the API key. Each clears on its own once fixed. There is a fifth case totsuka cannot report about itself: if it stops publishing altogether for two minutes while its process is still alive, that shows as `⚠` too — a wedged run cannot tell you it is wedged. `totsuka status` shows the same reasons under `degraded:`.
+The glyph has a third state, `⚠`: totsuka is running but cannot do its whole job. It covers five things it can re-check every cycle — the hook receiver failed to bind (nothing can report completion for that run), a plugin is down, hook signals are stuck in the spool, the LLM gateway rejected the API key, or the LLM gateway is not answering at all. Each clears on its own once fixed. There is one more case totsuka cannot report about itself: if it stops publishing altogether for two minutes while its process is still alive, that shows as `⚠` too — a wedged run cannot tell you it is wedged. `totsuka status` shows the same reasons under `degraded:`.
 
 The default output is SwiftBar's plugin format; `--json` gives you the same view as data. It always exits 0, because SwiftBar renders a plugin that exits non-zero as a broken item; failures appear as a row instead. Task titles come from whoever filed the task, so totsuka neutralises them before they reach SwiftBar: nothing in a title can add parameters to a row, split it into several, or replace written characters with a symbol. Setup is a short shell snippet in the operations guide.
 

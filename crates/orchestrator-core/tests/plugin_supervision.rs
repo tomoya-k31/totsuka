@@ -134,6 +134,10 @@ fn settings_with_backoff(max_attempts: u32, first_backoff: Duration) -> EngineSe
         readme_cache_dir: None,
         worktree_sweep_interval: Duration::ZERO,
         one_shot_grace: Duration::ZERO,
+        // An hour: nothing here is about LLM liveness, so only the startup
+        // probe (if a router is given) ever runs.
+        llm_probe_interval: Duration::from_secs(3600),
+        llm_probe_interval_while_unreachable: Duration::from_secs(3600),
         tools: orchestrator_core::tool::builtin_registry(),
         default_tool: "claude".to_string(),
         prompts: Default::default(),

@@ -61,6 +61,26 @@ impl LlmError {
         )
     }
 
+    /// Whether the gateway failed to serve at all: no connection, no answer
+    /// in time, or a 5xx from the far side.
+    ///
+    /// The "is the LLM alive" question (F-111). Distinct from
+    /// [`is_retryable`](Self::is_retryable), which also counts 429 — a
+    /// throttled gateway is very much alive — and from every 4xx: a 400 for a
+    /// rejected schema or a 404 for a wrong model name is the gateway
+    /// *answering*, just not the way we hoped.
+    pub fn is_unreachable(&self) -> bool {
+        matches!(
+            self,
+            LlmError::Transport(_)
+                | LlmError::Timeout(_)
+                | LlmError::Status {
+                    status: 500..=599,
+                    ..
+                }
+        )
+    }
+
     /// Whether the error is worth retrying with backoff (§5.3).
     pub fn is_retryable(&self) -> bool {
         matches!(
@@ -82,4 +102,26 @@ pub trait LlmRouter: Send + Sync {
         &self,
         request: &ChatRequest,
     ) -> impl Future<Output = Result<Value, LlmError>> + Send;
+
+    /// Ask the gateway whether it is there and accepts our credentials, with
+    /// the cheapest request it will answer.
+    ///
+    /// The liveness check the engine runs at startup, after a resume from
+    /// sleep, and while no real call has been made for a while. A
+    /// **liveness** question, not a correctness one: it never sends a
+    /// schema, because a provider rejecting our structured-output shape (400)
+    /// would masquerade as an outage. The default answers "alive" — the
+    /// right answer for a test double, and the only honest one for a router
+    /// that has no gateway to ask.
+    fn probe(&self) -> impl Future<Output = Result<(), LlmError>> + Send {
+        async { Ok(()) }
+    }
+
+    /// Drop every pooled connection, so the next call opens a fresh one.
+    ///
+    /// Called when the engine detects that the machine slept: keep-alive
+    /// connections that survived the suspend are half-open, and the first
+    /// request on one either fails at once or hangs until the timeout. The
+    /// default is a no-op for routers that hold no connections.
+    fn reset_connections(&self) {}
 }

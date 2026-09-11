@@ -7,7 +7,7 @@
 
 use super::*;
 
-impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
+impl<G: GitRunner, L: LlmRouter + 'static> Engine<G, L> {
     /// Handle one plugin event.
     pub(super) async fn on_event(&mut self, event: PluginEvent) -> Result<(), EngineError> {
         match event {

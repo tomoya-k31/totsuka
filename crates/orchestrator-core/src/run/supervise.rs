@@ -152,7 +152,7 @@ pub(super) fn wire_liveness(name: &str, plugin: &Plugin, tx: &mpsc::UnboundedSen
     });
 }
 
-impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
+impl<G: GitRunner, L: LlmRouter + 'static> Engine<G, L> {
     /// A plugin process exited on its own (§5.3, #495).
     ///
     /// Kind-specific teardown first, relaunch second. **The order is

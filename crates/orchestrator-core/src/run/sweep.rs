@@ -7,7 +7,7 @@
 
 use super::*;
 
-impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
+impl<G: GitRunner, L: LlmRouter + 'static> Engine<G, L> {
     /// Read `HEAD` in the worktree of every in-flight task and record the
     /// branch the agent put it on.
     ///

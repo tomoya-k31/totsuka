@@ -6,7 +6,7 @@
 
 use super::*;
 
-impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
+impl<G: GitRunner, L: LlmRouter + 'static> Engine<G, L> {
     /// Persist one normalized task under `wf`, idempotently (F-73), appending
     /// the delivery to the conversation's message ledger. Returns
     /// `(row id, outcome)`. Every ingest since 0.2.0 arrives via `task/submit`

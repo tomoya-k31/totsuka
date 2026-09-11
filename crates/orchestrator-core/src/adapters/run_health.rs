@@ -78,6 +78,13 @@ pub enum Degradation {
     },
     /// The LLM gateway rejected the configured credentials (401/403).
     LlmKeyRejected,
+    /// The LLM gateway is not serving: the last call — real or probe — got
+    /// no connection, no answer in time, or a 5xx (F-111).
+    LlmUnreachable {
+        /// Short operator-facing reason (`transport error: …`, `no answer
+        /// within 30s`, `HTTP 502`). Never a response body.
+        reason: String,
+    },
     /// A `kind` this build does not know. Naming it beats dropping it: a
     /// dropped row reads as "not degraded".
     #[serde(other)]
@@ -92,6 +99,7 @@ impl Degradation {
             Degradation::PluginDown { .. } => "plugin_down",
             Degradation::SpoolBacklog { .. } => "spool_backlog",
             Degradation::LlmKeyRejected => "llm_key_rejected",
+            Degradation::LlmUnreachable { .. } => "llm_unreachable",
             Degradation::Unknown => "unknown",
         }
     }
@@ -121,6 +129,11 @@ impl Degradation {
                  selection falls back to asking you for every new conversation; reissue the key \
                  and update `[llm].api_key_ref`"
                 .to_string(),
+            Degradation::LlmUnreachable { reason } => format!(
+                "the LLM gateway is not answering ({reason}) → tasks that need repository \
+                 classification fail until it is back; check the network and `[llm].base_url`, \
+                 or run `totsuka doctor --online`"
+            ),
             Degradation::Unknown => {
                 "this build does not recognise the reported degradation → check `totsuka logs`"
                     .to_string()
@@ -240,6 +253,9 @@ mod tests {
             },
             Degradation::SpoolBacklog { files: 4 },
             Degradation::LlmKeyRejected,
+            Degradation::LlmUnreachable {
+                reason: "HTTP 502".to_string(),
+            },
         ]);
         let dir = test_support::scratch("run_health_roundtrip");
         let p = path_in(&dir);
@@ -313,6 +329,9 @@ mod tests {
             },
             Degradation::SpoolBacklog { files: 1 },
             Degradation::LlmKeyRejected,
+            Degradation::LlmUnreachable {
+                reason: "no answer within 30s".to_string(),
+            },
             Degradation::Unknown,
         ] {
             let m = d.message();
