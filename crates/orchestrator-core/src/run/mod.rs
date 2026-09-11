@@ -870,6 +870,12 @@ impl<G: GitRunner, L: LlmRouter + 'static> Engine<G, L> {
             gap_secs = gap.as_secs(),
             "the wall clock jumped ahead of the process clock → treating this as a resume from sleep"
         );
+        // A probe that left before the nap is stuck on the old pool until its
+        // timeout, and while it is unfinished no new one is spawned — so the
+        // "immediate" post-resume probe would wait on it. Abort it first.
+        if let Some(probe) = self.llm_probe.take() {
+            probe.abort();
+        }
         if let Some(llm) = &self.llm {
             llm.reset_connections();
         }
@@ -1370,6 +1376,10 @@ mod liveness_tests {
         answers: std::sync::Mutex<Vec<Result<(), LlmError>>>,
         probes: Arc<AtomicUsize>,
         resets: Arc<AtomicUsize>,
+        /// When set, every probe parks on `gate` before answering — a gateway
+        /// that takes its whole timeout to not answer.
+        hang: Arc<std::sync::atomic::AtomicBool>,
+        gate: Arc<tokio::sync::Notify>,
     }
 
     impl LlmRouter for ProbeScript {
@@ -1380,6 +1390,9 @@ mod liveness_tests {
         /// Scripted answers first; once they run out, every probe succeeds.
         async fn probe(&self) -> Result<(), LlmError> {
             self.probes.fetch_add(1, Ordering::SeqCst);
+            if self.hang.load(Ordering::SeqCst) {
+                self.gate.notified().await;
+            }
             let mut answers = self.answers.lock().unwrap();
             if answers.is_empty() {
                 Ok(())
@@ -1397,6 +1410,7 @@ mod liveness_tests {
         engine: Engine<crate::adapters::git::SystemGitRunner, ProbeScript>,
         probes: Arc<AtomicUsize>,
         resets: Arc<AtomicUsize>,
+        hang: Arc<std::sync::atomic::AtomicBool>,
         clock: Arc<ManualClock>,
         dir: PathBuf,
     }
@@ -1411,10 +1425,13 @@ mod liveness_tests {
             let clock = Arc::new(ManualClock::new(
                 time::OffsetDateTime::from_unix_timestamp(1_757_635_200).unwrap(),
             ));
+            let hang = Arc::new(std::sync::atomic::AtomicBool::new(false));
             let router = ProbeScript {
                 answers: std::sync::Mutex::new(answers),
                 probes: Arc::clone(&probes),
                 resets: Arc::clone(&resets),
+                hang: Arc::clone(&hang),
+                gate: Arc::new(tokio::sync::Notify::new()),
             };
             let mut engine = test_engine_with(
                 Duration::from_secs(3600),
@@ -1429,6 +1446,7 @@ mod liveness_tests {
                 engine,
                 probes,
                 resets,
+                hang,
                 clock,
                 dir,
             }
@@ -1550,6 +1568,34 @@ mod liveness_tests {
         rig.cycle_and_settle().await;
         assert_eq!(rig.resets.load(Ordering::SeqCst), 1, "the pool was dropped");
         assert_eq!(rig.probes(), 2, "and the gateway asked again immediately");
+    }
+
+    /// A probe that was in flight when the machine slept is stuck on the old
+    /// pool until its timeout. The resume must not wait for it: it is aborted
+    /// and a fresh one goes out at once.
+    #[tokio::test]
+    async fn a_resume_aborts_a_probe_left_over_from_before_the_nap() {
+        let mut rig = Rig::new("liveness_resume_abort", vec![]).await;
+        rig.hang.store(true, Ordering::SeqCst);
+        rig.engine.cycle().await.unwrap();
+        tokio::task::yield_now().await;
+        assert_eq!(
+            rig.probes(),
+            1,
+            "the startup probe went out and is now hanging"
+        );
+        let stuck = rig.engine.llm_probe.as_ref().expect("still in flight");
+        assert!(!stuck.is_finished());
+
+        rig.clock.advance(time::Duration::hours(2));
+        rig.engine.cycle().await.unwrap();
+        tokio::task::yield_now().await;
+        assert_eq!(
+            rig.probes(),
+            2,
+            "a new probe went out despite the stuck one"
+        );
+        assert_eq!(rig.resets.load(Ordering::SeqCst), 1);
     }
 
     /// Without `[llm]` there is nothing to probe and nothing to publish.

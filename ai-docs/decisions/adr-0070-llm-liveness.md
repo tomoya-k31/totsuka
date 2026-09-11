@@ -4,7 +4,7 @@ title: ADR-0070 LLM ゲートウェイの生存確認 — 起動時・復帰時�
 description: "「LLM が生きているか」を run が自分で確かめる方式の決定。LlmRouter に probe / reset_connections を足し、最後の接触から 10 分（不到達中は 60 秒）沈黙したら doctor --online と同じ最小リクエストを spawn して投げ、到達不能（transport / timeout / 5xx）を health.json の llm_unreachable として公開する。接触が無ければ即時 = 起動時に必ず 1 回。復帰検知は壁時計と単調時計の差（30 秒以上）で行い、HTTP 接続プールを捨てて即プローブする。設定キーは足さず、起動も止めない。定期の無条件プローブ・同期の起動時プローブ・OS のスリープ通知・pool_idle_timeout・プラグイン側 LLM の連携は不採用または後続。"
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/orchestrator-core/src/adapters/llm.rs
 tags: [decision, llm, health, liveness, run, resume, adr]
-generated: { by: claude-code/fable-5-1, at: 2026-09-12T02:51:00+09:00 }
+generated: { by: claude-code/fable-5-1, at: 2026-09-12T03:10:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -47,7 +47,7 @@ totsuka が LLM（OpenAI 互換 AI Gateway、`[llm]`）に頼るのはリポジ�
 | `unreachable(reason)` | `LlmError::is_unreachable()` = `Transport` / `Timeout` / 5xx | **ゲートウェイから何か答えが返る**（成功・401・429・400・パース不能、すべて） |
 | `last_contact` | 呼び出しまたはプローブが完了するたび更新 | `forget_contact()`（復帰時） |
 
-429 と 401/403 以外の 4xx を到達不能にしないのは、それらが「ゲートウェイは答えている」証拠だからである。`reason` は `transport error: …`（160 字で切る）／`no answer within 30s`／`HTTP 502` の短文で、**応答本文は決して載せない** —— `health.json` と `totsuka status` の端末は redact 層を通らない。ログは**遷移時だけ**（不到達へ落ちたら warn、戻ったら info）。1 時間の障害は 2 行で、プローブ 60 回分の行にはならない。
+429 と 401/403 以外の 4xx を到達不能にしないのは、それらが「ゲートウェイは答えている」証拠だからである。`reason` は `transport error: …`（URL の userinfo とクエリを削り、160 字で切る）／`no answer within 30s`／`HTTP 502` の短文で、**応答本文は決して載せない**。transport エラーの文字列は生成時点（reqwest の `map_err`）でも同じスクラブを通すので、ログに出る側も `https://user:pass@host/v1?key=…` のような `base_url` の秘密を運ばない。鍵拒否の warn も `%e` ではなくこの短文を出す（`Status` の `Display` は応答本文を含む） —— `health.json` と `totsuka status` の端末は redact 層を通らない。ログは**遷移時だけ**（不到達へ落ちたら warn、戻ったら info）。1 時間の障害は 2 行で、プローブ 60 回分の行にはならない。
 
 ## 3. `Degradation::LlmUnreachable { reason }` を health.json に足す
 
@@ -59,11 +59,11 @@ F-110 の「毎サイクル問い直せる事実」の 5 つ目。`kind` は `ll
 
 - **due の定義**: 最後の接触から `LLM_PROBE_INTERVAL`（10 分）以上。`unreachable` ラッチ中は `LLM_PROBE_INTERVAL_WHILE_UNREACHABLE`（60 秒） —— そのときのプローブの仕事は「復旧に気づくこと」で、直した運用者を 10 分待たせない。**接触が一度も無ければ即時** = 起動時に必ず 1 回。
 - **実トラフィックが最良のプローブ**である。呼び出しがあれば `last_contact` が進み、プローブは打たれない。沈黙した `--watch` プロセスの課金は 1 日 144 トークン。
-- **`tokio::spawn` で同時 1 本**。結果は `LlmHealthRouter` が `LlmHealth` に記録し、次以降のサイクルが publish する。ループがタイムアウト（既定 30 秒）分止まることはない。このために `Engine` の `L` に `'static` が付いた。
+- **`tokio::spawn` で同時 1 本**。結果は `LlmHealthRouter` が `LlmHealth` に記録し、次以降のサイクルが publish する。**プローブの飛行中に実呼び出しが完了していたら、プローブの結果は捨てる**（`last_contact` が動いたかで判定）: 復旧前に出て復旧後に 502 を返したプローブが、直前の成功を上書きして偽の障害を立てないため。ループがタイムアウト（既定 30 秒）分止まることはない。このために `Engine` の `L` に `'static` が付いた。
 
 ## 5. 復帰検知は 2 つの時計の差で行う
 
-`cycle()` の先頭の `detect_resume`: 前サイクルからの**壁時計の進み − 単調時計の進み ≥ 30 秒**（`RESUME_GAP`）なら「スリープから復帰した」とみなし、info を 1 行出して `reset_connections()` + `forget_contact()`（= 同じサイクルで即プローブ）。
+`cycle()` の先頭の `detect_resume`: 前サイクルからの**壁時計の進み − 単調時計の進み ≥ 30 秒**（`RESUME_GAP`）なら「スリープから復帰した」とみなし、info を 1 行出して、**飛行中のプローブがあれば abort し**、`reset_connections()` + `forget_contact()`（= 同じサイクルで即プローブ）。abort するのは、スリープ前に出たプローブは旧プールで自分のタイムアウトまで固まり、それが終わるまで新しいプローブが出ないため（同時 1 本の規則）。
 
 - サスペンドは単調時計を止め壁時計を止めない。ループ側の遅さ（2 分のプラグイン RPC）は両方の時計を等しく進めるので差にならない。
 - 運用者が時計を進めた場合も引っかかるが、代償は余分なプローブ 1 回と TLS ハンドシェイク 1 回で無害。時計を**戻した**場合は resume ではない（`None`）。

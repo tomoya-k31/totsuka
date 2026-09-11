@@ -122,7 +122,7 @@ impl OpenAiRouter {
                 if e.is_timeout() {
                     LlmError::Timeout(self.config.timeout.as_secs())
                 } else {
-                    LlmError::Transport(e.to_string())
+                    LlmError::Transport(scrub_urls(&e.to_string()))
                 }
             })?;
 
@@ -158,7 +158,7 @@ impl OpenAiRouter {
                 if e.is_timeout() {
                     LlmError::Timeout(self.config.timeout.as_secs())
                 } else {
-                    LlmError::Transport(e.to_string())
+                    LlmError::Transport(scrub_urls(&e.to_string()))
                 }
             })?;
 
@@ -166,7 +166,7 @@ impl OpenAiRouter {
         let text = response
             .text()
             .await
-            .map_err(|e| LlmError::Transport(e.to_string()))?;
+            .map_err(|e| LlmError::Transport(scrub_urls(&e.to_string())))?;
         if !status.is_success() {
             return Err(LlmError::Status {
                 status: status.as_u16(),
@@ -176,6 +176,39 @@ impl OpenAiRouter {
 
         parse_chat_content(&text)
     }
+}
+
+/// Strip credentials and query strings out of every URL in a transport error
+/// message.
+///
+/// reqwest's error text carries the request URL, and `[llm].base_url` is
+/// operator-written: a gateway configured as `https://user:pass@host/v1` or
+/// `https://host/v1?key=…` would otherwise copy its secret into the run log,
+/// `health.json` and the `totsuka status` terminal — the last two of which the
+/// redacting logging layer never sees. Scheme, host, port and path survive,
+/// which is everything "which gateway" needs.
+fn scrub_urls(msg: &str) -> String {
+    let mut out = String::with_capacity(msg.len());
+    let mut rest = msg;
+    while let Some(i) = rest.find("://") {
+        let (head, tail) = rest.split_at(i + 3);
+        out.push_str(head);
+        // The URL runs to whitespace or a closing bracket.
+        let end = tail
+            .find(|c: char| c.is_whitespace() || matches!(c, ')' | ']' | '}' | '>'))
+            .unwrap_or(tail.len());
+        let (url, after) = tail.split_at(end);
+        let authority_end = url.find('/').unwrap_or(url.len());
+        let url = match url[..authority_end].rfind('@') {
+            Some(at) => &url[at + 1..],
+            None => url,
+        };
+        let url = url.split(['?', '#']).next().unwrap_or(url);
+        out.push_str(url);
+        rest = after;
+    }
+    out.push_str(rest);
+    out
 }
 
 /// `error.message` out of an OpenAI-compatible error envelope, truncated.
@@ -430,8 +463,11 @@ impl LlmHealth {
             }
             Err(e) if e.is_auth_failure() => {
                 if !self.key_rejected.swap(true, Relaxed) {
+                    // The short reason, not `%e`: a `Status` error carries the
+                    // gateway's response body, which is the gateway's text to
+                    // put anything in.
                     tracing::warn!(
-                        error = %e,
+                        reason = %short_reason(e),
                         "the LLM gateway rejected the API key → repository selection \
                          degrades until it is fixed; check `[llm].api_key_ref` and run \
                          `totsuka doctor --online`"
@@ -440,7 +476,7 @@ impl LlmHealth {
                 true
             }
             Err(e) if e.is_unreachable() => {
-                let reason = unreachable_reason(e);
+                let reason = short_reason(e);
                 let mut slot = self.unreachable.lock().unwrap_or_else(|p| p.into_inner());
                 if slot.is_none() {
                     tracing::warn!(
@@ -465,18 +501,21 @@ impl LlmHealth {
     }
 }
 
-/// The short, operator-facing reason stored in [`LlmHealth::unreachable`].
+/// The short, operator-facing reason stored in [`LlmHealth::unreachable`]
+/// and written to the log on a key rejection.
 ///
 /// Deliberately narrower than `Display` for [`LlmError`]: this string ends up
 /// in `health.json` and on the `totsuka status` terminal, where the redacting
-/// logging layer never sees it. A 5xx body is dropped entirely — a gateway
-/// echoing our request into its error page would land the credential in a
-/// file — and a transport message is truncated, since reqwest's can nest the
-/// full URL chain.
-fn unreachable_reason(e: &LlmError) -> String {
+/// logging layer never sees it. A response body is dropped entirely — a
+/// gateway echoing our request into its error page would land the credential
+/// in a file — and a transport message is URL-scrubbed ([`scrub_urls`], a
+/// second time, in case the error was built elsewhere) and truncated, since
+/// reqwest's can nest the full URL chain.
+fn short_reason(e: &LlmError) -> String {
     const MAX: usize = 160;
     match e {
         LlmError::Transport(msg) => {
+            let msg = scrub_urls(msg);
             let mut s: String = msg.chars().take(MAX).collect();
             if msg.chars().count() > MAX {
                 s.push('…');
@@ -523,8 +562,19 @@ impl<L: LlmRouter> LlmRouter for LlmHealthRouter<L> {
     }
 
     async fn probe(&self) -> Result<(), LlmError> {
+        let before = self.health.last_contact();
         let result = self.inner.probe().await;
-        self.health.record(&result);
+        // A real call that completed while this probe was in flight is newer
+        // evidence than the probe; a probe that left before the gateway came
+        // back must not report the outage that has since ended. Only one probe
+        // runs at a time, so a changed `last_contact` can only mean traffic.
+        if self.health.last_contact() == before {
+            self.health.record(&result);
+        } else {
+            tracing::debug!(
+                "llm probe finished after real traffic; its verdict is stale and dropped"
+            );
+        }
         result
     }
 
@@ -700,9 +750,76 @@ mod health_router_tests {
     #[test]
     fn a_long_transport_message_is_truncated_for_the_health_file() {
         let long = "x".repeat(500);
-        let reason = unreachable_reason(&LlmError::Transport(long));
+        let reason = short_reason(&LlmError::Transport(long));
         assert!(reason.chars().count() < 200, "{}", reason.chars().count());
         assert!(reason.ends_with('…'));
+    }
+
+    /// A credential written into `base_url` must not travel into the health
+    /// file through a transport error that echoes the URL.
+    #[test]
+    fn urls_in_transport_errors_lose_their_credentials_and_query() {
+        assert_eq!(
+            scrub_urls(
+                "error sending request for url (https://me:s3cret@gw.example/v1/chat/completions?key=abc#frag): dns error"
+            ),
+            "error sending request for url (https://gw.example/v1/chat/completions): dns error"
+        );
+        // No URL: untouched. A bare scheme: still fine.
+        assert_eq!(scrub_urls("connection refused"), "connection refused");
+        assert_eq!(scrub_urls("bad ://"), "bad ://");
+        // Reaches the stored reason through the transport arm too.
+        let reason = short_reason(&LlmError::Transport(
+            "https://u:p@h.example/v1?token=x failed".into(),
+        ));
+        assert_eq!(reason, "transport error: https://h.example/v1 failed");
+    }
+
+    /// A probe that was in flight while a real call succeeded is stale
+    /// evidence: it must not re-latch an outage the traffic just disproved.
+    #[tokio::test]
+    async fn a_stale_probe_does_not_overwrite_newer_traffic() {
+        struct Gated {
+            release: tokio::sync::Notify,
+        }
+        impl LlmRouter for Gated {
+            async fn chat_json(&self, _request: &ChatRequest) -> Result<Value, LlmError> {
+                Ok(json!({"ok": true}))
+            }
+            async fn probe(&self) -> Result<(), LlmError> {
+                self.release.notified().await;
+                Err(LlmError::Status {
+                    status: 502,
+                    body: String::new(),
+                })
+            }
+        }
+        let router = std::sync::Arc::new(LlmHealthRouter::new(Gated {
+            release: tokio::sync::Notify::new(),
+        }));
+        let health = router.health();
+
+        let probe = tokio::spawn({
+            let router = std::sync::Arc::clone(&router);
+            async move { router.probe().await }
+        });
+        tokio::task::yield_now().await;
+        let _ = router.chat_json(&request()).await;
+        assert!(
+            health.last_contact().is_some(),
+            "the real call was recorded"
+        );
+
+        router.inner.release.notify_one();
+        assert!(
+            probe.await.unwrap().is_err(),
+            "the probe itself still failed"
+        );
+        assert_eq!(
+            health.unreachable(),
+            None,
+            "…but its verdict was stale and did not latch"
+        );
     }
 
     /// The real router must survive a reset mid-life: the next request simply
