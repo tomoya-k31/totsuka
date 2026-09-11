@@ -231,9 +231,10 @@ async fn full_path_fetch_worktree_dispatch_done_cleanup() {
     let notify_log = base.join("notify.ndjson");
     let db_path = base.join("state.db");
 
+    let dispatch_log = base.join("dispatch.ndjson");
     let plugins = plugin_set(
         json!([mock_task("1")]),
-        json!({ "stream_states": ["running", "done"] }),
+        json!({ "stream_states": ["running", "done"], "dispatch_log": dispatch_log }),
         &source_log,
         &notify_log,
     )
@@ -281,6 +282,22 @@ async fn full_path_fetch_worktree_dispatch_done_cleanup() {
         !worktree.exists(),
         "worktree must be cleaned up: {}",
         worktree.display()
+    );
+
+    // 0.7.1 (#645): `task_number` rides **every** dispatch. This agent
+    // declares no `hook_completion`, so it is minted no `job_id` at all — the
+    // difference is the whole reason the number is its own field rather than
+    // something a plugin parses out of the job id, and a test that only
+    // covered the hook-capable path would not see it.
+    let dispatches = read_log(&dispatch_log);
+    let params = &dispatches
+        .iter()
+        .find(|d| d["method"] == "task/dispatch")
+        .expect("a task/dispatch call")["params"];
+    assert_eq!(params["task_number"], task.id);
+    assert!(
+        params["job_id"].is_null(),
+        "a non-hook agent gets no job_id: {params}"
     );
 
     // on_success wrote the status back to the source (F-84).

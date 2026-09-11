@@ -4,7 +4,7 @@ title: herdr の暗黙契約（schema に載らない依存）
 description: "totsuka が herdr の Socket API schema に載っていない振る舞いへ依存している箇所の一覧と、その確かめ方。metadata token 値の 80 文字上限（超過は黙って切られる）、pane id の w1:p1 形式、herdr 内部の 5 秒下限、workspace.create の env が root pane に適用されること、pane.split が env を継承しないこと（セキュリティ前提）を扱う。型化も CI の schema 差分もこの層を一切カバーしない。"
 resource: https://github.com/tomoya-k31/totsuka/blob/main/plugins/agent-ide-herdr
 tags: [herdr, socket-api, implicit-contract, security, live-e2e, external]
-generated: { by: claude-code/opus-5, at: 2026-08-23T00:00:00Z }
+generated: { by: claude-code/opus-5, at: 2026-09-12T21:30:00+09:00 }
 verified:
   - { by: claude-code/opus-5, at: 2026-08-23T00:00:00Z }
 status: stable

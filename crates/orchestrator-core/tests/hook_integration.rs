@@ -1449,6 +1449,14 @@ async fn dispatch_wires_job_id_and_hook_launch_spec() {
         params["job_id"], expected_job,
         "job_id minted from task + session row"
     );
+    // 0.7.1 (#645): the task number rides the same dispatch, and unlike
+    // `job_id` it is not conditional on any of this hook wiring — see
+    // `run_loop::a_dispatch_carries_the_task_number_even_without_hooks` for
+    // the other half of that contract.
+    assert_eq!(
+        params["task_number"], task.id,
+        "task_number is the Orchestrator's own task id"
+    );
     // #411: the separate `hook` spec is gone; the settings path is baked into
     // the argv and the hook env rides `tool_launch.env`.
     let tool = &params["tool_launch"];

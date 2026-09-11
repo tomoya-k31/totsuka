@@ -39,6 +39,17 @@
 //!   so two totsuka instances driving one herdr would otherwise collide on
 //!   `t-3`. Hashing `source ∥ source_task_id` rather than the id alone keeps
 //!   two sources that both call something `42` apart.
+//! - **Changing any of this renames every task's agent, once.** A name is
+//!   derived, never stored, so the build that computes it is the only
+//!   authority — and during an upgrade a live agent started by the previous
+//!   build answers to the previous name. For the one task that is retried
+//!   across that window, `agent_name_taken` cannot recognise its own orphan
+//!   (ADR-0032 D-3) and a second agent is started beside it. The orphan stays
+//!   detectable, because `totsuka doctor` finds it through the workspace
+//!   label — which carries the source's task id and is unaffected by any of
+//!   this (ADR-0013). Keeping the old digest for the fallback would not narrow
+//!   the window: the readable half changes too, and only for the *fallback*,
+//!   so the main path would rename regardless.
 //! - **The session row is deliberately absent.** The name of a task's agent
 //!   has to be the same on every dispatch of that task, because
 //!   [ADR-0032](https://github.com/tomoya-k31/totsuka/blob/main/ai-docs/decisions/adr-0032-herdr-protocol-17.md)
@@ -117,7 +128,13 @@ pub trait IdentifierPolicy {
     /// Fixed leading string (`"t-"`, `"totsuka-"`, or `""`).
     fn prefix(&self) -> &str;
 
-    /// Total length limit, or `None` when the tool has none.
+    /// Total length limit **in bytes**, or `None` when the tool has none.
+    ///
+    /// Bytes rather than characters because that is what a truncation can
+    /// honour without lying. A tool that states its limit in *characters* —
+    /// herdr does — is served exactly as long as its alphabet is ASCII, which
+    /// [`extra_allowed`](Self::extra_allowed) and [`case`](Self::case) already
+    /// constrain it to be for every tool that has one.
     fn max_len(&self) -> Option<usize>;
 
     /// Whether upper case survives.
@@ -159,7 +176,10 @@ pub fn build(
     core: &IdentifierCore<'_>,
 ) -> String {
     let hash = hash8(core.source, core.source_task_id);
-    let sep_len = separator.map_or(0, |_| 1);
+    // `len_utf8`, not 1: a policy may declare a non-ASCII separator, and a
+    // budget counted in characters against a limit counted in bytes overflows
+    // it — the same shape as the bug this module replaced.
+    let sep_len = separator.map_or(0, char::len_utf8);
 
     let readable = match core.task_number {
         Some(n) => sanitize(&n.to_string(), case, separator),
@@ -237,16 +257,23 @@ fn sanitize(input: &str, case: Case, separator: Option<char>) -> String {
     out
 }
 
-/// `value` cut to `budget` characters, with any separator the cut exposed at
-/// the end removed.
+/// `value` cut to `budget` **bytes**, with any separator the cut exposed at the
+/// end removed.
 ///
-/// `value` is [`sanitize`] output, so it is ASCII and a byte index is a
-/// character index.
+/// The cut walks to a character boundary rather than indexing: `value` is
+/// [`sanitize`] output, which is ASCII apart from a separator the policy chose,
+/// and `&value[..budget]` would panic if that separator straddled the budget.
 fn truncate(value: &str, budget: usize, separator: Option<char>) -> String {
     if value.len() <= budget {
         return value.to_string();
     }
-    let cut = &value[..budget];
+    let end = value
+        .char_indices()
+        .map(|(i, c)| i + c.len_utf8())
+        .take_while(|end| *end <= budget)
+        .last()
+        .unwrap_or(0);
+    let cut = &value[..end];
     match separator {
         Some(sep) => cut.trim_end_matches(sep).to_string(),
         None => cut.to_string(),
@@ -455,7 +482,9 @@ mod tests {
     }
 
     /// Without a task number the source id is the readable half — the same
-    /// name the plugin produced before 0.7.1, minus the overflow.
+    /// **readable prefix** the plugin produced before 0.7.1, minus the
+    /// overflow. Not the same *name*: the digest half now covers the source as
+    /// well as the id (see the module docs on renaming).
     #[test]
     fn the_fallback_keeps_a_readable_prefix() {
         let name = Herdr.identifier(&core(None, "slack", "C0BEYU0E95Y:1700000000.614309"));
@@ -486,6 +515,36 @@ mod tests {
         assert_eq!(name, format!("t-{}", &name[2..]));
         assert!(!name.starts_with("t--"), "{name}");
         is_legal(&Herdr, &name).unwrap();
+    }
+
+    /// A policy may declare a multi-byte separator, and the budget is in
+    /// bytes: the cut must not overflow the limit nor split the character.
+    #[test]
+    fn a_multi_byte_separator_neither_overflows_nor_splits() {
+        struct Wide;
+        impl IdentifierPolicy for Wide {
+            fn prefix(&self) -> &str {
+                "w"
+            }
+            fn max_len(&self) -> Option<usize> {
+                Some(24)
+            }
+            fn case(&self) -> Case {
+                Case::Lower
+            }
+            fn extra_allowed(&self) -> &[char] {
+                // 3 bytes each.
+                &['…', '—']
+            }
+        }
+        for id in nasty_ids() {
+            let name = Wide.identifier(&core(None, "slack", &id));
+            assert!(name.len() <= 24, "{name} is {} bytes", name.len());
+            // Still a string: a split character would have panicked above, and
+            // a truncated one would leave a replacement here.
+            assert!(!name.contains('\u{FFFD}'), "{name}");
+            is_legal(&Wide, &name).unwrap();
+        }
     }
 
     /// `Preserve` is a tool's choice, not a suggestion.
