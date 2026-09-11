@@ -185,9 +185,16 @@ core の `[tools]` に集める」は保たれ、`args` は不透明なまま渡
 ## `name` の生成
 
 protocol 17 の `name` は表示ラベルではなく**識別子**（`[a-z][a-z0-9_-]{0,31}`、生存中のエージェント間で一意）。
-`t-<可読プレフィクス>-<task_id の sha256 先頭 8 桁>` を生成する。ハッシュが要るのは、切り詰めの衝突が
-**別タスクとの取り違え**になるからで、可読プレフィクスが要るのは `herdr agent list` を人間が読んで
-切り分けられるようにするため。
+**#645 ([ADR-0071](/decisions/adr-0071-task-identifier-naming.md)) 以降、生成するのは
+`t-<task 番号>-<sha256(source ∥ ソース側 id) 先頭 8 桁>`**（例 `t-3-9f3c2a1e`）で、
+このプラグインが持つのは `AgentName` が宣言する**制約 4 つ**（`t-` 前置・32 文字・小文字・`[-_]`）
+だけである。生成手順は `plugin-protocol` の `identifier` が orca・worktree と共有する。
+
+読める半分が **task 番号**（`state.db` の `tasks.id`）なのは、ログの `task_id=`・`totsuka status`・
+`totsuka task retry <n>` と同じ番号で、名前からタスクへ戻れるからである。#645 以前は
+`t-<ソース側 id の可読プレフィクス>-<hash>` だったが、切り詰められた Slack の ts や GitHub の
+base64 node id は人間にとって何も識別していなかった。ハッシュが要るのは、切り詰めの衝突が
+**別タスクとの取り違え**になるうえ、task 番号が一意なのは 1 つの `state.db` の中だけだからである。
 
 `agent_name_taken`（同名の生存エージェントがある）は**別名で回避せず dispatch を失敗させる**。
 決定論的な名前が衝突するのは、孤児 pane が残っているか `session/release` が失敗したという異常であり、

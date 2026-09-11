@@ -230,8 +230,9 @@ fn hash8(source: &str, source_task_id: &str) -> String {
 ///
 /// Leading and trailing separators are never emitted, so the result can be
 /// concatenated with a prefix or a hash without producing a doubled or
-/// dangling separator. The output is ASCII by construction, which is what lets
-/// [`truncate`] cut on a byte index.
+/// dangling separator. The output is ASCII **apart from a separator the policy
+/// chose** — which is why [`truncate`] walks to a character boundary rather
+/// than indexing bytes.
 fn sanitize(input: &str, case: Case, separator: Option<char>) -> String {
     let mut out = String::with_capacity(input.len());
     let mut pending_separator = false;
