@@ -80,9 +80,12 @@ pub struct Task {
     /// - **Not unique.** Uniqueness is the digest's job. A handle that repeats
     ///   costs nothing.
     ///
-    /// `None` is a normal answer, not a gap — a source whose ids carry nothing
-    /// a person reads (Notion's UUIDs, Discord's snowflakes) should leave it
-    /// unset rather than inventing one. Punctuation, case and length are
+    /// `None` is a normal answer, not a gap — a source with nothing short and
+    /// stable to offer should leave it unset rather than invent one. Notion
+    /// does: a page id is a UUID and a title is prose, so putting the title
+    /// here would make a renameable string part of an identifier. Discord's
+    /// *ids* are equally unreadable snowflakes, but its trigger carries a
+    /// channel name, which is exactly the kind of thing this field wants. Punctuation, case and length are
     /// normalized by the policy, so a source writes the string it would show a
     /// human and nothing more.
     #[serde(default, skip_serializing_if = "Option::is_none")]
