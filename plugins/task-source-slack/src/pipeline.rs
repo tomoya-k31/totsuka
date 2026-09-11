@@ -1316,7 +1316,14 @@ fn build_task(
         // it distinguishes (two threads in one channel) the task number
         // already distinguishes. A rename makes new tasks read differently and
         // changes nothing about old ones, because identity is the digest's.
-        handle: Some(enriched.channel_name.clone()),
+        //
+        // **`None` when the lookup failed.** `NameCache::channel` falls back
+        // to the raw id so the title still says *something*; passing that on
+        // would put the opaque id this field exists to avoid into every name,
+        // for a reason (a transient `conversations.info` failure) that has
+        // nothing to do with the task. No handle reads better than a wrong
+        // one, and the next task in the same channel recovers on its own.
+        handle: (enriched.channel_name != mention.channel).then(|| enriched.channel_name.clone()),
         source: config.source_name.clone(),
         title,
         body: Some(body),
@@ -1836,6 +1843,18 @@ mod tests {
         // and what it would separate — two threads in one channel — the task
         // number already separates.
         assert!(!task.handle.unwrap().contains("200.0"));
+    }
+
+    /// `conversations.info` failing makes `channel_name` the raw id (so the
+    /// title still says something). That is **not** a handle: it is the
+    /// opaque id the field exists to avoid, and it would ride every name this
+    /// task ever gets for a reason unrelated to the task.
+    #[test]
+    fn a_failed_channel_lookup_leaves_no_handle() {
+        let mut e = enriched("200.0");
+        e.channel_name = e.mention.channel.clone();
+        let (task, _pending) = build_task(&slack_config(), &e, None);
+        assert_eq!(task.handle, None);
     }
 
     #[test]

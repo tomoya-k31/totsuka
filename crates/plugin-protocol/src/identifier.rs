@@ -298,6 +298,16 @@ fn hash8(source: &str, source_task_id: &str) -> String {
         .collect()
 }
 
+/// One value, normalized the way `policy` would normalize it inside an
+/// identifier.
+///
+/// For a caller that needs a *part* on its own — the worktree location
+/// template offers the handle as `{handle}` — and must not invent a second
+/// normalization to do it.
+pub fn sanitize_for<P: IdentifierPolicy + ?Sized>(policy: &P, value: &str) -> String {
+    sanitize(value, policy.case(), policy.separator())
+}
+
 /// ASCII alphanumerics, case-mapped; every other run becomes one separator.
 ///
 /// Leading and trailing separators are never emitted, so the result can be

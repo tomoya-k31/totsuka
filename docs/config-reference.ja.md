@@ -591,7 +591,7 @@ OpenAI 互換の `/chat/completions` を前提とする。ヒントを持たな�
 
 | キー | 型 | 既定 | 意味 |
 |---|---|---|---|
-| `location` | string? | `<state dir>/worktrees/{repo_name}/{worktree_name}` | 配置テンプレート。`{repo}` `{repo_name}` `{worktree_name}` `{task_id}` `{source}` `{task_number}` `{hash}` `{handle}` `${ENV}` `~` を展開する。`{worktree_name}` は `<task 番号>[-<handle>]-<8 桁 hex>` — `totsuka status` や `totsuka task retry <n>` が使う番号、ソースが付ける短い名前（GitHub は `repo-番号`、Slack と Discord はチャンネル名、Notion は無し）、ソース名とソース側 id から取ったダイジェストの先頭 8 桁である。各部分は個別にも使えるので、区切りを変えたり一部だけ使ったりできる。`{handle}` はソースが出さなければ**空文字**になるので、単独でディレクトリ名にしない。`{task_id}` は**ソース側の** id（Slack なら `{channel}:{ts}`）。**`{branch}` は廃止された** — ブランチは worktree ができた後にエージェントが決めるので、ディレクトリ名には使えない。残っていると起動しない |
+| `location` | string? | `<state dir>/worktrees/{repo_name}/{worktree_name}` | 配置テンプレート。`{repo}` `{repo_name}` `{worktree_name}` `{task_id}` `{source}` `{task_number}` `{hash}` `{handle}` `${ENV}` `~` を展開する。`{worktree_name}` は `<task 番号>[-<handle>]-<8 桁 hex>` — `totsuka status` や `totsuka task retry <n>` が使う番号、ソースが付ける短い名前（GitHub は `repo-番号`、Slack と Discord はチャンネル名、Notion は無し）、ソース名とソース側 id から取ったダイジェストの先頭 8 桁である。各部分は個別にも使えるので、区切りを変えたり一部だけ使ったりできる。`{handle}` はソースが出さなければ**空文字**になるので、単独でディレクトリ名にしない。また `{handle}` だけは埋める前に**正規化**される（英数字と `-` `_` 以外は潰す）— プラグインが書く文字列なので `../` のようなものが worktree の外へ出ないようにするためで、`{task_id}` と `{source}` は既存のテンプレートの出力を変えないよう生のままである。`{task_id}` は**ソース側の** id（Slack なら `{channel}:{ts}`）。**`{branch}` は廃止された** — ブランチは worktree ができた後にエージェントが決めるので、ディレクトリ名には使えない。残っていると起動しない |
 | `cleanup` | policy? | `manual` | implement モードの掃除ポリシー |
 | `plan_cleanup` | policy? | `immediate` | plan モードの掃除ポリシー |
 

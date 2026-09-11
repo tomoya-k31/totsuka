@@ -67,7 +67,8 @@ pub struct Task {
     /// shapes that reach totsuka (a Slack `channel:ts`, a base64 GitHub node
     /// id, a Notion UUID) identify nothing to a person, least of all
     /// truncated. This is the source's chance to say what a person would call
-    /// the task — `web-42` for an issue, `C0ABCDEF12-1700000000` for a thread.
+    /// the task — `web-42` for a GitHub issue, `dev-support` for a Slack
+    /// thread (the channel's name, not its id).
     ///
     /// Three properties make one usable, and the source owns all three:
     ///

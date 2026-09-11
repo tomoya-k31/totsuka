@@ -41,6 +41,14 @@ use crate::ports::git::GitRunner;
 /// maintained by hand.
 pub struct WorktreeLeaf;
 
+impl WorktreeLeaf {
+    /// `handle` as it appears inside the leaf name — the form that is safe to
+    /// put in a path.
+    fn handle_for_path(&self, handle: Option<&str>) -> Option<String> {
+        handle.map(|h| plugin_protocol::identifier::sanitize_for(self, h))
+    }
+}
+
 impl IdentifierPolicy for WorktreeLeaf {
     fn prefix(&self) -> &str {
         ""
@@ -276,7 +284,17 @@ pub fn render_location(
             &ctx.task_number.map(|n| n.to_string()).unwrap_or_default(),
         )
         .replace("{hash}", &location_core(ctx).hash())
-        .replace("{handle}", ctx.handle.unwrap_or_default())
+        // **Sanitized, unlike `{task_id}` / `{source}` below.** The handle is
+        // a string a *plugin* writes, and `../outside` in it would escape the
+        // worktree root of a template like `/state/{handle}/{worktree_name}`.
+        // Normalizing costs nothing here because the placeholder is new
+        // (0.7.2): there is no operator template whose meaning could change,
+        // which is the exact reason the older two are left raw. It also makes
+        // `{task_number}-{handle}-{hash}` reproduce the leaf byte for byte.
+        .replace(
+            "{handle}",
+            &WorktreeLeaf.handle_for_path(ctx.handle).unwrap_or_default(),
+        )
         .replace("{task_id}", ctx.task_id)
         .replace("{source}", ctx.source);
     // A leading `~` expands to `$HOME` (e.g. `worktree_location = "~/.worktrees/{worktree_name}"`).
@@ -1263,6 +1281,7 @@ mod tests {
             source: "slack",
             task_id: "C1:{hash}",
             task_number: Some(7),
+            handle: None,
         };
         let loc = render_location(
             "/wt/{task_id}",
@@ -1272,6 +1291,37 @@ mod tests {
         )
         .unwrap();
         assert_eq!(loc, PathBuf::from("/wt/C1:{hash}"), "{loc:?}");
+    }
+
+    /// `{handle}` carries a string a **plugin** writes, so it is normalized
+    /// before it reaches a path: a template like `/state/{handle}/…` must not
+    /// be escapable by a source that returns `../outside`.
+    #[test]
+    fn the_handle_placeholder_cannot_escape_the_worktree_root() {
+        let ctx = LocationContext {
+            repo_path: Path::new("/repos/totsuka"),
+            repo_name: "totsuka",
+            source: "slack",
+            task_id: "C1:100.1",
+            task_number: Some(7),
+            handle: Some("../../outside"),
+        };
+        let loc = render_location(
+            "/state/{handle}/{worktree_name}",
+            &ctx,
+            &WorktreeLeaf.identifier(&location_core(&ctx)),
+            &HashMap::new(),
+        )
+        .unwrap();
+        assert!(
+            !loc.to_string_lossy().contains(".."),
+            "escaped the root: {loc:?}"
+        );
+        assert!(loc.starts_with("/state"), "{loc:?}");
+        // …and what it renders is exactly the segment the leaf carries, so
+        // spelling the leaf out by hand lands in the same place.
+        let leaf = WorktreeLeaf.identifier(&location_core(&ctx));
+        assert!(leaf.starts_with("7-outside-"), "{leaf}");
     }
 
     /// The two halves of the leaf are offered to `location` separately
