@@ -48,6 +48,23 @@ impl FakeCli {
             .filter(|c| cli_key(c) == key)
             .count()
     }
+
+    /// The argv of the first call to `key`, so a test can assert on what was
+    /// actually passed rather than only that something was.
+    fn first_call_to(&self, key: &str) -> Option<Vec<String>> {
+        self.calls
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|c| cli_key(c) == key)
+            .cloned()
+    }
+}
+
+/// The value passed for `flag` in an argv (`--name x` → `x`).
+fn flag_value<'a>(argv: &'a [String], flag: &str) -> Option<&'a str> {
+    let at = argv.iter().position(|a| a == flag)?;
+    argv.get(at + 1).map(String::as_str)
 }
 
 /// Key an invocation by its subcommand (+ verb): the first arg, plus the second
@@ -188,11 +205,28 @@ async fn dispatch_then_state_stream_to_done() {
             json!({
                 "task": { "id": "T-1", "source": "github", "title": "Do it" },
                 "worktree_path": "/wt/agent-1",
-                "mode": "implement"
+                "mode": "implement",
+                "task_number": 3
             }),
         )
         .await;
     assert_eq!(disp["result"]["session_id"], "wt1");
+
+    // The name orca was actually given (ADR-0071): `totsuka-` + the same core
+    // herdr's agent and the worktree directory carry, so one search finds all
+    // three. Asserted on the argv rather than on the policy, because the
+    // wiring between them is the only part a unit test cannot see.
+    let argv = cli.first_call_to("worktree create").expect("a create call");
+    let name = flag_value(&argv, "--name").expect("--name is passed");
+    assert!(name.starts_with("totsuka-3-"), "{name}");
+    assert!(
+        name.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
+        "{name}"
+    );
+    // Without a task number the name falls back to the source id, and is still
+    // legal — an Orchestrator predating 0.7.1 is served, not refused.
+    assert_ne!(name, "totsuka-T-1");
 
     let ack = d
         .call("state/subscribe", json!({ "session_id": "wt1" }))
