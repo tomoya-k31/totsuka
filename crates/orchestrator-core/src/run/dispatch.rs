@@ -7,7 +7,7 @@
 use super::*;
 use crate::adapters::state_db::AUTO_RETRY_KIND;
 
-impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
+impl<G: GitRunner, L: LlmRouter + 'static> Engine<G, L> {
     /// Select a repository for every queued task that has none (F-10–F-14).
     pub(super) async fn select_repos(&mut self) -> Result<(), EngineError> {
         let queued = self.db.tasks_in_state(TaskState::Queued)?;
@@ -73,7 +73,7 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             })
             .collect();
         match &self.llm {
-            Some(llm) => select_repo(task, &candidates, llm, &self.settings.select).await,
+            Some(llm) => select_repo(task, &candidates, llm.as_ref(), &self.settings.select).await,
             None => select_repo(task, &candidates, &NoLlmRouter, &self.settings.select).await,
         }
     }
@@ -1469,6 +1469,10 @@ mod tests {
             readme_cache_dir: None,
             worktree_sweep_interval: Duration::ZERO,
             one_shot_grace: Duration::ZERO,
+            // An hour: nothing here is about LLM liveness, so only the startup
+            // probe (if a router is given) ever runs.
+            llm_probe_interval: Duration::from_secs(3600),
+            llm_probe_interval_while_unreachable: Duration::from_secs(3600),
             tools: crate::tool::builtin_registry(),
             default_tool: "claude".to_string(),
             prompts: Default::default(),

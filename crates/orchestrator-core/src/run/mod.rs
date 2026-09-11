@@ -134,6 +134,26 @@ const WORKTREE_SWEEP_INTERVAL: Duration = Duration::from_secs(60);
 /// real chance before the run gives up and reports nothing to do.
 const ONE_SHOT_GRACE: Duration = Duration::from_secs(2);
 
+/// How long the LLM gateway may go without any contact before the engine
+/// spends a probe on it (F-111). A probe is one billable request (`max_tokens:
+/// 1`), so it is only sent when real traffic has not already answered the
+/// question; ten minutes keeps a quiet `--watch` run to a rounding error a
+/// day while still noticing an outage before the next task hits it.
+const LLM_PROBE_INTERVAL: Duration = Duration::from_secs(600);
+
+/// [`LLM_PROBE_INTERVAL`] while the gateway is latched unreachable. Shorter,
+/// because now the probe's job is to notice recovery, and an operator staring
+/// at `⚠` should not wait ten minutes after fixing the network.
+const LLM_PROBE_INTERVAL_WHILE_UNREACHABLE: Duration = Duration::from_secs(60);
+
+/// How far the wall clock must run ahead of the process clock between two
+/// cycles before the engine concludes the machine was asleep (F-111). The
+/// loop cycles at least every [`SETTLE_TICK`], and even a cycle stuck in a
+/// two-minute plugin call advances both clocks equally — only a suspend (or
+/// an operator resetting the clock) opens a gap. 30 s is far above NTP slew
+/// and far below any nap worth reconnecting for.
+const RESUME_GAP: Duration = Duration::from_secs(30);
+
 /// An event observed by the run loop.
 ///
 /// `pub(crate)` so the signal-ingress driving adapter
@@ -281,16 +301,26 @@ enum HookReceiver {
     BindFailed,
 }
 
-pub struct Engine<G: GitRunner, L: LlmRouter> {
+/// `L: 'static` because the liveness probe (F-111) runs on a spawned task
+/// holding an `Arc` of the router, so the loop never blocks on a gateway
+/// that takes its whole timeout to not answer.
+pub struct Engine<G: GitRunner, L: LlmRouter + 'static> {
     db: StateDb,
     settings: EngineSettings,
     plugins: PluginSet,
     worktrees: WorktreeManager<G>,
-    /// The LLM router, wrapped so a 401/403 from the gateway is latched and
-    /// can be published as a degradation (F-110).
-    llm: Option<crate::adapters::llm::AuthLatchRouter<L>>,
-    /// The latch that wrapper writes; `None` when no LLM is configured.
-    llm_key_rejected: Option<Arc<std::sync::atomic::AtomicBool>>,
+    /// The LLM router, wrapped so every call and probe updates
+    /// [`LlmHealth`] (F-110 / F-111). Shared, because the probe runs on a
+    /// spawned task.
+    llm: Option<Arc<crate::adapters::llm::LlmHealthRouter<L>>>,
+    /// The record that wrapper writes; `None` when no LLM is configured.
+    llm_health: Option<Arc<crate::adapters::llm::LlmHealth>>,
+    /// The liveness probe in flight, if any — at most one at a time, so an
+    /// unanswering gateway is asked once per interval, not once per tick.
+    llm_probe: Option<tokio::task::JoinHandle<()>>,
+    /// `(wall clock, process clock)` at the previous cycle, for resume
+    /// detection (F-111). `None` until the first cycle has run.
+    last_cycle_clock: Option<(time::OffsetDateTime, tokio::time::Instant)>,
     /// Whether the hook receiver is listening (F-110). Set once, in
     /// [`run`](Self::run); `cycle()` alone leaves it `NotConfigured`, which is
     /// correct for a caller that never started a receiver.
@@ -361,7 +391,7 @@ pub struct Engine<G: GitRunner, L: LlmRouter> {
     stats: RunStats,
 }
 
-impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
+impl<G: GitRunner, L: LlmRouter + 'static> Engine<G, L> {
     /// Where a new project item goes, per repository (#542).
     ///
     /// Rebuilt on each call from the live plugin set rather than cached at
@@ -452,8 +482,8 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
         }
         let slots = SlotManager::new(settings.limits.clone());
         let readme_cache = settings.readme_cache_dir.clone().map(ReadmeCache::new);
-        let llm = llm.map(crate::adapters::llm::AuthLatchRouter::new);
-        let llm_key_rejected = llm.as_ref().map(|l| l.flag());
+        let llm = llm.map(|l| Arc::new(crate::adapters::llm::LlmHealthRouter::new(l)));
+        let llm_health = llm.as_ref().map(|l| l.health());
         Self {
             agent_tools: crate::agent_tools::ToolCache::default(),
             blocked_on_tools: std::collections::HashSet::new(),
@@ -464,7 +494,9 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             plugins,
             worktrees: WorktreeManager::new(git),
             llm,
-            llm_key_rejected,
+            llm_health,
+            llm_probe: None,
+            last_cycle_clock: None,
             hook_receiver: HookReceiver::NotConfigured,
             slots,
             restarts: HashMap::new(),
@@ -779,6 +811,9 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
     /// asynchronously via `task/submit`, so this is the startup/recovery
     /// sweep, not a fetch pass.
     pub async fn cycle(&mut self) -> Result<(), EngineError> {
+        // First, so a resume detected here gets its probe dispatched in this
+        // same cycle rather than the next one.
+        self.detect_resume();
         // Drain any hook signals a failed POST spooled (E-07) before acting on
         // state, so a completion that only reached the spool is applied this
         // cycle rather than a cycle late.
@@ -803,10 +838,87 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             self.sweep_finished_worktrees().await?;
             self.last_worktree_sweep = Some(tokio::time::Instant::now());
         }
+        // The liveness probe is spawned, never awaited: its verdict lands in
+        // `LlmHealth` and is published by whichever cycle runs after it.
+        self.probe_llm_if_due();
         // Last, so what is published describes the state this cycle left
         // behind rather than the one it started from.
         self.publish_health();
         Ok(())
+    }
+
+    /// Notice that the machine slept since the previous cycle (F-111), and
+    /// treat everything the process believed about the outside world as
+    /// stale.
+    ///
+    /// The tell is the wall clock running ahead of the process clock: a
+    /// suspend stops the monotonic clock and not the wall clock, and nothing
+    /// else the loop does opens a gap between them (a slow cycle advances
+    /// both). An operator resetting the clock trips it too, which is
+    /// harmless — one extra probe and one fresh connection pool.
+    ///
+    /// Today the only consumer is the LLM router (fresh pool, immediate
+    /// probe). Plugins reconnect their own sockets and are not told; a
+    /// protocol notification for that is the next step if one is ever needed.
+    fn detect_resume(&mut self) {
+        let now = (self.clock.now_utc(), tokio::time::Instant::now());
+        let prev = self.last_cycle_clock.replace(now);
+        let Some(gap) = prev.and_then(|prev| suspended_for(prev, now)) else {
+            return;
+        };
+        tracing::info!(
+            gap_secs = gap.as_secs(),
+            "the wall clock jumped ahead of the process clock → treating this as a resume from sleep"
+        );
+        // A probe that left before the nap is stuck on the old pool until its
+        // timeout, and while it is unfinished no new one is spawned — so the
+        // "immediate" post-resume probe would wait on it. Abort it first.
+        if let Some(probe) = self.llm_probe.take() {
+            probe.abort();
+        }
+        if let Some(llm) = &self.llm {
+            llm.reset_connections();
+        }
+        if let Some(health) = &self.llm_health {
+            health.forget_contact();
+        }
+    }
+
+    /// Spend a liveness probe on the LLM gateway if nothing has heard from it
+    /// lately (F-111).
+    ///
+    /// "Lately" is [`EngineSettings::llm_probe_interval`] since the last
+    /// contact of any kind — real traffic is the best probe there is and
+    /// costs nothing extra — shrinking to
+    /// [`EngineSettings::llm_probe_interval_while_unreachable`] once the
+    /// gateway is latched down, so recovery is noticed within a minute. No
+    /// contact at all (startup, or a resume that forgot it) is due at once.
+    /// At most one probe is in flight; the router records the outcome, so
+    /// nothing here awaits it.
+    fn probe_llm_if_due(&mut self) {
+        let (Some(llm), Some(health)) = (&self.llm, &self.llm_health) else {
+            return;
+        };
+        if self.llm_probe.as_ref().is_some_and(|h| !h.is_finished()) {
+            return;
+        }
+        let interval = if health.unreachable().is_some() {
+            self.settings.llm_probe_interval_while_unreachable
+        } else {
+            self.settings.llm_probe_interval
+        };
+        let due = health
+            .last_contact()
+            .is_none_or(|last| last.elapsed() >= interval);
+        if !due {
+            return;
+        }
+        let llm = Arc::clone(llm);
+        self.llm_probe = Some(tokio::spawn(async move {
+            // The outcome is recorded by the router; the `Result` itself has
+            // already been logged there on every state change.
+            let _ = llm.probe().await;
+        }));
     }
 
     /// Everything currently wrong, recomputed from scratch (F-110).
@@ -882,12 +994,13 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             }
         }
 
-        if self
-            .llm_key_rejected
-            .as_ref()
-            .is_some_and(|f| f.load(std::sync::atomic::Ordering::Relaxed))
-        {
-            out.push(Degradation::LlmKeyRejected);
+        if let Some(health) = &self.llm_health {
+            if health.key_rejected() {
+                out.push(Degradation::LlmKeyRejected);
+            }
+            if let Some(reason) = health.unreachable() {
+                out.push(Degradation::LlmUnreachable { reason });
+            }
         }
 
         out
@@ -928,6 +1041,22 @@ impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
             tracing::warn!(path = %path.display(), "could not clear run health: {e}");
         }
     }
+}
+
+/// How long the machine was suspended between two cycles, if it was (F-111).
+///
+/// `prev` and `now` are `(wall clock, process clock)` pairs. The answer is the
+/// wall-clock advance the process clock did not see, when that reaches
+/// [`RESUME_GAP`]; a wall clock that went *backwards* (an operator correcting
+/// it) is not a resume and yields `None`.
+fn suspended_for(
+    prev: (time::OffsetDateTime, tokio::time::Instant),
+    now: (time::OffsetDateTime, tokio::time::Instant),
+) -> Option<Duration> {
+    let wall = Duration::try_from(now.0 - prev.0).ok()?;
+    let process = now.1.saturating_duration_since(prev.1);
+    let gap = wall.checked_sub(process)?;
+    (gap >= RESUME_GAP).then_some(gap)
 }
 
 /// Deliver an event to every notifier plugin (F-90). Fire-and-forget:
@@ -990,6 +1119,17 @@ fn state_event(plugin: &str, note: Notification) -> Option<PluginEvent> {
 pub(crate) async fn test_engine(
     interval: Duration,
 ) -> Engine<crate::adapters::git::SystemGitRunner, NoLlmRouter> {
+    test_engine_with(interval, None, Arc::new(SystemClock)).await
+}
+
+#[cfg(test)]
+/// [`test_engine`] with an LLM router and a clock of the caller's choosing —
+/// the two seams the liveness tests (F-111) drive.
+pub(crate) async fn test_engine_with<L: LlmRouter + 'static>(
+    interval: Duration,
+    llm: Option<L>,
+    clock: Arc<dyn Clock>,
+) -> Engine<crate::adapters::git::SystemGitRunner, L> {
     let settings = EngineSettings {
         health_path: None,
         workflows: Vec::new(),
@@ -1004,6 +1144,8 @@ pub(crate) async fn test_engine(
         readme_cache_dir: None,
         worktree_sweep_interval: interval,
         one_shot_grace: ONE_SHOT_GRACE,
+        llm_probe_interval: LLM_PROBE_INTERVAL,
+        llm_probe_interval_while_unreachable: LLM_PROBE_INTERVAL_WHILE_UNREACHABLE,
         tools: crate::tool::builtin_registry(),
         default_tool: "claude".to_string(),
         prompts: Default::default(),
@@ -1011,12 +1153,13 @@ pub(crate) async fn test_engine(
         restart_disabled: Default::default(),
         hook: None,
     };
-    Engine::new(
+    Engine::with_clock(
         StateDb::open_in_memory().unwrap(),
         settings,
         PluginSet::default(),
         crate::adapters::git::SystemGitRunner,
-        None,
+        llm,
+        clock,
     )
     .await
 }
@@ -1124,14 +1267,41 @@ mod health_tests {
     async fn a_rejected_llm_key_is_published_and_clears_when_it_starts_working() {
         let dir = test_support::scratch("health_llm");
         let mut engine = engine_with_health(&dir).await;
-        let flag = Arc::new(std::sync::atomic::AtomicBool::new(true));
-        engine.llm_key_rejected = Some(Arc::clone(&flag));
+        let health = Arc::new(crate::adapters::llm::LlmHealth::default());
+        health.record::<()>(&Err(LlmError::Status {
+            status: 401,
+            body: String::new(),
+        }));
+        engine.llm_health = Some(Arc::clone(&health));
 
         engine.cycle().await.unwrap();
         assert_eq!(published(&dir).degraded, vec![Degradation::LlmKeyRejected]);
 
         // Rotating the key clears it with nothing to dismiss.
-        flag.store(false, std::sync::atomic::Ordering::Relaxed);
+        health.record(&Ok(()));
+        engine.cycle().await.unwrap();
+        assert!(!published(&dir).is_degraded());
+    }
+
+    /// A gateway that stopped answering is a degradation of its own (F-111),
+    /// distinct from a bad key — the remedies differ.
+    #[tokio::test]
+    async fn an_unreachable_gateway_is_published_with_its_reason() {
+        let dir = test_support::scratch("health_llm_unreachable");
+        let mut engine = engine_with_health(&dir).await;
+        let health = Arc::new(crate::adapters::llm::LlmHealth::default());
+        health.record::<()>(&Err(LlmError::Timeout(30)));
+        engine.llm_health = Some(Arc::clone(&health));
+
+        engine.cycle().await.unwrap();
+        assert_eq!(
+            published(&dir).degraded,
+            vec![Degradation::LlmUnreachable {
+                reason: "no answer within 30s".to_string(),
+            }]
+        );
+
+        health.record(&Ok(()));
         engine.cycle().await.unwrap();
         assert!(!published(&dir).is_degraded());
     }
@@ -1190,6 +1360,280 @@ mod health_tests {
         engine.settings.health_path = None;
         engine.cycle().await.unwrap();
         assert!(!run_health::path_in(&dir).exists());
+    }
+}
+
+#[cfg(test)]
+mod liveness_tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
+    use crate::adapters::ManualClock;
+
+    /// A router whose probes are scripted and counted. It is never asked to
+    /// classify anything — these tests have no tasks.
+    struct ProbeScript {
+        answers: std::sync::Mutex<Vec<Result<(), LlmError>>>,
+        probes: Arc<AtomicUsize>,
+        resets: Arc<AtomicUsize>,
+        /// When set, every probe parks on `gate` before answering — a gateway
+        /// that takes its whole timeout to not answer.
+        hang: Arc<std::sync::atomic::AtomicBool>,
+        gate: Arc<tokio::sync::Notify>,
+    }
+
+    impl LlmRouter for ProbeScript {
+        async fn chat_json(&self, _request: &ChatRequest) -> Result<Value, LlmError> {
+            Err(LlmError::InvalidResponse("not under test".into()))
+        }
+
+        /// Scripted answers first; once they run out, every probe succeeds.
+        async fn probe(&self) -> Result<(), LlmError> {
+            self.probes.fetch_add(1, Ordering::SeqCst);
+            if self.hang.load(Ordering::SeqCst) {
+                self.gate.notified().await;
+            }
+            let mut answers = self.answers.lock().unwrap();
+            if answers.is_empty() {
+                Ok(())
+            } else {
+                answers.remove(0)
+            }
+        }
+
+        fn reset_connections(&self) {
+            self.resets.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    struct Rig {
+        engine: Engine<crate::adapters::git::SystemGitRunner, ProbeScript>,
+        probes: Arc<AtomicUsize>,
+        resets: Arc<AtomicUsize>,
+        hang: Arc<std::sync::atomic::AtomicBool>,
+        clock: Arc<ManualClock>,
+        dir: PathBuf,
+    }
+
+    impl Rig {
+        /// Both intervals start at an hour, so nothing is probed for being
+        /// *old* unless a test lowers one — only for never having been asked.
+        async fn new(name: &str, answers: Vec<Result<(), LlmError>>) -> Self {
+            let dir = test_support::scratch(name);
+            let probes = Arc::new(AtomicUsize::new(0));
+            let resets = Arc::new(AtomicUsize::new(0));
+            let clock = Arc::new(ManualClock::new(
+                time::OffsetDateTime::from_unix_timestamp(1_757_635_200).unwrap(),
+            ));
+            let hang = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let router = ProbeScript {
+                answers: std::sync::Mutex::new(answers),
+                probes: Arc::clone(&probes),
+                resets: Arc::clone(&resets),
+                hang: Arc::clone(&hang),
+                gate: Arc::new(tokio::sync::Notify::new()),
+            };
+            let mut engine = test_engine_with(
+                Duration::from_secs(3600),
+                Some(router),
+                Arc::clone(&clock) as Arc<dyn Clock>,
+            )
+            .await;
+            engine.settings.health_path = Some(run_health::path_in(&dir));
+            engine.settings.llm_probe_interval = Duration::from_secs(3600);
+            engine.settings.llm_probe_interval_while_unreachable = Duration::from_secs(3600);
+            Self {
+                engine,
+                probes,
+                resets,
+                hang,
+                clock,
+                dir,
+            }
+        }
+
+        /// Run a cycle, then wait for the probe it may have spawned — the
+        /// deterministic stand-in for "some later cycle sees the verdict".
+        async fn cycle_and_settle(&mut self) {
+            self.engine.cycle().await.unwrap();
+            if let Some(probe) = self.engine.llm_probe.take() {
+                probe.await.unwrap();
+            }
+        }
+
+        fn probes(&self) -> usize {
+            self.probes.load(Ordering::SeqCst)
+        }
+
+        fn published(&self) -> RunHealth {
+            run_health::read(&run_health::path_in(&self.dir)).expect("a cycle published health")
+        }
+    }
+
+    fn refused() -> LlmError {
+        LlmError::Transport("connection refused".into())
+    }
+
+    /// Startup: nothing has been heard from the gateway, so the very first
+    /// cycle asks — and its answer shows up in health without anyone awaiting
+    /// it in the loop.
+    #[tokio::test]
+    async fn the_first_cycle_probes_and_a_later_one_publishes_the_verdict() {
+        let mut rig = Rig::new("liveness_startup", vec![Err(refused())]).await;
+
+        rig.engine.cycle().await.unwrap();
+        assert!(
+            rig.engine.llm_probe.is_some(),
+            "spawned, not awaited — the loop is not held hostage by the timeout"
+        );
+        assert!(
+            !rig.published().is_degraded(),
+            "the cycle that spawned it publishes what it knows so far: nothing"
+        );
+
+        rig.cycle_and_settle().await;
+        assert_eq!(rig.probes(), 1, "asked once, at startup");
+        rig.engine.cycle().await.unwrap();
+        assert_eq!(
+            rig.published().degraded,
+            vec![Degradation::LlmUnreachable {
+                reason: "transport error: connection refused".to_string(),
+            }]
+        );
+    }
+
+    /// Fresh contact — a probe counts — means no further probe until the
+    /// interval has passed; a zero interval means every cycle.
+    #[tokio::test]
+    async fn a_probe_is_spent_only_when_contact_has_gone_quiet() {
+        let mut rig = Rig::new("liveness_interval", vec![]).await;
+        rig.cycle_and_settle().await;
+        rig.cycle_and_settle().await;
+        rig.cycle_and_settle().await;
+        assert_eq!(
+            rig.probes(),
+            1,
+            "the startup probe answered; nothing since is old"
+        );
+
+        rig.engine.settings.llm_probe_interval = Duration::ZERO;
+        rig.cycle_and_settle().await;
+        rig.cycle_and_settle().await;
+        assert_eq!(rig.probes(), 3, "with no patience, every cycle asks");
+    }
+
+    /// Once the gateway is latched down, recovery is what the probe is for —
+    /// so the shorter interval applies until it answers again.
+    #[tokio::test]
+    async fn an_unreachable_gateway_is_re_asked_on_the_shorter_interval() {
+        let mut rig = Rig::new("liveness_recovery", vec![Err(LlmError::Timeout(30))]).await;
+        rig.engine.settings.llm_probe_interval_while_unreachable = Duration::ZERO;
+
+        rig.cycle_and_settle().await;
+        assert_eq!(rig.probes(), 1);
+        assert!(
+            rig.engine
+                .llm_health
+                .as_ref()
+                .unwrap()
+                .unreachable()
+                .is_some()
+        );
+
+        rig.cycle_and_settle().await;
+        assert_eq!(rig.probes(), 2, "latched down → asked again at once");
+        rig.engine.cycle().await.unwrap();
+        assert!(!rig.published().is_degraded(), "the second probe succeeded");
+        let after_recovery = rig.probes();
+        rig.cycle_and_settle().await;
+        assert_eq!(
+            rig.probes(),
+            after_recovery,
+            "healthy again → back to the long interval, no probe this cycle"
+        );
+    }
+
+    /// A machine waking from sleep: the wall clock jumped, the process clock
+    /// did not. The pool is dropped and the gateway is asked at once, however
+    /// recently it last answered.
+    #[tokio::test]
+    async fn a_resume_from_sleep_resets_connections_and_probes_at_once() {
+        let mut rig = Rig::new("liveness_resume", vec![]).await;
+        rig.cycle_and_settle().await;
+        rig.cycle_and_settle().await;
+        assert_eq!(rig.probes(), 1);
+        assert_eq!(rig.resets.load(Ordering::SeqCst), 0, "no resume yet");
+
+        rig.clock.advance(time::Duration::hours(2));
+        rig.cycle_and_settle().await;
+        assert_eq!(rig.resets.load(Ordering::SeqCst), 1, "the pool was dropped");
+        assert_eq!(rig.probes(), 2, "and the gateway asked again immediately");
+    }
+
+    /// A probe that was in flight when the machine slept is stuck on the old
+    /// pool until its timeout. The resume must not wait for it: it is aborted
+    /// and a fresh one goes out at once.
+    #[tokio::test]
+    async fn a_resume_aborts_a_probe_left_over_from_before_the_nap() {
+        let mut rig = Rig::new("liveness_resume_abort", vec![]).await;
+        rig.hang.store(true, Ordering::SeqCst);
+        rig.engine.cycle().await.unwrap();
+        tokio::task::yield_now().await;
+        assert_eq!(
+            rig.probes(),
+            1,
+            "the startup probe went out and is now hanging"
+        );
+        let stuck = rig.engine.llm_probe.as_ref().expect("still in flight");
+        assert!(!stuck.is_finished());
+
+        rig.clock.advance(time::Duration::hours(2));
+        rig.engine.cycle().await.unwrap();
+        tokio::task::yield_now().await;
+        assert_eq!(
+            rig.probes(),
+            2,
+            "a new probe went out despite the stuck one"
+        );
+        assert_eq!(rig.resets.load(Ordering::SeqCst), 1);
+    }
+
+    /// Without `[llm]` there is nothing to probe and nothing to publish.
+    #[tokio::test]
+    async fn no_llm_means_no_probe() {
+        let mut engine = test_engine(Duration::from_secs(3600)).await;
+        engine.cycle().await.unwrap();
+        assert!(engine.llm_probe.is_none());
+    }
+
+    /// The resume detector itself: only a wall-clock advance the process
+    /// clock did not see counts, and only past the threshold.
+    #[test]
+    fn suspended_for_measures_the_gap_between_the_two_clocks() {
+        let t0 = time::OffsetDateTime::from_unix_timestamp(1_757_635_200).unwrap();
+        let i0 = tokio::time::Instant::now();
+        let at = |wall_secs: i64, process_secs: u64| {
+            (
+                t0 + time::Duration::seconds(wall_secs),
+                i0 + Duration::from_secs(process_secs),
+            )
+        };
+
+        // A slow cycle advances both clocks: not a resume.
+        assert_eq!(suspended_for(at(0, 0), at(120, 120)), None);
+        // Below the threshold: NTP slew, scheduling jitter.
+        assert_eq!(suspended_for(at(0, 0), at(29, 0)), None);
+        // At the threshold and beyond: a suspend.
+        assert_eq!(
+            suspended_for(at(0, 0), at(30, 0)),
+            Some(Duration::from_secs(30))
+        );
+        assert_eq!(
+            suspended_for(at(0, 0), at(3600, 5)),
+            Some(Duration::from_secs(3595))
+        );
+        // The wall clock going backwards is a correction, not a nap.
+        assert_eq!(suspended_for(at(0, 0), at(-3600, 1)), None);
     }
 }
 

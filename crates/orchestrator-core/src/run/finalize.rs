@@ -6,7 +6,7 @@
 
 use super::*;
 
-impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
+impl<G: GitRunner, L: LlmRouter + 'static> Engine<G, L> {
     /// Terminal processing for a task whose agent finished: run the workflow's
     /// output policy (#65), then either complete or fail.
     ///

@@ -119,6 +119,10 @@ fn engine_settings(repo_path: &Path) -> EngineSettings {
         // preceded by an explicit seed, so production's 2s quiet-period floor
         // would be pure waiting (#281). `settled()` still has to hold.
         one_shot_grace: Duration::ZERO,
+        // An hour: nothing here is about LLM liveness, so only the startup
+        // probe (if a router is given) ever runs.
+        llm_probe_interval: Duration::from_secs(3600),
+        llm_probe_interval_while_unreachable: Duration::from_secs(3600),
         tools: orchestrator_core::tool::builtin_registry(),
         default_tool: "claude".to_string(),
         prompts: Default::default(),

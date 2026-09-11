@@ -1,5 +1,11 @@
 # Bundle Update Log
 
+## 2026-09-12
+
+* **Creation**: [ADR-0070 LLM ゲートウェイの生存確認](/decisions/adr-0070-llm-liveness.md)（F-111）。「LLM が生きているか」を `run` が自分で確かめる方式。`LlmRouter` に `probe()` / `reset_connections()`（既定実装つき）を足し、最後の接触から 10 分（不到達中は 60 秒）沈黙したら `doctor --online` と同じ最小リクエストを spawn して投げ、到達不能（transport / timeout / 5xx）を `health.json` の **`llm_unreachable`** として公開する。接触が無ければ即時 = 起動時に必ず 1 回。**復帰検知**は壁時計と単調時計の差（30 秒以上）で行い、HTTP 接続プールを捨てて即プローブする（プールの idle timeout は単調時計なのでスリープ中に効かない）。設定キーは足さず、起動も止めない。task_source プラグインが自前で呼ぶ LLM は対象外（プロトコルに health 報告の口が無い）。
+* **Update**: [orchestrator-core](/components/orchestrator-core.md) の `AuthLatchRouter` を **`LlmHealthRouter` + `LlmHealth`**（`key_rejected` / `unreachable(reason)` / `last_contact`）に置き換え、`LlmError::is_unreachable()` を追加（F-111）。429 と 401/403 以外の 4xx は「答えた」扱いで到達不能にしない。ログは遷移時だけ。`Engine` は `cycle()` の先頭で `detect_resume`、末尾で `probe_llm_if_due` を回し、`L` に `'static` が付いた。
+* **Update**: [orchestrator-spec](/product/orchestrator-spec.md) / [orchestrator-spec.ja](/product/orchestrator-spec.ja.md) に F-111 を追加し、F-110 の縮退一覧に到達不能を足した。[運用ガイド](/operations/operations-guide.md) の health 表に `llm_unreachable` 行を追加（縮退 4 種 → 5 種）。
+
 ## 2026-09-10
 
 * **Update**: herdr **0.9.0** の schema スライスを取り込み、`wire::NEWEST_CHECKED` を 0.8.2 → 0.9.0 に上げた（#635）。[ADR-0055](/decisions/adr-0055-herdr-schema-typed-wire.md) の protocol 実測表に 0.8.2 → 0.9.0 の行を足した — **protocol は 20 → 22 と 2 つ上がったが、22 メソッドの実変化は任意プロパティの追加だけ**（`workspace.close` の params が `WorkspaceTarget` → `WorkspaceCloseParams` に差し替わって `close_group` が増え、`workspace.create` に `source_workspace_id`、`ping` の capabilities に 3 つ）。**totsuka が送る形は変わらない**（`workspace_id` 必須は同じ）ので、下限 0.7.5 から生成した型のままで読み書きできる。`herdr-schema-check.sh` は 0 error（下限 0.7.5 / 上位 3 版 / 22 メソッド）。

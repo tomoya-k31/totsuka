@@ -34,7 +34,7 @@ use crate::ports::git::GitRunner;
 use crate::ports::llm::LlmRouter;
 use crate::ports::signal_ingress::FocusOutcome;
 
-impl<G: GitRunner, L: LlmRouter> Engine<G, L> {
+impl<G: GitRunner, L: LlmRouter + 'static> Engine<G, L> {
     /// Interpret one normalized hook signal (#138): resolve its task, record it
     /// idempotently, then drive the state machine per the signal's event.
     ///

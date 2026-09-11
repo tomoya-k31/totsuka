@@ -69,6 +69,15 @@ pub struct EngineSettings {
     /// one-shot run does not spend the grace waiting for a task that has
     /// already arrived.
     pub one_shot_grace: Duration,
+    /// How long the LLM gateway may go without any contact — a real call or a
+    /// probe — before the engine spends a probe on it (F-111). Not exposed in
+    /// config (no user knob), same as the two above; tests set
+    /// [`Duration::ZERO`] to probe every cycle.
+    pub llm_probe_interval: Duration,
+    /// The same, while the gateway is currently latched unreachable: shorter,
+    /// so the operator learns it is back within a minute rather than within
+    /// [`llm_probe_interval`](Self::llm_probe_interval).
+    pub llm_probe_interval_while_unreachable: Duration,
     /// Resolved AI-tool registry (#196): built-ins overlaid with `[tools]`
     /// entries, keyed by tool name. Dispatch resolves each task's tool here
     /// and sends the assembled [`ToolLaunchSpec`](plugin_protocol::methods::ToolLaunchSpec) to the agent plugin.
@@ -197,6 +206,8 @@ pub fn settings_from_config(
         readme_cache_dir: None,
         worktree_sweep_interval: WORKTREE_SWEEP_INTERVAL,
         one_shot_grace: ONE_SHOT_GRACE,
+        llm_probe_interval: LLM_PROBE_INTERVAL,
+        llm_probe_interval_while_unreachable: LLM_PROBE_INTERVAL_WHILE_UNREACHABLE,
         tools: crate::tool::registry_from_config(&cfg.tools),
         default_tool: cfg
             .default_tool
@@ -367,6 +378,11 @@ plan_cleanup = { retention_days = 2 }
         // production runs with: tests shrink it, `settings_from_config` must
         // not.
         assert_eq!(settings.one_shot_grace, ONE_SHOT_GRACE);
+        assert_eq!(settings.llm_probe_interval, LLM_PROBE_INTERVAL);
+        assert_eq!(
+            settings.llm_probe_interval_while_unreachable,
+            LLM_PROBE_INTERVAL_WHILE_UNREACHABLE
+        );
     }
 
     /// The default worktree location must resolve on a machine with no

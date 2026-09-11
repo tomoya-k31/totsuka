@@ -155,6 +155,10 @@ fn settings_with(
         // These tests drive the loop in watch mode, where the one-shot grace is
         // never consulted (#281).
         one_shot_grace: Duration::ZERO,
+        // An hour: nothing here is about LLM liveness, so only the startup
+        // probe (if a router is given) ever runs.
+        llm_probe_interval: Duration::from_secs(3600),
+        llm_probe_interval_while_unreachable: Duration::from_secs(3600),
         tools: orchestrator_core::tool::builtin_registry(),
         default_tool: "claude".to_string(),
         prompts: Default::default(),
