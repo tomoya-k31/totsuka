@@ -51,13 +51,13 @@
 //! manifest's `>=0.2.3` floor makes such an orchestrator unable to launch this
 //! plugin at all — the launcher refuses it before `initialize` (F-54).
 
+use plugin_protocol::identifier::{Case, IdentifierCore, IdentifierPolicy};
 use plugin_protocol::methods::{
     AgentState, DiagnosticsSnapshotResult, ExecutionMode, NotReleased, SessionAttachResult,
     SessionFocusResult, SessionInfo, SessionListResult, SessionReleaseParams, SessionReleaseResult,
     StateNotification, TaskDispatchParams, TaskDispatchResult,
 };
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -282,7 +282,7 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         let start_params = to_params(
             "agent.start",
             &request::AgentStartParams {
-                name: agent_name(&params.task.id),
+                name: AgentName.identifier(&IdentifierCore::from_dispatch(params)),
                 kind: resolve_kind(&self.config, &program),
                 pane_id: pane_id.clone(),
                 args,
@@ -1950,60 +1950,47 @@ fn compose_prompt(params: &TaskDispatchParams) -> String {
     }
 }
 
-/// How many characters of the readable prefix survive in an [`agent_name`].
-///
-/// The budget is herdr's 32: `t-` (2) + prefix + `-` (1) + 8 hex = 32.
-const NAME_PREFIX_CHARS: usize = 21;
-
-/// The `name` for `agent.start`: `t-<readable prefix>-<8 hex of the task id>`
-/// ([ADR-0032](../../../ai-docs/decisions/adr-0032-herdr-protocol-17.md) D-2).
+/// herdr's constraints on an `agent.start` `name`
+/// ([ADR-0071](../../../ai-docs/decisions/adr-0071-task-identifier-naming.md)).
 ///
 /// Protocol 17 made `name` an **identifier**, not a label:
-/// `[a-z][a-z0-9_-]{0,31}`, unique among live agents. Every task id this plugin
-/// sees breaks that as-is — GitHub's is mixed case (`I_kwDOTrfAp88AAA…`) and
-/// Slack's carries a colon (`C0BNAU8KKG8:1754…`) — and 32 characters is
-/// shorter than either.
+/// `[a-z][a-z0-9_-]{0,31}`, unique among live agents. Every task id this
+/// plugin sees breaks that as-is — GitHub's is mixed case
+/// (`I_kwDOTrfAp88AAA…`) and Slack's carries a colon (`C0BNAU8KKG8:1754…`) —
+/// and 32 characters is shorter than either.
 ///
-/// **The hash is what makes truncation safe.** A name that collides does not
-/// merely read ambiguously any more; it names another task's agent. Eight hex
-/// characters over the *full* id keep that out of reach while the sanitized
-/// prefix keeps `herdr agent list` legible to whoever is debugging a run — the
-/// only reason to carry a prefix at all.
-fn agent_name(task_id: &str) -> String {
-    let mut hash = Sha256::new();
-    hash.update(task_id.as_bytes());
-    let digest = hash.finalize();
+/// The four methods below are the whole of this plugin's say in the matter;
+/// the procedure that satisfies them is
+/// [`IdentifierPolicy::identifier`](plugin_protocol::identifier::IdentifierPolicy::identifier),
+/// shared with every other tool totsuka names things for. It used to be local,
+/// and it spent the separator outside the length budget: an id whose
+/// alphanumeric run ended on the 20th character produced a **33**-character
+/// name, `agent.start` refused it as `invalid_agent_name`, and the dispatch
+/// failed three retries deep (#645).
+///
+/// **`t-` is load-bearing**: herdr requires a letter first, and both halves of
+/// what follows can begin with a digit — the task number always does, and the
+/// hash does half the time.
+pub(crate) struct AgentName;
 
-    let mut prefix = String::with_capacity(NAME_PREFIX_CHARS);
-    let mut pending_dash = false;
-    for c in task_id.chars() {
-        if prefix.len() >= NAME_PREFIX_CHARS {
-            break;
-        }
-        if c.is_ascii_alphanumeric() {
-            // Only after something was kept, so a leading run of separators
-            // cannot produce the `-` start herdr rejects.
-            if pending_dash && !prefix.is_empty() {
-                prefix.push('-');
-            }
-            pending_dash = false;
-            prefix.push(c.to_ascii_lowercase());
-        } else {
-            // Collapsed rather than emitted: `a::b` is one separator, and a
-            // trailing run leaves nothing behind because it is never flushed.
-            pending_dash = true;
-        }
+impl IdentifierPolicy for AgentName {
+    fn prefix(&self) -> &str {
+        "t-"
     }
 
-    let hex: String = digest[..4].iter().map(|b| format!("{b:02x}")).collect();
-    if prefix.is_empty() {
-        // No alphanumerics at all (an id that is punctuation, or empty): the
-        // hash alone is still a valid, unique name — and hex cannot start with
-        // a letter-less character, but it *can* start with a digit, which herdr
-        // rejects. `t-` in front is what keeps every branch legal.
-        format!("t-{hex}")
-    } else {
-        format!("t-{prefix}-{hex}")
+    fn max_len(&self) -> Option<usize> {
+        // herdr's own limit, reported by `invalid_agent_name` and nowhere
+        // else: `agent.start`'s schema types `name` as a plain `string`
+        // (implicit contract C-6).
+        Some(32)
+    }
+
+    fn case(&self) -> Case {
+        Case::Lower
+    }
+
+    fn extra_allowed(&self) -> &[char] {
+        &['-', '_']
     }
 }
 
@@ -2276,7 +2263,7 @@ mod tests {
     #[test]
     fn identity_token_names_satisfy_herdrs_identifier_rules() {
         // herdr: `^[A-Za-z0-9_-]{1,32}$`, at most 16 tokens per call. Pinned
-        // the same way `agent_name_satisfies_herdrs_identifier_rules` is —
+        // the same way `the_declared_policy_is_herdrs_identifier_rule` is —
         // a name herdr rejects fails the whole report, silently, at dispatch.
         let names = [IDENTITY_TOKEN, "repo", "task", "mode"];
         assert!(names.len() <= 16);
@@ -2320,6 +2307,7 @@ mod tests {
             mode: plugin_protocol::methods::ExecutionMode::Plan,
             extra_context: None,
             job_id: None,
+            task_number: None,
             resume_session_id: None,
             tool_launch: None,
             repo_name: None,
@@ -2409,63 +2397,47 @@ mod tests {
         assert!(matches!(err, HerdrError::MissingToolLaunch), "{err}");
     }
 
-    /// The pieces of an [`agent_name`] that herdr's identifier rules constrain.
-    /// Every assertion here is a rule `agent.start` enforces, verified live:
-    /// `"totsuka probe"` was rejected as `invalid_agent_name`.
+    /// What this plugin still owns after the procedure moved to
+    /// [`plugin_protocol::identifier`]: that the constraints it declares are
+    /// **herdr's**. Every value here is a rule `agent.start` enforces, verified
+    /// live — `"totsuka probe"` was rejected as `invalid_agent_name`, and the
+    /// schema types `name` as a plain `string`, so this is the only place the
+    /// rule is written down on our side (implicit contract C-6).
+    ///
+    /// That the procedure *satisfies* a declared policy, for any input, is the
+    /// property test in `plugin-protocol` and is not restated here.
     #[test]
-    fn agent_name_satisfies_herdrs_identifier_rules() {
-        let legal = |name: &str| {
-            let mut chars = name.chars();
-            chars.next().is_some_and(|c| c.is_ascii_lowercase())
-                && name.len() <= 32
-                && name
-                    .chars()
-                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
-        };
-
-        // The two shapes that actually reach this plugin. Slack's colon and
-        // GitHub's upper case are exactly what the old `totsuka <id>` name
-        // failed on.
-        for id in [
-            "C0BNAU8KKG8:1754236800.123456",
-            "I_kwDOTrfAp88AAAABLKoO_Q",
-            "42",
-        ] {
-            let name = agent_name(id);
-            assert!(legal(&name), "{id} produced an illegal name: {name}");
-        }
-
-        // Degenerate ids still have to produce something legal: an id that is
-        // all punctuation leaves no prefix, and a hash-only name would start
-        // with a digit half the time.
-        for id in ["", ":::", "::9"] {
-            let name = agent_name(id);
-            assert!(legal(&name), "{id:?} produced an illegal name: {name}");
-        }
-    }
-
-    /// Truncation is what makes a bare prefix unsafe, so the suffix has to
-    /// separate ids that share their first 21 characters — the case that would
-    /// otherwise point two tasks at one agent.
-    #[test]
-    fn agent_name_separates_ids_sharing_a_prefix() {
-        let a = agent_name("C0BNAU8KKG8:1754236800.111111");
-        let b = agent_name("C0BNAU8KKG8:1754236800.222222");
-        assert_ne!(a, b);
-        // …and is stable, because a re-dispatch of the same task has to
-        // compute the same name.
-        assert_eq!(a, agent_name("C0BNAU8KKG8:1754236800.111111"));
-    }
-
-    /// The prefix is only worth carrying if it is still readable, which is the
-    /// whole reason the name is not just a hash.
-    #[test]
-    fn agent_name_keeps_a_readable_prefix() {
-        let name = agent_name("C0BNAU8KKG8:1754236800.123456");
+    fn the_declared_policy_is_herdrs_identifier_rule() {
+        assert_eq!(AgentName.max_len(), Some(32));
+        assert_eq!(AgentName.case(), Case::Lower);
+        assert_eq!(AgentName.extra_allowed(), &['-', '_']);
+        // A letter first is herdr's, and only the prefix can promise it: both
+        // the task number and the hash can begin with a digit.
         assert!(
-            name.starts_with("t-c0bnau8kkg8-"),
-            "prefix was not preserved: {name}"
+            AgentName
+                .prefix()
+                .starts_with(|c: char| c.is_ascii_lowercase()),
+            "{}",
+            AgentName.prefix()
         );
+    }
+
+    /// The name reaches `agent.start`, built from the dispatch the Orchestrator
+    /// sent — the one wiring that a policy in isolation cannot show.
+    #[test]
+    fn the_dispatch_names_the_agent_after_the_task_number() {
+        let mut params = dispatch_params("t", None);
+        params.task_number = Some(3);
+        let name = AgentName.identifier(&IdentifierCore::from_dispatch(&params));
+        assert!(name.starts_with("t-3-"), "{name}");
+
+        // An Orchestrator predating 0.7.1 sends no number; the name falls back
+        // to the source id and stays legal (the fallback is a different name,
+        // not a broken one — which is why the manifest floor does not move).
+        params.task_number = None;
+        let fallback = AgentName.identifier(&IdentifierCore::from_dispatch(&params));
+        assert!(fallback.starts_with("t-c1-1-0-"), "{fallback}");
+        assert_ne!(name, fallback);
     }
 
     /// `kind` comes from the program's file name, so an absolute path resolves

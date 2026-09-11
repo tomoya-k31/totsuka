@@ -304,7 +304,21 @@ use semver::{Version, VersionReq};
 /// read the field, so requiring 0.7.0 there would strand orchestrators they
 /// work with — the floor states a dependency, not a generation (the same
 /// distinction orca's manifest drew against herdr's for #411).
-pub const PROTOCOL_VERSION: &str = "0.7.0";
+/// 0.7.1 (#645): [`TaskDispatchParams::task_number`](crate::methods::TaskDispatchParams::task_number)
+/// — the Orchestrator's own task number, sent on **every** dispatch, plus the
+/// [`identifier`](crate::identifier) module that turns it into the name a tool
+/// gives the thing it creates.
+///
+/// **Patch, and no manifest moves.** The field is additive and optional, and a
+/// plugin that does not read it is unaffected; a plugin that does reads it
+/// through [`IdentifierPolicy`](crate::identifier::IdentifierPolicy), whose
+/// fallback (the source's id, as before) is a *different name*, not a broken
+/// one. That is the distinction 0.7.0 drew in the other direction: there, a
+/// 0.6-era source ignoring `projects` silently scanned boards the operator had
+/// narrowed away, so F-54 had to refuse it. Here the degraded behaviour is
+/// visible, harmless and self-correcting, so raising a floor would only strand
+/// orchestrators the plugin works with.
+pub const PROTOCOL_VERSION: &str = "0.7.1";
 
 /// [`PROTOCOL_VERSION`] parsed into a [`Version`].
 pub fn protocol_version() -> Version {
@@ -328,7 +342,7 @@ mod tests {
 
     #[test]
     fn current_version_parses() {
-        assert_eq!(protocol_version(), Version::new(0, 7, 0));
+        assert_eq!(protocol_version(), Version::new(0, 7, 1));
     }
 
     #[test]
