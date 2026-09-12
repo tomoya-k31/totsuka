@@ -119,7 +119,7 @@ body_template = """
 #
 # Placeholders: {count}
 #
-# The "content is not in this task" sentence is load-bearing, not decoration:
+# The "the content was not handed over" sentence is load-bearing, not decoration:
 # the plugin has no `files:read` scope, so it can name a file and nothing more.
 # An
 # agent handed "md ファイルにしました" with the file erased answered as if the
@@ -135,12 +135,15 @@ body_template = """
 # So: say what the task carries, allow the agent its own route, and keep the
 # "do not guess" instruction for the case where that route is unavailable.
 #
-# **Nothing agent-facing names the orchestrator.** The agent is handed a
-# mention and its thread; "totsuka" is not in that world, so a sentence whose
-# subject is totsuka says nothing to the reader. This file and every other
-# prompt default were free of the word — an earlier draft of this key was the
-# single exception, and it is stated here so the next edit does not reintroduce
-# it.
+# **Refer only to what the prompt itself shows.** The agent reads instructions
+# and a body, and nothing else: it cannot see the orchestrator, and it has no
+# notion of a "task" as a unit of work. Two earlier drafts of this key made
+# that mistake in turn — "totsuka は中身を取得していません" named a system the
+# reader has never heard of, and "このタスクに含まれていません" pointed at a
+# container the reader cannot identify. The wording that survives says the
+# content was not handed over and then points at the lines directly below it,
+# both of which are visible from where the agent is standing. Every other
+# prompt default in this repo already obeys this; only this key has broken it.
 #
 # No tool is named on purpose. `slack_read_file` is one route among several and
 # naming it sends an agent that does not have it looking for a tool that is not
@@ -154,7 +157,7 @@ body_attachment_header = """
 
 ## 添付ファイル（{count} 件）
 
-（添付ファイルの中身はこのタスクに含まれていません。分かっているのは以下の行に出ている情報だけです。リンクが付いている添付は、中身が必要なら、そこから自分で取得できる手段があれば使ってください。取得できなかった場合や、リンクが付いていない添付については、推測で補わず、添付を読めていないことを返信に書いてください）
+（添付ファイルの中身は渡されていません。分かっているのは以下の行に出ている情報だけです。リンクが付いている添付は、中身が必要なら、そこから自分で取得できる手段があれば使ってください。取得できなかった場合や、リンクが付いていない添付については、推測で補わず、添付を読めていないことを返信に書いてください）
 
 """
 

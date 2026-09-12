@@ -1791,10 +1791,7 @@ mod tests {
         let body = task.body.expect("body is set");
 
         assert!(body.contains("## 添付ファイル（1 件）"), "body: {body}");
-        assert!(
-            body.contains("中身はこのタスクに含まれていません"),
-            "body: {body}"
-        );
+        assert!(body.contains("中身は渡されていません"), "body: {body}");
         // The agent's own route is what actually delivered the content in
         // production, so the permission to use it is pinned alongside.
         assert!(

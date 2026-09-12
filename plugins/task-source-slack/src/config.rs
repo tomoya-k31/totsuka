@@ -842,7 +842,7 @@ mod tests {
         );
         // Not a #318 re-baseline: these two keys are new. Pinned here anyway
         // because both halves of the header are behaviour, not decoration.
-        // Dropping "the content is not in this task" puts the agent back to guessing
+        // Dropping "the content was not handed over" puts the agent back to guessing
         // what the attachment said; dropping the permission to fetch it anyway
         // steers it away from the one route that works (its own Slack tool,
         // via the permalink) — which is how the file was actually read in
@@ -853,7 +853,7 @@ mod tests {
             "{attachments}"
         );
         assert!(
-            attachments.contains("中身はこのタスクに含まれていません"),
+            attachments.contains("中身は渡されていません"),
             "{attachments}"
         );
         assert!(
