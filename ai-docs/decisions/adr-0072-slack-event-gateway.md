@@ -1,10 +1,10 @@
 ---
 type: Decision
 title: ADR-0072 Slack イベント受信を Events API + Cloud Run + Pub/Sub へ移譲する
-description: "totsuka 停止中の取りこぼしと Slack による購読の自動無効化を、Socket Mode リレーではなく Events API への転換で解決する決定。常時稼働ホストを持たない Cloud Run scale-to-zero + Pub/Sub 構成とし、本文は保存せず座標と文字列判定フラグだけを書く。保存対象も自分宛メンションと任意の subteam・リアクション・承認ボタンに絞り、チャンネル監視は Gateway 方式では conversations.history のポーリングへ移す。フィルタは関門だが判定の権威は mention.rs に残し、適合テストスイートが偽陰性ゼロを検査する。Socket Mode は event_source で併存させ、保持は Pub/Sub 7 日・起票窓は totsuka 側。複数人は利用者ごとのパスとトピックで分離し、クラウドに置く資格情報は signing secret のみ。イベントゲートウェイは workspace 外の同居プロジェクトとして公式イメージを配る。信頼境界は Slack からの公開受信（署名が唯一の関門・IP 制限は不可）と totsuka からの outbound pull（Workspace アカウント単位の IAM・鍵を配らない）に分け、ドメイン制限共有は緩めずに Invoker IAM チェックの無効化で公開する。グループメンション対応とスキーマ契約もここで決定。"
+description: "totsuka 停止中の取りこぼしと Slack による購読の自動無効化を、Socket Mode リレーではなく Events API への転換で解決する決定。常時稼働ホストを持たない Cloud Run scale-to-zero + Pub/Sub 構成とし、本文は保存せず座標と文字列判定フラグだけを書く。保存対象も自分宛メンションと任意の subteam・リアクション・承認ボタンに絞り、チャンネル監視は Gateway 方式では conversations.history のポーリングへ移す。フィルタは関門だが判定の権威は mention.rs に残し、適合テストスイートが偽陰性ゼロを検査する。Socket Mode は event_source で併存させ、保持は Pub/Sub 7 日・起票窓は totsuka 側。複数人は利用者ごとのパスとトピックで分離し、クラウドに置く資格情報は signing secret のみ。イベントゲートウェイは workspace 外の同居プロジェクトとして公式イメージを配る。信頼境界は Slack からの公開受信（関門は推測不能パスと利用者別 HMAC と 5 分のタイムスタンプ窓の 3 つで、IAM も IP 制限も使えない）と totsuka からの outbound pull（Workspace アカウント単位の IAM・鍵を配らない）に分け、ドメイン制限共有は緩めずに Invoker IAM チェックの無効化で公開する。グループメンション対応とスキーマ契約もここで決定。"
 resource: https://github.com/tomoya-k31/totsuka/issues/652
 tags: [decision, slack, gcp, cloud-run, pubsub, event-delivery, cost, multi-tenant, adr]
-generated: { by: claude-code/opus-5, at: 2026-09-12T22:45:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-12T23:05:00+09:00 }
 status: stable
 owner: tomoya-k31
 sources:
@@ -26,6 +26,15 @@ sources:
   - id: gce-free-tier
     resource: https://cloud.google.com/free/docs/compute-getting-started
     title: Google Cloud — Compute Engine 無料枠
+  - id: cloud-run-public
+    resource: https://docs.cloud.google.com/run/docs/authenticating/public
+    title: Google Cloud — Cloud Run で未認証アクセスを許可する（ドメイン制限共有下では Invoker IAM チェックの無効化を推奨）
+  - id: drs
+    resource: https://docs.cloud.google.com/organization-policy/domain-restricted-sharing
+    title: Google Cloud — ドメイン制限共有
+  - id: slack-verify
+    resource: https://docs.slack.dev/authentication/verifying-requests-from-slack
+    title: Slack — Verifying requests from Slack（署名検証と 5 分のタイムスタンプ窓）
   - id: oci-always-free
     resource: https://docs.oracle.com/en-us/iaas/Content/FreeTier/freetier_topic-Always_Free_Resources.htm
     title: Oracle Cloud — Always Free Resources（アイドル回収規定）
@@ -37,10 +46,10 @@ stable。設計判断は確定済み。実装は未着手で、[#652](https://gi
 
 **当初ここに「未検証のブロッカー」として書いていた事項は、調査の結果ブロッカーではなかった。** 訂正して残す。
 
-Slack は GCP の IAM 認証を喋れないので Cloud Run は公開が要るが、ドメイン制限共有（`constraints/iam.allowedPolicyMemberDomains`）が有効な組織では `allUsers` への `roles/run.invoker` 付与が拒否される。当初これを「組織ポリシーの例外申請が要る／回避策の外部ロードバランサで月 18 ドル」と書いていたが、**どちらも誤りだった**。
+Slack は GCP の IAM 認証を喋れないので Cloud Run は公開が要るが、ドメイン制限共有（`constraints/iam.allowedPolicyMemberDomains`）が有効な組織では `allUsers` への `roles/run.invoker` 付与が拒否される[^drs]。当初これを「組織ポリシーの例外申請が要る／回避策の外部ロードバランサで月 18 ドル」と書いていたが、**どちらも誤りだった**。
 
 - **外部ロードバランサでは解決しない。** Serverless NEG 経由で LB から届いたリクエストも Cloud Run には認証情報なしで到達するため、結局 `allUsers` への付与が必要になる。LB が解くのは ingress の制限であって IAM ではない
-- **無料の正規手段がある。** Cloud Run の Invoker IAM チェック自体を無効化する（`--no-invoker-iam-check` / `invoker_iam_disabled = true`）。Google のドキュメントがドメイン制限共有下での推奨手段として明示している
+- **無料の正規手段がある。** Cloud Run の Invoker IAM チェック自体を無効化する（`--no-invoker-iam-check` / `invoker_iam_disabled = true`）。Google のドキュメントがドメイン制限共有下での推奨手段として明示している[^cloud-run-public]
 
 したがって**組織ポリシーは一切緩めずに済み、費用前提も変わらない**。ブロッカーではなくデプロイ時のフラグ 1 つである。信頼境界の全体像は決定 11 を参照。
 
@@ -244,11 +253,11 @@ Secret Manager は 6 バージョンまで無料（以降 0.06 ドル/本/月）
 
 ### 経路 A — 公開が不可避で、関門は署名
 
-Slack は GCP の IAM プリンシパルになれないため、**IAM を関門にする道が構造的に存在しない**。ここで効く防御は 3 つで、いずれも既に決定済みのものである。
+Slack は GCP の IAM プリンシパルになれないため、**IAM を関門にする道が構造的に存在しない**。ここで効く防御は 3 つで、前 2 つは決定 6 で既に決めており、3 つ目は本決定で新たに定める。
 
 - 推測不能なパス（決定 6）— スキャンで発見されない
 - 利用者ごとの signing secret による HMAC 検証（決定 6）— signing secret は Slack アプリ単位なので、アプリを利用者ごとに分けた結果として**鍵も利用者ごとに分かれている**
-- タイムスタンプ窓によるリプレイ防止
+- **タイムスタンプ窓によるリプレイ防止（ここで定める）** — Slack の正典に合わせ、`X-Slack-Request-Timestamp` がローカル時刻から **5 分**以上離れたリクエストは拒否する。署名（`X-Slack-Signature`、`v0=` 接頭辞）の比較は**定数時間の HMAC compare** で行い、文字列の直接比較はしない[^slack-verify]
 
 **IP 許可リストは採れない。** Slack は Events API の送信元 IP の安定した一覧を公開していない（Slack の "Allowed IP ranges" は逆向き、すなわちアプリから Slack API を叩く側を絞る機能である）。推測で組めば配信が落ち、60 分で 95% を超えた時点で**この ADR が解決しようとしている購読の自動無効化が再発する**。経路 A において IP 制限はセキュリティ強化ではなく可用性リスクである。
 
@@ -262,12 +271,14 @@ totsuka からの outbound pull なので、**Workspace のアカウント単位
 
 DRS が守るのは IAM プリンシパルであり、それが実際に働くのは**経路 B** である。経路 A の公開は DRS を緩めて達成するのではなく、**Invoker IAM チェックを無効化して「DRS が許可すべき IAM プリンシパルを不要にする」**ことで達成する（Status 参照）。組織ポリシーには触れない。
 
+**DRS は経路 A を守らない。** Invoker IAM チェックを無効化した経路 A では Cloud Run が IAM プリンシパルを一切評価しないので、DRS が効く余地がそもそも無い。DRS が働くのは**実際に IAM を評価するリソース**、すなわち経路 B の Pub/Sub などである。ここを取り違えると「組織ポリシーがあるから公開エンドポイントも守られている」という誤解になる — この決定が防ごうとしている経路の混同そのものである。
+
 | 対象 | 関門 |
 |---|---|
-| IAM プリンシパル全般 | DRS を有効のまま維持（個人・他社アカウントを拒否） |
+| IAM を評価するリソース（経路 B の Pub/Sub 等） | DRS を有効のまま維持（個人・他社アカウントを拒否） |
 | 経路 B の購読 | Workspace アカウント単位の IAM。鍵は配らない |
 | 経路 A の到達性 | `--no-invoker-iam-check`（Slack は IAM プリンシパルになれないため） |
-| 経路 A の関門 | 推測不能パス + 利用者別 signing secret + タイムスタンプ窓 |
+| 経路 A の関門 | 推測不能パス + 利用者別 signing secret + 5 分のタイムスタンプ窓。**DRS はここに効かない** |
 
 # Consequences
 
@@ -315,10 +326,13 @@ DRS が守るのは IAM プリンシパルであり、それが実際に働く�
 - [ADR-0006 1Password バックエンド](/decisions/adr-0006-onepassword-secret-backend.md) — CLI へのシェルアウトで資格情報を解決する前例
 - [task-source-slack](/components/task-source-slack.md)
 
+[^drs]: Google Cloud — ドメイン制限共有
+[^cloud-run-public]: Google Cloud — Cloud Run で未認証アクセスを許可する
 [^slack-events-api]: Slack — The Events API
 [^cloud-run-websockets]: Google Cloud — Using WebSockets with Cloud Run
 [^pubsub-pricing]: Google Cloud — Pub/Sub pricing
 [^cloud-run-pricing]: Google Cloud — Cloud Run pricing
+[^slack-verify]: Slack — Verifying requests from Slack
 [^slack-rate-limit-2025]: Slack — Rate limit changes for non-Marketplace apps
 [^gce-free-tier]: Google Cloud — Compute Engine 無料枠
 [^oci-always-free]: Oracle Cloud — Always Free Resources
