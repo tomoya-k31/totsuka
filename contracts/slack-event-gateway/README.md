@@ -103,6 +103,22 @@ For `message`, the identity without its prefix is **byte-identical** to
 totsuka's `Mention::message_key()`, so the existing dedup covers gateway-sourced
 and socket-sourced deliveries alike. A test pins this.
 
+### Two rules that are easy to get wrong
+
+**A `<!subteam^…>` tag only counts when it closes.** The id is what sits between
+`<!subteam^` and the first `>` or `|`, it must be alphanumeric and at most 32
+characters, and a `>` must actually follow. Taking everything up to the next `>`
+instead would put `<!subteam^S0ABC and here is the secret>` on the topic
+verbatim — free text, in a record whose whole premise is that it carries none.
+The validation deliberately stops there: requiring a leading `S`, or an
+uppercase alphabet, would be a guess about Slack's id format, and guessing wrong
+loses a mention.
+
+**A `reaction_added` only counts when `item.type` is `message`.** totsuka refuses
+`file` and `file_comment` items outright, so publishing them stores records the
+consumer is guaranteed to discard — the same objection that rules out other
+people's reactions, one level down.
+
 ## What this suite does not cover
 
 **HTTP-level rejection — bad signature, stale timestamp, unknown path — is not

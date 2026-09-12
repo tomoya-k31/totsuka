@@ -94,7 +94,7 @@ fn load_cases() -> Vec<Case> {
         .collect();
     cases.sort_by(|a, b| a.name.cmp(&b.name));
     assert!(
-        cases.len() >= 20,
+        cases.len() >= 24,
         "only {} conformance cases found — the suite was probably not loaded from where it lives",
         cases.len()
     );
@@ -164,6 +164,14 @@ fn the_reference_projection_reproduces_every_case() {
         );
 
         if let Some(challenge) = case.body.get("expect_challenge").and_then(Value::as_str) {
+            // The fixture itself has to agree that nothing is published —
+            // otherwise a case could carry both a challenge and records, and
+            // this branch would pass while asserting the opposite.
+            assert!(
+                expectations(&case).is_empty(),
+                "{}: a url_verification case must expect no records",
+                case.name
+            );
             assert_eq!(
                 produced,
                 Projection::Challenge(challenge.to_string()),
@@ -344,6 +352,11 @@ fn the_false_negative_boundary_cases_are_still_present() {
         "block-actions-approve-from-container",
         "block-actions-channel-id-fallback",
         "url-verification-challenge",
+        // Records must not be able to carry free text, and a coordinate that
+        // the consumer refuses outright must not be stored for seven days.
+        "message-subteam-tag-with-prose",
+        "message-subteam-unterminated",
+        "reaction-added-on-a-file",
     ] {
         assert!(
             names.contains(required),

@@ -758,6 +758,21 @@ pub fn static_config_errors(config: &SlackConfig) -> Vec<String> {
         }
     }
 
+    // #656 freezes the contract; #657 is what reads it. Until then, selecting
+    // `gateway` would leave `initialize` probing the App-Level Token and
+    // spawning the Socket Mode loop — running the *other* transport without
+    // saying so, which is the silent misconfiguration this option exists to
+    // prevent. Refusing is the loud alternative, and the check disappears in
+    // the change that adds the consumer.
+    if config.event_source == EventSource::Gateway {
+        errors.push(
+            "`event_source = \"gateway\"` has no consumer yet — leaving it set would quietly \
+             keep running Socket Mode → keep `event_source = \"socket\"` until the Pub/Sub \
+             source lands"
+                .into(),
+        );
+    }
+
     // The gateway window knobs. Zero is refused for the same reason
     // `watch_backfill_max_age_hours = 0` is: it reads as "turn this off" but
     // means "consider nothing recent enough", which drops every queued event
@@ -766,19 +781,24 @@ pub fn static_config_errors(config: &SlackConfig) -> Vec<String> {
     // `watch_backfill_limit` with no watched channels.
     if config.drain_max_age_hours == Some(0) {
         errors.push(
-            "`drain_max_age_hours = 0` would consider no queued event recent enough and drop              them all → remove the key for the default (24), or set the hours you want to              recover after a stop"
+            "`drain_max_age_hours = 0` would consider no queued event recent enough and drop \
+             them all → remove the key for the default (24), or set the hours you want \
+             to recover after a stop"
                 .into(),
         );
     }
     if config.drain_limit == Some(0) {
         errors.push(
-            "`drain_limit = 0` would file nothing from the queue → remove the key for the              default (100), or set the number of events to file per pass"
+            "`drain_limit = 0` would file nothing from the queue → remove the key for the \
+             default (100), or set the number of events to file per pass"
                 .into(),
         );
     }
     if config.watch_poll_interval_secs == Some(0) {
         errors.push(
-            "`watch_poll_interval_secs = 0` would poll `conversations.history` without pause              and exhaust the Slack rate limit → remove the key for the default (60), or set              the seconds between polls"
+            "`watch_poll_interval_secs = 0` would poll `conversations.history` without pause \
+             and exhaust the Slack rate limit → remove the key for the default (60), or \
+             set the seconds between polls"
                 .into(),
         );
     }
@@ -790,6 +810,56 @@ pub fn static_config_errors(config: &SlackConfig) -> Vec<String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// The gateway knobs reject the value that reads as "off" but means
+    /// "discard everything", and the source itself is refused while nothing
+    /// consumes it.
+    #[test]
+    fn the_gateway_options_reject_their_silent_failure_values() {
+        let base: SlackConfig = serde_json::from_value(json!({
+            "app_token": "xapp-1",
+            "user_token": "xoxp-1",
+            "target_user_id": "U_ME",
+        }))
+        .expect("minimal config");
+        assert!(
+            static_config_errors(&base).is_empty(),
+            "the baseline used by these cases must itself be clean"
+        );
+
+        let with = |key: &str, value: serde_json::Value| -> Vec<String> {
+            let mut raw = json!({
+                "app_token": "xapp-1",
+                "user_token": "xoxp-1",
+                "target_user_id": "U_ME",
+            });
+            raw[key] = value;
+            static_config_errors(&serde_json::from_value(raw).expect("config parses"))
+        };
+
+        for key in [
+            "drain_max_age_hours",
+            "drain_limit",
+            "watch_poll_interval_secs",
+        ] {
+            let errors = with(key, json!(0));
+            assert!(
+                errors.iter().any(|e| e.contains(key)),
+                "`{key} = 0` must be rejected by name, got {errors:?}"
+            );
+            assert!(
+                with(key, json!(5)).is_empty(),
+                "`{key}` must accept an ordinary value"
+            );
+        }
+
+        let errors = with("event_source", json!("gateway"));
+        assert!(
+            errors.iter().any(|e| e.contains("event_source")),
+            "selecting an unconsumed source must not be silent, got {errors:?}"
+        );
+        assert!(with("event_source", json!("socket")).is_empty());
+    }
 
     /// `reply_instructions` must not ask for a deliverable other than the
     /// reply.

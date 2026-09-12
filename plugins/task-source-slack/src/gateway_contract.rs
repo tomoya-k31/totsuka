@@ -194,10 +194,17 @@ impl GatewayRecord {
     /// halves: what the kind needs must be there, and what belongs to another
     /// kind must not.
     fn check_kind_fields(&self) -> Result<(), ContractError> {
+        // Two different questions, and conflating them was a bug: which
+        // fields a kind may *carry* (decision 7 closes each list with "only")
+        // and which it must *have*. Only the second list can reject a record,
+        // and it holds exactly the fields `delivery_id` needs — demanding more
+        // would throw away deliveries over a field the consumer already treats
+        // as optional, which is the error direction that loses events.
         let reaction_fields = [
             ("reaction", self.reaction.is_some()),
             ("item_user", self.item_user.is_some()),
         ];
+        let reaction_required = ["reaction"];
         let press_fields = [
             ("action_id", self.action_id.is_some()),
             ("value", self.value.is_some()),
@@ -205,16 +212,17 @@ impl GatewayRecord {
             ("container_channel", self.container_channel.is_some()),
             ("action_ts", self.action_ts.is_some()),
         ];
+        let press_required = ["action_id", "container_channel", "action_ts"];
         let refuse = |problem: String| {
             Err(ContractError::KindMismatch {
                 kind: self.kind,
                 problem,
             })
         };
-        let missing = |fields: &[(&str, bool)]| -> Vec<String> {
+        let missing = |fields: &[(&str, bool)], required: &[&str]| -> Vec<String> {
             fields
                 .iter()
-                .filter(|(_, present)| !present)
+                .filter(|(name, present)| !present && required.contains(name))
                 .map(|(name, _)| (*name).to_string())
                 .collect()
         };
@@ -240,7 +248,7 @@ impl GatewayRecord {
                 }
             }
             RecordKind::Reaction => {
-                let absent = missing(&reaction_fields);
+                let absent = missing(&reaction_fields, &reaction_required);
                 if !absent.is_empty() {
                     return refuse(format!("is missing {}", absent.join(", ")));
                 }
@@ -253,7 +261,7 @@ impl GatewayRecord {
                 }
             }
             RecordKind::BlockActions => {
-                let absent = missing(&press_fields);
+                let absent = missing(&press_fields, &press_required);
                 if !absent.is_empty() {
                     return refuse(format!("is missing {}", absent.join(", ")));
                 }
@@ -380,21 +388,57 @@ impl MentionTags {
     }
 }
 
+/// Longest id [`extract_subteam_ids`] will accept. Slack's are around nine
+/// characters; the bound exists so a crafted tag cannot smuggle a long string
+/// into a record that is supposed to carry no free text.
+///
+/// Part of the contract rather than an implementation detail: a gateway that
+/// accepts longer ids publishes records this build would not.
+pub const SUBTEAM_ID_MAX: usize = 32;
+
 /// Every user-group id named in `text`, first-seen order, de-duplicated.
 ///
-/// Both `<!subteam^S123>` and `<!subteam^S123|@team>` yield `S123`.
-/// Membership is not consulted — an id belonging to a group the operator is
-/// not in still lands in the record, because the gateway has no way to know
-/// and guessing wrong drops the mention silently (decision 8).
+/// Both `<!subteam^S123>` and `<!subteam^S123|@team>` yield `S123`. A tag is
+/// only accepted when it actually closes with `>` and the id is alphanumeric
+/// and at most [`SUBTEAM_ID_MAX`] long.
+///
+/// **Why validate at all, when this is only a pre-filter?** Because
+/// `subteam_ids` travels in a record whose whole premise is that it carries no
+/// message text. Taking everything up to the next `>` would put
+/// `<!subteam^S0ABC and here is the secret>` on a Pub/Sub topic verbatim.
+///
+/// **Why not validate harder** — no leading `S`, no case rule? Those would be
+/// guesses about Slack's id format, and guessing wrong here fails in the one
+/// direction that loses a mention (decision 4). Rejecting whitespace and
+/// punctuation is enough to stop prose while staying agnostic about the
+/// alphabet.
+///
+/// Membership is not consulted: an id for a group the operator does not belong
+/// to still lands in the record, because the gateway has no way to know, and
+/// guessing wrong drops the mention silently (decision 8).
 pub fn extract_subteam_ids(text: &str) -> Vec<String> {
     let mut found: Vec<String> = Vec::new();
     let mut rest = text;
     while let Some(at) = rest.find(SUBTEAM_OPEN) {
         rest = &rest[at + SUBTEAM_OPEN.len()..];
-        let end = rest.find(['>', '|']).unwrap_or(rest.len());
+        let Some(end) = rest.find(['>', '|']) else {
+            // `<!subteam^` with nothing closing it: not a mention, and there
+            // is nothing further to scan.
+            break;
+        };
         let id = &rest[..end];
-        // An unterminated `<!subteam^` is not a mention; so is an empty id.
-        if !id.is_empty() && rest.len() != end && !found.iter().any(|seen| seen == id) {
+        let tail = &rest[end..];
+        // `>` right after the id, or after a `|label` that still closes before
+        // the next tag starts. Scanning for any `>` anywhere would let an
+        // unterminated tag borrow the `>` of something later in the message.
+        let closes = tail.starts_with('>')
+            || tail
+                .find(['>', '<'])
+                .is_some_and(|at| tail.as_bytes()[at] == b'>');
+        let plausible = !id.is_empty()
+            && id.len() <= SUBTEAM_ID_MAX
+            && id.chars().all(|c| c.is_ascii_alphanumeric());
+        if closes && plausible && !found.iter().any(|seen| seen == id) {
             found.push(id.to_string());
         }
         rest = &rest[end..];
@@ -588,6 +632,13 @@ fn project_reaction(
         return None;
     }
     let reaction = event.get("reaction").and_then(Value::as_str)?;
+    // Only reactions on messages. `reaction.rs::reaction_target` refuses
+    // `file` and `file_comment` items outright, so publishing them would store
+    // records the consumer is guaranteed to discard — the same objection that
+    // rules out other people's reactions, one level down.
+    if event.pointer("/item/type").and_then(Value::as_str) != Some("message") {
+        return None;
+    }
     // The body is not in a reaction event; `item` is the whole coordinate.
     let channel = event.pointer("/item/channel").and_then(Value::as_str)?;
     let ts = event.pointer("/item/ts").and_then(Value::as_str)?;
@@ -649,10 +700,7 @@ fn project_press(
         received_at: received_at.to_string(),
         reaction: None,
         item_user: None,
-        action_id: action
-            .get("action_id")
-            .and_then(Value::as_str)
-            .map(str::to_string),
+        action_id: Some(action.get("action_id").and_then(Value::as_str)?.to_string()),
         value: action
             .get("value")
             .and_then(Value::as_str)
@@ -662,10 +710,7 @@ fn project_press(
             .and_then(Value::as_str)
             .map(str::to_string),
         container_channel: Some(channel.to_string()),
-        action_ts: action
-            .get("action_ts")
-            .and_then(Value::as_str)
-            .map(str::to_string),
+        action_ts: Some(action.get("action_ts").and_then(Value::as_str)?.to_string()),
     })
 }
 
@@ -740,9 +785,110 @@ mod tests {
             vec!["S0A".to_string(), "S0B".to_string()]
         );
         assert!(extract_subteam_ids("no groups here").is_empty());
-        // Truncated or empty ids are not group mentions.
-        assert!(extract_subteam_ids("<!subteam^S0A").is_empty());
         assert!(extract_subteam_ids("<!subteam^>").is_empty());
+    }
+
+    /// The record is supposed to carry no message text, so a tag that does not
+    /// look like a tag must not become an id.
+    #[test]
+    fn a_malformed_subteam_tag_cannot_smuggle_text() {
+        // Everything-up-to-`>` would have made this the "id".
+        assert!(extract_subteam_ids("<!subteam^S0ABC and here is the secret> hi").is_empty());
+        // No closing `>` at all.
+        assert!(extract_subteam_ids("<!subteam^S0A").is_empty());
+        assert!(extract_subteam_ids("<!subteam^S0A|@team").is_empty());
+        // An unterminated tag must not borrow a later tag's `>`.
+        assert!(extract_subteam_ids("<!subteam^S0A|@team <@U_ME> done").is_empty());
+        // Longer than any real id.
+        let long = "X".repeat(SUBTEAM_ID_MAX + 1);
+        assert!(extract_subteam_ids(&format!("<!subteam^{long}>")).is_empty());
+        // …but exactly at the bound is still a group mention: the cost of
+        // being wrong here is a mention that vanishes.
+        let at_bound = "X".repeat(SUBTEAM_ID_MAX);
+        assert_eq!(
+            extract_subteam_ids(&format!("<!subteam^{at_bound}>")),
+            vec![at_bound]
+        );
+    }
+
+    /// Required and permitted are different questions: demanding a field the
+    /// consumer treats as optional would discard real deliveries.
+    #[test]
+    fn optional_kind_fields_do_not_reject_a_record() {
+        let mut anonymous_item = GatewayRecord {
+            kind: RecordKind::Reaction,
+            reaction: Some("eyes".into()),
+            item_user: None,
+            ..message_record()
+        };
+        anonymous_item.flags.mentions_me = false;
+        let value = serde_json::to_value(&anonymous_item).unwrap();
+        assert_eq!(GatewayRecord::from_value(&value).unwrap(), anonymous_item);
+
+        let valueless_press = GatewayRecord {
+            value: None,
+            response_url: None,
+            ..press_record()
+        };
+        let value = serde_json::to_value(&valueless_press).unwrap();
+        assert_eq!(GatewayRecord::from_value(&value).unwrap(), valueless_press);
+    }
+
+    /// Everything the reference projection emits must parse back.
+    #[test]
+    fn the_projection_never_emits_an_unparseable_record() {
+        let deliveries = [
+            (
+                Endpoint::Events,
+                json!({"type": "event_callback", "event": {
+                    "type": "reaction_added", "user": "U_ME", "reaction": "eyes",
+                    "item": {"type": "message", "channel": "C1", "ts": "1.0"}
+                }}),
+            ),
+            (
+                Endpoint::Interactivity,
+                json!({"type": "block_actions", "user": {"id": "U_ME"},
+                       "container": {"channel_id": "D1", "message_ts": "2.0"},
+                       "actions": [{"action_id": "approve_reply", "action_ts": "3.0"}]}),
+            ),
+        ];
+        for (endpoint, payload) in deliveries {
+            let Projection::Publish(published) = project(
+                endpoint,
+                &payload,
+                Registration { user_id: "U_ME" },
+                "2026-09-13T00:00:00Z",
+            ) else {
+                panic!("expected records");
+            };
+            for item in published {
+                let value = serde_json::to_value(&item.record).unwrap();
+                GatewayRecord::from_value(&value)
+                    .expect("a projected record must survive its own schema check");
+            }
+        }
+    }
+
+    /// `reaction.rs` refuses non-message items, so storing them would keep
+    /// records the consumer is guaranteed to throw away.
+    #[test]
+    fn reactions_on_non_message_items_are_not_published() {
+        for item_type in ["file", "file_comment"] {
+            let payload = json!({"type": "event_callback", "event": {
+                "type": "reaction_added", "user": "U_ME", "reaction": "eyes",
+                "item": {"type": item_type, "file": "F1"}
+            }});
+            assert_eq!(
+                project(
+                    Endpoint::Events,
+                    &payload,
+                    Registration { user_id: "U_ME" },
+                    "2026-09-13T00:00:00Z"
+                ),
+                Projection::Publish(Vec::new()),
+                "{item_type} must not be published"
+            );
+        }
     }
 
     #[test]
