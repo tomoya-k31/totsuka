@@ -119,6 +119,12 @@ body_template = """
 #
 # Placeholders: {count}
 #
+# **This key is split by language on purpose** (ADR-0054): the heading is a
+# label a human reads in the pane, so it stays in the operator's language; the
+# parenthetical addresses the *agent*, so it is English like every other
+# instruction in this file. The test is who the sentence talks to, not which
+# key it lives in — this one key holds both kinds.
+#
 # The "the content was not handed over" sentence is load-bearing, not decoration:
 # the plugin has no `files:read` scope, so it can name a file and nothing more.
 # An
@@ -138,12 +144,12 @@ body_template = """
 # **Refer only to what the prompt itself shows.** The agent reads instructions
 # and a body, and nothing else: it cannot see the orchestrator, and it has no
 # notion of a "task" as a unit of work. Two earlier drafts of this key made
-# that mistake in turn — "totsuka は中身を取得していません" named a system the
-# reader has never heard of, and "このタスクに含まれていません" pointed at a
-# container the reader cannot identify. The wording that survives says the
-# content was not handed over and then points at the lines directly below it,
-# both of which are visible from where the agent is standing. Every other
-# prompt default in this repo already obeys this; only this key has broken it.
+# that mistake in turn — one named the orchestrator, the other pointed at "this
+# task", and neither is a thing the reader can identify. The wording that
+# survives says the content was not handed over and then points at the lines
+# directly below it, both of which are visible from where the agent is
+# standing. Every other prompt default in this repo already obeys this; only
+# this key has broken it.
 #
 # No tool is named on purpose. `slack_read_file` is one route among several and
 # naming it sends an agent that does not have it looking for a tool that is not
@@ -157,7 +163,7 @@ body_attachment_header = """
 
 ## 添付ファイル（{count} 件）
 
-（添付ファイルの中身は渡されていません。分かっているのは以下の行に出ている情報だけです。リンクが付いている添付は、中身が必要なら、そこから自分で取得できる手段があれば使ってください。取得できなかった場合や、リンクが付いていない添付については、推測で補わず、添付を読めていないことを返信に書いてください）
+(The attachment content was not handed over — only what the lines below show is known. Where a line carries a link, fetch the file from it yourself if you need its content and have a way to do so. When you cannot, or when the line carries no link, do not fill the gap with a guess: say in your reply that you could not read the attachment.)
 
 """
 

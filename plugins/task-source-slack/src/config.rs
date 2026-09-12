@@ -853,11 +853,11 @@ mod tests {
             "{attachments}"
         );
         assert!(
-            attachments.contains("中身は渡されていません"),
+            attachments.contains("content was not handed over"),
             "{attachments}"
         );
         assert!(
-            attachments.contains("自分で取得できる手段があれば使ってください"),
+            attachments.contains("fetch the file from it yourself"),
             "{attachments}"
         );
         assert_eq!(
