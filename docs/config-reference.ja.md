@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:6ebb6883fb6c630e736b86788ea4962a044c59014eb7716bfb5cc80abfdb88e1 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:623178980f32b1ca2b38ecb8eacaf758e16549f05473c9b42d7bd433331a18be -->
 
 # 設定リファレンス
 
@@ -920,7 +920,7 @@ kind = "task_source"
 | `triage_instructions` | `triage` の既定。issue を起票し、その URL を報告に含めさせる | — |
 | `reply_style_suffix` | `reply_style` が設定されているときだけ返信指示に追記される | `{style}` |
 | `body_template` | pane に表示されるタスク本文。メンション由来のタスクでは `{text}` は元メッセージから **自分（`target_user_id`）宛のメンションタグを除いた**もの（生の `<@U…>` を見せるとエージェントが本人名義の返信に写す）。チャンネル監視のタスクは bot 名義で答えるので、運用者宛のタグも内容として残る | `{sender}` `{channel}` `{text}` |
-| `body_attachment_header` | 添付ファイルセクションの見出し。メッセージが添付を持つときだけ出る。**既定文は 2 つのことを言っており、どちらも振る舞いである**: ①「totsuka は中身を取得していません」—— このプラグインは `files:read` を持たないので中身をダウンロードしない。言わないとエージェントが内容を推測して返信する。②「リンクから自分で取得できる手段があれば使ってください」—— エージェント自身の Slack ツール（MCP 等）は permalink から file id を切り出して中身を読める。上書きするなら**両方**残すこと。既定文がツール名を出さないのは意図的で、名指しすると持っていないエージェントに存在しない道具を探させる | `{count}` |
+| `body_attachment_header` | 添付ファイルセクションの見出し。メッセージが添付を持つときだけ出る。**既定文は 2 つのことを言っており、どちらも振る舞いである**: ①「totsuka は中身を取得していません」—— このプラグインは `files:read` を持たないので中身をダウンロードしない。言わないとエージェントが内容を推測して返信する。②「リンクが付いている添付は、そこから自分で取得できる手段があれば使ってください」—— エージェント自身の Slack ツール（MCP 等）は permalink から file id を切り出して中身を読める。条件形なのは permalink が省かれる添付があるためで、無条件に書くと存在しないリンクを指すことになる。上書きするなら**両方**残すこと。既定文がツール名を出さないのは意図的で、名指しすると持っていないエージェントに存在しない道具を探させる | `{count}` |
 | `body_attachment_line` | 添付 1 行ぶん。`{file}` は名前・MIME・サイズ・permalink を**組み立て済み**で渡る（`mimetype` / `size` / `permalink` はどれも欠けうるので、4 つのプレースホルダにすると空の `（・）` が残る） | `{file}` |
 | `body_thread_header` | スレッド文脈セクションの見出し | `{count}` |
 | `body_thread_line` | スレッド文脈 1 行ぶん | `{line}` |

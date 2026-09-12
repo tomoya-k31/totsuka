@@ -134,11 +134,16 @@ body_template = """
 # No tool is named on purpose. `slack_read_file` is one route among several and
 # naming it sends an agent that does not have it looking for a tool that is not
 # there.
+#
+# The permission is **conditional on a link actually being shown**, because
+# `SlackFile.permalink` is an `Option` and the line omits it when Slack did not
+# supply one (a tombstone file, for instance). Promising a link that is not
+# there would point the agent at a handle it cannot find.
 body_attachment_header = """
 
 ## 添付ファイル（{count} 件）
 
-（totsuka は中身を取得していません。分かっているのは以下の名前・種類・サイズと、行末のリンクだけです。中身が必要なら、そのリンクから自分で取得できる手段があれば使ってください。取得できなかった場合は推測で補わず、添付を読めていないことを返信に書いてください）
+（totsuka は中身を取得していません。分かっているのは以下の行に出ている情報だけです。リンクが付いている添付は、中身が必要なら、そこから自分で取得できる手段があれば使ってください。取得できなかった場合や、リンクが付いていない添付については、推測で補わず、添付を読めていないことを返信に書いてください）
 
 """
 
