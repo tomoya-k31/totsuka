@@ -4,7 +4,7 @@ title: ADR-0072 Slack イベント受信を Events API + Cloud Run + Pub/Sub へ
 description: "totsuka 停止中の取りこぼしと Slack による購読の自動無効化を、Socket Mode リレーではなく Events API への転換で解決する決定。常時稼働ホストを持たない Cloud Run scale-to-zero + Pub/Sub 構成とし、本文は保存せず座標と文字列判定フラグだけを書く。保存対象も自分宛メンションと任意の subteam・リアクション・承認ボタンに絞り、チャンネル監視は Gateway 方式では conversations.history のポーリングへ移す。フィルタは関門だが判定の権威は mention.rs に残し、適合テストスイートが偽陰性ゼロを検査する。Socket Mode は event_source で併存させ、保持は Pub/Sub 7 日・起票窓は totsuka 側。複数人は利用者ごとのパスとトピックで分離し、クラウドに置く資格情報は signing secret のみ。イベントゲートウェイは workspace 外の同居プロジェクトとして公式イメージを配る。信頼境界は Slack からの公開受信（関門は推測不能パスと利用者別 HMAC と 5 分のタイムスタンプ窓の 3 つで、IAM も IP 制限も使えない）と totsuka からの outbound pull（Workspace アカウント単位の IAM・鍵を配らない）に分け、ドメイン制限共有は緩めずに Invoker IAM チェックの無効化で公開する。グループメンション対応とスキーマ契約もここで決定。"
 resource: https://github.com/tomoya-k31/totsuka/issues/652
 tags: [decision, slack, gcp, cloud-run, pubsub, event-delivery, cost, multi-tenant, adr]
-generated: { by: claude-code/opus-5, at: 2026-09-12T23:40:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-13T00:15:00+09:00 }
 status: stable
 owner: tomoya-k31
 sources:
@@ -44,7 +44,7 @@ sources:
 
 stable。設計判断は確定済み。実装は未着手で、[#652](https://github.com/tomoya-k31/totsuka/issues/652) の子 issue に分割する。
 
-**当初ここに「未検証のブロッカー」として書いていた事項は、調査の結果ブロッカーではなかった。** 訂正して残す。
+**当初ここに書いていた「未検証のブロッカー」は、回避手段と費用の見積もりが誤っていた。** 訂正して残す。ただし**ブロッカーが消えたわけではなく、確認すべき対象が変わった**。`constraints/run.managed.requireInvokerIam` が適用されている組織では、下記の回避手段も塞がれて元の行き止まりに戻る。**結論は #659 の事前確認の結果に左右される。**
 
 Slack は GCP の IAM 認証を喋れないので Cloud Run は公開が要るが、ドメイン制限共有（`constraints/iam.allowedPolicyMemberDomains`）が有効な組織では `allUsers` への `roles/run.invoker` 付与が拒否される[^drs]。当初これを「組織ポリシーの例外申請が要る／回避策の外部ロードバランサで月 18 ドル」と書いていたが、**どちらも誤りだった**。
 
