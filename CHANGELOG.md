@@ -11,6 +11,18 @@ Note: the plugin protocol is versioned independently of the application (see
 `crates/plugin-protocol`); a totsuka release does not imply a protocol-version
 change.
 
+## [0.7.5](https://github.com/tomoya-k31/totsuka/compare/v0.7.4...v0.7.5) (2026-09-12)
+
+
+### Bug Fixes
+
+* **task-source-slack:** 添付セクションがエージェント自身の経路を塞がないようにする ([#655](https://github.com/tomoya-k31/totsuka/issues/655)) ([719e4a4](https://github.com/tomoya-k31/totsuka/commit/719e4a4a5593ac326d44cfc344ff8a626f50a4f3))
+
+
+### Documentation
+
+* **task-source-slack:** 添付メタデータの実機検証結果を記録する ([#653](https://github.com/tomoya-k31/totsuka/issues/653)) ([59091c7](https://github.com/tomoya-k31/totsuka/commit/59091c730685bc158a37723f9a07ccb7b335832a))
+
 ## [0.7.4](https://github.com/tomoya-k31/totsuka/compare/v0.7.3...v0.7.4) (2026-09-12)
 
 
