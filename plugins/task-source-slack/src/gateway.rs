@@ -612,7 +612,13 @@ pub async fn probe<P: PubSubTransport>(
     for subscription in [gateway.events_path(), gateway.block_actions_path()] {
         pubsub.pull(&subscription, 1).await.map_err(|e| {
             SlackError::InvalidRequest(format!(
-                "could not read the Event Gateway queue `{subscription}`: {e} → check that                  `[slack.gateway]` names the right project and subscriptions, that `gcloud auth                  application-default login` has been run as the account holding                  `roles/pubsub.subscriber` on it, and that the subscription exists"
+                concat!(
+                    "could not read the Event Gateway queue `{}`: {} → check that ",
+                    "`[slack.gateway]` names the right project and subscriptions, that ",
+                    "`gcloud auth application-default login` has been run as the account ",
+                    "holding `roles/pubsub.subscriber` on it, and that the subscription exists",
+                ),
+                subscription, e
             ))
         })?;
     }
