@@ -322,6 +322,40 @@ async fn a_redelivered_record_is_handled_once() {
     );
 }
 
+/// A Slack outage is not a verdict on the mention. Acking a record whose
+/// rebuild failed transiently would delete the event on the strength of a
+/// temporary error, leaving one `warn` line where a task should have been.
+#[tokio::test]
+async fn a_transient_slack_failure_leaves_the_record_queued() {
+    let shared = Shared::default();
+    let ts = ts_ago(60);
+    // First pull: Slack is unreachable. Second: it answers, from the queue's
+    // redelivery of the very same message.
+    shared.push_for("conversations.history", Canned::Network);
+    shared.push_for("conversations.history", history_reply(&ts, "<@U_ME> hi"));
+    let record = message_record(&ts, true, &[]);
+    let batch = vec![PulledMessage {
+        ack_id: "ack-0".into(),
+        data: serde_json::to_string(&record).expect("record serializes"),
+    }];
+    let pubsub = Arc::new(FakePubSub {
+        batches: Arc::new(Mutex::new(vec![batch.clone(), batch])),
+        ..FakePubSub::default()
+    });
+
+    let events = collect(&shared, gateway_config(), Arc::clone(&pubsub), 1).await;
+    assert_eq!(
+        events.len(),
+        1,
+        "the redelivery must produce the event the failed attempt could not"
+    );
+    assert_eq!(
+        pubsub.acked(),
+        vec!["ack-0".to_string()],
+        "the failed attempt must not have acked; only the successful one does"
+    );
+}
+
 /// `pull` is specified as *may* wait, so an immediately-empty answer is legal
 /// — and a loop that does not back off around it spins a core.
 #[tokio::test]
@@ -353,6 +387,48 @@ async fn an_always_empty_subscription_does_not_busy_loop() {
         "an empty subscription was polled {pulls} times in 300ms — the backoff is not effective"
     );
     assert!(pulls >= 2, "each subscription should have been polled");
+}
+
+/// A credential or naming mistake has to fail startup, not leave a healthy
+/// -looking plugin that never receives anything.
+#[tokio::test]
+async fn the_startup_probe_reports_an_unreadable_queue() {
+    /// A subscription that refuses every pull, the way a missing
+    /// `roles/pubsub.subscriber` or a mistyped name does.
+    struct Refusing;
+    impl PubSubTransport for Refusing {
+        async fn pull(&self, _: &str, _: u32) -> Result<Vec<PulledMessage>, SlackError> {
+            Err(SlackError::Http {
+                status: 403,
+                body: "permission denied".into(),
+            })
+        }
+        async fn ack(&self, _: &str, _: &[String]) -> Result<(), SlackError> {
+            Ok(())
+        }
+    }
+
+    let config = gateway_config();
+    let gateway = config.gateway.clone().expect("gateway table");
+    let error = task_source_slack::gateway::probe(&Refusing, &gateway)
+        .await
+        .expect_err("a refused pull must fail the probe");
+    let text = error.to_string();
+    assert!(
+        text.contains("projects/p/subscriptions/events"),
+        "the message must name the subscription, got {text}"
+    );
+    assert!(
+        text.contains("pubsub.subscriber"),
+        "the message must say what to check, got {text}"
+    );
+
+    // An empty answer is a pass: an idle subscription is the normal state.
+    assert!(
+        task_source_slack::gateway::probe(&FakePubSub::default(), &gateway)
+            .await
+            .is_ok()
+    );
 }
 
 /// The token is reused until it expires, then fetched again. Being wrong

@@ -481,6 +481,11 @@ fn slack_ts_to_system_time(ts: &str) -> Option<SystemTime> {
 }
 
 /// Bounded set of delivery ids already handled.
+///
+/// Split into a check and a record for the same reason `mention.rs` is: a
+/// delivery whose handling failed transiently has **not** been handled, and
+/// remembering it would make the redelivery — the thing that was supposed to
+/// save it — a no-op.
 #[derive(Default)]
 struct Seen {
     ids: HashSet<String>,
@@ -488,10 +493,15 @@ struct Seen {
 }
 
 impl Seen {
-    /// `true` when `id` is new (and now remembered).
-    fn remember(&mut self, id: String) -> bool {
+    /// Whether `id` was already handled, without recording it.
+    fn contains(&self, id: &str) -> bool {
+        self.ids.contains(id)
+    }
+
+    /// Record `id` as handled.
+    fn remember(&mut self, id: String) {
         if !self.ids.insert(id.clone()) {
-            return false;
+            return;
         }
         self.order.push_back(id);
         if self.order.len() > SEEN_CAP
@@ -499,7 +509,6 @@ impl Seen {
         {
             self.ids.remove(&evicted);
         }
-        true
     }
 }
 
@@ -582,6 +591,34 @@ async fn to_socket_event<T: SlackTransport>(
     }
 }
 
+/// One `pull` against each subscription, to fail startup on a credential,
+/// permission or naming mistake instead of running silently.
+///
+/// **This is the gateway's answer to the `apps.connections.open` probe.**
+/// `token_guard` opens a Socket Mode connection at `initialize` for one
+/// reason: without it a bad App-Level Token surfaces only inside a background
+/// loop, so `totsuka doctor` reports the plugin healthy while it can never
+/// receive an event. A wrong ADC identity, a missing `roles/pubsub.subscriber`
+/// or a typo in a subscription name fails in exactly that shape, so it gets
+/// exactly that treatment.
+///
+/// An empty answer is a **pass** — it means the credential worked and there is
+/// nothing queued, which is the normal state of an idle subscription.
+/// Anything pulled here is left unacked and redelivered.
+pub async fn probe<P: PubSubTransport>(
+    pubsub: &P,
+    gateway: &GatewayConfig,
+) -> Result<(), SlackError> {
+    for subscription in [gateway.events_path(), gateway.block_actions_path()] {
+        pubsub.pull(&subscription, 1).await.map_err(|e| {
+            SlackError::InvalidRequest(format!(
+                "could not read the Event Gateway queue `{subscription}`: {e} → check that                  `[slack.gateway]` names the right project and subscriptions, that `gcloud auth                  application-default login` has been run as the account holding                  `roles/pubsub.subscriber` on it, and that the subscription exists"
+            ))
+        })?;
+    }
+    Ok(())
+}
+
 /// Drain both subscriptions until the receiver is dropped, emitting
 /// [`SocketEvent`]s the mention pipeline consumes.
 ///
@@ -646,16 +683,24 @@ async fn drain_forever<T, P>(
         .map(|g| g.pull_max_messages)
         .unwrap_or(50);
     let mut seen = Seen::default();
-    let mut quiet: u32 = 0;
+    // Two counters, not one. An idle subscription answering empty is normal
+    // and an unreachable one is not, so sharing a counter would let a quiet
+    // afternoon push the *first* transient error straight past `warn_after`
+    // — reporting a persistent outage on a blip, and waiting `backoff_max`
+    // before retrying it. `socket_mode.rs` had to learn the same thing about
+    // its `hello`-only advisory (#641): measuring a harmless state and a
+    // broken one on the same clock hides the broken one.
+    let mut failures: u32 = 0;
+    let mut empty_polls: u32 = 0;
     loop {
         let pulled = match pubsub.pull(&subscription, max_messages).await {
             Ok(pulled) => pulled,
             Err(e) => {
-                quiet = quiet.saturating_add(1);
-                let delay = capped_backoff(options.backoff_base, options.backoff_max, quiet - 1);
-                if quiet >= options.warn_after {
+                failures = failures.saturating_add(1);
+                let delay = capped_backoff(options.backoff_base, options.backoff_max, failures - 1);
+                if failures >= options.warn_after {
                     tracing::warn!(
-                        subscription = %subscription, error = %e, attempt = quiet,
+                        subscription = %subscription, error = %e, attempt = failures,
                         "the Event Gateway's queue is unreachable; Slack events are queued but \
                          not being collected. There is no automatic fall back to Socket Mode — \
                          the two are mutually exclusive in the Slack app"
@@ -670,24 +715,36 @@ async fn drain_forever<T, P>(
                 continue;
             }
         };
+        failures = 0;
         if pulled.is_empty() {
             // `pull` is documented as *may* wait, so an immediate empty answer
             // is legal and a tight loop around it would spin a CPU.
-            let delay = capped_backoff(options.backoff_base, options.backoff_max, quiet.min(8));
-            quiet = quiet.saturating_add(1);
+            let delay = capped_backoff(
+                options.backoff_base,
+                options.backoff_max,
+                empty_polls.min(8),
+            );
+            empty_polls = empty_polls.saturating_add(1);
             tokio::time::sleep(delay).await;
             continue;
         }
-        quiet = 0;
+        empty_polls = 0;
 
         let now = SystemTime::now();
         let mut filed = 0u32;
-        // Every pulled message is acknowledged, including the ones dropped:
-        // leaving a record unacked means Pub/Sub redelivers it, and a record
-        // this build has decided against will be decided against again.
+        // Acknowledged: everything this pass reached a **decision** about,
+        // including the records it deliberately dropped — a record this build
+        // decided against will be decided against again, so leaving it queued
+        // only means deciding again forever.
+        //
+        // **Not** acknowledged: a record whose rebuild failed for a reason
+        // outside this process. Slack running out of rate limit, or answering
+        // 5xx, is not a verdict on the mention; acking it would delete the
+        // mention on the strength of a transient error and leave one `warn`
+        // line behind. Redelivery is the retry, which is why `seen` is
+        // recorded only once the record has actually been dealt with.
         let mut ack_ids = Vec::with_capacity(pulled.len());
         for message in pulled {
-            ack_ids.push(message.ack_id);
             let record = match GatewayRecord::parse(&message.data) {
                 Ok(record) => record,
                 Err(e) => {
@@ -695,10 +752,13 @@ async fn drain_forever<T, P>(
                         subscription = %subscription, error = %e,
                         "dropping a queued record this build cannot read"
                     );
+                    ack_ids.push(message.ack_id);
                     continue;
                 }
             };
-            if !seen.remember(record.delivery_id()) {
+            let delivery_id = record.delivery_id();
+            if seen.contains(&delivery_id) {
+                ack_ids.push(message.ack_id);
                 continue;
             }
             if !window.admits(&record, now) {
@@ -706,6 +766,8 @@ async fn drain_forever<T, P>(
                     channel = %record.channel, ts = %record.ts, kind = ?record.kind,
                     "a queued event is older than `drain_max_age_hours`; dropping it"
                 );
+                seen.remember(delivery_id);
+                ack_ids.push(message.ack_id);
                 continue;
             }
             if filed >= window.limit {
@@ -717,22 +779,32 @@ async fn drain_forever<T, P>(
                     subscription = %subscription, limit = window.limit,
                     "drain limit reached for this pass; dropping the remainder"
                 );
+                seen.remember(delivery_id);
+                ack_ids.push(message.ack_id);
                 continue;
             }
             match to_socket_event(api.as_ref(), &record, now).await {
                 Ok(Some(event)) => {
                     filed += 1;
+                    seen.remember(delivery_id);
+                    ack_ids.push(message.ack_id);
                     if tx.send(event).is_err() {
                         // The pipeline is gone; ack what we have and stop.
                         let _ = pubsub.ack(&subscription, &ack_ids).await;
                         return;
                     }
                 }
-                Ok(None) => {}
+                // A definitive "nothing to do": filtered out, or a message
+                // Slack says does not exist. Settled, so it is acked.
+                Ok(None) => {
+                    seen.remember(delivery_id);
+                    ack_ids.push(message.ack_id);
+                }
                 Err(e) => {
                     tracing::warn!(
                         channel = %record.channel, ts = %record.ts, error = %e,
-                        "could not rebuild a queued event; dropping it"
+                        "could not reach Slack to rebuild a queued event; leaving it queued \
+                         for redelivery rather than dropping the event"
                     );
                 }
             }
@@ -885,13 +957,15 @@ mod tests {
     #[test]
     fn a_delivery_is_only_handled_once() {
         let mut seen = Seen::default();
-        assert!(seen.remember("message:C1:1.0".into()));
-        assert!(!seen.remember("message:C1:1.0".into()));
-        assert!(seen.remember("message:C1:2.0".into()));
-        // The set is bounded; the oldest entry falls out.
+        assert!(!seen.contains("message:C1:1.0"));
+        seen.remember("message:C1:1.0".into());
+        assert!(seen.contains("message:C1:1.0"));
+        assert!(!seen.contains("message:C1:2.0"));
+        // The set is bounded; the oldest entry falls out, and the
+        // orchestrator's idempotent ingest catches a redelivery after that.
         for n in 0..SEEN_CAP {
             seen.remember(format!("message:C1:filler-{n}"));
         }
-        assert!(seen.remember("message:C1:1.0".into()));
+        assert!(!seen.contains("message:C1:1.0"));
     }
 }

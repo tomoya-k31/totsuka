@@ -474,6 +474,17 @@ where
                         &gateway.pubsub_url,
                         gateway::AdcTokens::default(),
                     ));
+                    // Same job the `apps.connections.open` probe does for
+                    // Socket Mode: a wrong identity, a missing
+                    // `roles/pubsub.subscriber` or a mistyped subscription
+                    // would otherwise leave `doctor` green on a plugin that
+                    // can never receive an event.
+                    if let Err(e) = gateway::probe(pubsub.as_ref(), &gateway).await {
+                        return Reply::respond(Response::error(
+                            id,
+                            Error::new(error_code::CONFIG_INVALID, e.to_string()),
+                        ));
+                    }
                     let (events, drain) = gateway::spawn(
                         Arc::clone(&api),
                         Arc::new(config.clone()),

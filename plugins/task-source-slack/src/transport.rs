@@ -226,7 +226,8 @@ impl ReqwestTransport {
             // nothing should be asking for this token.
             TokenKind::App => self.app_token.as_deref().ok_or_else(|| {
                 SlackError::InvalidRequest(
-                    "an App-Level Token call was made but no `app_token` is configured (it is                      only needed for `event_source = \"socket\"`)"
+                    "an App-Level Token call was made but no `app_token` is configured (it is \
+                     only needed for `event_source = \"socket\"`)"
                         .into(),
                 )
             }),
