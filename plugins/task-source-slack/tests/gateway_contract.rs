@@ -328,9 +328,15 @@ fn press_records_rebuild_into_a_payload_the_pipeline_reads() {
     assert!(checked >= 2, "the suite lost its block_actions cases");
 }
 
-/// The suite must keep covering the shapes that produce a *false negative* —
-/// the only error direction that loses a mention. Naming them here means
+/// The suite must keep covering the boundary shapes. Naming them here means
 /// deleting one is a failing test, not a quiet reduction in coverage.
+///
+/// The list is **not** all one kind, and saying otherwise in a change whose
+/// subject is that asymmetry would be careless. Most of these pin the false
+/// negative — a mention that silently vanishes, the only fatal direction. A
+/// few pin the false positive instead (`message-mention-prefix-not-match`,
+/// the broadcast trio, the file reaction): harmless to the consumer, but they
+/// put records nobody will ever read on a topic for seven days, per user.
 #[test]
 fn the_false_negative_boundary_cases_are_still_present() {
     let names: BTreeSet<String> = load_cases().into_iter().map(|case| case.name).collect();
