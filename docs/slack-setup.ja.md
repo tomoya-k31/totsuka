@@ -1,7 +1,7 @@
 > 🌐 [English](slack-setup.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/slack-quickstart.md sha256:4ac47ac7fd572fc94715d745bfe7109fc22c008d054e2f0d8b67656b4b595c5d -->
+<!-- generated-from: ai-docs/operations/slack-quickstart.md sha256:70fe4a239f0798abdc5be3297f3c02dce3fc73e5baf0452c42dffcf9b68c8d63 -->
 
 # Slack ソースのセットアップ
 
@@ -11,12 +11,54 @@
 
 > **社用アカウントなら、先にワークスペースの規約を確認すること。** ユーザートークンは本人として振る舞い、そこから投稿されたものは本人が打ったものと区別できない。ユーザートークンのアプリを制限・禁止している組織もある。
 
+## 0. 受信方式を選ぶ — アプリを作る**前**に
+
+**Slack アプリは Socket Mode と Request URL を同時には持てない。** アプリ単位の排他な設定で、
+後から変えるには**もう一方の manifest でアプリを作り直す**ことになる（トークンも全部再発行される）。
+だからこれは最初の手順であって、あとから調整するものではない。
+
+| | **Socket Mode**（既定） | **Event Gateway** |
+|---|---|---|
+| 用意するもの | 無し | GCP プロジェクト 1 つ、月 1 ドル程度 |
+| totsuka を止めている間 | **メンションは失われ、取り戻す手段は無い** | キューに溜まり、起動すると拾われる |
+| 長く止めたとき | **Slack が購読を無効化する**（60 分の配信試行の 95% 超が失敗したアプリ）。復旧は Slack の設定画面での手作業で、それが起きたことを totsuka に知らせるものは何も無い | 起きない。配信は常に成功する |
+| 設定 | `event_source = "socket"`（既定なので省略可） | `event_source = "gateway"` と `[slack.gateway]` |
+| manifest | `manifest.yml` | `manifest.gateway.yml` |
+| チャンネル監視の遅延 | 即時 | `watch_poll_interval_secs`（既定 60 秒）。**遅くなるのは監視だけ**で、メンション・リアクション・承認ボタンは 1〜2 秒差に収まる |
+
+判断は**その機械が止まるかどうか**に尽きる。
+
+- **常時起動のデスクトップなら Socket Mode。** 用意するものが無く、遅延も増えない
+- **ノート PC なら Event Gateway。** 夜間・週末・出張のあいだ止まり、代償はその間のメンションだけ
+  ではなく**購読そのものを止められること**である。低流量アプリの免除（1 時間 1,000 イベント未満）は
+  この構成を守らない —— 購読しているのは参加している全チャンネルの全メッセージで、平日なら容易に超える
+
+Gateway を選ぶなら、**先に GCP 側を作ること**（[Event Gateway 構築手順](event-gateway-setup.ja.md)）——
+手順 1 でその Request URL が要る。
+
 ## 1. manifest から Slack アプリを作る
 
 1. <https://api.slack.com/apps> → **Create New App** → **From a manifest**、対象ワークスペースを選ぶ。
-2. [`plugins/task-source-slack/manifest.yml`](https://github.com/tomoya-k31/totsuka/blob/main/plugins/task-source-slack/manifest.yml) を YAML タブに貼り付けてアプリを作成する。
+2. **選んだ方式の manifest** を YAML タブに貼り付けてアプリを作成する。
+
+   | 方式 | manifest |
+   |---|---|
+   | Socket Mode | [`plugins/task-source-slack/manifest.yml`](https://github.com/tomoya-k31/totsuka/blob/main/plugins/task-source-slack/manifest.yml) |
+   | Event Gateway | [`plugins/task-source-slack/manifest.gateway.yml`](https://github.com/tomoya-k31/totsuka/blob/main/plugins/task-source-slack/manifest.gateway.yml) —— `<gateway-host>` と `<opaque-token>` を自分のものに置き換える |
+
 3. **OAuth & Permissions → Install to Workspace** を実行し、同じページから **User OAuth Token**（`xoxp-…`）と **Bot User OAuth Token**（`xoxb-…`）を控える。
-4. **Basic Information → App-Level Tokens → Generate Token and Scopes** で `connections:write` スコープのトークンを生成し、控える（`xapp-…`）。
+4. **ここは方式で分かれる。**
+   - **Socket Mode**: **Basic Information → App-Level Tokens → Generate Token and Scopes** で `connections:write` スコープのトークンを生成し、控える（`xapp-…`）。
+   - **Event Gateway**: App-Level Token は**要らない**（WebSocket を開かないため）。代わりに **Signing Secret** を控える（Basic Information → App Credentials）。**これは `config.toml` には書かない** —— ゲートウェイ側のシークレットストアに入る値で、この機械には残らない。
+
+   **Gateway では Request URL を 2 箇所に入れる。** manifest から作れば両方入っているので、確認だけでよい:
+
+   | Slack アプリの設定 | 運ぶもの |
+   |---|---|
+   | Event Subscriptions → Request URL | メンション、リアクション |
+   | Interactivity & Shortcuts → Request URL | 承認・リポジトリ選択のボタン |
+
+   **前者だけだと、メンションは動いたままボタンが一切届かない。** Socket Mode では両方が同じ接続で届いていたので、これまで存在しなかった区別である。保存時に Slack が URL を検証するので、ゲートウェイが先に動いていること。
 
 自分のメンバー ID（`U…`）も控える: Slack のプロフィール → **⋯** → **メンバー ID をコピー**。
 
@@ -28,7 +70,7 @@ totsuka がシークレットの値を保存することはない。設定に書
 
 ```text
 op://Dev/totsuka/slack-user   ← xoxp-…
-op://Dev/totsuka/slack-app    ← xapp-…
+op://Dev/totsuka/slack-app    ← xapp-…  （Socket Mode のみ。Gateway では不要）
 op://Dev/totsuka/slack-bot    ← xoxb-…（通知 DM を使う場合のみ）
 ```
 
@@ -140,8 +182,18 @@ reply_style = "丁寧語で簡潔に"            # 任意
 totsuka config validate   # オフラインの検査
 totsuka doctor            # Slack に対してトークンを検査する。ユーザートークンの
                           # identity が target_user_id と一致することも確認する
-totsuka run --watch       # ソケット接続に常駐する
+totsuka run --watch
 ```
+
+**`doctor` が見るものは方式で変わる。**
+
+| | Socket Mode | Event Gateway |
+|---|---|---|
+| App-Level Token（`xapp-`） | probe する | **しない** —— 開く接続が無いので、使わないトークンで起動が落ちるのは筋が通らない |
+| キュー | — | 起動時に各キューを 1 回読む。Google の identity 違い・権限の欠落・名前の打ち間違いは、放っておくとどれも**「`doctor` は緑で、イベントが 1 件も来ない」**という同じ形で失敗する |
+
+Gateway ではこの機械で 1 回 `gcloud auth application-default login` を実行しておく。
+totsuka は**自分の** Google アカウントで**自分の**キューを読む —— サービスアカウントキーは配られない。
 
 通しで試すには、誰かに自分宛のメンションをしてもらう。エージェントの完了後、スレッド内のエフェメラルメッセージと self-DM に返信案が届く（`bot_token` を設定していれば bot からの DM も届く）。**承認**すると本人名義のスレッド返信として投稿され、**却下**すると破棄される。
 
@@ -156,6 +208,11 @@ totsuka run --watch       # ソケット接続に常駐する
 | リアクションを付け直しても再実行されない | 意図した挙動。成功したメッセージは二度と処理されないので、外して付け直してもエージェントが二重に走ることはない。**取得に失敗した**メッセージはこの方法で再試行できる |
 | 返信案は届くがボタンが効かない | 24 時間で失効する。または下書きが 1024 件を超えて追い出された。self-DM の控えから手で返信するか、もう一度メンションする。下書きは再起動しても残る |
 | グループメンション（`@team-name`）がタスクにならない | `usergroups:read` を含む manifest でアプリを再インストール済みか確認する。**このスコープが無いと、起動時の所属グループ照会が失敗して所属が空になり、グループ宛のメンションは 1 件もタスクにならない** —— 個人宛メンションは動き続けるので、「一部だけ壊れている」ように見える。totsuka は起動時に警告を 1 回出すので、そこを見る。所属は**起動時に 1 回だけ**解決するので、グループに追加された直後は再起動が要る。`@here` / `@channel` / `@everyone` は**仕様として対象外**（誰も名指ししていないため） |
+| **Gateway**: メンションが 1 件も来ない | `gcloud auth application-default login` が済んでいるか（起動時の検査が報告する）、保存時に Slack が Request URL を受け付けたか（保存時に URL を検証するので、ゲートウェイが動いていないと保存自体が失敗する）、`[slack.gateway]` がデプロイの出力と一致しているかを確認する |
+| **Gateway**: メンションは動くのに承認ボタンだけ届かない | **Interactivity & Shortcuts** の Request URL が未設定。Event Subscriptions とは別の設定項目で、Socket Mode では両方が同じ接続で届いていたため見落としやすい |
+| **Gateway**: 復帰しても何も起票されない | イベントが `drain_max_age_hours`（既定 24）より古い。キューは 7 日保持しているので、**設定を一時的に上げれば拾える** —— 再デプロイは要らない |
+| **Gateway**: 監視チャンネルの反応が遅い | 仕様。Gateway ではチャンネル履歴のポーリング（`watch_poll_interval_secs`、既定 60 秒）で監視しており、メンション・リアクション・ボタンは遅くならない。ゲートウェイを通るのは自分を名指ししたものだけで、監視チャンネルへの普通の投稿は該当しない |
+| 設定を書き換えるだけで方式を切り替えようとした | そうはならない。Socket Mode と Request URL は**Slack アプリ単位で排他**なので、切り替えはもう一方の manifest でアプリを作り直すことを意味する（トークンも全部再発行される）。`event_source` を変えるだけでは Slack 側は何も変わらない |
 | アプリのスコープを変更した | スコープ変更にはアプリの再インストールが必要で、**`xoxp-` と `xoxb-` の両方が再発行される**。保管先の値を両方更新してから `doctor` を実行する。片方だけ直すとアプリは半分壊れたままになる |
 | チャンネル prefix のルールが効かず、毎回 LLM 分類（LLM 未設定ならピッカー）に落ちる | アプリがチャンネル名を読めていない。`channels:read` と `groups:read` を含む manifest で再インストールし、上と同じ手順でトークンを更新する |
 | 通知 DM が届かない | `bot_token` が設定され有効か（`doctor` が probe する）、起動ログに bot DM の解決失敗の警告が無いか、Slack でこのアプリの DM をミュートしていないかを確認する |

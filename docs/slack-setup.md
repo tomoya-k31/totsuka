@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](slack-setup.ja.md)
 
-<!-- generated-from: ai-docs/operations/slack-quickstart.md sha256:4ac47ac7fd572fc94715d745bfe7109fc22c008d054e2f0d8b67656b4b595c5d -->
+<!-- generated-from: ai-docs/operations/slack-quickstart.md sha256:70fe4a239f0798abdc5be3297f3c02dce3fc73e5baf0452c42dffcf9b68c8d63 -->
 
 # Setting up the Slack source
 
@@ -10,12 +10,59 @@ Everything that appears in a conversation is posted with your user token. The ap
 
 > **Read your workspace's rules first if this is a work account.** A user token acts as you: anything it posts is indistinguishable from you typing it. Some organizations restrict or prohibit user-token apps.
 
+## 0. Choose how events reach you — before creating the app
+
+**A Slack app cannot have both Socket Mode and a Request URL.** The two are
+mutually exclusive per app, and switching later means **recreating the app from
+the other manifest** (which reissues every token). So this is the first step,
+not a later tuning decision.
+
+| | **Socket Mode** (default) | **Event Gateway** |
+|---|---|---|
+| What you need | Nothing | One GCP project, about $1/month |
+| While totsuka is stopped | **Mentions are lost, with no way to recover them** | They queue, and are picked up when you start |
+| After a long stop | **Slack disables the app's event subscription** (any app failing more than 95% of deliveries over 60 minutes). Re-enabling is a manual step in the Slack settings, and nothing tells totsuka it happened | Does not occur. Delivery always succeeds |
+| Setting | `event_source = "socket"` (the default; you can omit it) | `event_source = "gateway"` plus `[slack.gateway]` |
+| Manifest | `manifest.yml` | `manifest.gateway.yml` |
+| Channel-watch latency | Immediate | `watch_poll_interval_secs` (60s default). **Only watching is slower**; mentions, reactions and approval buttons stay within a second or two |
+
+It comes down to **whether that machine stops**.
+
+- **An always-on desktop: Socket Mode.** Nothing to set up, no added latency.
+- **A laptop: the Event Gateway.** It stops overnight, at weekends and while you
+  travel — and the cost is not only the mentions that arrive meanwhile but the
+  subscription itself being switched off. The exemption for low-volume apps
+  (under 1,000 events an hour) does not protect this setup: what is subscribed
+  is every message in every channel you are in, which passes that easily on a
+  weekday.
+
+If you choose the gateway, **build the GCP side first** — see
+[Event Gateway setup](event-gateway-setup.md) — because step 1 needs the
+Request URL it produces.
+
 ## 1. Create the Slack app from the manifest
 
 1. Go to <https://api.slack.com/apps> → **Create New App** → **From a manifest**, and pick the workspace.
-2. Paste [`plugins/task-source-slack/manifest.yml`](https://github.com/tomoya-k31/totsuka/blob/main/plugins/task-source-slack/manifest.yml) into the YAML tab and create the app.
+2. Paste **the manifest for the mode you chose** into the YAML tab and create the app.
+
+   | Mode | Manifest |
+   |---|---|
+   | Socket Mode | [`plugins/task-source-slack/manifest.yml`](https://github.com/tomoya-k31/totsuka/blob/main/plugins/task-source-slack/manifest.yml) |
+   | Event Gateway | [`plugins/task-source-slack/manifest.gateway.yml`](https://github.com/tomoya-k31/totsuka/blob/main/plugins/task-source-slack/manifest.gateway.yml) — replace `<gateway-host>` and `<opaque-token>` with your own |
+
 3. **OAuth & Permissions → Install to Workspace**. Copy the **User OAuth Token** (`xoxp-…`) and the **Bot User OAuth Token** (`xoxb-…`) from that page.
-4. **Basic Information → App-Level Tokens → Generate Token and Scopes**, with the `connections:write` scope. Copy the token (`xapp-…`).
+4. **This step differs by mode.**
+   - **Socket Mode**: **Basic Information → App-Level Tokens → Generate Token and Scopes**, with the `connections:write` scope. Copy the token (`xapp-…`).
+   - **Event Gateway**: no app-level token is needed — nothing opens a WebSocket. Copy the **Signing Secret** instead (Basic Information → App Credentials). **It does not go in `config.toml`**; it belongs to the gateway's secret store and never reaches this machine.
+
+   **The gateway also needs a Request URL in two places.** Creating the app from the manifest fills both in, so this is a check rather than a step:
+
+   | Slack app setting | Carries |
+   |---|---|
+   | Event Subscriptions → Request URL | mentions, reactions |
+   | Interactivity & Shortcuts → Request URL | approval and repository-picker buttons |
+
+   **With only the first, mentions keep working and no button ever arrives.** Socket Mode delivered both down one connection, so this is a distinction that did not exist before. Slack verifies the URL when you save it, so the gateway has to be running first.
 
 Also copy your own member id (`U…`): your Slack profile → **⋯** → **Copy member ID**.
 
@@ -27,7 +74,7 @@ totsuka never stores a secret value — the config holds a *reference*, and the 
 
 ```text
 op://Dev/totsuka/slack-user   ← xoxp-…
-op://Dev/totsuka/slack-app    ← xapp-…
+op://Dev/totsuka/slack-app    ← xapp-…  (Socket Mode only; the gateway needs none)
 op://Dev/totsuka/slack-bot    ← xoxb-…  (only if you want the notification DM)
 ```
 
@@ -142,8 +189,19 @@ Every key is described in the [configuration reference](config-reference.md).
 totsuka config validate   # offline checks
 totsuka doctor            # checks the tokens against Slack, including that the
                           # user token's identity matches target_user_id
-totsuka run --watch       # stays resident on the socket connection
+totsuka run --watch
 ```
+
+**What `doctor` checks differs by mode.**
+
+| | Socket Mode | Event Gateway |
+|---|---|---|
+| The app-level token (`xapp-`) | Probed | **Not probed** — nothing opens a connection, so failing startup over an unused token would be wrong |
+| The queues | — | One read of each queue at startup. A wrong Google identity, a missing permission or a mistyped name all fail the same way otherwise: **`doctor` green, and not one event ever arrives** |
+
+With the gateway, run `gcloud auth application-default login` once on this
+machine. totsuka reads **your own** queues with **your own** Google account;
+no service-account key is handed out.
 
 To try it end to end, have someone mention you. After the agent finishes, a draft arrives as an ephemeral message in the thread and as a self-DM (plus a bot DM if you configured `bot_token`). **Approve** posts it as a thread reply under your name; **reject** discards it.
 
@@ -158,6 +216,11 @@ To try it end to end, have someone mention you. After the agent finishes, a draf
 | Re-adding a reaction does not re-run it | Intended. A message that was handled successfully is not handled again, so removing and re-adding a reaction cannot start a second agent. A message whose fetch **failed** can be retried this way |
 | The draft arrives but the buttons no longer work | They expire after 24 hours, or were evicted once more than 1024 drafts accumulated. Reply by hand from the self-DM copy, or mention again. Drafts survive a restart |
 | A group mention (`@team-name`) does not create a task | Check that the app was reinstalled with a manifest containing `usergroups:read`. **Without that scope the startup lookup of your groups fails, your group set stays empty, and no group mention becomes a task** — personal mentions keep working, so it looks like "only part of it is broken". totsuka logs one warning at startup; look there. Your groups are resolved **once, at startup**, so restart after being added to a group. `@here`, `@channel` and `@everyone` are **out of scope by design**: they name no one |
+| **Gateway**: not a single mention arrives | Check that `gcloud auth application-default login` has been run (the startup check reports it), that Slack accepted the Request URL when you saved it (it verifies the URL on save, so saving fails if the gateway is not running), and that `[slack.gateway]` matches what the deployment produced |
+| **Gateway**: mentions work but no approval button arrives | The **Interactivity & Shortcuts** Request URL is not set. It is a separate setting from Event Subscriptions, and easy to miss because Socket Mode delivered both down one connection |
+| **Gateway**: nothing is filed after coming back | The events are older than `drain_max_age_hours` (24 by default). The queue holds 7 days, so **raising the setting temporarily picks them up** — nothing needs redeploying |
+| **Gateway**: a watched channel reacts slowly | Expected. With the gateway, watching is a poll of the channel history (`watch_poll_interval_secs`, 60s default); mentions, reactions and buttons are not slower. Only things that name you travel through the gateway, and an ordinary post in a watched channel does not |
+| You tried to switch modes by editing the config | It does not work that way. Socket Mode and a Request URL are **mutually exclusive per Slack app**, so switching means recreating the app from the other manifest (reissuing every token). Changing `event_source` alone changes nothing on Slack's side |
 | You changed the app's scopes | A scope change requires reinstalling the app, which **reissues both `xoxp-` and `xoxb-`**. Update both stored values, then run `doctor`. Updating only one leaves the app half-broken |
 | Channel-prefix rules never apply, so every mention falls back to the classifier LLM (or to the picker, if no LLM is configured) | The app cannot read channel names. Reinstall with a manifest containing `channels:read` and `groups:read`, then update the stored tokens as above |
 | No notification DM arrives | Check that `bot_token` is set and valid (`doctor` probes it), look for a warning about resolving the bot DM in the startup log, and check that you have not muted the app's DMs in Slack |
