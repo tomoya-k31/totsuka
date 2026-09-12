@@ -777,6 +777,16 @@ async fn check_scopes<T: SlackTransport>(
 /// Split out from [`check_scopes`] so the *decision* can be tested directly.
 /// Asserting "initialize still succeeded" would pass just as well with the
 /// check deleted, which is no test at all.
+///
+/// **Two classes of warning live here, and only one is conditional.** Most are
+/// keyed to something the config asks for — no reaction trigger, no complaint
+/// about `reactions:read` — because nagging about a feature nobody enabled is
+/// how a warning gets ignored. `usergroups:read` (#658) is the exception:
+/// group mentions have no setting to turn them on, so there is no config field
+/// whose absence could excuse the check, and its failure mode is a
+/// `<!subteam^…>` addressed to the operator quietly never becoming a task.
+/// It therefore fires for any token without the scope, until the app is
+/// reinstalled with the current manifest.
 fn scope_warnings(
     scopes: &[String],
     config: &SlackConfig,
@@ -796,6 +806,23 @@ fn scope_warnings(
                 "so reaction triggers are silently dead. Update the app with the current ",
                 "manifest, Reinstall to Workspace, then store the NEW `xoxp-` and `xoxb-` ",
                 "tokens (a reinstall reissues both).",
+            )
+            .to_string(),
+        );
+    }
+    // Group mentions (#658) are not opt-in the way a reaction trigger is:
+    // nothing in the config turns them on, so there is no setting whose
+    // absence could excuse the check. Without the scope, `usergroups.list`
+    // fails at startup, the operator's group set stays empty, and every
+    // `<!subteam^…>` addressed to them is dropped with nothing to see.
+    if !has("usergroups:read") {
+        warnings.push(
+            concat!(
+                "the user token has no `usergroups:read` scope → the operator's user groups ",
+                "cannot be resolved, so mentions of a group they belong to (`<!subteam^…>`) ",
+                "will NOT become tasks. Personal mentions are unaffected. Update the app with ",
+                "the current manifest, Reinstall to Workspace, then store the NEW `xoxp-` and ",
+                "`xoxb-` tokens (a reinstall reissues both).",
             )
             .to_string(),
         );
@@ -966,7 +993,7 @@ mod tests {
     #[test]
     fn reaction_triggers_without_their_scope_are_reported() {
         let warnings = scope_warnings(
-            &owned(&["chat:write", "im:write", "users:read"]),
+            &owned(&["chat:write", "im:write", "users:read", "usergroups:read"]),
             &config_with(false),
             &triggers(&["totsuka-test"]),
         );
@@ -983,7 +1010,7 @@ mod tests {
     fn a_token_carrying_what_the_config_uses_is_silent() {
         assert!(
             scope_warnings(
-                &owned(&["reactions:read", "channels:read"]),
+                &owned(&["reactions:read", "channels:read", "usergroups:read"]),
                 &config_with(true),
                 &triggers(&["totsuka-test"]),
             )
@@ -992,12 +1019,35 @@ mod tests {
         // …and neither feature configured means neither scope is wanted.
         assert!(
             scope_warnings(
-                &owned(&["chat:write"]),
+                &owned(&["chat:write", "usergroups:read"]),
                 &config_with(false),
                 &ReactionTriggers::default(),
             )
             .is_empty()
         );
+    }
+
+    /// The exception to the rule above (#658): group mentions have no setting,
+    /// so there is nothing to key the check off — and a token without the
+    /// scope drops every `<!subteam^…>` addressed to the operator with nothing
+    /// to see. It fires on a config that asks for nothing else at all.
+    #[test]
+    fn a_token_without_usergroups_read_is_always_reported() {
+        let warnings = scope_warnings(
+            &owned(&["chat:write"]),
+            &config_with(false),
+            &ReactionTriggers::default(),
+        );
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("usergroups:read"), "{}", warnings[0]);
+        // It has to say that the rest still works, or it reads as "totsuka is
+        // broken" and the operator stops to investigate a working setup.
+        assert!(
+            warnings[0].contains("Personal mentions are unaffected"),
+            "{}",
+            warnings[0]
+        );
+        assert!(warnings[0].contains("Reinstall"), "{}", warnings[0]);
     }
 
     /// Either scope resolves a channel name, so a private-only or public-only
@@ -1006,7 +1056,7 @@ mod tests {
     fn channel_groups_accept_either_channel_scope() {
         assert!(
             scope_warnings(
-                &owned(&["groups:read"]),
+                &owned(&["groups:read", "usergroups:read"]),
                 &config_with(true),
                 &ReactionTriggers::default(),
             )
@@ -1014,7 +1064,7 @@ mod tests {
             "private-channel-only is a real setup"
         );
         let warnings = scope_warnings(
-            &owned(&["chat:write"]),
+            &owned(&["chat:write", "usergroups:read"]),
             &config_with(true),
             &ReactionTriggers::default(),
         );

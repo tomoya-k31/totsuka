@@ -430,6 +430,52 @@ impl<T: SlackTransport> SlackApi<T> {
         Ok(thread.into_iter().find(|message| message.ts == ts))
     }
 
+    /// The user-group ids the operator belongs to, via `usergroups.list`
+    /// with `include_users = true` (#658).
+    ///
+    /// Called **once, at startup**. Group membership changes rarely and a
+    /// restart picks it up, so there is no refresh loop — and this plugin's
+    /// premise is a laptop that stops and starts often, which makes "once at
+    /// startup" run rather more than it sounds.
+    ///
+    /// Resolving membership here rather than at the Event Gateway is decision
+    /// 8 of ADR-0072: the edge would need a copy of the operator's groups in
+    /// its own configuration, someone would have to update it by hand on every
+    /// membership change, and a stale copy drops group mentions **silently**.
+    /// This asks Slack every time it starts.
+    ///
+    /// Requires the `usergroups:read` user scope. Without it Slack returns
+    /// `missing_scope`, which surfaces as an error here; the caller degrades
+    /// to personal mentions and warns rather than failing startup.
+    pub async fn usergroups_for_user(&self, user_id: &str) -> Result<Vec<String>, SlackError> {
+        let response = self
+            .call(
+                "usergroups.list",
+                Some(json!({ "include_users": true, "include_disabled": false })),
+                true,
+            )
+            .await?;
+        let groups = response
+            .get("usergroups")
+            .and_then(Value::as_array)
+            .ok_or_else(|| {
+                SlackError::InvalidResponse(
+                    "`usergroups.list` response has no `usergroups` array".into(),
+                )
+            })?;
+        Ok(groups
+            .iter()
+            .filter(|group| {
+                group
+                    .get("users")
+                    .and_then(Value::as_array)
+                    .is_some_and(|users| users.iter().any(|u| u.as_str() == Some(user_id)))
+            })
+            .filter_map(|group| group.get("id").and_then(Value::as_str))
+            .map(str::to_string)
+            .collect())
+    }
+
     /// `conversations.open` with the operator's own user id — the self-DM
     /// channel where drafts are recorded. Idempotent by Slack semantics
     /// (opening an already-open IM returns the same channel).
