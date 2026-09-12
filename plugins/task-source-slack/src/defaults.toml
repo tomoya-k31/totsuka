@@ -5,9 +5,12 @@
 #
 # These are DEFAULTS, not the live values: editing this file changes what a
 # freshly built totsuka ships with, not what an existing installation uses.
-# Override per installation under `[prompts]` in `plugins/slack.toml` — the key
-# names here ARE the config keys (unlike the orca plugin, whose defaults are
-# keyed differently from its flat config).
+# Override per installation under `[slack.prompts]` in
+# `~/.config/totsuka/config.toml` — **per key**: what you do not name keeps the
+# embedded value. The key names here ARE the config keys (unlike the orca
+# plugin, whose defaults are keyed differently from its flat config). The
+# per-plugin `plugins/slack.toml` this comment used to name no longer exists;
+# plugin settings moved into config.toml's `[<plugin>]` tables.
 #
 # `{placeholder}` substitution is single-pass, so a value containing `{token}`
 # text is inserted, never re-expanded. That matters here more than anywhere
@@ -83,8 +86,8 @@ Write both the issue and the report in the same language as the thread. \
 Output the report only, with no preamble, no postscript and no commentary.\
 """
 
-# Appended to `reply_instructions` only when `reply_style` is set in
-# `plugins/slack.toml`. `reply_style` itself stays a plain user string — it is
+# Appended to `reply_instructions` only when `reply_style` is set in the
+# `[slack]` table of `~/.config/totsuka/config.toml`. `reply_style` itself stays a plain user string — it is
 # content, not a template.
 #
 # Placeholders: {style}

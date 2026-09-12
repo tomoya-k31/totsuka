@@ -9,11 +9,12 @@
 # notification nudge when a draft/picker arrives (#305), because ephemerals
 # and your own self-DM posts generate no Slack notification. It never posts
 # a reply.
-# After installing, copy three tokens into the Keychain referenced by
-# plugins/slack.toml:
+# After installing, put three tokens in your secret store and reference them
+# from the `[slack]` table of `~/.config/totsuka/config.toml` (per-plugin
+# `plugins/*.toml` files are gone — plugin settings live in config.toml now):
 #   - User OAuth Token (`xoxp-…`)      — OAuth & Permissions page
 #   - Bot User OAuth Token (`xoxb-…`)  — same page (optional: omit
-#     `bot_token` from plugins/slack.toml to run without nudges)
+#     `bot_token` from `[slack]` to run without nudges)
 #   - App-Level Token  (`xapp-…`)      — Basic Information > App-Level Tokens;
 #     create one with scope `connections:write` (Socket Mode)
 #
