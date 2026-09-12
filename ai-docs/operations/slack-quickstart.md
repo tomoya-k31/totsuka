@@ -4,7 +4,7 @@ title: Slack セットアップ Quickstart（task-source-slack）
 description: 受信方式（Socket Mode / Event Gateway）の選択から始まり、manifest からの Slack アプリ作成 → トークン発行 → トークン保管 → totsuka setup → doctor → run --watch までの導入手順と、手で書く場合のフォールバック、トークン失効・スコープ変更時の対処。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-slack
 tags: [slack, setup, runbook, secrets, doctor]
-generated: { by: claude-code/opus-5, at: 2026-09-14T01:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-14T02:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -39,9 +39,17 @@ owner: tomoya-k31
   イベント未満）はこの構成を守らない —— 購読しているのは参加している全チャンネルの全メッセージで、
   平日日中は容易に超える
 
-設計の背景は [ADR-0072](/decisions/adr-0072-slack-event-gateway.md)。**Gateway を選ぶ場合、
-GCP 側の構築は [Event Gateway 構築手順](/operations/event-gateway-setup.md) にある**ので、
-先にそちらを通してから手順 1 に戻ること（Request URL が要る）。
+設計の背景は [ADR-0072](/decisions/adr-0072-slack-event-gateway.md)。
+
+**Gateway を選ぶ場合、GCP 側の構築は [Event Gateway 構築手順](/operations/event-gateway-setup.md) にある。**
+順番がややこしいので先に書いておく —— Request URL に入れるホスト名は `tofu apply` の結果で、
+`tofu apply` に入れる signing secret は Slack アプリの結果である。一周しないように、こう割る:
+
+1. **下の手順 1 の 1〜3 だけを先にやる**（アプリを作り、トークンと signing secret を控える）。
+   `manifest.gateway.yml` の `<gateway-host>` は**プレースホルダのままでよい**
+2. [Event Gateway 構築手順](/operations/event-gateway-setup.md) を通す
+3. 出てきた Request URL を**アプリに戻って 2 箇所に入れる**
+4. このページの手順 2 以降に戻る
 
 # 1. Slack アプリを作成（manifest 貼り付け）
 

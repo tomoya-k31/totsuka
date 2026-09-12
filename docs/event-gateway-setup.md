@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](event-gateway-setup.ja.md)
 
-<!-- generated-from: ai-docs/operations/event-gateway-setup.md sha256:4fb7f61a4dc37cff5034b02b264bd85e2dc356b798a408fba534ee301c3dbfa9 -->
+<!-- generated-from: ai-docs/operations/event-gateway-setup.md sha256:4586c1b14ebe4b6d765706b86808d9ed41a7b926859384fa01d3d787091494c3 -->
 
 # Event Gateway setup
 
@@ -52,13 +52,29 @@ gcloud auth login
 gcloud config set project <PROJECT_ID>
 ```
 
-## 2. Three values per person
+## 2. Four values per person
+
+**Create the Slack app first.** The ordering is awkward because the hostname
+that goes into the Request URL is a result of `tofu apply`, and the signing
+secret that goes into `tofu apply` is a result of the Slack app. Split it like
+this so it does not go in a circle:
+
+1. **Create the app only** (steps 1–3 of [Slack setup](slack-setup.md)). Leave
+   the `<gateway-host>` placeholder in `manifest.gateway.yml` alone — Slack
+   verifies a Request URL when you *save* it, and creating from a manifest does
+   not verify it yet.
+2. The signing secret exists from that moment, so the four values below are
+   available.
+3. `tofu apply` (step 3) produces the hostname.
+4. **Go back to the app and fill in the Request URL in both places** (step 4).
+   That is when verification actually runs.
 
 | Value | Where it comes from |
 |---|---|
 | Slack user id (`U…`) | Slack profile → **⋯** → Copy member ID |
 | Signing secret | Slack app → Basic Information → App Credentials → Signing Secret |
 | Path token | **Generate it. Do not invent one** — `openssl rand -hex 24` |
+| Google principal | The identity allowed to read that person's queues — the account they will run `gcloud auth application-default login` as in step 5, written as `user:alice@example.com` |
 
 **The path token is a credential.** There is no IAM and no IP allowlist in front
 of the public endpoint, so the only things standing in the way are the
@@ -201,5 +217,4 @@ any organization policy.
 
 ---
 
-The design decisions behind this are recorded in
-`ai-docs/decisions/adr-0072-slack-event-gateway.md`.
+This page is generated from `ai-docs/operations/event-gateway-setup.md`.

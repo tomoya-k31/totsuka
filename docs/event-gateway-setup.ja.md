@@ -1,7 +1,7 @@
 > 🌐 [English](event-gateway-setup.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/event-gateway-setup.md sha256:4fb7f61a4dc37cff5034b02b264bd85e2dc356b798a408fba534ee301c3dbfa9 -->
+<!-- generated-from: ai-docs/operations/event-gateway-setup.md sha256:4586c1b14ebe4b6d765706b86808d9ed41a7b926859384fa01d3d787091494c3 -->
 
 # Event Gateway 構築手順
 
@@ -45,13 +45,25 @@ gcloud auth login
 gcloud config set project <PROJECT_ID>
 ```
 
-## 2. 利用者ごとに 3 つの値
+## 2. 利用者ごとに 4 つの値
+
+**先に Slack アプリを作る。** 順番がややこしいのは、Request URL に入れるホスト名が
+`tofu apply` の結果であり、`tofu apply` に入れる signing secret が Slack アプリの結果だからである。
+一周しないように、こう割る:
+
+1. **アプリだけ作る**（[Slack セットアップ](slack-setup.ja.md) の手順 1 の 1〜3）。
+   `manifest.gateway.yml` の `<gateway-host>` は**プレースホルダのままでよい** —— Slack が
+   Request URL を検証するのは**保存時**で、manifest から作る時点ではまだ検証されない
+2. その時点で signing secret は発行済みなので、下の 4 つが揃う
+3. `tofu apply`（手順 3）でホスト名が出る
+4. **アプリに戻って Request URL を 2 箇所に入れる**（手順 4）。ここで初めて検証が走る
 
 | 値 | 出どころ |
 |---|---|
 | Slack user id（`U…`） | Slack のプロフィール → **⋯** → メンバー ID をコピー |
 | signing secret | Slack アプリ → Basic Information → App Credentials → Signing Secret |
 | パストークン | **生成する。考えない** —— `openssl rand -hex 24` |
+| Google プリンシパル | その人のキューを読める identity —— 手順 5 で `gcloud auth application-default login` を実行するアカウントを、`user:alice@example.com` の形で書く |
 
 **パストークンは資格情報である。** 公開エンドポイントの手前には IAM も IP 許可リストも無く、
 立ちはだかるのは推測不能なパス・署名・5 分のタイムスタンプ窓だけである。選んだ単語ではなく
@@ -182,4 +194,4 @@ Pub/Sub にペリメータを張るのが方法だが、意図して足すこと
 
 ---
 
-この背景にある設計判断は `ai-docs/decisions/adr-0072-slack-event-gateway.md` に記録されている。
+このページは `ai-docs/operations/event-gateway-setup.md` から生成されている。

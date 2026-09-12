@@ -4,7 +4,7 @@ title: Event Gateway 構築手順（event_source = "gateway"）
 description: GCP 側の構築手順。着手前の組織ポリシー確認、OpenTofu による Cloud Run / Pub/Sub / Secret Manager / IAM の一括構築、Slack の Request URL 2 箇所の設定、totsuka 側の config、人を増やす手順、破棄、費用の前提。Socket Mode を使う読者はこのページを読む必要がない。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/slack-event-gateway/tofu
 tags: [slack, gateway, gcp, cloud-run, pubsub, secret-manager, opentofu, runbook, cost]
-generated: { by: claude-code/opus-5, at: 2026-09-14T01:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-14T02:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -57,13 +57,25 @@ gcloud config set project <PROJECT_ID>
 
 # 2. 利用者ごとの値を用意する
 
-利用者 1 人につき 3 つ。
+**ここで Slack アプリを先に作る。** 順番がややこしいのは、Request URL に入れるホスト名が
+`tofu apply` の結果であり、`tofu apply` に入れる signing secret が Slack アプリの結果だからである。
+一周しないように、こう割る:
+
+1. **アプリだけ作る**（[Quickstart の手順 1](/operations/slack-quickstart.md) の 1〜3）。
+   `manifest.gateway.yml` の `<gateway-host>` は**プレースホルダのままでよい** —— Slack は保存時に
+   Request URL を検証するが、manifest から作る時点ではまだ検証されない
+2. その時点で signing secret は発行済みなので、下の 4 つを揃える
+3. `tofu apply`（手順 3）でホスト名が出る
+4. **アプリに戻って Request URL を 2 箇所に入れる**（手順 4）。ここで初めて検証が走る
+
+利用者 1 人につき 4 つ。
 
 | 値 | 出どころ |
 |---|---|
 | Slack user id（`U…`） | Slack のプロフィール → … → メンバー ID をコピー |
 | signing secret | Slack アプリ → Basic Information → App Credentials → Signing Secret |
 | パストークン | **生成する。考えない** —— `openssl rand -hex 24` |
+| Google プリンシパル | その人のキューを引ける identity。手順 5 で `gcloud auth application-default login` をするアカウントで、`user:alice@example.com` の形で書く |
 
 **パストークンは資格情報である。** 公開エンドポイントの手前には IAM も IP 許可リストも無いので、
 「推測不能なパス・署名・5 分のタイムスタンプ窓」の 3 つだけが関門になる（ADR-0072 決定 11）。

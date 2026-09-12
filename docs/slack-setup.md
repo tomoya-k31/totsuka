@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](slack-setup.ja.md)
 
-<!-- generated-from: ai-docs/operations/slack-quickstart.md sha256:70fe4a239f0798abdc5be3297f3c02dce3fc73e5baf0452c42dffcf9b68c8d63 -->
+<!-- generated-from: ai-docs/operations/slack-quickstart.md sha256:1d984312a60b22cbd824d6805822973604e13db43f0650454201d69c9d9daf33 -->
 
 # Setting up the Slack source
 
@@ -36,9 +36,17 @@ It comes down to **whether that machine stops**.
   is every message in every channel you are in, which passes that easily on a
   weekday.
 
-If you choose the gateway, **build the GCP side first** — see
-[Event Gateway setup](event-gateway-setup.md) — because step 1 needs the
-Request URL it produces.
+If you choose the gateway, the ordering is awkward, so here it is up front: the
+hostname that goes into the Request URL is a result of building the GCP side,
+and the signing secret that goes into building it is a result of the Slack app.
+Split it like this:
+
+1. **Do only steps 1–3 below first** — create the app, copy the tokens and the
+   signing secret. Leave the `<gateway-host>` placeholder in
+   `manifest.gateway.yml` alone.
+2. Work through [Event Gateway setup](event-gateway-setup.md).
+3. **Go back to the app** and put the Request URL it produced into both places.
+4. Return to step 2 on this page.
 
 ## 1. Create the Slack app from the manifest
 

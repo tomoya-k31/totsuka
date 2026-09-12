@@ -1,7 +1,7 @@
 > 🌐 [English](slack-setup.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/slack-quickstart.md sha256:70fe4a239f0798abdc5be3297f3c02dce3fc73e5baf0452c42dffcf9b68c8d63 -->
+<!-- generated-from: ai-docs/operations/slack-quickstart.md sha256:1d984312a60b22cbd824d6805822973604e13db43f0650454201d69c9d9daf33 -->
 
 # Slack ソースのセットアップ
 
@@ -33,8 +33,14 @@
   ではなく**購読そのものを止められること**である。低流量アプリの免除（1 時間 1,000 イベント未満）は
   この構成を守らない —— 購読しているのは参加している全チャンネルの全メッセージで、平日なら容易に超える
 
-Gateway を選ぶなら、**先に GCP 側を作ること**（[Event Gateway 構築手順](event-gateway-setup.ja.md)）——
-手順 1 でその Request URL が要る。
+Gateway を選ぶなら順番がややこしいので、先に書いておく —— Request URL に入れるホスト名は
+GCP 側を作った結果で、それを作るのに要る signing secret は Slack アプリの結果である。こう割る:
+
+1. **下の手順 1 の 1〜3 だけを先にやる** —— アプリを作り、トークンと signing secret を控える。
+   `manifest.gateway.yml` の `<gateway-host>` はプレースホルダのままでよい
+2. [Event Gateway 構築手順](event-gateway-setup.ja.md) を通す
+3. **アプリに戻って**、出てきた Request URL を 2 箇所に入れる
+4. このページの手順 2 に戻る
 
 ## 1. manifest から Slack アプリを作る
 
