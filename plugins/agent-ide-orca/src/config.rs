@@ -9,6 +9,7 @@
 //! different key names — `defaults.toml` groups prompts under `[prompts]`,
 //! while `[orca]` in config.toml is a flat table of [`OrcaConfig`] fields.
 
+use plugin_protocol::identifier::{Case, IdentifierPolicy};
 use std::sync::LazyLock;
 
 use serde::Deserialize;
@@ -109,27 +110,42 @@ fn default_poll_interval() -> u64 {
     2000
 }
 
-/// Turn an arbitrary task id into an orca-safe worktree name (alphanumerics,
-/// `-` and `_`; other runs collapse to a single `-`).
-pub fn worktree_name(task_id: &str) -> String {
-    let mut name = String::new();
-    let mut last_dash = false;
-    for ch in task_id.chars() {
-        if ch.is_ascii_alphanumeric() || ch == '_' {
-            name.push(ch);
-            last_dash = false;
-        } else if !last_dash {
-            name.push('-');
-            last_dash = true;
-        }
+/// orca's constraints on a `worktree create --name`
+/// ([ADR-0071](../../../ai-docs/decisions/adr-0071-task-identifier-naming.md)).
+///
+/// **Every value here is a guess that orca has never contradicted.** Unlike
+/// herdr — whose 32-character rule is at least reported by `invalid_agent_name`
+/// — orca documents no alphabet, no length and no uniqueness rule for `--name`,
+/// and this plugin has no error path for a name it rejects (a refusal would
+/// surface as a generic `CliFailed`). So the constraints are kept
+/// deliberately narrow: alphanumerics plus `-`/`_`, which no tool in this
+/// family has objected to.
+///
+/// `max_len` is `None` because nothing suggests a limit; if one turns up, it
+/// is one line here rather than a rewrite. [`Case::Preserve`] keeps the
+/// pre-0.7.1 behaviour for the fallback name, where the id's own case is the
+/// only thing making it legible.
+///
+/// The name is **write-only**: orca returns a worktree id from `create`, and
+/// every later call addresses `id:<session_id>`. Nothing reads it back.
+pub struct WorktreeName;
+
+impl IdentifierPolicy for WorktreeName {
+    fn prefix(&self) -> &str {
+        "totsuka-"
     }
-    let trimmed = name.trim_matches('-').to_string();
-    let base = if trimmed.is_empty() {
-        "task".to_string()
-    } else {
-        trimmed
-    };
-    format!("totsuka-{base}")
+
+    fn max_len(&self) -> Option<usize> {
+        None
+    }
+
+    fn case(&self) -> Case {
+        Case::Preserve
+    }
+
+    fn extra_allowed(&self) -> &[char] {
+        &['-', '_']
+    }
 }
 
 #[cfg(test)]
@@ -198,10 +214,16 @@ mod tests {
         assert_eq!(cfg.compose_prompt("do it", true), "PLAN: do it");
     }
 
+    /// What stays this plugin's own after the procedure moved to
+    /// [`plugin_protocol::identifier`]: the constraints it declares. There is
+    /// no published orca rule to check them against (see [`WorktreeName`]), so
+    /// what is pinned is the narrowness itself — widening this is a decision,
+    /// not a detail.
     #[test]
-    fn worktree_name_is_sanitized() {
-        assert_eq!(worktree_name("T-123"), "totsuka-T-123");
-        assert_eq!(worktree_name("owner/repo#45"), "totsuka-owner-repo-45");
-        assert_eq!(worktree_name("!!!"), "totsuka-task");
+    fn the_declared_policy_stays_narrow() {
+        assert_eq!(WorktreeName.prefix(), "totsuka-");
+        assert_eq!(WorktreeName.max_len(), None);
+        assert_eq!(WorktreeName.case(), Case::Preserve);
+        assert_eq!(WorktreeName.extra_allowed(), &['-', '_']);
     }
 }

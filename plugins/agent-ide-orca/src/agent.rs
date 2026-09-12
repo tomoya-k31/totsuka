@@ -11,7 +11,9 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 
 use crate::cli::OrcaCli;
-use crate::config::{OrcaConfig, worktree_name};
+use plugin_protocol::identifier::{IdentifierCore, IdentifierPolicy};
+
+use crate::config::{OrcaConfig, WorktreeName};
 use crate::error::OrcaError;
 use crate::state::{extract_question, map_orca_state};
 
@@ -37,7 +39,7 @@ impl<C: OrcaCli> OrcaAgent<C> {
     ) -> Result<TaskDispatchResult, OrcaError> {
         let plan = params.mode == ExecutionMode::Plan;
         let repo = self.config.repo_selector_for(&params.worktree_path);
-        let name = worktree_name(&params.task.id);
+        let name = WorktreeName.identifier(&IdentifierCore::from_dispatch(&params));
         let prompt = self.config.compose_prompt(&compose_prompt(&params), plan);
 
         let args = vec![

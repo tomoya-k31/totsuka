@@ -47,7 +47,7 @@ pub enum ValidationError {
 
     /// A worktree location template uses an unknown `{placeholder}` (F-22).
     #[error(
-        "{referrer} uses unknown placeholder `{{{placeholder}}}` → allowed: {{repo}}, {{repo_name}}, {{worktree_name}}, {{task_id}}, {{source}}"
+        "{referrer} uses unknown placeholder `{{{placeholder}}}` → allowed: {{repo}}, {{repo_name}}, {{worktree_name}}, {{task_id}}, {{source}}, {{task_number}}, {{hash}}"
     )]
     UnknownWorktreePlaceholder {
         referrer: String,
@@ -280,8 +280,22 @@ pub enum ValidationError {
 }
 
 /// Placeholders permitted in worktree location templates (F-22 addendum).
-const ALLOWED_WORKTREE_PLACEHOLDERS: &[&str] =
-    &["repo", "repo_name", "worktree_name", "task_id", "source"];
+///
+/// **This list and [`render_location`](crate::worktree::render_location) have
+/// to move together.** They are the two halves of one contract — what an
+/// operator may write, and what gets substituted — and only this half is
+/// reachable from `totsuka config validate`, so a placeholder added to the
+/// renderer alone is rejected before the renderer ever sees it.
+const ALLOWED_WORKTREE_PLACEHOLDERS: &[&str] = &[
+    "repo",
+    "repo_name",
+    "worktree_name",
+    "task_id",
+    "source",
+    // 0.7.1 (#645): the two halves of the leaf name.
+    "task_number",
+    "hash",
+];
 
 /// Run all static checks, returning every problem found (empty = valid).
 pub fn validate_static<E>(cfg: &RootConfig, env: &E) -> Vec<ValidationError>
@@ -1472,6 +1486,34 @@ worktree_location = "{{repo}}/../.worktrees/{{bogus}}"
             e,
             ValidationError::UnknownWorktreePlaceholder { referrer, .. } if referrer == "[worktree].location"
         )));
+    }
+
+    /// The two halves of the leaf are placeholders an operator may write
+    /// (0.7.1, #645). The renderer substitutes them; **this validator decides
+    /// whether the config is even accepted**, so a placeholder added to one
+    /// half only is rejected before the other half runs.
+    #[test]
+    fn worktree_templates_accept_the_leafs_own_placeholders() {
+        let dir = env!("CARGO_MANIFEST_DIR");
+        let toml = format!(
+            r#"
+[worktree]
+location = "/wt/{{task_number}}_{{hash}}/{{repo_name}}"
+
+[[repositories]]
+name = "totsuka"
+path = "{dir}"
+worktree_location = "{{repo}}/../.worktrees/{{task_number}}-{{hash}}"
+"#
+        );
+        let cfg = RootConfig::from_toml_str(&toml).unwrap();
+        let errors = validate_static(&cfg, &env_from(&[]));
+        assert!(
+            !errors
+                .iter()
+                .any(|e| matches!(e, ValidationError::UnknownWorktreePlaceholder { .. })),
+            "the leaf's own placeholders must validate: {errors:?}"
+        );
     }
 
     /// `{branch}` was a valid placeholder until the branch stopped being known

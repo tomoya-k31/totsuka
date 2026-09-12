@@ -42,9 +42,6 @@ pub struct EngineSettings {
     pub repos: Vec<RepoSettings>,
     /// Concurrency limits (F-40–F-42).
     pub limits: Limits,
-    /// Worktree directory-name template, filling `{worktree_name}` in
-    /// `location_template` (F-22 addendum).
-    pub worktree_name_template: String,
     /// Global worktree location template (F-22).
     pub location_template: String,
     /// Cleanup policy for implement-mode worktrees (F-23).
@@ -186,7 +183,6 @@ pub fn settings_from_config(
         workflows: Workflow::from_configs(&cfg.workflows, &cfg.projects),
         repos,
         limits,
-        worktree_name_template: DEFAULT_WORKTREE_NAME_TEMPLATE.to_string(),
         location_template: cfg
             .worktree
             .location
@@ -368,10 +364,6 @@ plan_cleanup = { retention_days = 2 }
         assert_eq!(
             settings.location_template,
             "/xdg/state/totsuka/worktrees/{repo_name}/{worktree_name}"
-        );
-        assert_eq!(
-            settings.worktree_name_template,
-            DEFAULT_WORKTREE_NAME_TEMPLATE
         );
         assert_eq!(settings.worktree_sweep_interval, WORKTREE_SWEEP_INTERVAL);
         // Promoting this from a const to a settings field must not change what

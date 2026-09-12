@@ -4,7 +4,7 @@ title: 設定リファレンス（config.toml）
 description: "config.toml の全キー・デフォルト値・意味の一覧。設定ファイルは 1 本で、プラグイン個別設定もトップレベルの [<name>] テーブルに入る。シークレット参照、設定スキーマのバージョニング方針、[[projects]] の domain 宣言とワークフローからの参照、プラグインが定義する追加プロパティ、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-github の [github]、task-source-notion の [notion]、task-source-slack の [slack]、agent-ide-herdr の [herdr] を含む。"
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
 tags: [config, reference, toml, secrets, workflow, worktree, github, notion, slack, hooks, versioning]
-generated: { by: claude-code/opus-5, at: 2026-09-10T18:10:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-13T00:20:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -702,7 +702,7 @@ OpenAI 互換 `/chat/completions` を前提。repo_hint を持たないタスク
 
 | キー | 型 | 既定 | 意味 |
 |---|---|---|---|
-| `location` | string? | `<state dir>/worktrees/{repo_name}/{worktree_name}` | 配置テンプレート。`{repo}`/`{repo_name}`/`{worktree_name}`/`{task_id}`/`{source}`/`${ENV}`/`~` を展開。`{worktree_name}` は `{source}-{task_id}` を git ref 規則で正規化して `/` を潰したもの。**`{branch}` は廃止** — ブランチは worktree ができた後にエージェントが決めるので、作成時点のディレクトリ名には使えない。残っていると設定エラーで起動しない |
+| `location` | string? | `<state dir>/worktrees/{repo_name}/{worktree_name}` | 配置テンプレート。`{repo}`/`{repo_name}`/`{worktree_name}`/`{task_id}`/`{source}`/`{task_number}`/`{hash}`/`${ENV}`/`~` を展開。**`{worktree_name}` は `<task 番号>-<hash8>`**（`{task_number}` と `{hash}` を `-` で繋いだもの。0.7.3 までは `{source}-{task_id}` を git ref 規則で正規化したものだった → [ADR-0071](/decisions/adr-0071-task-identifier-naming.md)）。`{task_number}` は `totsuka status` / `totsuka task retry <n>` が使う番号、`{hash}` は `sha256(source ∥ ソース側 id)` の先頭 8 桁で、2 つを別々に置いてあるのは区切りを変えたり片方を落としたりできるようにするため。**`{task_id}` は従来どおりソース側の id**（Slack なら `{channel}:{ts}`）で意味は変わらない。**`{branch}` は廃止** — ブランチは worktree ができた後にエージェントが決めるので、作成時点のディレクトリ名には使えない。残っていると設定エラーで起動しない |
 | `cleanup` | policy? | `manual` | implement モードの掃除ポリシー（F-23） |
 | `plan_cleanup` | policy? | `immediate` | plan モードの掃除ポリシー（F-85） |
 

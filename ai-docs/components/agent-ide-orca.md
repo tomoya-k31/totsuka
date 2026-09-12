@@ -4,7 +4,7 @@ title: agent-ide-orca プラグイン
 description: orca を Agent IDE として接続する公式 agent_ide プラグイン。プロトコル面は herdr プラグインと同一で、orca 固有の起動・状態取得を orca CLI（--json）ラップとして隠蔽する。pane_control は非宣言（capability を正直に宣言）。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/agent-ide-orca
 tags: [rust, crate, plugin, agent-ide, orca, cli, worktree]
-generated: { by: claude-code/opus-5, at: 2026-08-20T00:00:00Z }
+generated: { by: claude-code/opus-5, at: 2026-09-13T00:20:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -19,7 +19,7 @@ orca は公開 REST/ソケット API を持たず、**`orca` CLI（`--json`）�
 
 | モジュール | 内容 |
 |---|---|
-| `config` | `[orca]`（= `InitializeParams.config`）を型付け。`orca_bin` / `agent`（既定 claude）/ `setup`（run\|skip\|inherit）/ `repo_selector`（未設定時は dispatch の worktree_path を `path:` セレクタ化）/ `plan_prompt_prefix`（plan モードでプロンプト前置, F-36）/ `poll_interval_ms`。`worktree_name` で task id を orca 安全名に正規化。`deny_unknown_fields`。**#317: プロンプト文の組み込みデフォルトは Rust の文字列リテラルではなく `plugins/agent-ide-orca/src/defaults.toml`（`include_str!` で埋め込み、`LazyLock` で初回参照時に parse）に置く** — 文言調整をコード変更ではなくデータファイルの編集にするため（エピック [#311](https://github.com/tomoya-k31/totsuka/issues/311)）。上書き口は従来どおり `[orca]` の `plan_prompt_prefix` で、キーもシグネチャも `compose_prompt` の挙動も不変。orca は claude の `--permission-mode plan` や codex の `--sandbox read-only` に相当する構造的な plan API を持たないため、**この前置きテキストが plan 意図の唯一の強制手段**である点に注意（末尾の空行は後続のタスクプロンプトとの区切りとして意味を持つ） |
+| `config` | `[orca]`（= `InitializeParams.config`）を型付け。`orca_bin` / `agent`（既定 claude）/ `setup`（run\|skip\|inherit）/ `repo_selector`（未設定時は dispatch の worktree_path を `path:` セレクタ化）/ `plan_prompt_prefix`（plan モードでプロンプト前置, F-36）/ `poll_interval_ms`。`WorktreeName`（`IdentifierPolicy`）が `worktree create --name` の制約を宣言する（`totsuka-` 前置・長さ上限なし・大小保持・`[-_]`）。**#645 ([ADR-0071](/decisions/adr-0071-task-identifier-naming.md)) で生成手順は `plugin-protocol` の `identifier` へ移り**、名前は `totsuka-<task 番号>-<hash8>` になった。**orca は `--name` の文字種・長さ・重複時の挙動を一切公開していない**（herdr の `invalid_agent_name` に当たる報告経路も無く、拒否されれば汎用の `CliFailed` になる）ので、宣言は意図的に狭く取ってある。名前は書き捨てで、`create` 以降は `id:<worktree_id>` で参照する。`deny_unknown_fields`。**#317: プロンプト文の組み込みデフォルトは Rust の文字列リテラルではなく `plugins/agent-ide-orca/src/defaults.toml`（`include_str!` で埋め込み、`LazyLock` で初回参照時に parse）に置く** — 文言調整をコード変更ではなくデータファイルの編集にするため（エピック [#311](https://github.com/tomoya-k31/totsuka/issues/311)）。上書き口は従来どおり `[orca]` の `plan_prompt_prefix` で、キーもシグネチャも `compose_prompt` の挙動も不変。orca は claude の `--permission-mode plan` や codex の `--sandbox read-only` に相当する構造的な plan API を持たないため、**この前置きテキストが plan 意図の唯一の強制手段**である点に注意（末尾の空行は後続のタスクプロンプトとの区切りとして意味を持つ） |
 | `state` | orca の粗い3値状態（OSC state dots 由来）→ totsuka 正規化状態の写像（`working→running`・`waiting→waiting_input`・`done`/`idle`(tui-idle)→`done`・異常終了/timeout→`failed`・不明は前値維持, F-32）、`blocked` 時の terminal 出力からの質問 best-effort 抽出（F-35） |
 | `cli` | `OrcaCli` trait（`run(args)→JSON`）＋ `ProcessCli`（`orca` サブプロセスを spawn し `--json` を parse）。ロジックを fake orca でテストするための seam |
 | `agent` | `OrcaAgent<C: OrcaCli>`。`dispatch`（`worktree create --agent … --prompt … --json`→worktree id を session_id に, F-31/F-37）/ `attach`（`worktree show` で生存確認・消失は `attached:false`, 弱い吸収）/ `cancel`（`worktree rm --force`, 冪等）/ `start_state_stream`（`worktree ps` を poll し state dot を写像、`terminal wait --for tui-idle` で pacing, F-38） |
@@ -43,7 +43,7 @@ orca CLI で確実に対応できる `state_stream` のみを宣言し、**`pane
 
 # テスト
 
-- 状態写像（3値＋異常→failed・大小無視・不明は前値維持）・worktree 名正規化・repo セレクタ・plan プロンプト前置・質問抽出は単体テスト。
+- 状態写像（3値＋異常→failed・大小無視・不明は前値維持）・repo セレクタ・plan プロンプト前置・質問抽出は単体テスト。worktree 名は **宣言した制約が狭いままであること**だけを固定する（生成手順の性質検査は `plugin-protocol` 側に 1 本ある → [ADR-0071](/decisions/adr-0071-task-identifier-naming.md) D-5）。
 - **fake orca CLI**（サブコマンド別レスポンス）に対して initialize→dispatch→state/subscribe→状態ストリーム（`running`→`waiting_input`（質問付き）→`done`、異常 state→`failed`）を結合テスト（`tests/integration.rs`）。session/attach 成功・worktree 消失（`attached:false`）、cancel の冪等、capability 宣言（`pane_control` 非宣言）、`config/validate`（`orca status` 疎通）を検証。
 - 実バイナリを stdio で fake `orca` スクリプトに接続して疎通確認済み。
 - **実機との手動疎通チェックリストは issue #61 のコメントに整理**（状態が OSC state dots 由来である前提での遅延・取りこぼし・「承認待ち idle」誤検知の観点を含む）。

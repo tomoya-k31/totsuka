@@ -28,7 +28,7 @@ use orchestrator_core::domain::workflow::Workflow;
 use orchestrator_core::repo_select::SelectConfig;
 use orchestrator_core::run::{Engine, EngineSettings, PluginSet, RepoSettings};
 use orchestrator_core::scheduler::Limits;
-use orchestrator_core::worktree::{CleanupPolicy, DEFAULT_WORKTREE_NAME_TEMPLATE};
+use orchestrator_core::worktree::CleanupPolicy;
 use plugin_protocol::manifest::Manifest;
 use serde_json::json;
 use std::sync::Arc;
@@ -105,7 +105,6 @@ fn engine_settings(repo_path: &Path) -> EngineSettings {
             tool: None,
         }],
         limits: Limits::global(2),
-        worktree_name_template: DEFAULT_WORKTREE_NAME_TEMPLATE.to_string(),
         location_template: "{repo}/../wt/{worktree_name}".to_string(),
         cleanup_implement: CleanupPolicy::Immediate,
         cleanup_plan: CleanupPolicy::Immediate,

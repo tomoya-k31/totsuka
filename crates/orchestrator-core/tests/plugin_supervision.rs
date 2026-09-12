@@ -24,7 +24,7 @@ use orchestrator_core::run::{
     Engine, EngineSettings, PluginSet, RepoSettings, RestartPolicy, RunSummary,
 };
 use orchestrator_core::scheduler::Limits;
-use orchestrator_core::worktree::{CleanupPolicy, DEFAULT_WORKTREE_NAME_TEMPLATE};
+use orchestrator_core::worktree::CleanupPolicy;
 use plugin_protocol::manifest::Manifest;
 use serde_json::json;
 
@@ -125,7 +125,6 @@ fn settings_with_backoff(max_attempts: u32, first_backoff: Duration) -> EngineSe
             tool: None,
         }],
         limits: Limits::global(2),
-        worktree_name_template: DEFAULT_WORKTREE_NAME_TEMPLATE.to_string(),
         location_template: "{repo}/../wt/{worktree_name}".to_string(),
         cleanup_implement: CleanupPolicy::Immediate,
         cleanup_plan: CleanupPolicy::Immediate,
