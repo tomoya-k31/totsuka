@@ -11,6 +11,16 @@ Note: the plugin protocol is versioned independently of the application (see
 `crates/plugin-protocol`); a totsuka release does not imply a protocol-version
 change.
 
+## [0.7.4](https://github.com/tomoya-k31/totsuka/compare/v0.7.3...v0.7.4) (2026-09-12)
+
+
+### Features
+
+* **core:** orca と worktree の名前を同じ識別子に揃える ([#649](https://github.com/tomoya-k31/totsuka/issues/649)) ([4db9aee](https://github.com/tomoya-k31/totsuka/commit/4db9aee1fa052b122cb99930d5998c7237bf7bd6)), closes [#645](https://github.com/tomoya-k31/totsuka/issues/645)
+* **orchestrator-core:** LLM ゲートウェイの生存確認 — 起動時・復帰時・沈黙時のプローブと llm_unreachable 縮退 ([#644](https://github.com/tomoya-k31/totsuka/issues/644)) ([5f28642](https://github.com/tomoya-k31/totsuka/commit/5f286426f5660b934b6d41fc1ce4349ace3b86fb))
+* **protocol:** task_number と IdentifierPolicy で識別子の命名を一本化する ([#648](https://github.com/tomoya-k31/totsuka/issues/648)) ([e81f59b](https://github.com/tomoya-k31/totsuka/commit/e81f59bcf3fc2d6c1dce3204d00bba4c94596252)), closes [#645](https://github.com/tomoya-k31/totsuka/issues/645)
+* **protocol:** Task.handle — ソースが名付ける読める名前を識別子に足す ([#651](https://github.com/tomoya-k31/totsuka/issues/651)) ([2e35cb5](https://github.com/tomoya-k31/totsuka/commit/2e35cb50d0a72341403fbe82e329903582450ad1)), closes [#646](https://github.com/tomoya-k31/totsuka/issues/646)
+
 ## [0.7.3](https://github.com/tomoya-k31/totsuka/compare/v0.7.2...v0.7.3) (2026-09-11)
 
 
