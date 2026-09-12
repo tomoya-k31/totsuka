@@ -1,0 +1,1 @@
+* **Creation**: [ADR-0072 Slack イベント受信を Events API + Cloud Run + Pub/Sub へ移譲する](/decisions/adr-0072-slack-event-gateway.md) — totsuka 停止中の取りこぼしと購読の自動無効化（#652）を、Socket Mode リレーではなく Events API への転換で解決する決定。常時稼働ホストを持たない構成、座標と文字列判定フラグのみの永続化、`event_source` による Socket Mode の併存、利用者ごとのパスとトピックによる複数人分離、グループメンション対応、受け口の配布形態を決めた。
