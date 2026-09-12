@@ -91,6 +91,32 @@ Slack の設定項目は**2 つ**あり、どちらもここへ向ける必要�
 Socket Mode ではどちらも同じ WebSocket で届いていたので、前者だけを設定してしまいやすい ——
 症状は「**メンションは動いたまま、承認ボタンとリポジトリ選択ボタンだけが一切届かない**」になる。
 
+## 公式イメージと、差し替え方
+
+totsuka のリリースごとに `ghcr.io/tomoya-k31/totsuka/slack-event-gateway:<tag>` を公開する。
+タグは**ビルド元の totsuka のバージョン**である。OpenTofu モジュールの既定値がこれなので、
+手でビルドするものは何も無い。
+
+**`:latest` は無い。** モジュールは正確なバージョンを固定する —— 浮動タグがあると
+`tofu apply` が黙って動いているものを入れ替えられるようになり、Slack の signing secret を
+持つサービスでその性質は持ちたくない。
+
+自前でビルドして使うには（会社での利用なら通常そうすべきである。自分たちが管理する
+レジストリからイメージが来る形になる）:
+
+```bash
+cd slack-event-gateway
+docker build -t <your-registry>/slack-event-gateway:<tag> .
+docker push <your-registry>/slack-event-gateway:<tag>
+```
+
+あとはモジュールの `image` 変数をそこに向ける。ビルドは引数もシークレットも取らない ——
+プロセスが必要とするものはすべて実行時に環境から届く。
+
+ベースイメージは 2 つともダイジェストで固定してあり、タグはそれぞれのコメントに書いてある
+（GitHub Actions を SHA で固定するのと同じ理屈）。更新は手動で、手順は
+`ai-docs/development/dependency-hygiene.md` にある。
+
 ## テストの回し方
 
 ```bash
