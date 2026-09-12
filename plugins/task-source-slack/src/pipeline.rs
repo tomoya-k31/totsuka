@@ -22,7 +22,7 @@ use tokio::sync::mpsc;
 
 use plugin_protocol::Task;
 
-use crate::config::SlackConfig;
+use crate::config::{DEFAULT_WATCH_POLL_INTERVAL_SECS, EventSource, SlackConfig};
 use crate::draft::{DRAFT_TTL, Draft, DraftStatus, DraftStore};
 use crate::llm::ChatTransport;
 use crate::mention::{Mention, MentionFilter};
@@ -437,12 +437,62 @@ where
         sweep.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         sweep.tick().await; // the first tick fires immediately; skip it
 
+        // Watched channels do not arrive over the Event Gateway: decision 4
+        // narrowed publishing to things that name the operator, and an
+        // ordinary post in a watched channel does not. Handing the gateway the
+        // watch list would split one setting across two places, and the
+        // symptom when they drift is that watching stops working *silently* —
+        // so the watch becomes a poll of the same `conversations.history`
+        // call the startup backfill already makes.
+        //
+        // Only this path gets slower. Mentions, reactions and presses stay on
+        // the queue's long poll, within a second or two of Socket Mode.
+        let mut watch_poll = (config.event_source == EventSource::Gateway
+            && !watch_triggers.is_empty())
+        .then(|| {
+            let period = Duration::from_secs(
+                config
+                    .watch_poll_interval_secs
+                    .unwrap_or(DEFAULT_WATCH_POLL_INTERVAL_SECS),
+            );
+            let mut interval = tokio::time::interval(period);
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            interval
+        });
+        if let Some(interval) = watch_poll.as_mut() {
+            interval.tick().await; // the startup backfill above just ran
+        }
+
         loop {
             let event = tokio::select! {
                 event = events.recv() => match event {
                     Some(event) => event,
                     None => return,
                 },
+                // `watch_poll` is `None` under Socket Mode, where Slack
+                // pushes these posts; `pending()` then parks this arm forever
+                // instead of it needing a second `select!`.
+                _ = async {
+                    match watch_poll.as_mut() {
+                        Some(interval) => { interval.tick().await; }
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    let deps = WatchStartup {
+                        api: api.as_ref(),
+                        config: &config,
+                        triggers: &watch_triggers,
+                        limits: &backfill,
+                        submitter: &orchestrator.submit,
+                        state: &state,
+                    };
+                    // The same call the startup backfill makes, for the same
+                    // reason it needs no cursor: re-submitting a post the
+                    // ledger already holds is an idempotent `duplicate` ack,
+                    // while under-fetching loses a clip silently.
+                    backfill_watched_channels(&deps, &mut names, &mut filter).await;
+                    continue;
+                }
                 _ = sweep.tick() => {
                     let now = Instant::now();
                     let expired = awaiting.lock().unwrap().sweep(now, SELECTION_TTL);

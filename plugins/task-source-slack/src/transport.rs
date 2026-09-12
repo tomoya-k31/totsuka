@@ -31,8 +31,10 @@ pub enum TokenKind {
 pub struct TransportSettings<'a> {
     /// Web API base URL (no trailing slash), e.g. `https://slack.com/api`.
     pub api_url: &'a str,
-    /// App-Level Token (`xapp-`).
-    pub app_token: &'a str,
+    /// App-Level Token (`xapp-`). `None` under `event_source = "gateway"`,
+    /// where no Socket Mode connection is opened and the token has no other
+    /// use.
+    pub app_token: Option<&'a str>,
     /// User token (`xoxp-`).
     pub user_token: &'a str,
     /// Bot token (`xoxb-`), when the notification nudge is configured.
@@ -149,7 +151,7 @@ pub(crate) fn capped_backoff(base: Duration, cap: Duration, attempt: u32) -> Dur
 pub struct ReqwestTransport {
     client: reqwest::Client,
     base_url: String,
-    app_token: String,
+    app_token: Option<String>,
     user_token: String,
     bot_token: Option<String>,
     timeout: Duration,
@@ -180,7 +182,7 @@ impl ReqwestTransport {
         Self {
             client: reqwest::Client::new(),
             base_url: settings.api_url.trim_end_matches('/').to_string(),
-            app_token: settings.app_token.to_string(),
+            app_token: settings.app_token.map(str::to_string),
             user_token: settings.user_token.to_string(),
             bot_token: settings.bot_token.map(str::to_string),
             timeout: Duration::from_secs(30),
@@ -219,7 +221,15 @@ impl ReqwestTransport {
 
     fn token(&self, kind: TokenKind) -> Result<&str, SlackError> {
         match kind {
-            TokenKind::App => Ok(&self.app_token),
+            // Reachable only through a plugin bug, like the bot case below:
+            // `event_source = "gateway"` opens no Socket Mode connection, so
+            // nothing should be asking for this token.
+            TokenKind::App => self.app_token.as_deref().ok_or_else(|| {
+                SlackError::InvalidRequest(
+                    "an App-Level Token call was made but no `app_token` is configured (it is                      only needed for `event_source = \"socket\"`)"
+                        .into(),
+                )
+            }),
             TokenKind::User => Ok(&self.user_token),
             // Reachable only through a plugin bug: every bot call site must
             // gate on `bot_token` being configured before asking for it.

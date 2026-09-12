@@ -26,6 +26,7 @@ use crate::config::{
 };
 use crate::draft::DraftStore;
 use crate::error::SlackError;
+use crate::gateway;
 use crate::llm::ChatTransport;
 use crate::persist;
 use crate::pipeline::{self, SharedState};
@@ -118,7 +119,7 @@ fn workflow_reactions(
 fn settings(config: &SlackConfig) -> TransportSettings<'_> {
     TransportSettings {
         api_url: &config.api_url,
-        app_token: &config.app_token,
+        app_token: config.app_token.as_deref(),
         user_token: &config.user_token,
         bot_token: config.bot_token.as_deref(),
         max_retries: config.max_retries,
@@ -448,8 +449,41 @@ where
         let state = SharedState::new(drafts);
         let mut runtime = Vec::new();
         if self.start_runtime {
-            let (events, socket) =
-                socket_mode::spawn(Arc::clone(&api), SocketModeOptions::default());
+            // The two sources are interchangeable by construction: both hand
+            // back an `UnboundedReceiver<SocketEvent>`, so everything below
+            // this point is the same code on either transport.
+            // Reduced to an `AbortHandle` right here because the two
+            // sources report differently on exit (Socket Mode can fail with a
+            // `SlackError`, the drain loop runs until dropped) and shutdown is
+            // the only thing this scope does with either.
+            let (events, source) = match config.event_source {
+                crate::config::EventSource::Socket => {
+                    let (events, socket) =
+                        socket_mode::spawn(Arc::clone(&api), SocketModeOptions::default());
+                    (events, socket.abort_handle())
+                }
+                crate::config::EventSource::Gateway => {
+                    // `static_config_errors` already refused a `gateway`
+                    // source with no `[slack.gateway]`, so this is a plugin
+                    // bug rather than a configuration one.
+                    let gateway =
+                        Arc::new(config.gateway.clone().expect(
+                            "validated: `gateway` is present under event_source = gateway",
+                        ));
+                    let pubsub = Arc::new(gateway::ReqwestPubSub::new(
+                        &gateway.pubsub_url,
+                        gateway::AdcTokens::default(),
+                    ));
+                    let (events, drain) = gateway::spawn(
+                        Arc::clone(&api),
+                        Arc::new(config.clone()),
+                        gateway,
+                        pubsub,
+                        gateway::GatewayOptions::default(),
+                    );
+                    (events, drain.abort_handle())
+                }
+            };
             let pipeline = pipeline::spawn(
                 Arc::clone(&api),
                 Arc::new(self.factory.build_chat()),
@@ -462,7 +496,7 @@ where
                 self.submit.clone(),
                 self.lookup.clone(),
             );
-            runtime.push(socket.abort_handle());
+            runtime.push(source);
             runtime.push(pipeline.abort_handle());
         }
 
@@ -635,6 +669,12 @@ where
 /// Socket Mode loop — invisible to `initialize`'s caller, so `totsuka
 /// doctor` would report the plugin healthy while it can never receive an
 /// event.
+///
+/// **The xapp probe is skipped under `event_source = "gateway"`** (#657):
+/// there is no Socket Mode connection to open, so the probe would fail
+/// startup over a token the run never uses. The equivalent guard for the
+/// gateway is not a probe here — pulling begins immediately and a rejected
+/// credential is reported by the drain loop.
 async fn token_guard<T: SlackTransport>(
     api: &SlackApi<T>,
     config: &SlackConfig,
@@ -647,7 +687,9 @@ async fn token_guard<T: SlackTransport>(
             actual: identity.user_id,
         });
     }
-    api.apps_connections_open().await?;
+    if config.event_source == crate::config::EventSource::Socket {
+        api.apps_connections_open().await?;
+    }
     // An explicitly configured `bot_token` gets the same treatment as the
     // xapp token: probe it here so a dead one fails startup with guidance
     // (visible to `doctor`) instead of silently dropping every nudge (#305).

@@ -118,7 +118,7 @@ fn transport(base: &str, max_retries: u32) -> ReqwestTransport {
 fn transport_with_bot(base: &str, max_retries: u32, bot_token: Option<&str>) -> ReqwestTransport {
     ReqwestTransport::new(TransportSettings {
         api_url: base,
-        app_token: "xapp-1-A1-app",
+        app_token: Some("xapp-1-A1-app"),
         user_token: "xoxp-user",
         bot_token,
         max_retries,
