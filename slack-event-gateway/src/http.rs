@@ -20,7 +20,7 @@
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use http_body_util::{BodyExt, Full};
+use http_body_util::{BodyExt, Full, Limited};
 use hyper::body::{Body, Bytes};
 use hyper::{Method, Request, Response, StatusCode};
 use serde_json::Value;
@@ -38,6 +38,13 @@ const PATH_PREFIX: &str = "/slack/e/";
 /// Slack's own limit is well under this. The cap exists so an unauthenticated
 /// caller — which every caller is, until the signature is checked — cannot
 /// make the process allocate without bound.
+///
+/// **It has to stop the stream, not check the total afterwards.** A
+/// `Content-Length` is not required: `Transfer-Encoding: chunked` carries no
+/// declared size, so a cap applied after collecting is a cap applied to
+/// something already in memory. On the 512 MiB instance this is sized for
+/// (ADR-0072 decision 10), a handful of concurrent unsigned POSTs is enough to
+/// take the process down and every delivery in flight with it.
 const MAX_BODY_BYTES: usize = 1024 * 1024;
 
 /// Everything one request needs.
@@ -53,11 +60,15 @@ pub struct Gateway<P: Publisher> {
 /// Returns the response to send. **It never contains anything derived from the
 /// request body** — an error message that echoed the body would defeat the
 /// point of not storing it.
-pub async fn handle<P: Publisher, B: Body>(
+pub async fn handle<P: Publisher, B>(
     gateway: Arc<Gateway<P>>,
     request: Request<B>,
     now: SystemTime,
-) -> Response<Full<Bytes>> {
+) -> Response<Full<Bytes>>
+where
+    B: Body,
+    B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+{
     if request.method() != Method::POST {
         return text(StatusCode::METHOD_NOT_ALLOWED, "method not allowed");
     }
@@ -187,7 +198,16 @@ pub async fn handle<P: Publisher, B: Body>(
 }
 
 /// Read the body, refusing anything over [`MAX_BODY_BYTES`].
-async fn read_body<B: Body>(request: Request<B>) -> Result<Bytes, StatusCode> {
+///
+/// `Limited` aborts the stream at the bound, so an over-sized body is never
+/// held in full. A declared `Content-Length` is checked first as well — it
+/// saves reading a megabyte to learn what the header already said — but it is
+/// the *optimisation*, not the cap: a chunked request declares nothing.
+async fn read_body<B>(request: Request<B>) -> Result<Bytes, StatusCode>
+where
+    B: Body,
+    B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+{
     if let Some(declared) = request
         .headers()
         .get(hyper::header::CONTENT_LENGTH)
@@ -197,16 +217,15 @@ async fn read_body<B: Body>(request: Request<B>) -> Result<Bytes, StatusCode> {
     {
         return Err(StatusCode::PAYLOAD_TOO_LARGE);
     }
-    let collected = request
-        .into_body()
+    Limited::new(request.into_body(), MAX_BODY_BYTES)
         .collect()
         .await
-        .map_err(|_| StatusCode::BAD_REQUEST)?
-        .to_bytes();
-    if collected.len() > MAX_BODY_BYTES {
-        return Err(StatusCode::PAYLOAD_TOO_LARGE);
-    }
-    Ok(collected)
+        // `Limited` reports the bound and a transport failure through the same
+        // error. Answering `413` to both is the safe direction: it is accurate
+        // for the case that matters, and a client that hung up mid-body is not
+        // reading the status anyway.
+        .map_err(|_| StatusCode::PAYLOAD_TOO_LARGE)
+        .map(|collected| collected.to_bytes())
 }
 
 fn text(status: StatusCode, body: &str) -> Response<Full<Bytes>> {

@@ -4,7 +4,7 @@ title: slack-event-gateway
 description: Slack の配信を HTTPS で受け、署名を検証し、本文を保存せずに座標へ射影して Pub/Sub へ publish する常駐しないサービス。event_source = "gateway" のときだけ経路に入る。同一リポジトリの workspace 外に置き、適合テストスイートだけを totsuka と共有する。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/slack-event-gateway
 tags: [rust, service, slack, gateway, cloud-run, pubsub, hmac, security]
-generated: { by: claude-code/opus-5, at: 2026-09-13T19:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-13T20:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -43,6 +43,13 @@ Slack は IAM プリンシパルになれず、許可リストに使える**安�
 | 推測不能なパス | `/slack/e/<opaque-token>` を利用者ごとに 1 本。`registry::Registry::lookup` が**定数時間比較で全行を走査**する（応答時間から当たった接頭辞を絞られないため） |
 | 署名 | 生のボディに対する HMAC-SHA256。**定数時間比較**（`subtle::ConstantTimeEq`）。ボディはパースする前に検証する —— 再シリアライズしたものを検証すると、署名されていない入力で検査が通る |
 | タイムスタンプの窓 | ローカル時刻から前後 5 分。署名は「Slack から来たこと」しか証明せず、キャプチャされたリクエストが永久に使えるのを止めるのは窓だけである |
+
+**署名検証より手前の処理は、すべて「鍵を知らない相手が到達できる場所」である。** ここで
+落ちたり無制限に確保したりすると、それは関門ではなく攻撃面になる。具体的には ——
+タイムスタンプは `checked_add` で扱う（20 桁の値は `u64` にはパースが通るので、素朴に
+足すと `path_token` だけで panic させられる）。ボディ上限は `Limited` で**ストリームを
+打ち切る**（`Content-Length` は必須ではなく、chunked は何も申告しないので、集め終えてから
+長さを測るのは上限ではない）。
 
 **未登録のパスと署名不正には同じ 404 / 401 の区別しかなく、どちらが原因かは応答から
 分からない。** 「そのトークンは存在するが署名が違う」と教えると、パスが総当たりする価値の

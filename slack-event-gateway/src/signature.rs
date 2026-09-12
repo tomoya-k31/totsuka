@@ -60,7 +60,15 @@ pub fn verify(
     let seconds: u64 = timestamp
         .parse()
         .map_err(|_| SignatureError::MissingHeader("X-Slack-Request-Timestamp"))?;
-    let sent = SystemTime::UNIX_EPOCH + Duration::from_secs(seconds);
+    // `UNIX_EPOCH + Duration` panics past the platform's representable range,
+    // and this runs **before** the HMAC — so a 20-digit timestamp, which
+    // parses fine as a `u64`, would take the connection down without the
+    // caller ever needing the signing secret. A timestamp that cannot be a
+    // time is not within five minutes of now, so it fails the same way a
+    // stale one does.
+    let sent = SystemTime::UNIX_EPOCH
+        .checked_add(Duration::from_secs(seconds))
+        .ok_or(SignatureError::StaleTimestamp)?;
     // Distance in either direction: a clock ahead of ours is as suspect as one
     // behind, and `duration_since` on the wrong ordering is an error, not zero.
     let skew = now
@@ -165,6 +173,41 @@ mod tests {
         assert_eq!(
             check(1_757_640_000 - 301),
             Err(SignatureError::StaleTimestamp)
+        );
+    }
+
+    /// A timestamp outside the representable range must be refused, not
+    /// panicked on: this check runs before the HMAC, so reaching it needs only
+    /// a registered path — never the signing secret. A panic here answers
+    /// nothing, and an unanswered delivery counts against the app the same way
+    /// a failure does.
+    #[test]
+    fn an_unrepresentable_timestamp_is_refused_not_panicked_on() {
+        let signature = sign(SECRET, "1757640000", BODY);
+        for timestamp in ["18446744073709551615", "9223372036854775808"] {
+            assert_eq!(
+                verify(
+                    SECRET,
+                    Some(&signature),
+                    Some(timestamp),
+                    BODY,
+                    at(1_757_640_000)
+                ),
+                Err(SignatureError::StaleTimestamp),
+                "`{timestamp}` must be refused"
+            );
+        }
+        // A negative one does not parse as a `u64` at all, which is the other
+        // shape of the same input.
+        assert_eq!(
+            verify(
+                SECRET,
+                Some(&signature),
+                Some("-1"),
+                BODY,
+                at(1_757_640_000)
+            ),
+            Err(SignatureError::MissingHeader("X-Slack-Request-Timestamp"))
         );
     }
 

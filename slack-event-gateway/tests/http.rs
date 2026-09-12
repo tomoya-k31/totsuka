@@ -339,6 +339,103 @@ async fn no_response_body_echoes_the_request() {
     );
 }
 
+/// The timestamp check runs **before** the HMAC, so anything that can crash it
+/// needs only a registered path — never the signing secret. A panic answers
+/// nothing, and an unanswered delivery counts against the app exactly like a
+/// failure does, which is the condition that gets a subscription switched off.
+#[tokio::test]
+async fn an_unrepresentable_timestamp_is_refused_not_panicked_on() {
+    let mut delivery = Delivery::events(mention_payload());
+    // 20 digits: fits in a `u64`, so it parses — and then overflows every
+    // arithmetic that treats it as a point in time.
+    delivery.timestamp = "18446744073709551615".into();
+    let delivery = delivery.resign();
+    let (status, _, publisher) = send(FakePublisher::default(), &delivery).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert!(publisher.published.lock().unwrap().is_empty());
+}
+
+/// The body cap has to stop the stream, not measure what is already in
+/// memory. A `Content-Length` is not required — `Transfer-Encoding: chunked`
+/// declares nothing — so a check that only reads the header is no cap at all,
+/// and reaching it needs a path but not a signature.
+#[tokio::test]
+async fn an_oversized_body_is_refused_without_a_content_length() {
+    /// A body that reports no size, the way a chunked request does.
+    struct Chunked {
+        remaining: usize,
+    }
+
+    impl hyper::body::Body for Chunked {
+        type Data = Bytes;
+        type Error = std::convert::Infallible;
+
+        fn poll_frame(
+            mut self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Option<Result<hyper::body::Frame<Bytes>, Self::Error>>> {
+            if self.remaining == 0 {
+                return std::task::Poll::Ready(None);
+            }
+            let chunk = self.remaining.min(64 * 1024);
+            self.remaining -= chunk;
+            std::task::Poll::Ready(Some(Ok(hyper::body::Frame::data(Bytes::from(vec![
+                b'x';
+                chunk
+            ])))))
+        }
+
+        // The point of the test: the size is unknown until the stream ends.
+        fn size_hint(&self) -> hyper::body::SizeHint {
+            hyper::body::SizeHint::default()
+        }
+    }
+
+    let gateway = Arc::new(Gateway {
+        registry: registry(),
+        publisher: FakePublisher::default(),
+    });
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri(format!("/slack/e/{TOKEN}"))
+        .header("content-type", "application/json")
+        .header("x-slack-request-timestamp", NOW_SECS.to_string())
+        .header("x-slack-signature", "v0=whatever")
+        .body(Chunked {
+            // Comfortably over the 1 MiB cap.
+            remaining: 8 * 1024 * 1024,
+        })
+        .expect("a valid request");
+
+    assert_eq!(
+        handle(gateway, request, now()).await.status(),
+        StatusCode::PAYLOAD_TOO_LARGE,
+        "the stream must be cut at the bound, not measured after collecting"
+    );
+}
+
+/// …and a declared over-size is refused too, without reading the body at all.
+#[tokio::test]
+async fn an_oversized_content_length_is_refused() {
+    let gateway = Arc::new(Gateway {
+        registry: registry(),
+        publisher: FakePublisher::default(),
+    });
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri(format!("/slack/e/{TOKEN}"))
+        .header("content-type", "application/json")
+        .header("content-length", (16 * 1024 * 1024).to_string())
+        .header("x-slack-request-timestamp", NOW_SECS.to_string())
+        .header("x-slack-signature", "v0=whatever")
+        .body(Full::new(Bytes::from_static(b"{}")))
+        .expect("a valid request");
+    assert_eq!(
+        handle(gateway, request, now()).await.status(),
+        StatusCode::PAYLOAD_TOO_LARGE
+    );
+}
+
 #[tokio::test]
 async fn a_get_is_refused() {
     let gateway = Arc::new(Gateway {
