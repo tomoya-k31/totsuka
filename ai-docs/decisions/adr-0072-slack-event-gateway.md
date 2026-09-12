@@ -4,7 +4,7 @@ title: ADR-0072 Slack イベント受信を Events API + Cloud Run + Pub/Sub へ
 description: "totsuka 停止中の取りこぼしと Slack による購読の自動無効化を、Socket Mode リレーではなく Events API への転換で解決する決定。常時稼働ホストを持たない Cloud Run scale-to-zero + Pub/Sub 構成とし、本文は保存せず座標と文字列判定フラグだけを書く。保存対象も自分宛メンションと任意の subteam・リアクション・承認ボタンに絞り、チャンネル監視は Gateway 方式では conversations.history のポーリングへ移す。フィルタは関門だが判定の権威は mention.rs に残し、適合テストスイートが偽陰性ゼロを検査する。Socket Mode は event_source で併存させ、保持は Pub/Sub 7 日・起票窓は totsuka 側。複数人は利用者ごとのパスとトピックで分離し、クラウドに置く資格情報は signing secret のみ。イベントゲートウェイは workspace 外の同居プロジェクトとして公式イメージを配る。信頼境界は Slack からの公開受信（関門は推測不能パスと利用者別 HMAC と 5 分のタイムスタンプ窓の 3 つで、IAM も IP 制限も使えない）と totsuka からの outbound pull（Workspace アカウント単位の IAM・鍵を配らない）に分け、ドメイン制限共有は緩めずに Invoker IAM チェックの無効化で公開する。グループメンション対応とスキーマ契約もここで決定。"
 resource: https://github.com/tomoya-k31/totsuka/issues/652
 tags: [decision, slack, gcp, cloud-run, pubsub, event-delivery, cost, multi-tenant, adr]
-generated: { by: claude-code/opus-5, at: 2026-09-12T23:05:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-12T23:40:00+09:00 }
 status: stable
 owner: tomoya-k31
 sources:
@@ -51,7 +51,11 @@ Slack は GCP の IAM 認証を喋れないので Cloud Run は公開が要る�
 - **外部ロードバランサでは解決しない。** Serverless NEG 経由で LB から届いたリクエストも Cloud Run には認証情報なしで到達するため、結局 `allUsers` への付与が必要になる。LB が解くのは ingress の制限であって IAM ではない
 - **無料の正規手段がある。** Cloud Run の Invoker IAM チェック自体を無効化する（`--no-invoker-iam-check` / `invoker_iam_disabled = true`）。Google のドキュメントがドメイン制限共有下での推奨手段として明示している[^cloud-run-public]
 
-したがって**組織ポリシーは一切緩めずに済み、費用前提も変わらない**。ブロッカーではなくデプロイ時のフラグ 1 つである。信頼境界の全体像は決定 11 を参照。
+したがって**組織ポリシーは一切緩めずに済み、費用前提も変わらない**。信頼境界の全体像は決定 11 を参照。
+
+**ただし確認は依然として要る。対象が変わっただけである。** 当初の訂正はここで「ブロッカーではなくデプロイ時のフラグ 1 つ」と断言していたが、それは**訂正前とまったく同じ形の未検証の断定**だった。管理者は `constraints/run.managed.requireInvokerIam` という managed constraint で Invoker IAM チェックの無効化そのものを制限できる[^cloud-run-public]。**既定では未適用**なので大半の組織では素通りするが、もし適用されていれば、DRS が `allUsers` を拒否したままこちらの逃げ道も塞がれ、**元のブロッカーが丸ごと戻る**（そのときは外部 LB も助けにならない。上記のとおり LB 経由でも `allUsers` が要るからである）。
+
+**#659 の着手前に、この 1 つの constraint の適用状況を確認すること。** 確認先が DRS から `run.managed.requireInvokerIam` に変わっただけで、「確認が要る」という事実は最初から変わっていない。
 
 # Context
 
@@ -236,7 +240,9 @@ tier 1 の公開レート（CPU 0.000024 ドル/vCPU 秒、メモリ 0.0000025 �
 | 60 万件 | 0.68 ドル | 0.07 ドル | 約 0.8 ドル |
 | 150 万件 | 1.7 ドル | 0.17 ドル | 約 2 ドル |
 
-Secret Manager は 6 バージョンまで無料（以降 0.06 ドル/本/月）。Pub/Sub の保管は最初の 24 時間が無料で、座標だけなら 7 日分溜めても月 0.01 ドル未満。**`min-instances` を 0 に保つことがこの金額の唯一の前提**であり、1 以上にした瞬間に桁が変わる。
+Secret Manager は 6 バージョンまで無料（以降 0.06 ドル/本/月）。Pub/Sub の保管は最初の 24 時間が無料で、座標だけなら 7 日分溜めても月 0.01 ドル未満。
+
+この金額には**前提が 2 つ**ある。**`min-instances = 0`** — 1 以上にすると待ち時間が課金対象になり桁が変わる。そして **`max-instances` の上限**である。決定 11 のとおり経路 A の関門は 3 つともコンテナの中で評価されるので、**署名で弾いたリクエストも、そのためのコールドスタートも課金される**。`--no-invoker-iam-check` によって手前の IAM 層が無くなった以上、既定の 100 インスタンスまでスケールできる状態は費用の前提と噛み合わない。想定トラフィック（利用者数 × 参加チャンネルの流量）から上限を決め、OpenTofu の既定値として縛る。
 
 ## 11. 信頼境界を経路 A と経路 B に分ける
 
@@ -251,13 +257,15 @@ Secret Manager は 6 バージョンまで無料（以降 0.06 ドル/本/月）
 
 **totsuka はイベントゲートウェイに一度も接続しない。** Pub/Sub から直接引く。ゲートウェイは「Slack から受けて Pub/Sub に置く」片道の部品である。
 
-### 経路 A — 公開が不可避で、関門は署名
+### 経路 A — 公開が不可避で、関門はコンテナの中にしかない
 
 Slack は GCP の IAM プリンシパルになれないため、**IAM を関門にする道が構造的に存在しない**。ここで効く防御は 3 つで、前 2 つは決定 6 で既に決めており、3 つ目は本決定で新たに定める。
 
 - 推測不能なパス（決定 6）— スキャンで発見されない
 - 利用者ごとの signing secret による HMAC 検証（決定 6）— signing secret は Slack アプリ単位なので、アプリを利用者ごとに分けた結果として**鍵も利用者ごとに分かれている**
 - **タイムスタンプ窓によるリプレイ防止（ここで定める）** — Slack の正典に合わせ、`X-Slack-Request-Timestamp` がローカル時刻から **5 分**以上離れたリクエストは拒否する。署名（`X-Slack-Signature`、`v0=` 接頭辞）の比較は**定数時間の HMAC compare** で行い、文字列の直接比較はしない[^slack-verify]
+
+**この 3 つは宣言ではなく実装必須事項である。** 経路 A には IAM も IP 制限も無い以上、**鍵を知らない相手を止めるのはここだけ**なので、#659 の受け入れ条件として検査する。本 ADR の他の実装必須事項（publish-before-ack、pull ループのバックオフ、フィルタの偽陰性ゼロ）を子 issue に紐づけたのと同じ扱いにする。
 
 **IP 許可リストは採れない。** Slack は Events API の送信元 IP の安定した一覧を公開していない（Slack の "Allowed IP ranges" は逆向き、すなわちアプリから Slack API を叩く側を絞る機能である）。推測で組めば配信が落ち、60 分で 95% を超えた時点で**この ADR が解決しようとしている購読の自動無効化が再発する**。経路 A において IP 制限はセキュリティ強化ではなく可用性リスクである。
 
