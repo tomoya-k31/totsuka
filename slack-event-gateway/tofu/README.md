@@ -2,9 +2,9 @@
 
 # Event Gateway — OpenTofu module
 
-`tofu apply` stands the whole thing up. The narrative version of the setup —
-including the Slack app side — is in `ai-docs/operations/event-gateway-setup.md`;
-this file is the module's own reference.
+`tofu apply` stands the whole thing up. This file is the module's own
+reference; the Slack app side of the setup is a separate step, and the gateway's
+own README covers what the service is and how the two Request URLs fit together.
 
 ## What it creates
 
@@ -56,6 +56,12 @@ One entry in `operators`, then `tofu apply`. Topics, subscriptions, IAM and the
 registration table all follow. Nothing else has to be edited, and no existing
 operator's resources are touched — the resources are keyed by `key`, not
 indexed by position.
+
+The apply also rolls a new Cloud Run revision, so the new table is live when it
+finishes. That is why the mount pins the exact secret version rather than
+`latest`: with `latest`, nothing about the service changes, no revision is
+created, and running instances keep serving the old table until they happen to
+be recycled.
 
 ## Destroy
 

@@ -2,21 +2,23 @@ terraform {
   required_version = ">= 1.6"
 
   required_providers {
-    # `google-beta`, for one field: `invoker_iam_disabled`. The provider's own
-    # documented example for it uses google-beta, so this module follows the
-    # example rather than a guess about whether the GA provider accepts it.
+    # The GA provider. `invoker_iam_disabled` — the one field that made this
+    # look beta-only — is listed in the GA argument reference with no Beta
+    # note, and the upstream schema carries no `min_version: beta` for it. The
+    # `provider = google-beta` in the registry's *example* for that field is
+    # copied into the GA page unchanged; the argument list is the authority.
     #
-    # Every other resource here (Pub/Sub, Secret Manager, IAM) behaves
-    # identically on either provider, so using one provider for the whole
-    # module is simpler than aliasing two.
-    google-beta = {
-      source  = "hashicorp/google-beta"
-      version = ">= 6.0"
+    # Upper bound as well as lower: without one, `tofu init` can resolve a
+    # different major version than CI validated against, and the first sign of
+    # that is someone else's `tofu plan`.
+    google = {
+      source  = "hashicorp/google"
+      version = "~> 6.0"
     }
   }
 }
 
-provider "google-beta" {
+provider "google" {
   project = var.project_id
   region  = var.region
 }

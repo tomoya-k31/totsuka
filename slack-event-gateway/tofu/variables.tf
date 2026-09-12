@@ -15,9 +15,17 @@ variable "region" {
 }
 
 variable "service_name" {
-  description = "Cloud Run service name. One service serves every operator; routing is by path, not by service (ADR-0072 decision 6)."
+  description = "Cloud Run service name. One service serves every operator; routing is by path, not by service (ADR-0072 decision 6). It also prefixes the service account id, which GCP caps at 30 characters."
   type        = string
   default     = "slack-event-gateway"
+
+  validation {
+    # The service account id is `<service_name>-sa`, and GCP requires 6-30
+    # characters of this shape. Caught here rather than partway through an
+    # apply that has already created topics.
+    condition     = can(regex("^[a-z][a-z0-9-]{2,26}[a-z0-9]$", var.service_name))
+    error_message = "service_name must be 4-28 characters of lowercase letters, digits and hyphens, starting with a letter: it prefixes the service account id, which GCP caps at 30."
+  }
 }
 
 variable "image" {
@@ -113,9 +121,11 @@ variable "operators" {
                             e.g. `user:someone@example.com`. Each operator is
                             granted their own two subscriptions and nothing else
 
-    **These values land in the OpenTofu state file.** State is not encrypted by
-    the tooling, so put it in a bucket only the deployer can read, or supply
-    `registration_secret_version` instead and manage the table yourself.
+    **These values land in the OpenTofu state file, and this module offers no
+    way around that** — it builds the registration table from them, which is
+    exactly what makes "add a person, apply" true. State is not encrypted by
+    the tooling, so keep it in a bucket only the deployer can read, and treat
+    access to that bucket as access to every operator's Slack app.
   EOT
   type = list(object({
     key              = string

@@ -10,13 +10,22 @@
 # one `git add <dir>` away from committing a provider binary.
 /slack-event-gateway/tofu/.terraform/
 
-# OpenTofu working state. `terraform.tfvars` holds every operator's Slack
-# signing secret and the state file holds it again — neither belongs in git.
-# `terraform.tfvars.example` is committed and has no real values.
-/slack-event-gateway/tofu/.terraform.lock.hcl
-/slack-event-gateway/tofu/terraform.tfvars
+# OpenTofu. What must never be committed is anything holding an operator's
+# Slack signing secret: the variables file and the state file both do.
+#
+# The pattern is `*.tfvars`, not the exact name `terraform.tfvars`, because
+# `prod.auto.tfvars` and `secrets.tfvars` are perfectly ordinary names — and
+# what is being protected is the content, not one filename. The `.example` is
+# committed and contains no real values.
+*.tfvars
+!*.tfvars.example
 *.tfstate
 *.tfstate.*
+
+# `.terraform.lock.hcl` is deliberately NOT ignored. It holds provider
+# versions and checksums, no secrets, and committing it is what makes a
+# `tofu init` here resolve what CI validated — the same reason `Cargo.lock` is
+# committed.
 **/*.rs.bk
 
 # Coverage

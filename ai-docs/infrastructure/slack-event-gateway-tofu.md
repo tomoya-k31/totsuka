@@ -4,7 +4,7 @@ title: Event Gateway の OpenTofu モジュール
 description: slack-event-gateway/tofu/ の構成。Cloud Run 1 サービス・利用者ごとの Pub/Sub トピックとサブスクリプション 2 組・Secret Manager の登録表・利用者を自分のキューだけに閉じる IAM を tofu apply で立てる。min-instances 0 と max-instances 上限が費用の前提であること、invoker_iam_disabled が組織ポリシーを緩めずに公開する唯一の手段であること、IP 制限と VPC Service Controls を既定に入れない理由を含む。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/slack-event-gateway/tofu
 tags: [gcp, cloud-run, pubsub, secret-manager, iam, opentofu, terraform, slack, cost]
-generated: { by: claude-code/opus-5, at: 2026-09-13T23:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-14T00:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -66,12 +66,17 @@ gcloud resource-manager org-policies describe \
 
 # 運用上の注意
 
-- **`terraform.tfvars` と state ファイルの両方に全利用者の signing secret が入る。**
-  OpenTofu は state を暗号化しないので、デプロイ担当だけが読めるバケットに置く
+- **`terraform.tfvars` と state ファイルの両方に全利用者の signing secret が入り、このモジュールに逃げ道は無い**（登録表を変数から組み立てることが「1 人足して apply」を成立させている当のものだから）。OpenTofu は state を暗号化しないので、デプロイ担当だけが読めるバケットに置き、**そのバケットへのアクセス = 全利用者の Slack アプリへのアクセス**とみなす。`.gitignore` は `terraform.tfvars` という名前ではなく `*.tfvars` を弾く ——`prod.auto.tfvars` のような名前はごく普通で、守りたいのは名前ではなく中身である
+- **`.terraform.lock.hcl` は commit する。** 秘密は入らず、プロバイダの版とハッシュだけである。`Cargo.lock` を commit しているのと同じ理由で、手元の `tofu init` が CI の検証したものと同じ版を引くようにする（`versions.tf` の制約も `~> 6.0` で上限を切ってある）
 - リソースは**位置ではなく `key`** で識別しているので、利用者を 1 人足しても既存の
   リソースは作り直されない
 - `deletion_protection = false` を明示している。provider の既定は true で、そのままだと
   `tofu destroy` が**利用者が選んだ覚えのない設定**を理由に失敗する
+- **シークレットのマウントは `latest` ではなく版を正確に指す。** `latest` だと
+  サービス側の引数が 1 つも変わらないため**リビジョンが作られず**、利用者を足しても
+  稼働中のインスタンスは回収されるまで古い表を配り続ける。さらに、サービスと版のあいだに
+  グラフ上の辺が無いので**初回 apply が版より先にリビジョンを作って失敗しうる**
+  （しかも 2 回目は通るので再現しない）
 - サブスクリプションの `expiration_policy.ttl` を空にしている。既定は 31 日 pull が無いと
   サブスクリプションを消すので、**長期休暇の人のキューが黙って消え**、復帰後の症状は
   「totsuka が何も受け取らない」になる

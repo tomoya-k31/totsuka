@@ -49,11 +49,15 @@ locals {
     "run.googleapis.com",
     "pubsub.googleapis.com",
     "secretmanager.googleapis.com",
+    # Usually on already, but this module creates a service account and four
+    # IAM bindings per operator. Enabling an enabled API is a no-op; hitting a
+    # disabled one partway through an apply leaves half of it standing.
+    "iam.googleapis.com",
   ]) : toset([])
 }
 
 resource "google_project_service" "required" {
-  provider = google-beta
+  provider = google
   for_each = local.services
 
   project = var.project_id
@@ -73,7 +77,7 @@ resource "google_project_service" "required" {
 # both counts — filtered-out messages are still billed as deliveries.
 
 resource "google_pubsub_topic" "events" {
-  provider = google-beta
+  provider = google
   for_each = local.operator_keys
 
   project = var.project_id
@@ -83,7 +87,7 @@ resource "google_pubsub_topic" "events" {
 }
 
 resource "google_pubsub_topic" "block_actions" {
-  provider = google-beta
+  provider = google
   for_each = local.operator_keys
 
   project = var.project_id
@@ -93,7 +97,7 @@ resource "google_pubsub_topic" "block_actions" {
 }
 
 resource "google_pubsub_subscription" "events" {
-  provider = google-beta
+  provider = google
   for_each = local.operator_keys
 
   project = var.project_id
@@ -117,7 +121,7 @@ resource "google_pubsub_subscription" "events" {
 }
 
 resource "google_pubsub_subscription" "block_actions" {
-  provider = google-beta
+  provider = google
   for_each = local.operator_keys
 
   project = var.project_id
@@ -136,7 +140,7 @@ resource "google_pubsub_subscription" "block_actions" {
 # ---- the registration table ----------------------------------------------
 
 resource "google_secret_manager_secret" "registrations" {
-  provider = google-beta
+  provider = google
 
   project   = var.project_id
   secret_id = "${var.service_name}-registrations"
@@ -149,7 +153,7 @@ resource "google_secret_manager_secret" "registrations" {
 }
 
 resource "google_secret_manager_secret_version" "registrations" {
-  provider = google-beta
+  provider = google
 
   secret      = google_secret_manager_secret.registrations.id
   secret_data = local.registrations
@@ -164,7 +168,9 @@ resource "google_secret_manager_secret_version" "registrations" {
 # ---- the service ----------------------------------------------------------
 
 resource "google_service_account" "gateway" {
-  provider = google-beta
+  provider = google
+
+  depends_on = [google_project_service.required]
 
   project      = var.project_id
   account_id   = "${var.service_name}-sa"
@@ -175,7 +181,7 @@ resource "google_service_account" "gateway" {
 # Publish to every operator's topics, read the registration table. Nothing
 # else — in particular, no subscriber role: this service never pulls.
 resource "google_pubsub_topic_iam_member" "gateway_publishes_events" {
-  provider = google-beta
+  provider = google
   for_each = local.operator_keys
 
   project = var.project_id
@@ -185,7 +191,7 @@ resource "google_pubsub_topic_iam_member" "gateway_publishes_events" {
 }
 
 resource "google_pubsub_topic_iam_member" "gateway_publishes_block_actions" {
-  provider = google-beta
+  provider = google
   for_each = local.operator_keys
 
   project = var.project_id
@@ -195,7 +201,7 @@ resource "google_pubsub_topic_iam_member" "gateway_publishes_block_actions" {
 }
 
 resource "google_secret_manager_secret_iam_member" "gateway_reads_registrations" {
-  provider = google-beta
+  provider = google
 
   project   = var.project_id
   secret_id = google_secret_manager_secret.registrations.secret_id
@@ -204,7 +210,7 @@ resource "google_secret_manager_secret_iam_member" "gateway_reads_registrations"
 }
 
 resource "google_cloud_run_v2_service" "gateway" {
-  provider = google-beta
+  provider = google
 
   project  = var.project_id
   name     = var.service_name
@@ -284,9 +290,20 @@ resource "google_cloud_run_v2_service" "gateway" {
       secret {
         secret = google_secret_manager_secret.registrations.secret_id
         items {
-          # `latest` so a table change takes effect on the next revision
-          # without editing this file. Pin a number here to roll back.
-          version = "latest"
+          # The **exact** version, not `latest`, and for two reasons.
+          #
+          # It gives the service an edge to the version. With `latest` there is
+          # none at all, so a first `tofu apply` can deploy the revision before
+          # the version exists and fail on a mount that resolves to nothing —
+          # a failure that then does not reproduce, because the second run has
+          # the version.
+          #
+          # And it makes a table change produce a new revision. With `latest`,
+          # adding an operator changes the secret and *nothing* in the service,
+          # so no revision is created and running instances keep serving the
+          # old table until they happen to be recycled. "Add one entry and
+          # apply" has to mean the change is live, not live eventually.
+          version = google_secret_manager_secret_version.registrations.version
           path    = "registrations.json"
         }
       }
@@ -309,7 +326,7 @@ resource "google_cloud_run_v2_service" "gateway" {
 # Google identity, through Application Default Credentials.
 
 resource "google_pubsub_subscription_iam_member" "operator_reads_events" {
-  provider = google-beta
+  provider = google
   for_each = local.operator_keys
 
   project      = var.project_id
@@ -319,7 +336,7 @@ resource "google_pubsub_subscription_iam_member" "operator_reads_events" {
 }
 
 resource "google_pubsub_subscription_iam_member" "operator_reads_block_actions" {
-  provider = google-beta
+  provider = google
   for_each = local.operator_keys
 
   project      = var.project_id
