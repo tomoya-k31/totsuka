@@ -82,9 +82,16 @@ One file per case under `cases/*.json`.
 
 `received_at` is genuinely "when it was received", so the implementation
 decides it. A conformance runner must **inject a fixed clock** — build the
-gateway with a replaceable time source. totsuka does not use this value to
-decide what to file: the ingest window is computed from Slack's `ts`, so a
-gateway with a skewed clock cannot change what gets filed.
+gateway with a replaceable time source.
+
+totsuka's ingest window prefers Slack's own clock, which is already in the
+record: `ts` for a message, `action_ts` for a press. **A reaction is the
+exception.** Slack stamps `reaction_added` with an `event_ts`, but the kind's
+extra fields are closed at `reaction` / `item_user`, so `received_at` is the
+only stamp saying when the *reaction* happened rather than when the message it
+points at was posted — and `ts` cannot stand in, because reacting to a
+month-old note is an ordinary way to open a task. So a gateway with a skewed
+clock can shift that one window, and only that one.
 
 ### Delivery identity
 

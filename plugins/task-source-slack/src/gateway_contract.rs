@@ -99,9 +99,16 @@ pub struct GatewayRecord {
     /// without a second source of truth that would go stale (decision 8).
     #[serde(default)]
     pub subteam_ids: Vec<String>,
-    /// When the gateway accepted the delivery (RFC 3339). Diagnostic only:
-    /// the ingest window is computed from Slack's `ts`, so a gateway with a
-    /// skewed clock cannot change what totsuka files.
+    /// When the gateway accepted the delivery (RFC 3339).
+    ///
+    /// Mostly diagnostic — the ingest window prefers Slack's own clock, which
+    /// this record already carries as `ts` for a message and `action_ts` for a
+    /// press. **A reaction is the exception**: Slack stamps `reaction_added`
+    /// with an `event_ts`, but the kind's extra fields are closed at
+    /// `reaction` / `item_user` (decision 7), so this is the only stamp for
+    /// *when the reaction happened* rather than when the message it points at
+    /// was posted. The consumer uses it there, and a gateway with a skewed
+    /// clock can therefore shift that one window.
     pub received_at: String,
 
     // ---- `kind`-specific fields. Decision 7 closes each list with "only". --
