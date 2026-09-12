@@ -4,7 +4,7 @@ title: ADR-0072 Slack イベント受信を Events API + Cloud Run + Pub/Sub へ
 description: "totsuka 停止中の取りこぼしと Slack による購読の自動無効化を、Socket Mode リレーではなく Events API への転換で解決する決定。常時稼働ホストを持たない Cloud Run scale-to-zero + Pub/Sub 構成とし、本文は保存せず座標と文字列判定フラグだけを書く。保存対象も自分宛メンションと任意の subteam・リアクション・承認ボタンに絞り、チャンネル監視は Gateway 方式では conversations.history のポーリングへ移す。フィルタは関門だが判定の権威は mention.rs に残し、適合テストスイートが偽陰性ゼロを検査する。Socket Mode は event_source で併存させ、保持は Pub/Sub 7 日・起票窓は totsuka 側。複数人は利用者ごとのパスとトピックで分離し、クラウドに置く資格情報は signing secret のみ。イベントゲートウェイは workspace 外の同居プロジェクトとして公式イメージを配る。グループメンション対応とスキーマ契約もここで決定。"
 resource: https://github.com/tomoya-k31/totsuka/issues/652
 tags: [decision, slack, gcp, cloud-run, pubsub, event-delivery, cost, multi-tenant, adr]
-generated: { by: claude-code/opus-5, at: 2026-09-12T12:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-12T22:10:00+09:00 }
 status: stable
 owner: tomoya-k31
 sources:
@@ -96,9 +96,9 @@ totsuka から Slack への送信（返信投稿・リアクション・`respons
 |---|---|---|
 | リアクション | `reaction` / `item.channel` / `item.ts` / `item_user` | 不要 |
 | メンション | 宛先タグの有無 | この 1 ビットのみ |
-| 承認ボタン | `action_id` / `value` / `response_url` / `container.channel_id` | 不要 |
+| 承認ボタン | `action_id` / `value` / `response_url` / チャンネル（`container.channel_id`、無ければ `channel.id`） | 不要 |
 
-承認ボタンについては `plugins/task-source-slack/src/approval.rs` が読む 4 フィールドだけを射影する。下書き本文を含む `message` ブロックは渡さない。
+承認ボタンについては `plugins/task-source-slack/src/approval.rs` が読むフィールドだけを射影する。下書き本文を含む `message` ブロックは渡さない。
 
 **スキーマに本文フィールドを置かないので、レコード形式そのものが本文を運べない。** ただしこれで漏洩が不可能になるわけではない — 差し替えられたゲートウェイはリクエストをメモリに保持することも、ログに出すことも、別の宛先へ送ることもできる。**「保存しない・外部送信しない・ログに出さない」は、スキーマとは独立に、テストで守る振る舞い**として #659 が担保する。
 
@@ -140,7 +140,7 @@ publish するのは次の 4 種だけとする。
 
 Pub/Sub のサブスクリプション保持期間は **10 分から 31 日**の範囲で設定でき（既定 7 日）、期限切れの未 ack メッセージは自動的に落ちる。**TTL は設定値ひとつでコードが要らない。**
 
-保持は 7 日を取る。上限の 31 日まで伸ばせるが、`drain_max_age_hours` の既定 24 時間に対して 7 日でも十分な余裕があり、それ以上は「起票されないと分かっているレコードを保持し続ける」ことにしかならない。起票する窓は totsuka 側の実際に起票する窓は totsuka 側の `drain_max_age_hours`（既定 24）と `drain_limit` で決める。ADR-0068 の `watch_backfill_max_age_hours` / `watch_backfill_limit` と同じ考え方で、名前もそれに揃える。ポリシーが手元にあるので、出張明けに拾いたければ設定を一時的に上げるだけでよく、クラウドの再デプロイが要らない。窓の外のメッセージは ack して捨てる。
+保持は 7 日を取る。上限の 31 日まで伸ばせるが、`drain_max_age_hours` の既定 24 時間に対して 7 日でも十分な余裕があり、それ以上は「起票されないと分かっているレコードを保持し続ける」ことにしかならない。起票する窓は totsuka 側の `drain_max_age_hours`（既定 24）と `drain_limit` で決める。ADR-0068 の `watch_backfill_max_age_hours` / `watch_backfill_limit` と同じ考え方で、名前もそれに揃える。ポリシーが手元にあるので、出張明けに拾いたければ設定を一時的に上げるだけでよく、クラウドの再デプロイが要らない。窓の外のメッセージは ack して捨てる。
 
 `block_actions` は**別トピックにして保持を短く**する。ただし `response_url` の寿命 30 分**より短くしてはならない** — 保持 5 分では、10 分の停止から復帰したときに**まだ有効なボタン操作を捨てる**ことになる。保持は 35 分程度（寿命 + 余裕）とし、**期限切れの判定は消費側で行う**。保持は「取りこぼさない」ため、期限切れ判定は「無駄に処理しない」ためで、役割が違う。
 
@@ -180,9 +180,11 @@ totsuka 側の pull は**各利用者の Google アカウントの ADC** を使�
 }
 ```
 
-`kind` ごとの追加フィールドは、`reaction` が `reaction` / `item_user`、`block_actions` が `action_id` / `value` / `response_url` / `container_channel` のみ。**本文・`text`・下書きブロックはスキーマに存在しない。**
+`kind` ごとの追加フィールドは、`reaction` が `reaction` / `item_user`、`block_actions` が `action_id` / `value` / `response_url` / `container_channel` / `action_ts` のみ。**本文・`text`・下書きブロックはスキーマに存在しない。**
 
-`block_actions` の 4 フィールドは**正規化形**である。Slack の生ペイロードでは `actions[0].action_id` / `actions[0].value` とネストし、チャンネルは `container.channel_id` にある。ゲートウェイが平坦化し、消費側がそこから読む。**この変換自体を適合スイートが固定する** — 生ペイロードの形をそのまま凍結したと誤読すると、全ボタン操作が無反応になる。
+`block_actions` のフィールドは**正規化形**である。Slack の生ペイロードでは `actions[0].action_id` / `actions[0].value` とネストする。ゲートウェイが平坦化し、消費側がそこから読む。**この変換自体を適合スイートが固定する** — 生ペイロードの形をそのまま凍結したと誤読すると、全ボタン操作が無反応になる。
+
+**`container_channel` の導出は 2 経路**で、`container.channel_id` を見て、無ければ `channel.id` に落ちる。これは `approval.rs` の `press_channel()` がすでに持っているフォールバックをそのまま写したもので、死にコードではない（stale draft の押下判定と `pressed_in_dm` が現用し、`press_channel_reads_container_then_channel` が両経路を pin している）。**`container.channel_id` 単独に固定すると、`channel.id` しか載らないペイロードで消費側が今使っている経路が落ちる。**
 
 **配送同一性を契約に含める。** Slack の再送も Pub/Sub の配送も at-least-once なので、`kind` ごとに「同じ出来事」を指す安定した鍵が要る。`message` は `channel` + `ts`、`reaction` は `channel` + `ts` + `user` + `reaction`、`block_actions` は Slack の `action_ts` を含める。この導出規則を適合 fixture に載せ、消費側の `message_key` はここから作る。鍵が無いと、実装ごとに重複処理か取りこぼしのどちらかに倒れる。
 
@@ -196,7 +198,7 @@ totsuka 側の pull は**各利用者の Google アカウントの ADC** を使�
 
 **所属判定は totsuka 側に残す。** エッジで真偽値にするには運用者の所属グループ一覧をクラウド設定に置く必要があり、メンバー変更のたびに更新が要り、陳腐化するとメンションを黙って取りこぼす。代わりにイベントゲートウェイは本文から**グループ ID だけを抽出**して `subteam_ids` に載せ、自分が属するかの判定は totsuka が行う。他人個人宛の `<@U_OTHER>` は記録しない。これにより登録表は `パス → (signing secret, user ID, トピック)` のまま増えない。
 
-所属は起動時に `usergroups.list`（`include_users=true`）を 1 回呼んで解決する。メンバー変更は稀で再起動で追従できるため、定期更新は入れない。これは `manifest.yml` の user scope に `usergroups:read` の追加を要求し、**再インストールにより `xoxp-` と `xoxb-` の両方が再発行される**。
+所属は起動時に `usergroups.list`（`include_users=true`）を 1 回呼んで解決する。メンバー変更は稀で再起動で追従できるため、定期更新は入れない。**クラウドに置く案との違いは、更新が自動であること**である — こちらは起動のたびに API から取り直すが、あちらはメンバー変更のたびに人が設定を書き換える二重管理になる。本 ADR の前提どおりノート PC は頻繁に止まって起動するので、起動時解決は実質かなり頻繁に走る。これは `manifest.yml` の user scope に `usergroups:read` の追加を要求し、**再インストールにより `xoxp-` と `xoxb-` の両方が再発行される**。
 
 対象外と決めた以上 `broadcast` はスキーマに置かない。スキーマは追加に寛容なので、方針が変われば `v: 1` のまま足せる。
 
