@@ -4,7 +4,7 @@ title: ADR-0032 herdr protocol 17 への追随（agent.start の manifest 駆動
 description: herdr 0.7.5 (protocol 17) で agent.start が manifest 駆動（kind + 呼び出し側が用意した既存 pane）へ、プロンプト投入が agent.prompt へ破壊的に変わったことへの追随方針。program→kind 写像、agent name の生成規則と agent_name_taken の扱い、pane 確保順序の反転、submit_prompt と RetryPolicy の廃止、protocol 16 以下を切る判断を定める。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/agent-ide-herdr
 tags: [adr, herdr, agent-ide, protocol, breaking-change]
-generated: { by: claude-code/opus-5, at: 2026-08-07T23:30:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-12T23:55:00+09:00 }
 status: stable
 verified: [{ by: human:tomoya-k31, at: 2026-08-06T03:15:00+09:00 }]
 owner: tomoya-k31
@@ -20,6 +20,17 @@ sources:
 # Status
 
 **採択（stable）。** [agent-ide-herdr](/components/agent-ide-herdr.md) に実装済み。
+ただし **D-2（`name` の生成規則）は [ADR-0071](/decisions/adr-0071-task-identifier-naming.md) が置き換えた**（#645）。
+
+- **D-2 の「`t-<可読プレフィクス>-<task_id の 8 桁ハッシュ>`」は無効。** 名前は
+  `t-<task 番号>-<hash8>` になり、生成手順は herdr プラグインから `plugin-protocol` の
+  `identifier` へ移って orca・worktree と共有される。D-2 の可読プレフィクスは「`herdr agent list` を
+  人間が読んで切り分けられるように」という意図だったが、実際に出ていたのは切り詰められた Slack の
+  ts や base64 の断片で、**どのソースでも名前からタスクを特定できていなかった**。加えて 32 文字の
+  予算計算が 1 文字はみ出す条件があり、該当するタスクは恒久的に dispatch できなかった
+- **D-1・D-3〜D-7 は生きている。** とくに **D-3（`agent_name_taken` を「掃除されていない同一タスクの
+  エージェント」の徴候と読み、別名で逃げない）は前提ごと維持**されている — ADR-0071 が名前に
+  session row を含めないのは、その決定論を壊さないことを要件にしたためである
 
 # Context
 

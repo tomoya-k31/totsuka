@@ -4,7 +4,7 @@ title: agent-ide-herdr プラグイン
 description: herdr を Agent IDE として接続する公式 agent_ide プラグイン（v1 参照実装）。Orchestrator の JSON-RPC ↔ herdr Socket API（NDJSON）のアダプタで、dispatch/セッション管理/状態ストリーム/plan モード/pane レイアウトを担う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/agent-ide-herdr
 tags: [rust, crate, plugin, agent-ide, herdr, socket-api, streaming, hook, deadman, layout]
-generated: { by: claude-code/opus-5, at: 2026-08-23T21:00:00Z }
+generated: { by: claude-code/opus-5, at: 2026-09-12T21:30:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -185,9 +185,16 @@ core の `[tools]` に集める」は保たれ、`args` は不透明なまま渡
 ## `name` の生成
 
 protocol 17 の `name` は表示ラベルではなく**識別子**（`[a-z][a-z0-9_-]{0,31}`、生存中のエージェント間で一意）。
-`t-<可読プレフィクス>-<task_id の sha256 先頭 8 桁>` を生成する。ハッシュが要るのは、切り詰めの衝突が
-**別タスクとの取り違え**になるからで、可読プレフィクスが要るのは `herdr agent list` を人間が読んで
-切り分けられるようにするため。
+**#645 ([ADR-0071](/decisions/adr-0071-task-identifier-naming.md)) 以降、生成するのは
+`t-<task 番号>-<sha256(source ∥ ソース側 id) 先頭 8 桁>`**（例 `t-3-9f3c2a1e`）で、
+このプラグインが持つのは `AgentName` が宣言する**制約 4 つ**（`t-` 前置・32 文字・小文字・`[-_]`）
+だけである。生成手順は `plugin-protocol` の `identifier` が orca・worktree と共有する。
+
+読める半分が **task 番号**（`state.db` の `tasks.id`）なのは、ログの `task_id=`・`totsuka status`・
+`totsuka task retry <n>` と同じ番号で、名前からタスクへ戻れるからである。#645 以前は
+`t-<ソース側 id の可読プレフィクス>-<hash>` だったが、切り詰められた Slack の ts や GitHub の
+base64 node id は人間にとって何も識別していなかった。ハッシュが要るのは、切り詰めの衝突が
+**別タスクとの取り違え**になるうえ、task 番号が一意なのは 1 つの `state.db` の中だけだからである。
 
 `agent_name_taken`（同名の生存エージェントがある）は**別名で回避せず dispatch を失敗させる**。
 決定論的な名前が衝突するのは、孤児 pane が残っているか `session/release` が失敗したという異常であり、
@@ -331,7 +338,7 @@ manifest（`plugins/agent-ide-herdr/plugin.toml`）と `initialize` 応答で `k
 
 # テスト
 
-- 状態写像・復帰ハンドル・exit 分類・**`agent_name` の書式と衝突耐性**・**`resolve_kind` の写像**は純関数として単体テスト。`agent_name` は herdr が実際に課す規則（小文字始まり・`[a-z0-9_-]`・32 文字以内）を Slack / GitHub 双方の task id と退化ケース（空文字・記号のみ）で検査し、先頭 21 文字が同じ 2 つの id が別名になること・同じ id が常に同じ名前になることを固定する。
+- 状態写像・復帰ハンドル・exit 分類・**`resolve_kind` の写像**は純関数として単体テスト。**エージェント名は 0.7.1 (#645) で `plugin_protocol::identifier` へ移った**ので、ここで固定するのは `AgentName` が**宣言する制約が herdr のものであること**（32 文字・小文字・`[-_]`・prefix が英字始まり）と、dispatch が実際にその名前を `agent.start` へ渡すこと（task 番号あり = `t-<n>-`、`None` なら source id へフォールバック）だけである。「任意の入力に対して制約を満たす」という性質は protocol 側の性質テストが持ち、ここでは繰り返さない（[ADR-0071](/decisions/adr-0071-task-identifier-naming.md) D-5）。
 - **実 Unix ソケットの fake herdr サーバ**に対する結合テスト（`tests/integration.rs`）。fake は **herdr 0.7.5 (protocol 17)** を模す: **応答後に接続を閉じる**接続モデル、`{event, data}` 封筒（**ドット/アンダースコア混在**の実イベント名）、`ping` が返す `protocol`、`agent.start {name, kind, pane_id}`、そして入力と送信を 1 回で行う `agent.prompt`。0.7.4 までモデルしていた「入力に反応できるまで `agent.send` / Enter を落とす CLI」は `agent.send` ごと消え、herdr 側の `agent_prompt_stalled` に置き換わった。
 - **protocol 17 の固定**（[ADR-0032](/decisions/adr-0032-herdr-protocol-17.md)）: `initialize` が protocol 16 を**バージョン名指しで拒否**し以後の dispatch も受け付けないこと／`protocol` フィールドの無い `ping` は**通す**こと（未知の形に対して落とさない）／`agent.start` に `argv`/`cwd`/`env` を**送らない**こと・`pane_id` が root pane であること・`kind` が `program` のファイル名から解決されること（絶対パスでも）・`name` が herdr の識別子規則を満たすこと／`agent.prompt` の `wait.until` が `working` だけでなく `blocked`/`done` も含むこと（短いターンの取り逃し防止）／**`agent_name_taken` を別名で回避せず失敗させ、workspace を畳むこと**／`root_pane` の無い応答が **dispatch を失敗させ**、`agent.start` をどこにも撃たないこと。
 - 従来からの検証は維持: 始動しない CLI（`agent_prompt_stalled`）で**エラーで失敗する**こと・**フック env が `workspace.create` に乗り `agent.start` には乗らないこと**・`--settings`/`--resume` が `args` に入ること・**`pane.agent_status_changed` を送っても通知が出ないこと（縮退の固定化）**・`pane.exited` 非 0/コード無し→`Failed`・clean exit（0）は通知なし・`diagnostics/snapshot` の正常/pane 消失（`text: null`）両応答・**`session/focus` のフォーカスチェーン**と pane 消失・**`session/release` の各分岐**・他 pane の replay と close 通知を無視すること・`id:""` エラーの即時相関・session/attach の成功と pane 消失・`config/validate` の疎通（ping）。**#261 の `SESSION_UNRESUMABLE` 写像 3 分岐**も維持（resume 指定 + pane 消失 → `-32006`／resume なし + pane 消失 → `-32603`／resume 指定 + pane 生存の別エラー → `-32603`）。

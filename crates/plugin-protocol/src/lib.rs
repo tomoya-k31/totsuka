@@ -91,12 +91,14 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
+pub mod identifier;
 pub mod jsonrpc;
 pub mod manifest;
 pub mod methods;
 pub mod task;
 pub mod version;
 
+pub use identifier::{Case, HASH_CHARS, IdentifierCore, IdentifierPolicy};
 pub use jsonrpc::{Error, Notification, Request, RequestId, Response, error_code};
 pub use manifest::{Capabilities, Manifest, ManifestError, OutputCapability, PluginKind};
 pub use methods::method;

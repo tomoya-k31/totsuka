@@ -4,7 +4,7 @@ title: herdr の暗黙契約（schema に載らない依存）
 description: "totsuka が herdr の Socket API schema に載っていない振る舞いへ依存している箇所の一覧と、その確かめ方。metadata token 値の 80 文字上限（超過は黙って切られる）、pane id の w1:p1 形式、herdr 内部の 5 秒下限、workspace.create の env が root pane に適用されること、pane.split が env を継承しないこと（セキュリティ前提）を扱う。型化も CI の schema 差分もこの層を一切カバーしない。"
 resource: https://github.com/tomoya-k31/totsuka/blob/main/plugins/agent-ide-herdr
 tags: [herdr, socket-api, implicit-contract, security, live-e2e, external]
-generated: { by: claude-code/opus-5, at: 2026-08-23T00:00:00Z }
+generated: { by: claude-code/opus-5, at: 2026-09-12T21:30:00+09:00 }
 verified:
   - { by: claude-code/opus-5, at: 2026-08-23T00:00:00Z }
 status: stable
@@ -51,13 +51,23 @@ sources:
 | C-3 | herdr 内部の **5 秒下限**（設定不能）を前提にした stall 回復 | `agent.rs` の `agent_prompt_stalled` 処理 | 成功した投入が失敗として返り、Enter が余計に押される |
 | C-4 | `workspace.create` の `env` が **root pane に適用される** | `agent.rs` `dispatch` | フック環境が届かず、**完了検知が来ない**（タスクがタイムアウトするまで気づかない） |
 | C-5 | **`pane.split` で作る shell pane は env を継承しない** | `agent.rs` `apply_layout` | **壊れても動き続けたまま秘密が漏れる**（下記） |
-| C-6 | `agent.start` の `name` は `[a-z][a-z0-9_-]{0,31}` | `agent.rs` `agent_name` / `NAME_PREFIX_CHARS` | `invalid_agent_name` で dispatch が落ちる（大声で壊れる） |
+| C-6 | `agent.start` の `name` は `[a-z][a-z0-9_-]{0,31}` | `agent.rs` `AgentName`（制約の宣言）/ `plugin-protocol` の `identifier`（生成手順） | `invalid_agent_name` で dispatch が落ちる（大声で壊れる） |
 
 **C-6 は schema 上は素の `string`** で、実際の制約は herdr のドキュメントと
 `invalid_agent_name` エラーにしかない。C-1 と同型（schema にあっても意味が
 現れない）だが、**破れたら大声で壊れる**ので確かめ方は要らない — dispatch が
-そのエラーで落ちる。ここに載せてあるのは、`agent_name` の生成規則を触るときに
-「なぜ `t-` を前置しているのか」を辿れるようにするためである。
+そのエラーで落ちる。ここに載せてあるのは、名前の生成規則を触るときに
+「なぜ `t-` を前置しているのか」を辿れるようにするためである
+（[ADR-0071](/decisions/adr-0071-task-identifier-naming.md) D-1: 先頭が英字である
+保証は prefix にしか無い。task 番号もハッシュも数字で始まりうる）。
+
+**この行が「大声で壊れる」と言えるのは herdr が検査するからで、こちら側が
+正しいからではない。** 実際 #645 では、32 文字の予算計算が 1 文字はみ出す条件を
+満たした task だけが恒久的に dispatch 不能になった。制約は
+[`AgentName`](https://github.com/tomoya-k31/totsuka/blob/main/plugins/agent-ide-herdr/src/agent.rs)
+が宣言し、それを満たす手順は
+[`plugin_protocol::identifier`](https://github.com/tomoya-k31/totsuka/blob/main/crates/plugin-protocol/src/identifier.rs)
+が全ツール共通で持つ形に変えてある。
 
 **C-5 だけ性質が違う。** 他は「壊れたら動かなくなる」ので、遅かれ早かれ気づく。
 C-5 は壊れても**何も起きない** — `TOTSUKA_HOOK_TOKEN` を持ったシェルが人間の隣に

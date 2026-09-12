@@ -410,6 +410,7 @@ mod tests {
             mode: plugin_protocol::methods::ExecutionMode::Plan,
             extra_context: Some(Value::String("line one\nline two".into())),
             job_id: None,
+            task_number: None,
             resume_session_id: None,
             tool_launch: None,
             repo_name: None,

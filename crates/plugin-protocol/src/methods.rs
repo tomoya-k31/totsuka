@@ -621,6 +621,27 @@ pub struct TaskDispatchParams {
     /// the launched process's environment as `TOTSUKA_JOB_ID`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub job_id: Option<String>,
+    /// 0.7.1 (#645): the Orchestrator's own number for this task — `tasks.id`,
+    /// the number the logs print as `task_id=`, `totsuka status` lists, and
+    /// `totsuka task retry <n>` takes.
+    ///
+    /// It is what an `agent_ide` plugin names its agent, worktree or pane
+    /// after, via [`IdentifierPolicy`](crate::identifier::IdentifierPolicy):
+    /// a name carrying this number can be carried back to the task, which is
+    /// the thing `Task::id` cannot do (a truncated Slack timestamp or a slice
+    /// of a base64 node id identifies nothing to a human).
+    ///
+    /// **Sent on every dispatch**, unlike [`job_id`](Self::job_id) — which is
+    /// minted only for agents declaring `hook_completion` under a workflow
+    /// with hook launch settings, and is therefore permanently absent for
+    /// agents like orca. That difference is the whole reason this field is not
+    /// just parsed out of `job_id`.
+    ///
+    /// `None` when the Orchestrator predates 0.7.1. A plugin must degrade —
+    /// `IdentifierPolicy` falls back to the source's id — rather than refuse
+    /// the dispatch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_number: Option<i64>,
     /// 0.1.3: the agent-native session id to resume a past session with
     /// (`claude --resume <id>`). Used for Slack thread conversation
     /// continuation.
@@ -1124,6 +1145,7 @@ mod tests {
             mode: ExecutionMode::Implement,
             extra_context: Some(serde_json::json!({"base": "main"})),
             job_id: Some("job-7".into()),
+            task_number: Some(7),
             resume_session_id: Some("claude-sess-abc".into()),
             repo_name: Some("totsuka".into()),
             tool_launch: Some(ToolLaunchSpec {
@@ -1277,18 +1299,24 @@ mod tests {
         // 0.4.1 (#417): same contract. A plugin reading this must show no
         // repository name, not refuse the dispatch.
         assert!(old.repo_name.is_none());
+        // 0.7.1 (#645): same contract again. A plugin reading this names what
+        // it creates after the source's id instead — a different name, not a
+        // refused dispatch.
+        assert!(old.task_number.is_none());
         let unset = TaskDispatchParams {
             task: sample_task(),
             worktree_path: "/wt".into(),
             mode: ExecutionMode::Plan,
             extra_context: None,
             job_id: None,
+            task_number: None,
             resume_session_id: None,
             tool_launch: None,
             repo_name: None,
         };
         let wire = serde_json::to_string(&unset).unwrap();
         assert!(!wire.contains("job_id"));
+        assert!(!wire.contains("task_number"));
         assert!(!wire.contains("resume_session_id"));
         assert!(!wire.contains("tool_launch"));
         assert!(!wire.contains("repo_name"));
