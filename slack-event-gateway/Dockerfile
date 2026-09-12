@@ -32,9 +32,13 @@ WORKDIR /src
 # source changes on every commit, and building them again for a one-line edit
 # is the difference between a 30-second and a 4-minute release job.
 COPY Cargo.toml Cargo.lock ./
+# The stubs need crate-level docs: this crate sets `missing_docs = "warn"` on
+# top of `warnings = "deny"`, so a bare `fn main() {}` does not compile. CI
+# caught that; the comment is here so the next person editing these two lines
+# does not have to.
 RUN mkdir -p src \
-    && echo 'fn main() {}' > src/main.rs \
-    && echo '' > src/lib.rs \
+    && printf '//! placeholder\nfn main() {}\n' > src/main.rs \
+    && printf '//! placeholder\n' > src/lib.rs \
     && cargo build --release --locked \
     && rm -rf src
 
