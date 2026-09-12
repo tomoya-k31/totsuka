@@ -121,11 +121,24 @@ body_template = """
 # agent handed "md ファイルにしました" with the file erased answered as if the
 # message had no attachment; this section is what stops it inventing the
 # content instead of saying it could not read it.
+#
+# **The permission to fetch it anyway is equally load-bearing**, and was added
+# after production showed why: an agent whose Slack MCP was configured parsed
+# the file id out of the permalink on the line below and read the attachment
+# itself — under the `answer` profile, which denies the shell entirely. The
+# first wording listed only 名前・種類・サイズ and told the agent to reply that
+# it could not read the file, which steers away from the one path that works.
+# So: say what totsuka has, allow the agent its own route, and keep the
+# "do not guess" instruction for the case where that route is unavailable.
+#
+# No tool is named on purpose. `slack_read_file` is one route among several and
+# naming it sends an agent that does not have it looking for a tool that is not
+# there.
 body_attachment_header = """
 
 ## 添付ファイル（{count} 件）
 
-（ファイルの中身は取得していません。名前・種類・サイズだけが分かっています。内容が必要な場合は推測で補わず、添付を読めていないことを返信に書いてください）
+（totsuka は中身を取得していません。分かっているのは以下の名前・種類・サイズと、行末のリンクだけです。中身が必要なら、そのリンクから自分で取得できる手段があれば使ってください。取得できなかった場合は推測で補わず、添付を読めていないことを返信に書いてください）
 
 """
 

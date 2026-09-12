@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:2a29d0c53de8136de0b3cdce5257dfe50fe7ca6198bfdaaa648d57ab4f3f5b4c -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:6ebb6883fb6c630e736b86788ea4962a044c59014eb7716bfb5cc80abfdb88e1 -->
 
 # Configuration reference
 
@@ -921,7 +921,7 @@ Per-key overrides for the prompts this plugin sends; the key name is the setting
 | `triage_instructions` | The default for `triage`: file an issue, report the URL | — |
 | `reply_style_suffix` | Appended to the reply instructions only when `reply_style` is set | `{style}` |
 | `body_template` | The task body shown in the pane. For a mention-driven task, `{text}` is the original message with **your own (`target_user_id`) mention tag removed**: when the agent sees the raw `<@U…>` tag, it copies it into a reply that is posted as you. A channel-watch task is answered as the bot, so a mention of you stays there as content | `{sender}`, `{channel}`, `{text}` |
-| `body_attachment_header` | Heading of the attachment section, emitted only when the message carried files. The default text states that the **content was not fetched**: the plugin has no `files:read` scope, so only the name, type and size are known. Without that sentence the agent guesses what the attachment said, so keep it if you override the key | `{count}` |
+| `body_attachment_header` | Heading of the attachment section, emitted only when the message carried files. **The default text says two things, and both are behaviour**: (1) totsuka has not fetched the content — the plugin has no `files:read` scope and downloads nothing; without this the agent guesses what the attachment said. (2) The agent may fetch it from the link itself — an agent with its own Slack tooling reads the file id out of the permalink and retrieves the content. Keep **both** if you override the key. The default deliberately names no tool: naming one sends an agent that lacks it looking for something that is not there | `{count}` |
 | `body_attachment_line` | One attachment line. `{file}` arrives **already composed** from the name, MIME type, size and permalink — each of those but the name can be missing, so four separate placeholders would leave an empty `（・）` behind | `{file}` |
 | `body_thread_header` | Heading of the thread context section | `{count}` |
 | `body_thread_line` | One line of thread context | `{line}` |

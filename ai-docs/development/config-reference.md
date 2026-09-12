@@ -4,7 +4,7 @@ title: 設定リファレンス（config.toml）
 description: "config.toml の全キー・デフォルト値・意味の一覧。設定ファイルは 1 本で、プラグイン個別設定もトップレベルの [<name>] テーブルに入る。シークレット参照、設定スキーマのバージョニング方針、[[projects]] の domain 宣言とワークフローからの参照、プラグインが定義する追加プロパティ、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-github の [github]、task-source-notion の [notion]、task-source-slack の [slack]、agent-ide-herdr の [herdr] を含む。"
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
 tags: [config, reference, toml, secrets, workflow, worktree, github, notion, slack, hooks, versioning]
-generated: { by: claude-code/opus-5, at: 2026-09-13T00:20:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-12T12:05:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -1035,7 +1035,7 @@ kind = "task_source"
 | `triage_instructions` | **profile 既定**: `triage`（`:books:` の起票フロー、#450）。Issue を起票し、その URL を報告文に含めさせる | — |
 | `reply_style_suffix` | `reply_style` が設定されているときだけ `reply_instructions` に追記される | `{style}` |
 | `body_template` | ペインに表示されるタスク本文。メンション由来のタスクでは `{text}` は元メッセージから **自分（`target_user_id`）宛のメンションタグを除いた**もの（#632。生の `<@U…>` を見せるとエージェントが本人名義の返信に写す）。チャンネル監視のタスクは bot 名義で答えるので、運用者宛のタグも内容として残る | `{sender}` `{channel}` `{text}` |
-| `body_attachment_header` | 添付ファイルセクションの見出し。メッセージが添付を持つときだけ出る。既定文は「**中身は取得していません**」を明言する —— このプラグインは `files:read` を持たないので名前・種類・サイズしか分からず、それを言わないとエージェントが添付の内容を推測して返信する（実機で踏んだ: 「md ファイルにしました」というメンションが本文だけのタスクになった）。上書きするならこの一文は残すこと | `{count}` |
+| `body_attachment_header` | 添付ファイルセクションの見出し。メッセージが添付を持つときだけ出る。**既定文は 2 つのことを言っており、どちらも振る舞いである**: ①「totsuka は中身を取得していません」—— このプラグインは `files:read` を持たないので中身をダウンロードしない。言わないとエージェントが内容を推測して返信する（実機で踏んだ: 「md ファイルにしました」というメンションが本文だけのタスクになった）。②「リンクから自分で取得できる手段があれば使ってください」—— **エージェント自身の Slack ツール（MCP 等）は permalink から file id を切り出して中身を読める**（これも実機で確認。`answer` profile の deny セットと plan モードの下でも通った）。①だけを書いていた頃の文面は、唯一動く経路からエージェントを遠ざけていた。上書きするなら**両方**残すこと。既定文がツール名を出さないのは意図的で、名指しすると持っていないエージェントに存在しない道具を探させる | `{count}` |
 | `body_attachment_line` | 添付 1 行ぶん。`{file}` は名前・MIME・サイズ・permalink を**組み立て済み**で渡る（`mimetype` / `size` / `permalink` はどれも欠けうるので、4 つのプレースホルダにすると空の `（・）` が残る。`body_thread_line` と同じ作法） | `{file}` |
 | `body_thread_header` | スレッド文脈セクションの見出し | `{count}` |
 | `body_thread_line` | スレッド文脈 1 行ぶん | `{line}` |

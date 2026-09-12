@@ -72,10 +72,11 @@ pub struct Mention {
     ///
     /// Always `None` on the mention and reaction paths, which resolve.
     pub repo_pin: Option<String>,
-    /// Files attached to the message, **metadata only**
-    /// ([`SlackFile`]): the plugin has no
-    /// `files:read` scope, so the body names them and says the content was
-    /// not fetched. Empty for a message with no attachment.
+    /// Files attached to the message, **metadata only** ([`SlackFile`]): the
+    /// plugin has no `files:read` scope, so it names them and hands over the
+    /// permalink rather than the content. That link is not a dead end — an
+    /// agent with a Slack tool of its own fetches the file from it. Empty for
+    /// a message with no attachment.
     pub files: Vec<SlackFile>,
 }
 
