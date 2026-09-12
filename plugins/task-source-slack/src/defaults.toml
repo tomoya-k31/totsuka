@@ -116,8 +116,9 @@ body_template = """
 #
 # Placeholders: {count}
 #
-# The "中身は取得していません" sentence is load-bearing, not decoration: the
-# plugin has no `files:read` scope, so it can name a file and nothing more. An
+# The "content is not in this task" sentence is load-bearing, not decoration:
+# the plugin has no `files:read` scope, so it can name a file and nothing more.
+# An
 # agent handed "md ファイルにしました" with the file erased answered as if the
 # message had no attachment; this section is what stops it inventing the
 # content instead of saying it could not read it.
@@ -128,8 +129,15 @@ body_template = """
 # itself — under the `answer` profile, which denies the shell entirely. The
 # first wording listed only 名前・種類・サイズ and told the agent to reply that
 # it could not read the file, which steers away from the one path that works.
-# So: say what totsuka has, allow the agent its own route, and keep the
+# So: say what the task carries, allow the agent its own route, and keep the
 # "do not guess" instruction for the case where that route is unavailable.
+#
+# **Nothing agent-facing names the orchestrator.** The agent is handed a
+# mention and its thread; "totsuka" is not in that world, so a sentence whose
+# subject is totsuka says nothing to the reader. This file and every other
+# prompt default were free of the word — an earlier draft of this key was the
+# single exception, and it is stated here so the next edit does not reintroduce
+# it.
 #
 # No tool is named on purpose. `slack_read_file` is one route among several and
 # naming it sends an agent that does not have it looking for a tool that is not
@@ -143,7 +151,7 @@ body_attachment_header = """
 
 ## 添付ファイル（{count} 件）
 
-（totsuka は中身を取得していません。分かっているのは以下の行に出ている情報だけです。リンクが付いている添付は、中身が必要なら、そこから自分で取得できる手段があれば使ってください。取得できなかった場合や、リンクが付いていない添付については、推測で補わず、添付を読めていないことを返信に書いてください）
+（添付ファイルの中身はこのタスクに含まれていません。分かっているのは以下の行に出ている情報だけです。リンクが付いている添付は、中身が必要なら、そこから自分で取得できる手段があれば使ってください。取得できなかった場合や、リンクが付いていない添付については、推測で補わず、添付を読めていないことを返信に書いてください）
 
 """
 
