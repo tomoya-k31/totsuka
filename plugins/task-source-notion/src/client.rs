@@ -468,6 +468,12 @@ impl<T: NotionTransport> NotionClient<T> {
                 )
             });
         Some(Task {
+            // No handle (0.7.2, #646). A Notion page id is a UUID and its
+            // title is prose — neither is the short, stable, path-safe name a
+            // handle has to be, and inventing one from the title would put a
+            // renameable string into an identifier. `None` is the honest
+            // answer; the task number and the digest still name the task.
+            handle: None,
             id,
             source: self.config.source_name.clone(),
             title,

@@ -297,6 +297,7 @@ mod tests {
             assignee: None,
             message_key: None,
             instructions: None,
+            handle: None,
         }
     }
 

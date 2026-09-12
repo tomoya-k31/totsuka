@@ -4,7 +4,7 @@ title: ADR-0071 タスク識別子の命名 — 内部 task 番号を読める�
 description: "herdr の agent name・orca の worktree 名・Orchestrator の worktree ディレクトリ名を 1 つの規則に揃える決定。名前は <prefix><task 番号><sep><sha256(source ∥ source id) 先頭 8 hex> とし、制約（prefix・長さ上限・大小・許可文字）だけを各ツールが IdentifierPolicy で宣言して sanitize・切り詰め・ハッシュ付与の手順は plugin-protocol が持つ。読める半分を source id から内部 task 番号へ移すため protocol 0.7.1 で TaskDispatchParams.task_number を足し、job_id は使わない。session row を含めない理由、ハッシュを常に付ける理由、worktree の葉とプレースホルダの扱いを含む。"
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/plugin-protocol/src/identifier.rs
 tags: [decision, adr, naming, identifier, plugin-protocol, herdr, orca, worktree]
-generated: { by: claude-code/opus-5, at: 2026-09-13T00:20:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-13T01:10:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -69,15 +69,21 @@ if c.is_ascii_alphanumeric() {
 ## D-1: 名前は `<prefix><task 番号><sep><hash8>`、core を全ツールで一致させる
 
 ```text
-core        = <task 番号>-<hash8>        hash8 = sha256("<source>\0<source_task_id>") 先頭 8 hex
-herdr       = t-3-9f3c2a1e               32 文字・[a-z][a-z0-9_-]
-orca        = totsuka-3-9f3c2a1e
-worktree 葉 = 3-9f3c2a1e                 <state>/totsuka/worktrees/<repo_name>/3-9f3c2a1e
+core        = <task 番号>[-<handle>]-<hash8>   hash8 = sha256("<source>\0<source_task_id>") 先頭 8 hex
+herdr       = t-3-web-42-9f3c2a1e              32 文字・[a-z][a-z0-9_-]
+orca        = totsuka-3-web-42-9f3c2a1e
+worktree 葉 = 3-web-42-9f3c2a1e                <state>/totsuka/worktrees/<repo_name>/3-web-42-9f3c2a1e
 ```
+
+`handle` は任意で、D-7（0.7.2 / #646）で足した。初版は `<task 番号>-<hash8>` だけだった。
 
 **読める半分は内部 task 番号**（`state.db` の `tasks.id`）。ログ・`status`・`retry <n>` と同じ番号なので、名前から**タスクへ戻れる**。source id を切り詰めたものには戻る先が無かった。
 
 **prefix だけツール固有にする。** core が一致するので `3-9f3c2a1e` の 1 回の grep で herdr のエージェント・orca の worktree・ディスク上のディレクトリが同時に引ける。prefix はツールの制約（herdr は英字始まりを要求する）と既存の慣習（orca の `totsuka-`）を吸収する層として残す。
+
+**core を一致させるには `case` を揃える必要がある**（#646 のレビューで判明）。初版の core は数字と小文字 hex だけだったので `Case::Lower` と `Case::Preserve` の区別が出力に現れず、worktree と orca は `Preserve`、herdr だけ `Lower` で問題無かった。D-7 の `handle` は**英字を持ち込む最初の部分**で、`Web-App-42` のような GitHub の handle はそこで割れる（herdr `t-3-web-app-42-…` / 葉 `3-Web-App-42-…`）。したがって **3 つとも `Case::Lower` に揃える** — 小文字は herdr の制約であって他 2 つの制約ではないが、「揃っていること」自体がここでの要件である。
+
+**長さだけは揃わない。** herdr の 32 文字は他 2 つに無いので、長い handle は herdr でだけ切られる。完全な一致を求めて全ツールを最も狭い制約に合わせる案は採らない — 将来もっと狭いツールが 1 つ増えるだけで全員の名前が縮むことになる。したがって**あらゆる場合に byte 一致する部分は `<hash8>`** であり、確実に 3 つ引きたいときはダイジェストで検索する。
 
 ## D-2: 読める半分は `job_id` ではなく、新しい `task_number` フィールドで受け取る
 
@@ -135,6 +141,25 @@ pub trait IdentifierPolicy {
 
 既存の worktree に移行は要らない。掃除・孤児検出・`doctor`・再利用ガードはいずれも `tasks.worktree_path` に記録された**フルパス**を読み、**名前を parse して task を復元している箇所は 1 つも無い**。
 
+## D-7: 読める半分の隣に、ソースが名付ける `handle` を置く（0.7.2 / #646）
+
+D-1 の名前は「どのタスクか」に答えるが、「**何の**タスクか」には答えない。`t-3-9f3c2a1e` を見て `totsuka status` は引けても、それが web リポジトリの issue 42 なのか Slack の #dev-support なのかは分からない。herdr の 32 文字にはまだ 20 文字ほど余っている。
+
+そこで [`Task.handle: Option<String>`](https://github.com/tomoya-k31/totsuka/blob/main/crates/plugin-protocol/src/task.rs) を protocol 0.7.2 で足し、**ソースが人間向けの短い名前を書く**。識別子では task 番号とダイジェストの間に入る。
+
+**切られるのは handle だけ。** 番号は `totsuka status` へ戻る手段で、ダイジェストは一意性の担い手なので、予算が足りないときに落とせるのは可読性だけである。切り詰めは末尾から行うので、**ソースは識別性の高い順に並べる**（`web-app-42` であって `42-web-app` ではない）。
+
+各ソースが何を入れるか、そして**何も入れないこと**も正しい答えである:
+
+| ソース | handle | 理由 |
+|---|---|---|
+| GitHub Projects | `{repo}-{issue 番号}` | 人が呼ぶ名前そのもの。`Task.id` は base64 の node id で、これになれない。1 つのボードが複数 repo を追うので番号だけでは曖昧 |
+| Slack | チャンネル**名**（`dev-support`） | 人は `#dev-support` を読み、`C0ABCDEF12` は読まない。ts は**入れない** — 予算で数字の途中で切られるうえ、それが区別するもの（同一チャンネルの 2 スレッド）は task 番号が既に区別している |
+| Discord | チャンネル**名** | 同上。Discord の id は全て snowflake で、名前だけが人の読むもの |
+| Notion | **無し** | page id は UUID、title は散文。短く・安定し・パス安全という条件を満たすものが無い。title から作ると**改名可能な文字列が識別子に入る** |
+
+**一意性は要求しない。** それはダイジェストの仕事なので、重複する handle は何も壊さない。逆に言えば handle は**識別子ではない**ので、これで dedup する経路を作ってはならない。
+
 # Consequences
 
 ## 良くなること
@@ -168,7 +193,7 @@ pub trait IdentifierPolicy {
 | trait ではなく値（`IdentifierRule` 構造体）で宣言する | 実装としてはほぼ同じだが、ツール固有の事情（将来 `agent.start` が別の形を要求する等）を型で表現する余地が無くなる。required を制約に限れば手順の分岐は防げる |
 | `plugin-sdk` に置く | core（worktree 名）から使えない。core が sdk に依存すると「sdk はプラグイン作者向け」という層が逆転する |
 | worktree 名テンプレートを残し、`{task_number}` / `{hash}` プレースホルダで葉を組む | 葉がポリシーの出力ではなくなり、3 ツールの core 一致がテンプレート文字列の偶然の一致に落ちる。到達不能な設定を残す対価としては高い（D-6） |
-| task_source が読める handle を提供する | 有用だが本 ADR の範囲外。余った予算に足す設計として #646 に分離した |
+| ~~task_source が読める handle を提供する~~ | **採択した**（D-7、#646）。初版では範囲外としていたが、余った予算の使い道として分離したまま放置する理由が無かった。Slack の handle だけは当初案（`{channel}-{ts 秒}`）を採らず、チャンネル**名**にしている |
 
 # 関連
 

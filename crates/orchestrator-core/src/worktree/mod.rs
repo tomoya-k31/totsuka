@@ -28,9 +28,12 @@ use crate::ports::git::GitRunner;
 /// `totsuka status` and `totsuka task retry <n>` take.
 ///
 /// `max_len` is `None` because no filesystem totsuka targets has a component
-/// limit this can reach, and [`Case::Preserve`] because a directory is the one
-/// place case costs nothing — it shows only in the pre-0.7.1 fallback, where
-/// it keeps the source's id looking like itself.
+/// limit this can reach. [`Case::Lower`] is **not** a constraint of any
+/// filesystem — it is what keeps the shared core shared: herdr's alphabet is
+/// lower-case only, so a handle like `Web-App-42` (0.7.2) would otherwise read
+/// `web-app-42` in the agent's name and `Web-App-42` here, and the one thing
+/// this leaf exists for is to match. Directories on a case-insensitive volume
+/// do not care either way.
 ///
 /// **This replaces a template.** The leaf used to be rendered from
 /// `"{source}-{task_id}"` through a git-ref legalizer, carried as a settings
@@ -40,6 +43,14 @@ use crate::ports::git::GitRunner;
 /// output had to coincide with two other tools' names is a coincidence
 /// maintained by hand.
 pub struct WorktreeLeaf;
+
+impl WorktreeLeaf {
+    /// `handle` as it appears inside the leaf name — the form that is safe to
+    /// put in a path.
+    fn handle_for_path(&self, handle: Option<&str>) -> Option<String> {
+        handle.map(|h| plugin_protocol::identifier::sanitize_for(self, h))
+    }
+}
 
 impl IdentifierPolicy for WorktreeLeaf {
     fn prefix(&self) -> &str {
@@ -51,7 +62,7 @@ impl IdentifierPolicy for WorktreeLeaf {
     }
 
     fn case(&self) -> Case {
-        Case::Preserve
+        Case::Lower
     }
 
     fn extra_allowed(&self) -> &[char] {
@@ -215,6 +226,7 @@ fn location_core<'a>(ctx: &LocationContext<'a>) -> IdentifierCore<'a> {
         task_number: ctx.task_number,
         source: ctx.source,
         source_task_id: ctx.task_id,
+        handle: ctx.handle,
     }
 }
 
@@ -231,11 +243,13 @@ pub struct LocationContext<'a> {
     pub task_id: &'a str,
     /// The Orchestrator's own task number (`tasks.id`), for `{task_number}`.
     pub task_number: Option<i64>,
+    /// The source's short name for the task (0.7.2, #646), for `{handle}`.
+    pub handle: Option<&'a str>,
 }
 
 /// Render a worktree location from a template (F-22). `${ENV}` is expanded from
 /// `env`; `{repo}` / `{repo_name}` / `{worktree_name}` / `{task_id}` /
-/// `{source}` / `{task_number}` / `{hash}` are substituted.
+/// `{source}` / `{task_number}` / `{hash}` / `{handle}` are substituted.
 ///
 /// `worktree_name` is expected to come from [`WorktreeLeaf`], which is what
 /// makes it safe as a path component. `{task_id}` and `{source}` are
@@ -273,6 +287,24 @@ pub fn render_location(
             &ctx.task_number.map(|n| n.to_string()).unwrap_or_default(),
         )
         .replace("{hash}", &location_core(ctx).hash())
+        // **Sanitized, unlike `{task_id}` / `{source}` below.** The handle is
+        // a string a *plugin* writes, and `../outside` in it would escape the
+        // worktree root of a template like `/state/{handle}/{worktree_name}`.
+        // Normalizing costs nothing here because the placeholder is new
+        // (0.7.2): there is no operator template whose meaning could change,
+        // which is the exact reason the older two are left raw.
+        //
+        // Spelling the leaf out by hand as `{task_number}-{handle}-{hash}`
+        // reproduces it **only when the source offers a handle**: this
+        // substitution renders an absent one as the empty string and leaves
+        // the template's own separators, giving `7--<hash>` where the leaf
+        // has `7-<hash>`. That is the normal path for Notion (never a handle)
+        // and for Slack when the channel lookup failed, so a template that
+        // cares should use `{worktree_name}`.
+        .replace(
+            "{handle}",
+            &WorktreeLeaf.handle_for_path(ctx.handle).unwrap_or_default(),
+        )
         .replace("{task_id}", ctx.task_id)
         .replace("{source}", ctx.source);
     // A leading `~` expands to `$HOME` (e.g. `worktree_location = "~/.worktrees/{worktree_name}"`).
@@ -339,6 +371,9 @@ pub struct CreateRequest<'a> {
     /// The Orchestrator's own task number (`tasks.id`), which becomes the
     /// readable half of the leaf name (ADR-0071 D-1).
     pub task_number: Option<i64>,
+    /// The source's short name for the task (0.7.2, #646), which follows the
+    /// number in the leaf when it fits.
+    pub handle: Option<&'a str>,
     /// Location template (use [`default_location_template`] for the default).
     pub location_template: &'a str,
     /// Base branch override; `None` detects `origin`'s default (F-25).
@@ -419,6 +454,7 @@ impl<G: GitRunner> WorktreeManager<G> {
             source: req.source,
             task_id: req.task_id,
             task_number: req.task_number,
+            handle: req.handle,
         };
         let worktree_name = WorktreeLeaf.identifier(&location_core(&ctx));
         let path = render_location(req.location_template, &ctx, &worktree_name, req.env)?;
@@ -1174,6 +1210,7 @@ mod tests {
                 task_number: number,
                 source,
                 source_task_id: id,
+                handle: None,
             })
         };
         let safe = |name: &str| {
@@ -1214,6 +1251,7 @@ mod tests {
             task_number: Some(123),
             source: "github",
             source_task_id: "123",
+            handle: None,
         });
         assert!(name.starts_with("123-"), "{name}");
 
@@ -1223,6 +1261,7 @@ mod tests {
             source: "github",
             task_id: "123",
             task_number: Some(1),
+            handle: None,
         };
         // An operator-written template with a `${ENV}` reference — the shape
         // the built-in default used to have, kept here because user config
@@ -1240,6 +1279,51 @@ mod tests {
         );
     }
 
+    /// ADR-0071 D-1's claim is that one search finds the agent, the orca
+    /// worktree and this directory. The handle (0.7.2) is the first part that
+    /// *could* break it — it is the only one carrying letters a tool might
+    /// fold — so the leaf and herdr's agent name are compared directly here,
+    /// on a handle whose case and length both differ from their raw form.
+    #[test]
+    fn the_leaf_and_the_agent_name_share_a_core() {
+        // herdr's constraints, restated locally: this crate does not depend on
+        // the plugin, and the point is that two independent declarations agree.
+        struct Herdr;
+        impl IdentifierPolicy for Herdr {
+            fn prefix(&self) -> &str {
+                "t-"
+            }
+            fn max_len(&self) -> Option<usize> {
+                Some(32)
+            }
+            fn case(&self) -> Case {
+                Case::Lower
+            }
+            fn extra_allowed(&self) -> &[char] {
+                &['-', '_']
+            }
+        }
+        let core = IdentifierCore {
+            task_number: Some(3),
+            source: "github",
+            source_task_id: "I_kwDOTrfAp88AAAABLKoO_Q",
+            handle: Some("Web-App-42"),
+        };
+        let agent = Herdr.identifier(&core);
+        let leaf = WorktreeLeaf.identifier(&core);
+        assert_eq!(
+            agent.strip_prefix("t-"),
+            Some(leaf.as_str()),
+            "{agent} / {leaf}"
+        );
+        assert!(leaf.starts_with("3-web-app-42-"), "{leaf}");
+
+        // The digest is the part that is byte-identical regardless of any
+        // policy's budget — a long handle is cut to fit herdr's 32 and not
+        // cut here, so it is the digest a search should use.
+        assert!(leaf.ends_with(&core.hash()) && agent.ends_with(&core.hash()));
+    }
+
     /// A source id is substituted **raw**, so it can carry text that looks
     /// like another placeholder. Rendering it before the others would let the
     /// next pass rewrite it — the one thing the raw substitution promises not
@@ -1252,6 +1336,7 @@ mod tests {
             source: "slack",
             task_id: "C1:{hash}",
             task_number: Some(7),
+            handle: None,
         };
         let loc = render_location(
             "/wt/{task_id}",
@@ -1261,6 +1346,67 @@ mod tests {
         )
         .unwrap();
         assert_eq!(loc, PathBuf::from("/wt/C1:{hash}"), "{loc:?}");
+    }
+
+    /// Spelling the leaf out by hand is **not** the same as `{worktree_name}`
+    /// when the source offers no handle: the empty substitution leaves the
+    /// template's own separator behind. Notion never offers one, so this is a
+    /// normal path rather than an edge case.
+    #[test]
+    fn an_absent_handle_leaves_the_templates_own_separator() {
+        let ctx = LocationContext {
+            repo_path: Path::new("/repos/totsuka"),
+            repo_name: "totsuka",
+            source: "notion",
+            task_id: "1f2a3b4c-5d6e-7f80-9a1b-2c3d4e5f6a7b",
+            task_number: Some(7),
+            handle: None,
+        };
+        let leaf = WorktreeLeaf.identifier(&location_core(&ctx));
+        let spelled = render_location(
+            "/wt/{task_number}-{handle}-{hash}",
+            &ctx,
+            &leaf,
+            &HashMap::new(),
+        )
+        .unwrap();
+        assert_eq!(leaf, format!("7-{}", location_core(&ctx).hash()));
+        assert_eq!(
+            spelled,
+            PathBuf::from(format!("/wt/7--{}", location_core(&ctx).hash())),
+            "the empty handle leaves the template's separator"
+        );
+    }
+
+    /// `{handle}` carries a string a **plugin** writes, so it is normalized
+    /// before it reaches a path: a template like `/state/{handle}/…` must not
+    /// be escapable by a source that returns `../outside`.
+    #[test]
+    fn the_handle_placeholder_cannot_escape_the_worktree_root() {
+        let ctx = LocationContext {
+            repo_path: Path::new("/repos/totsuka"),
+            repo_name: "totsuka",
+            source: "slack",
+            task_id: "C1:100.1",
+            task_number: Some(7),
+            handle: Some("../../outside"),
+        };
+        let loc = render_location(
+            "/state/{handle}/{worktree_name}",
+            &ctx,
+            &WorktreeLeaf.identifier(&location_core(&ctx)),
+            &HashMap::new(),
+        )
+        .unwrap();
+        assert!(
+            !loc.to_string_lossy().contains(".."),
+            "escaped the root: {loc:?}"
+        );
+        assert!(loc.starts_with("/state"), "{loc:?}");
+        // …and what it renders is exactly the segment the leaf carries, so
+        // spelling the leaf out by hand lands in the same place.
+        let leaf = WorktreeLeaf.identifier(&location_core(&ctx));
+        assert!(leaf.starts_with("7-outside-"), "{leaf}");
     }
 
     /// The two halves of the leaf are offered to `location` separately
@@ -1276,6 +1422,7 @@ mod tests {
             source: "slack",
             task_id: "C1:100.1",
             task_number: Some(42),
+            handle: None,
         };
         let loc = render_location(
             "/wt/{task_number}_{hash}/{task_id}/{source}",
@@ -1320,6 +1467,7 @@ mod tests {
             source: "slack",
             task_id: "C1:100.1",
             task_number: Some(1),
+            handle: None,
         };
         let name = WorktreeLeaf.identifier(&location_core(&ctx));
         // Rendering succeeds against an *empty* environment.
@@ -1351,6 +1499,7 @@ mod tests {
             source: "github",
             task_id: "123",
             task_number: Some(1),
+            handle: None,
         };
         let name = WorktreeLeaf.identifier(&location_core(&ctx));
         let new = render_location(
@@ -1378,6 +1527,7 @@ mod tests {
             source: "github",
             task_id: "1",
             task_number: Some(1),
+            handle: None,
         };
         let loc = render_location(
             "{repo}/../.worktrees/{worktree_name}",
@@ -1801,6 +1951,7 @@ mod tests {
             source: "github",
             task_id: "1",
             task_number: Some(1),
+            handle: None,
         };
         let loc = render_location(
             "~/.worktrees/{worktree_name}",
@@ -1822,6 +1973,7 @@ mod tests {
             source: "s",
             task_id: "1",
             task_number: Some(1),
+            handle: None,
         };
         assert!(render_location("${MISSING}/{worktree_name}", &ctx, "b", &env(&[])).is_err());
     }

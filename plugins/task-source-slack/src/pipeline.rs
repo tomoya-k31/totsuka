@@ -1309,6 +1309,21 @@ fn build_task(
 
     let task = Task {
         id: mention.task_id(),
+        // The handle (0.7.2, #646): the channel's **name**, not its id — a
+        // person reads `#dev-support`, never `C0ABCDEF12`, and the name is
+        // already looked up for the title. The timestamp is deliberately left
+        // out: it would be cut mid-number by the identifier's budget, and what
+        // it distinguishes (two threads in one channel) the task number
+        // already distinguishes. A rename makes new tasks read differently and
+        // changes nothing about old ones, because identity is the digest's.
+        //
+        // **`None` when the lookup failed.** `NameCache::channel` falls back
+        // to the raw id so the title still says *something*; passing that on
+        // would put the opaque id this field exists to avoid into every name,
+        // for a reason (a transient `conversations.info` failure) that has
+        // nothing to do with the task. No handle reads better than a wrong
+        // one, and the next task in the same channel recovers on its own.
+        handle: (enriched.channel_name != mention.channel).then(|| enriched.channel_name.clone()),
         source: config.source_name.clone(),
         title,
         body: Some(body),
@@ -1815,6 +1830,31 @@ mod tests {
         let (task, _pending) = build_task(&slack_config(), &enriched("200.0"), None);
         assert_eq!(task.id, "C1:200.0");
         assert_eq!(task.message_key.as_deref(), Some(task.id.as_str()));
+    }
+
+    /// The handle (0.7.2, #646) is the channel's **name**. `Task::id` has to
+    /// be `{channel}:{ts}` — which reads as nothing — so this is the source's
+    /// only chance to say where the task came from in words.
+    #[test]
+    fn a_task_carries_the_channel_name_as_its_handle() {
+        let (task, _pending) = build_task(&slack_config(), &enriched("200.0"), None);
+        assert_eq!(task.handle.as_deref(), Some("general"));
+        // Deliberately no timestamp: the identifier would cut it mid-number,
+        // and what it would separate — two threads in one channel — the task
+        // number already separates.
+        assert!(!task.handle.unwrap().contains("200.0"));
+    }
+
+    /// `conversations.info` failing makes `channel_name` the raw id (so the
+    /// title still says something). That is **not** a handle: it is the
+    /// opaque id the field exists to avoid, and it would ride every name this
+    /// task ever gets for a reason unrelated to the task.
+    #[test]
+    fn a_failed_channel_lookup_leaves_no_handle() {
+        let mut e = enriched("200.0");
+        e.channel_name = e.mention.channel.clone();
+        let (task, _pending) = build_task(&slack_config(), &e, None);
+        assert_eq!(task.handle, None);
     }
 
     #[test]

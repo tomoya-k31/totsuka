@@ -147,6 +147,13 @@ impl WatchTriggers {
         };
         Task {
             id,
+            // The handle (0.7.2, #646): the channel's name from the trigger.
+            // The ids here are snowflakes — 19 digits that tell a person
+            // nothing — so the name is the only readable thing Discord offers,
+            // and the post id is left out for the reason Slack leaves the
+            // timestamp out: the task number already separates two posts in
+            // one channel.
+            handle: Some(watched.trigger.channel_name.clone()),
             source: String::new(), // filled by the caller, which knows the instance name
             title: format!("Discord #{}: {snippet}", watched.trigger.channel_name),
             body: Some(format!(
@@ -239,6 +246,10 @@ mod tests {
         assert_eq!(task.repo_hint.as_deref(), Some("docs"));
         // One post, one task: no per-delivery key to reopen it with.
         assert_eq!(task.message_key, None);
+        // The handle (0.7.2, #646) is the channel's name: every id Discord
+        // hands us is a snowflake, so the name is the only part of this a
+        // person reads.
+        assert_eq!(task.handle.as_deref(), Some("clip"));
         assert!(task.body.unwrap().contains("https://example.com"));
     }
 

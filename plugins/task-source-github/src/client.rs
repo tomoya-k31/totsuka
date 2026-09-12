@@ -315,8 +315,18 @@ impl<T: GithubTransport> GithubClient<T> {
             .find(|l| l.eq_ignore_ascii_case(&self.config.github_login))
             .or(assignees.first())
             .map(|l| l.to_string());
+        // The handle (0.7.2, #646): what a person calls this task —
+        // `web-42`, not the base64 node id that `id` has to be. Repository
+        // first because truncation keeps the head, and because the number
+        // alone is ambiguous across repositories on one board.
+        let handle = match (repo.is_empty(), issue_number.is_empty()) {
+            (_, true) => None,
+            (true, false) => Some(issue_number.clone()),
+            (false, false) => Some(format!("{repo}-{issue_number}")),
+        };
         Some(Task {
             id,
+            handle,
             source: self.config.source_name.clone(),
             title: content["title"].as_str().unwrap_or_default().to_string(),
             body: body.map(str::to_string),
@@ -1074,6 +1084,23 @@ mod tests {
     /// The board `item()` belongs to, for the `normalize_item` callers below.
     fn project_for_tests() -> ProjectConfig {
         ProjectConfig::new("board-0", "me", 1, &["web-app"])
+    }
+
+    /// The handle (0.7.2, #646) is what a person calls the issue, which the
+    /// node id in `Task::id` can never be. Repository first, because the
+    /// identifier truncates from the tail and because an issue number alone is
+    /// ambiguous across the repositories one board tracks.
+    #[test]
+    fn an_issue_offers_a_readable_handle() {
+        let filter =
+            TriggerFilter::parse(&json!({ "status": "設計待ち" }), Some("design"), "wf").unwrap();
+        let task = client_for_tests()
+            .normalize_item(&item("設計待ち"), &project_for_tests(), &filter)
+            .expect("ingestable");
+        assert_eq!(task.handle.as_deref(), Some("web-app-42"));
+        // The id stays the node id: the handle is legibility, not identity —
+        // nothing dedups on it.
+        assert_ne!(task.handle.as_deref(), Some(task.id.as_str()));
     }
 
     /// The `instructions_kind` the Orchestrator derives beside the trigger

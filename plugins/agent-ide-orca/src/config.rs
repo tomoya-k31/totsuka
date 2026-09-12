@@ -122,9 +122,11 @@ fn default_poll_interval() -> u64 {
 /// family has objected to.
 ///
 /// `max_len` is `None` because nothing suggests a limit; if one turns up, it
-/// is one line here rather than a rewrite. [`Case::Preserve`] keeps the
-/// pre-0.7.1 behaviour for the fallback name, where the id's own case is the
-/// only thing making it legible.
+/// is one line here rather than a rewrite. [`Case::Lower`] is not orca's
+/// requirement — it is what keeps the core shared with herdr, whose alphabet
+/// is lower-case only: a handle like `Web-App-42` (0.7.2) would otherwise
+/// read one way in the agent's name and another here, and matching is the
+/// whole point of sharing the core (ADR-0071 D-1).
 ///
 /// The name is **write-only**: orca returns a worktree id from `create`, and
 /// every later call addresses `id:<session_id>`. Nothing reads it back.
@@ -140,7 +142,7 @@ impl IdentifierPolicy for WorktreeName {
     }
 
     fn case(&self) -> Case {
-        Case::Preserve
+        Case::Lower
     }
 
     fn extra_allowed(&self) -> &[char] {
@@ -223,7 +225,7 @@ mod tests {
     fn the_declared_policy_stays_narrow() {
         assert_eq!(WorktreeName.prefix(), "totsuka-");
         assert_eq!(WorktreeName.max_len(), None);
-        assert_eq!(WorktreeName.case(), Case::Preserve);
+        assert_eq!(WorktreeName.case(), Case::Lower);
         assert_eq!(WorktreeName.extra_allowed(), &['-', '_']);
     }
 }

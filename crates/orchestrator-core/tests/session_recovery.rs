@@ -68,6 +68,7 @@ fn dispatch_task() -> Task {
         assignee: None,
         message_key: None,
         instructions: None,
+        handle: None,
     }
 }
 

@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:685991e3f62a64fa5781805b29b5a3aa2f5ad97a6073e9692661fd096a45d786 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:2a29d0c53de8136de0b3cdce5257dfe50fe7ca6198bfdaaa648d57ab4f3f5b4c -->
 
 # Configuration reference
 
@@ -590,7 +590,7 @@ Assumes an OpenAI-compatible `/chat/completions`. Used to pick a repository for 
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
-| `location` | string? | `<state dir>/worktrees/{repo_name}/{worktree_name}` | Placement template. Expands `{repo}`, `{repo_name}`, `{worktree_name}`, `{task_id}`, `{source}`, `{task_number}`, `{hash}`, `${ENV}`, and `~`. `{worktree_name}` is `<task number>-<8 hex>` — the number `totsuka status` and `totsuka task retry <n>` use, and the first 8 hex characters of a digest over the source and its task id. The two halves are also available separately, so you can join them differently or drop one. `{task_id}` is the **source's own** id (for Slack, `{channel}:{ts}`). **`{branch}` was removed** — the agent chooses the branch after the worktree exists, so it cannot appear in the directory name. Leaving it in stops startup |
+| `location` | string? | `<state dir>/worktrees/{repo_name}/{worktree_name}` | Placement template. Expands `{repo}`, `{repo_name}`, `{worktree_name}`, `{task_id}`, `{source}`, `{task_number}`, `{hash}`, `{handle}`, `${ENV}`, and `~`. `{worktree_name}` is `<task number>[-<handle>]-<8 hex>` — the number `totsuka status` and `totsuka task retry <n>` use, an optional short name from the source (GitHub `repo-number`, Slack and Discord the channel name, Notion none), and the first 8 hex characters of a digest over the source and its task id. The parts are also available separately, so you can join them differently or drop some. `{handle}` is **empty** when the source offers none, so do not use it alone as a directory name. It is also the one placeholder that is **normalized** before substitution (anything outside letters, digits, `-` and `_` is folded), because a plugin writes it and a `../` in a path would escape the worktree root; `{task_id}` and `{source}` stay raw so that existing custom templates keep rendering what they always did. `{task_id}` is the **source's own** id (for Slack, `{channel}:{ts}`). **`{branch}` was removed** — the agent chooses the branch after the worktree exists, so it cannot appear in the directory name. Leaving it in stops startup |
 | `cleanup` | policy? | `manual` | Cleanup policy for implement mode |
 | `plan_cleanup` | policy? | `immediate` | Cleanup policy for plan mode |
 

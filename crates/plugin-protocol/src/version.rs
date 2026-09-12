@@ -318,7 +318,17 @@ use semver::{Version, VersionReq};
 /// narrowed away, so F-54 had to refuse it. Here the degraded behaviour is
 /// visible, harmless and self-correcting, so raising a floor would only strand
 /// orchestrators the plugin works with.
-pub const PROTOCOL_VERSION: &str = "0.7.1";
+/// 0.7.2 (#646): [`Task::handle`](crate::task::Task::handle) — the source's
+/// own short, human-readable name for a task, which the
+/// [`identifier`](crate::identifier) module places between the task number and
+/// the digest (`t-3-web-42-9f3c2a1e`).
+///
+/// **Patch, additive, and no manifest moves**, for the reason 0.7.1 gives: a
+/// source that sets nothing, and an orchestrator that carries nothing, both
+/// produce a name that is still legal, still unique, and merely less legible.
+/// `None` is also the *right* answer for a source whose ids carry nothing a
+/// person reads, so the field being absent is not evidence of an old plugin.
+pub const PROTOCOL_VERSION: &str = "0.7.2";
 
 /// [`PROTOCOL_VERSION`] parsed into a [`Version`].
 pub fn protocol_version() -> Version {
@@ -342,7 +352,7 @@ mod tests {
 
     #[test]
     fn current_version_parses() {
-        assert_eq!(protocol_version(), Version::new(0, 7, 1));
+        assert_eq!(protocol_version(), Version::new(0, 7, 2));
     }
 
     #[test]

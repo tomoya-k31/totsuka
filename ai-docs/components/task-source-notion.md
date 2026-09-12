@@ -4,7 +4,7 @@ title: task-source-notion プラグイン
 description: Notion データベースをタスクソースとして接続する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。プロパティマッピングで任意の DB 構造を Task へ正規化し、ステータス書き戻しとページ本文への結果追記を行う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-notion
 tags: [rust, crate, plugin, task-source, notion, rest, property-mapping]
-generated: { by: claude-code/opus-5, at: 2026-09-07T12:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-12T23:10:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -55,6 +55,10 @@ fetch（`poll_loop` の各 tick が呼ぶ `NotionClient::fetch`。0.2.0 で `tas
 **notion のタスクは、トリガーが何であれ 1 回しか実行されない。** `normalize_page` は `message_key` を**無条件で `None`** にするので、core はそれを `task.id` にフォールバックさせ、`UNIQUE(task_id, message_key)` が以降の再配送をすべて重複として捨てる。ステータスを戻しても再実行されず、`totsuka task retry` も `done` を拒否する。
 
 これは実装漏れではなく**決定である**（ADR-0064）。github は `trigger.status` を持つワークフローに限り `status` セルの `updatedAt` を lane identity に使えるが（#556。`label` 単独・`assignee` 単独のトリガーは **github でも at-most-once** である）、**Notion API にはプロパティ単位の更新時刻が無い**ので同じものが作れない。却下した代替案とその破れ方は ADR-0064 にある。
+
+# handle は付けない（#646）
+
+`Task.handle`（protocol 0.7.2、[ADR-0071](/decisions/adr-0071-task-identifier-naming.md) D-7）は **`None` のまま**にする。page id は UUID、title は散文で、「短く・安定していて・パス安全」という handle の条件を満たすものが Notion 側に無い。title から作る案は採らない — **改名可能な文字列が識別子に入る**ことになる。これは欠落ではなく正しい答えで、task 番号とダイジェストだけで名前は成立する。
 
 # capabilities（F-83）
 

@@ -4,7 +4,7 @@ title: task-source-github プラグイン
 description: GitHub Issues / ProjectsV2 をタスクソースとして接続する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。GraphQL で fetch→正規化、ProjectsV2 ステータス書き戻し、task/claim（Issue への self-assign + AssignedEvent 先着裁定による楽観排他）を行う。Issue への書き込みは claim の assignee 操作だけ。呼び出す 8 つの GraphQL 操作と、トークン権限（十分条件は実測済み・最小値は未実測。fine-grained PAT が user 所有ボードに使えない理由を含む）を扱う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-github
 tags: [rust, crate, plugin, task-source, github, graphql, projectsv2]
-generated: { by: claude-code/opus-5, at: 2026-09-07T12:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-12T23:10:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -46,6 +46,10 @@ fetch（`poll_loop` の各 tick が呼ぶ `GithubClient::fetch`。0.2.0 で `tas
 **claim（#556、[ADR-0059](/decisions/adr-0059-task-claim-exclusion.md)）**: 読み取りゲートに加え、Orchestrator が dispatch 直前に送る `task/claim` に **Issue への self-assign** で答える。pre-read で既に自分が assignee なら**書き込みゼロで won**（人間の事前アサイン・過去の claim・retry を 1 規則で吸収 — 裁定は自動 claim 同士の対称レースを破る道具であり、人間の意図に適用しない）。他者のみなら書き込みゼロで lost。空なら add → `claim_verify_delay_ms`（既定 750ms、実測 p95 ≈ 700ms）待って読み戻し → 自分不在なら遅延 2 倍で 1 回だけ再読、なお不在なら **forbidden**（push 権限の無い assignee は 200 のまま黙殺されるため読み戻しでしか検出できない）。競合時の裁定は「現 assignee ごとの最新 AssignedEvent のうち createdAt 最古（同時刻は event node id）が勝ち」— actor でなく **assignee の login** で判定し、負けたら自分の assignee だけ外す。**現 assignee のイベントが timeline に見えないときは降りずにエラー**で返す（相互不可視で両者が降りると誰も保持しないタスクが生まれる。エラーなら次 cycle の再読で裁定できる — 遅延であって誤答ではない）。createdAt の比較は辞書順 — GitHub のこの DateTime は固定幅 `YYYY-MM-DDTHH:MM:SSZ` で小数部を持たないため安全（可変長小数部で壊れた #478 とは前提が違う）。**制約: 1 login = 1 インスタンス** — assignee は login しか運べず actor も同一になるため、同じ login の複数 totsuka は原理的に裁定できない（非対応）。
 
 **探索中のボードに対象の Status 列が無くても、そこで打ち切らない。** 探索は item が載っていないボードも訪れるので、そういうボードが対象の列を持っている必要はない。ここでエラーにすると**呼び出し側が `?` で探索ループごと抜け**、次のボードなら成功したはずの遷移が失敗する。メモが空になる再起動直後は必ず先頭のボードから当たるので、現実に踏む経路である。列が無いことをエラーにするのは **item がそのボードで見つかった後**で、そのときは意味どおり「このボードの設定が足りない」を指す。
+
+# handle（#646）
+
+`Task.handle` に **`{repo}-{issue 番号}`** を入れる（protocol 0.7.2）。エージェントの名前や worktree 名に載る人間向けの短い名前で（[ADR-0071](/decisions/adr-0071-task-identifier-naming.md) D-7）、`Task.id` が base64 の node id でこれになれないために要る。リポジトリを先に置くのは、識別子の予算が足りないとき**末尾から切られる**のと、1 つのボードが複数リポジトリを追うので番号だけでは曖昧だからである。**一意である必要は無い** — 一意性はダイジェストが持つので、これで dedup してはならない。
 
 # capabilities（F-83）
 

@@ -4,7 +4,7 @@ title: task-source-discord プラグイン
 description: "Discord のチャンネル監視をタスクソースとして接続する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。Gateway WebSocket で MESSAGE_CREATE を受け、監視チャンネルへのトップレベル投稿を Task へ正規化し、結果を bot 名義でその投稿のスレッドへ返す。self-bot 禁止により本人名義投稿・承認フローは持たない薄い設計。"
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-discord
 tags: [rust, crate, plugin, task-source, discord, gateway, websocket, channel-watch]
-generated: { by: claude-code/opus-5, at: 2026-09-06T06:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-12T23:10:00+09:00 }
 status: stable
 owner: tomoya-k31
 sources:
@@ -44,6 +44,10 @@ Discord の[チャンネル監視トリガ](/glossary/channel-watch.md)を totsu
 | `pipeline` | 起動時のチャンネル名照合（改名を warn、失敗しても続行）、バックフィル、1 メッセージの submit、結果投稿。`SharedState` は `PendingPost`（channel / message / author）を task id で持つ。座標は task id から**導出可能**だが記録する —— `result/publish` に id の書式を解析させると、prefix を足した日に壊れる |
 | `run` | 常駐 Gateway ループ。接続 → `HELLO` → `IDENTIFY` か `RESUME` → heartbeat → フレーム消費。終わり方を 3 つに分類する: **Permanent**（止まる）・**Resumable**（resume して再接続）・**Restart**（session を捨て、再接続してバックフィル）。4007 / 4009 は再接続してよいが session は無効なので Restart に倒す |
 | `server` | JSON-RPC dispatch。`initialize` で設定検査 → trigger 解決 → **監視が 0 本ならエラー**（このソースには他のトリガ種別が無く、何もしないまま起動するのは常に間違い）→ トークンガード → 常駐ランタイム起動。`config/validate` は**意図的にオフライン**で、`doctor` がネットワークもトークンも要らない。`task/update_status` は no-op だが**成功を返す**（失敗にすると全タスクが失敗に見える） |
+
+# handle（#646）
+
+`Task.handle` にトリガーの**チャンネル名**を入れる（protocol 0.7.2、[ADR-0071](/decisions/adr-0071-task-identifier-naming.md) D-7）。Discord が渡す id は全て snowflake（19 桁の数字）で人には読めないので、名前だけが唯一読めるものである。投稿 id を足さないのは Slack が ts を足さないのと同じ理由で、同一チャンネルの 2 投稿は task 番号が既に区別している。
 
 # capabilities（F-83）
 

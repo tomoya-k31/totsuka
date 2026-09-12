@@ -972,6 +972,7 @@ mod tests {
             assignee: None,
             message_key: None,
             instructions: None,
+            handle: None,
         }
     }
 
@@ -1303,6 +1304,9 @@ mod tests {
         // it creates after the source's id instead — a different name, not a
         // refused dispatch.
         assert!(old.task_number.is_none());
+        // 0.7.2 (#646): and again for the handle, which is *also* absent from
+        // a current source that simply has no readable name to offer.
+        assert!(old.task.handle.is_none());
         let unset = TaskDispatchParams {
             task: sample_task(),
             worktree_path: "/wt".into(),
