@@ -1,0 +1,24 @@
+{
+  "name": "message-mention-other-user-only",
+  "why": "他人個人宛だけのメッセージを通さないこと（ADR 決定 8 —— 他人宛の `<@U_OTHER>` は記録しない）。",
+  "delivery": {
+    "endpoint": "events",
+    "content_type": "application/json",
+    "payload": {
+      "token": "deprecated-verification-token",
+      "team_id": "T_WS",
+      "api_app_id": "A_APP",
+      "type": "event_callback",
+      "event_id": "Ev0001",
+      "event_time": 1757640000,
+      "event": {
+        "type": "message",
+        "channel": "C0LOBBY",
+        "user": "U_SENDER",
+        "ts": "1757640000.000100",
+        "text": "<@U_OTHER> お願いします"
+      }
+    }
+  },
+  "expect": []
+}

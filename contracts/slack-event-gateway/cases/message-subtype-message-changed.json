@@ -1,0 +1,25 @@
+{
+  "name": "message-subtype-message-changed",
+  "why": "`subtype` 付き（編集・削除・システム投稿）を通さないこと。`mention.rs` のフィルタ表 1 行目と同じ判断をエッジでも行う。",
+  "delivery": {
+    "endpoint": "events",
+    "content_type": "application/json",
+    "payload": {
+      "token": "deprecated-verification-token",
+      "team_id": "T_WS",
+      "api_app_id": "A_APP",
+      "type": "event_callback",
+      "event_id": "Ev0001",
+      "event_time": 1757640000,
+      "event": {
+        "type": "message",
+        "channel": "C0LOBBY",
+        "user": "U_SENDER",
+        "ts": "1757640000.000100",
+        "text": "<@U_ME> 直しました",
+        "subtype": "message_changed"
+      }
+    }
+  },
+  "expect": []
+}

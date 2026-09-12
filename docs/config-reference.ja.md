@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:f02411a364cc83fec77dc08c0ad034e59bbda6c362ff867443d50aa8fc1513e7 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:f7a6b1ccca54a07d62ee8a30fdea0755b55e3f4427aa7c6edf0e8f1fee54350b -->
 
 # 設定リファレンス
 
@@ -884,6 +884,11 @@ project = "design-db"
 
 Slack ソースはイベント駆動で、受け取ったイベントをその場で push するため `poll_interval_secs` は使わない。
 
+**受信経路は Slack アプリを作る前に決めること。** `event_source` で、常駐ソケット接続と、イベントゲートウェイが
+答える HTTP Request URL のどちらかを選ぶ。Slack はこの 2 つをアプリ単位で排他に扱うので、後から切り替えるには
+もう一方の manifest でアプリを作り直すことになる。manifest は方式ごとに 1 本ずつある ——
+ソケットなら `plugins/task-source-slack/manifest.yml`、ゲートウェイなら `manifest.gateway.yml`。
+
 ```toml
 [plugins.slack]
 enabled = true
@@ -898,6 +903,10 @@ kind = "task_source"
 | `target_user_id` | string | 必須 | 自分の Slack ユーザー ID。このユーザー宛のメンションがタスクになり、トークン自身の identity とも照合される |
 | `watch_backfill_limit` | int? | 100 | チャンネル監視で、totsuka が止まっていた間の投稿を起動時に読み直す件数の上限（1 チャンネルあたり）。監視チャンネルが無ければ使われない。**`0` は拒否される** |
 | `watch_backfill_max_age_hours` | int? | 24 | 同じく、遡る時間の上限。件数上限だけだと**履歴のあるチャンネルを初めて監視対象にした瞬間に、過去の投稿がそのままタスクになる** —— それを 1 日ぶんに抑える。数分〜数時間の再起動なら取りこぼしは全部拾える。**`0` は拒否される** |
+| `event_source` | `"socket"` \| `"gateway"` | `socket` | イベントの受信経路。`socket` は `totsuka run` のプロセス自身が WebSocket を握る方式で、用意するものは無いが、**totsuka が止まっている間のメンションは失われる**。さらに配信失敗が続くと Slack が購読を無効化し、復旧は Slack アプリ設定画面での手作業になる。`gateway` は Slack の配信先を HTTP Request URL に向け、イベントゲートウェイが座標をキューに置き、totsuka は起動しているあいだにそれを引く —— 止まっていた間のぶんも失われない。**Slack はこの 2 つをアプリ単位で排他に扱う**ので、切り替えには manifest の変更と再設定が要る。**ゲートウェイ障害時に自動で `socket` へ落ちるフォールバックが無い**のもこれが理由で、落ちようがない。到達不能時は backoff して警告を出す |
+| `drain_max_age_hours` | int? | 24 | `gateway` 方式で、キューに溜まったイベントをタスクにする時間窓。キューは 7 日保持するので長期不在でも失われないが、復帰した瞬間に 1 週間ぶんのメンションが一斉にタスクになるのは望まれない。**窓をキューの保持期間ではなくこちらに置いているので、出張明けに拾いたければ設定を一時的に上げるだけでよく、再デプロイが要らない。** 窓の外は ack して捨てる。**`0` は拒否される** —— 「全部捨てる」を無言の 0 で表さないため。`socket` 方式では読まれない |
+| `drain_limit` | int? | 100 | `gateway` 方式で、1 回の取り込みでタスクにする件数の上限。**`0` は拒否される。** `socket` 方式では読まれない |
+| `watch_poll_interval_secs` | int? | 60 | `gateway` 方式でのチャンネル監視のポーリング間隔（秒）。**監視はゲートウェイに載せられない** —— ゲートウェイが転送するのは自分を名指ししたものだけで、監視チャンネルへの普通の投稿は該当しないためである。ゲートウェイに監視チャンネル一覧を持たせると設定が 2 箇所に分かれ、ずれたときの症状が「監視が黙って効かない」になるので、代わりにチャンネル履歴を定期的に読む。**遅くなるのは監視経路だけ**で、メンション・リアクション・承認ボタンはソケットとの差が 1〜2 秒に収まる。**`0` は拒否される。** `socket` 方式では読まれない（Slack が push してくる） |
 | `thread_context_limit` | int | 6 | タスク本文に含めるスレッド直近メッセージ数 |
 | `reply_style` | string? | なし | タスク本文へ注入する返信トーンの指示 |
 | `[slack.prompts]` | テーブル | — | このプラグインが送るプロンプト文の上書き |

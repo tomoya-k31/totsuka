@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:f02411a364cc83fec77dc08c0ad034e59bbda6c362ff867443d50aa8fc1513e7 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:f7a6b1ccca54a07d62ee8a30fdea0755b55e3f4427aa7c6edf0e8f1fee54350b -->
 
 # Configuration reference
 
@@ -885,6 +885,11 @@ Per-key overrides of the instruction text this plugin sends; anything you leave 
 
 The Slack source is event-driven — it pushes each event as it arrives — so `poll_interval_secs` is unused.
 
+**Choose how events reach you before you create the Slack app.** `event_source` selects between a resident
+socket connection and an HTTP Request URL answered by an event gateway, and Slack treats the two as mutually
+exclusive per app — switching later means recreating the app from the other manifest. There is one manifest
+per mode: `plugins/task-source-slack/manifest.yml` for the socket, `manifest.gateway.yml` for the gateway.
+
 ```toml
 [plugins.slack]
 enabled = true
@@ -899,6 +904,10 @@ kind = "task_source"
 | `target_user_id` | string | required | Your Slack user id. Mentions of this user become tasks, and it is checked against the token's own identity |
 | `watch_backfill_limit` | int? | 100 | For a channel watch: how many recent messages per channel totsuka re-reads at startup to recover posts made while it was down. Unused when no channel is watched. **`0` is rejected** |
 | `watch_backfill_max_age_hours` | int? | 24 | How far back that recovery reaches. Without an age bound, **pointing a watch at a channel that already has history would turn its recent posts into tasks on the first start**; this caps that at a day. A restart of minutes or hours still recovers everything missed. **`0` is rejected** |
+| `event_source` | `"socket"` \| `"gateway"` | `socket` | Where events arrive from. `socket` keeps a WebSocket open from the `totsuka run` process itself: nothing to deploy, but **mentions that arrive while totsuka is stopped are lost**, and if delivery keeps failing Slack disables the subscription until you re-enable it by hand in the app settings. `gateway` points Slack at an HTTP Request URL answered by an event gateway, which publishes coordinates to a queue that totsuka drains while it is running; nothing is lost while totsuka is down. **Slack treats the two as mutually exclusive per app**, so switching needs a manifest change and re-setup — which is also why **there is no automatic fallback from `gateway` to `socket`**: falling back is not something this process can do. When the gateway is unreachable it backs off and warns |
+| `drain_max_age_hours` | int? | 24 | Under `gateway`, how old a queued event may be and still become a task. The queue holds 7 days, so a long absence loses nothing — but filing a week of mentions the moment you come back is not what anyone wants. **The window lives here rather than in the queue's retention, so widening it after a trip is a local edit and needs no redeploy.** Anything older is acknowledged and dropped. **`0` is rejected** — "drop everything" should not be spelled as a silent zero. Unread under `socket` |
+| `drain_limit` | int? | 100 | Under `gateway`, how many queued events become tasks per drain pass. **`0` is rejected.** Unread under `socket` |
+| `watch_poll_interval_secs` | int? | 60 | Under `gateway`, seconds between polls of watched channels. **Channel watching cannot ride the gateway**: the gateway only forwards things that name you, and an ordinary post in a watched channel does not. Giving the gateway a copy of the watch list would split the setting across two places, and when the two drift the symptom is that watching silently stops working — so totsuka polls the channel history instead. **Only the watch path gets slower**; mentions, reactions and approval buttons stay within a second or two of the socket. **`0` is rejected.** Unread under `socket`, where Slack pushes these posts |
 | `thread_context_limit` | int | 6 | How many recent thread messages to include in the task body |
 | `reply_style` | string? | none | Tone instructions injected into the task body |
 | `[slack.prompts]` | table | — | Overrides for the prompts this plugin sends |

@@ -1,7 +1,18 @@
-# Slack App Manifest for the totsuka task-source-slack plugin.
+# Slack App Manifest for the totsuka task-source-slack plugin —
+# **Socket Mode variant**, `event_source = "socket"` (the default).
 #
 # Paste this into https://api.slack.com/apps > "Create New App" >
 # "From a manifest" (YAML), then install the app to your workspace.
+#
+# THERE IS A SECOND MANIFEST. `manifest.gateway.yml` is the Request URL
+# variant used with an Event Gateway (ADR-0072, #652). Socket Mode and Request
+# URLs are mutually exclusive per Slack app, so pick before you create it —
+# switching later means redoing the app from the other manifest. The trade-off,
+# in one line each: Socket Mode needs nothing deployed but LOSES every event
+# that arrives while totsuka is stopped (and a long enough outage makes Slack
+# disable the subscription); the gateway costs a GCP project and about $1/month
+# and loses nothing. The comments at the top of `manifest.gateway.yml` have the
+# longer version.
 #
 # The app acts as *you* for everything visible in a conversation: mention
 # detection, the approved reply, and the self-DM draft record all use the

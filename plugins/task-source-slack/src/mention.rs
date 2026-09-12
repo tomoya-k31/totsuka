@@ -20,6 +20,7 @@ use std::collections::{HashSet, VecDeque};
 
 use serde_json::Value;
 
+use crate::gateway_contract::MentionTags;
 use crate::slack_api::{SlackFile, parse_files};
 
 /// Bound on the processed-id set. Old entries fall out FIFO; a redelivery
@@ -142,9 +143,11 @@ impl Mention {
 /// been processed already.
 pub struct MentionFilter {
     target_user_id: String,
-    /// `<@U…>` and `<@U…|label>` are both valid mention encodings.
-    tag_closed: String,
-    tag_labeled: String,
+    /// `<@U…>` and `<@U…|label>` are both valid mention encodings. Shared
+    /// with the Event Gateway's pre-filter (#656) so the two cannot drift:
+    /// a tag this says is not a mention is one the gateway never publishes,
+    /// and that record does not exist for anyone to notice.
+    tags: MentionTags,
     self_dm_channel: Option<String>,
     /// The workflow a plain mention belongs to (0.6.0, #554). `None` means
     /// none is configured, and mentions are dropped rather than submitted to
@@ -159,8 +162,7 @@ impl MentionFilter {
     pub fn new(target_user_id: &str, mention_workflow: Option<String>) -> Self {
         Self {
             target_user_id: target_user_id.to_string(),
-            tag_closed: format!("<@{target_user_id}>"),
-            tag_labeled: format!("<@{target_user_id}|"),
+            tags: MentionTags::new(target_user_id),
             self_dm_channel: None,
             mention_workflow,
             processed: HashSet::new(),
@@ -218,7 +220,7 @@ impl MentionFilter {
         }
         // 4. mentions only
         let text = text_of("text").unwrap_or("");
-        if !text.contains(&self.tag_closed) && !text.contains(&self.tag_labeled) {
+        if !self.tags.matches(text) {
             return None;
         }
         // 5. no workflow answers mentions.

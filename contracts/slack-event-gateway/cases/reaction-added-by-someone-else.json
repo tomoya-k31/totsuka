@@ -1,0 +1,29 @@
+{
+  "name": "reaction-added-by-someone-else",
+  "why": "他人が付けたリアクションを通さないこと。`reaction.rs` は「操作者本人のリアクションしか受け付けない」を不変条件に持つ（ADR-0025）ので、通すと**消費側が必ず捨てるレコード**を7 日保存することになる。",
+  "delivery": {
+    "endpoint": "events",
+    "content_type": "application/json",
+    "payload": {
+      "token": "deprecated-verification-token",
+      "team_id": "T_WS",
+      "api_app_id": "A_APP",
+      "type": "event_callback",
+      "event_id": "Ev0001",
+      "event_time": 1757640000,
+      "event": {
+        "type": "reaction_added",
+        "user": "U_OTHER",
+        "reaction": "eyes",
+        "item": {
+          "type": "message",
+          "channel": "C0LOBBY",
+          "ts": "1757640000.000100"
+        },
+        "item_user": "U_SENDER",
+        "event_ts": "1757640300.000400"
+      }
+    }
+  },
+  "expect": []
+}

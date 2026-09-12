@@ -1,0 +1,42 @@
+{
+  "name": "message-mention-no-surrounding-space",
+  "why": "前後に空白が無い `cc<@U_ME>よろしく` でも通ること。判定は部分一致であって語境界ではない。",
+  "delivery": {
+    "endpoint": "events",
+    "content_type": "application/json",
+    "payload": {
+      "token": "deprecated-verification-token",
+      "team_id": "T_WS",
+      "api_app_id": "A_APP",
+      "type": "event_callback",
+      "event_id": "Ev0001",
+      "event_time": 1757640000,
+      "event": {
+        "type": "message",
+        "channel": "C0LOBBY",
+        "user": "U_SENDER",
+        "ts": "1757640000.000100",
+        "text": "cc<@U_ME>よろしく"
+      }
+    }
+  },
+  "expect": [
+    {
+      "topic": "events",
+      "identity": "message:C0LOBBY:1757640000.000100",
+      "record": {
+        "v": 1,
+        "kind": "message",
+        "channel": "C0LOBBY",
+        "ts": "1757640000.000100",
+        "thread_ts": null,
+        "user": "U_SENDER",
+        "flags": {
+          "mentions_me": true
+        },
+        "subteam_ids": [],
+        "received_at": "2026-09-13T00:00:00Z"
+      }
+    }
+  ]
+}

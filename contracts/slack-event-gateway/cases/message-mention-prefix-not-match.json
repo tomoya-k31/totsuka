@@ -1,0 +1,24 @@
+{
+  "name": "message-mention-prefix-not-match",
+  "why": "`<@U_MEX>` が `<@U_ME>` に一致しないこと。前方一致で照合すると他人宛が自分宛になる。偽陽性側の誤りなので致命ではないが、無関係な投稿を 7 日ぶん保存し続けることになる。",
+  "delivery": {
+    "endpoint": "events",
+    "content_type": "application/json",
+    "payload": {
+      "token": "deprecated-verification-token",
+      "team_id": "T_WS",
+      "api_app_id": "A_APP",
+      "type": "event_callback",
+      "event_id": "Ev0001",
+      "event_time": 1757640000,
+      "event": {
+        "type": "message",
+        "channel": "C0LOBBY",
+        "user": "U_SENDER",
+        "ts": "1757640000.000100",
+        "text": "<@U_MEX> こっちは別人宛"
+      }
+    }
+  },
+  "expect": []
+}

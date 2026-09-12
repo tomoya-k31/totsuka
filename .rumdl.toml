@@ -52,6 +52,11 @@ disable = [
 # 始まる規約（.claude/rules/documentation-i18n.md）。H1 はその次の行に置く。
 "README.md" = ["MD041"]
 "README.ja.md" = ["MD041"]
+# 同じ規約に従う README は他にもある。パターンを `**/README.md` に広げないのは、
+# ルート直下も巻き込むかどうかが glob 実装依存で、除外が黙って増えるより
+# 名指しのほうが読んで分かるため。
+"contracts/slack-event-gateway/README.md" = ["MD041"]
+"contracts/slack-event-gateway/README.ja.md" = ["MD041"]
 
 # 人間向け docs/ も同じ言語スイッチャ規約に従う。さらに 1 行目の直後に
 # `<!-- generated-from: … -->` マーカー（scripts/docs-freshness.sh が読む）が入るので、
