@@ -4,7 +4,7 @@ title: リリース手順（release-please / ユニバーサルバイナリ / Gi
 description: "totsuka のリリース運用。release-please による Release PR、macOS ユニバーサルバイナリと同梱プラグインの自動ビルド・署名・GitHub Releases 配布、リリースごとの Homebrew tap 自動 bump と 2 本のトークン運用、Release PR の CI/ブランチ保護を通すトークン運用（GitHub App / PAT / admin）、Gatekeeper（ad-hoc 署名）の扱い。"
 resource: https://github.com/tomoya-k31/totsuka/tree/main/.github/workflows
 tags: [release, ci, distribution, homebrew, gatekeeper, semver, github-app, pat, branch-protection]
-generated: { by: claude-code/opus-5, at: 2026-08-22T00:00:00Z }
+generated: { by: claude-code/opus-5, at: 2026-09-13T22:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -88,6 +88,34 @@ App が Release PR を作る → 実 identity 扱いなので CI が走り `lint
    同梱するプラグイン名は `plugins/*/plugin.toml` の `name` を舐めて決めるので、プラグインを追加してもワークフローの編集は要らない。ビルド成果物名がそのまま配布名になるのは [ADR-0027](/decisions/adr-0027-plugin-artifact-naming.md) の不変条件（bin 名 = `plugin.toml` の `name`）が `scripts/arch-lint.sh` で担保されているため。
 
    **プラグインにも署名すること。** 本体だけ署名すると、プラグインが Gatekeeper に殺されて `totsuka doctor` は「crashed or exited」としか言えない（原因が署名だと分からない）。
+
+# Event Gateway イメージ（#660）
+
+同じ `release-please.yml` 実行内の `gateway-image` ジョブが、`universal-binary` と同じ
+`release_created` ゲートで `ghcr.io/<owner>/totsuka/slack-event-gateway:vX.Y.Z` を push する
+（[ADR-0072](/decisions/adr-0072-slack-event-gateway.md) 決定 9）。タグは totsuka 本体の版と
+同じで、**`:latest` は出さない** —— OpenTofu 側は正確なバージョンを固定するので、浮動タグは
+`tofu apply` が黙ってデプロイ内容を変えられることを意味する。
+
+## 初回リリースで必ず 1 回、手作業が要る
+
+**ghcr のパッケージは初回公開時に private になり、リポジトリが public でも可視性は継承されない**
+（継承されるのはアクセス権限のほうである）。Cloud Run が直接 pull できるのは public な ghcr
+イメージだけなので、private のままだと**ジョブは緑で、デプロイする人だけが落ちる**。
+
+ジョブは push の後に可視性を検査して、public でなければ赤くする。赤くなったら:
+
+```text
+Packages → slack-event-gateway → Package settings → Change visibility → Public
+```
+
+を一度やってジョブを再実行する。設定は残るので、以降のリリースは継承する。
+
+## 失敗したときの復旧は手動である
+
+このジョブも `release_created` ゲートなので、**失敗した時点でタグと Release は既に存在し**、
+次の `push: main` では `release_created` が false になって**自動リトライの経路が無い**。
+下の Homebrew bump と同じ性質で、復旧は Actions 画面からのジョブ再実行（`Re-run failed jobs`）になる。
 
 > プラグインプロトコルの版はアプリ本体と独立（#50）。totsuka のリリースはプロトコル版の変更を意味しない。CHANGELOG に破壊的プロトコル変更を書く場合は明示する。
 

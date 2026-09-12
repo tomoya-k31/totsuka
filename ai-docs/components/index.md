@@ -19,5 +19,5 @@
 * [notifier-macos](notifier-macos.md) - Orchestrator のイベント（waiting_input / done / failed / pending / escalated / verification_pending）を macOS 通知センターへ配送する公式 notifier プラグイン。バックエンド選択（osascript / terminal-notifier click-to-focus）、ワークフロー×イベント別フィルタ、fire-and-forget 配送。
 * [live-e2e スキル](live-e2e.md) - 実 Slack / 実 GitHub / 実 herdr + 実 Claude Code に対して totsuka を通しで動かす実機検証の手順・設定雛形・駆動スクリプト一式。自動／手動／目視の区分と、別環境での一からの構築手順を含む。
 * [task-source-discord プラグイン](task-source-discord.md) - Discord のチャンネル監視をタスクソースとして接続する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。Gateway WebSocket で MESSAGE_CREATE を受け、監視チャンネルへのトップレベル投稿を Task へ正規化し、結果を bot 名義でその投稿のスレッドへ返す。self-bot 禁止により本人名義投稿・承認フローは持たない薄い設計。
-* [slack-event-gateway](slack-event-gateway.md) - Slack の配信を HTTPS で受け、署名を検証し、本文を保存せずに座標へ射影して Pub/Sub へ publish する常駐しないサービス。event_source = "gateway" のときだけ経路に入る。同一リポジトリの workspace 外に置き、適合テストスイートだけを totsuka と共有する。
+* [slack-event-gateway](slack-event-gateway.md) - Slack の配信を HTTPS で受け、署名を検証し、本文を保存せずに座標へ射影して Pub/Sub へ publish する常駐しないサービス。event_source = "gateway" のときだけ経路に入る。同一リポジトリの workspace 外に置き、適合テストスイートだけを totsuka と共有する。公式イメージは ghcr.io にリリースごとに公開する。
 <!-- okf:index:end -->

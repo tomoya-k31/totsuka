@@ -8,7 +8,9 @@
 #
 # Hence: statically linked against musl, `FROM scratch`-adjacent distroless,
 # non-root, no shell. What is left to keep current is the Rust toolchain and
-# `Cargo.lock`, which is the same list `cargo audit` already watches.
+# this crate's own `Cargo.lock` — **not** the workspace's, which is a different
+# file. `audit.yml` scans it in a step of its own for exactly that reason; the
+# workspace's `cargo audit` run cannot see outside the workspace.
 #
 # linux/amd64 only. Cloud Run runs amd64; a multi-arch build would double the
 # release time to produce an image nothing pulls.

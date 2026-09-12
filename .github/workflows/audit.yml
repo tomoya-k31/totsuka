@@ -13,6 +13,11 @@ on:
     paths:
       - "**/Cargo.toml"
       - "Cargo.lock"
+      # The Event Gateway is outside the workspace (#659), so `Cargo.lock`
+      # without a `**/` prefix does not reach it — and that lockfile is what
+      # ships inside a published container (#660). Named explicitly rather
+      # than loosening the pattern, so the omission cannot come back.
+      - "slack-event-gateway/Cargo.lock"
       - "deny.toml"
   workflow_dispatch:
 
@@ -44,3 +49,16 @@ jobs:
         run: cargo audit
       - name: Run cargo-deny
         run: cargo deny check
+      # The Event Gateway again: `cargo audit` resolves the lockfile from the
+      # working directory, and the workspace's does not contain it. Skipping
+      # this would mean **publishing a container built from a lockfile nothing
+      # has ever scanned** — and the container is distroless, so its lockfile
+      # is the only place a fix could land (#660).
+      #
+      # `cargo deny check` is not repeated here: `deny.toml` is the
+      # workspace's policy file and does not apply to a separate crate. Adding
+      # a second policy is a decision to take deliberately, not a line to
+      # sneak into an audit job.
+      - name: Run cargo-audit on the Event Gateway
+        working-directory: slack-event-gateway
+        run: cargo audit
