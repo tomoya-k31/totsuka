@@ -1,9 +1,9 @@
 ---
 type: Decision
 title: ADR-0054 組み込みプロンプトは英語で書き、成果物の言語は文脈に従わせる
-description: "プラグインの defaults.toml が持つエージェント向け指示文を英語へ統一し、そこに焼き込まれていた「日本語で」という言語指定を「スレッド / 元 issue と同じ言語で書け」という規則へ置き換える決定。locale を読む案と output_language キー新設案は却下。人間が読む UI 文言とタスク本文のラベルは対象外。"
+description: "プラグインの defaults.toml が持つエージェント向け指示文を英語へ統一し、そこに焼き込まれていた「日本語で」という言語指定を「スレッド / 元 issue と同じ言語で書け」という規則へ置き換える決定。locale を読む案と output_language キー新設案は却下。人間が読む UI 文言とタスク本文のラベルは対象外。Amendment で、1 つのキーが指示とラベルの両方を持つ場合の分け方を追記。"
 tags: [decision, prompts, i18n, plugins, adr]
-generated: { by: claude-code/opus-5, at: 2026-08-22T13:00:00Z }
+generated: { by: claude-code/opus-5, at: 2026-09-12T13:00:00+09:00 }
 verified: { by: human:tomoya-k31, at: 2026-08-22T13:00:00Z }
 status: stable
 owner: tomoya-k31
@@ -134,6 +134,31 @@ macOS 通知のタイトル（`notifier-macos`）—— も触らない。**配�
   `defaults.toml` から貼り直した。これらは**意図しない編集しか検出しない** —
   当該テストのコメントにその旨を明記した。`reply_instructions` を意味で守るのは
   `the_reply_instructions_ask_only_for_a_reply`（#527 の門番。ADR は無い）のほうである
+
+# Amendment（2026-09-12、#655）: 1 つのキーが①と③の両方を持つ場合
+
+**撤回は無い。** 決定 1〜3 はそのまま生きている。追記するのは、決定 3 が列挙した
+キー名の一覧では答えが出ない形が現れたためである。
+
+`body_attachment_header`（#642 で追加）は**見出しと指示を 1 つの値に持つ**:
+
+```text
+## 添付ファイル（{count} 件）
+
+(The attachment content was not handed over — only what the lines below show is known. …)
+```
+
+見出しはペインを見る人間が読むラベルなので③、括弧内はエージェントに何をすべきか
+言っているので①である。決定 3 は「`body_*` は日本語のまま」とキー名で列挙していたが、
+**分類の根拠はキー名ではなく「その文が誰に話しかけているか」**である。同じ根拠で
+`body_thread_unavailable`（「スレッド文脈の取得に失敗したため省略されています」）は
+日本語のまま残る —— あれは状態の説明であって指示ではない。
+
+**判定の手順**: その文を読んで動作を変えるのがエージェントなら①（英語）、
+ペインを見る人間が読むだけなら③（利用者の言語）。1 つのキーに両方入るなら、
+文ごとに分ける。
+
+この区別は `defaults.toml` の当該キーのコメントにも書いてある。
 
 # 検証
 

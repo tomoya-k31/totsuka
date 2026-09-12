@@ -841,16 +841,23 @@ mod tests {
             "## メンション\n\n- 送信者: 太郎\n- チャンネル: #dev\n- 本文:\n\n> こんにちは\n"
         );
         // Not a #318 re-baseline: these two keys are new. Pinned here anyway
-        // because the header's "content not fetched" sentence is the behaviour,
-        // not decoration — an override that drops it puts the agent back to
-        // guessing what the attachment said.
+        // because both halves of the header are behaviour, not decoration.
+        // Dropping "the content was not handed over" puts the agent back to guessing
+        // what the attachment said; dropping the permission to fetch it anyway
+        // steers it away from the one route that works (its own Slack tool,
+        // via the permalink) — which is how the file was actually read in
+        // production.
         let attachments = crate::template::render(&p.body_attachment_header, &[("count", "2")]);
         assert!(
             attachments.contains("## 添付ファイル（2 件）"),
             "{attachments}"
         );
         assert!(
-            attachments.contains("中身は取得していません"),
+            attachments.contains("content was not handed over"),
+            "{attachments}"
+        );
+        assert!(
+            attachments.contains("fetch the file from it yourself"),
             "{attachments}"
         );
         assert_eq!(

@@ -29,12 +29,17 @@ pub struct AuthIdentity {
 
 /// One file attached to a message.
 ///
-/// **Metadata only.** The manifest asks for no `files:read` scope, so nothing
-/// here can be downloaded and the content never reaches the agent. Carrying
-/// the metadata anyway is what stops the silent version of that: before this,
-/// a message reading "md ファイルにしました" arrived as text with the file
-/// erased from the payload entirely, and the agent answered as if the message
-/// had no attachment at all.
+/// **Metadata only.** The manifest asks for no `files:read` scope, so *this
+/// plugin* downloads nothing. Carrying the metadata anyway is what stops the
+/// silent version of that: before this, a message reading "md ファイルにしま
+/// した" arrived as text with the file erased from the payload entirely, and
+/// the agent answered as if the message had no attachment at all.
+///
+/// It also turns out to be enough for the content to reach the agent by
+/// another route: given the [`permalink`](Self::permalink) in the task body,
+/// an agent with a Slack tool of its own reads the file itself (observed in
+/// production). Metadata arrives with no `files:read` — that scope buys
+/// downloading, not seeing that a file exists.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SlackFile {
     /// File name as Slack reports it (`name`, falling back to `title`).
@@ -43,8 +48,13 @@ pub struct SlackFile {
     pub mimetype: Option<String>,
     /// Size in bytes (`size`).
     pub size: Option<u64>,
-    /// Slack permalink to the file — the only handle the operator can follow
-    /// by hand, since the agent cannot fetch it.
+    /// Slack permalink to the file — the handle both readers follow: the
+    /// operator opens it from the pane, and an agent with a Slack tool of its
+    /// own parses the file id out of the path and fetches the content.
+    ///
+    /// `Option` because Slack does not always supply it, and the body line
+    /// simply omits it then — which is one of the cases a plugin-side
+    /// download would still be worth having.
     pub permalink: Option<String>,
 }
 

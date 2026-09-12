@@ -5,9 +5,12 @@
 #
 # These are DEFAULTS, not the live values: editing this file changes what a
 # freshly built totsuka ships with, not what an existing installation uses.
-# Override per installation under `[prompts]` in `plugins/slack.toml` — the key
-# names here ARE the config keys (unlike the orca plugin, whose defaults are
-# keyed differently from its flat config).
+# Override per installation under `[slack.prompts]` in
+# `~/.config/totsuka/config.toml` — **per key**: what you do not name keeps the
+# embedded value. The key names here ARE the config keys (unlike the orca
+# plugin, whose defaults are keyed differently from its flat config). The
+# per-plugin `plugins/slack.toml` this comment used to name no longer exists;
+# plugin settings moved into config.toml's `[<plugin>]` tables.
 #
 # `{placeholder}` substitution is single-pass, so a value containing `{token}`
 # text is inserted, never re-expanded. That matters here more than anywhere
@@ -83,8 +86,8 @@ Write both the issue and the report in the same language as the thread. \
 Output the report only, with no preamble, no postscript and no commentary.\
 """
 
-# Appended to `reply_instructions` only when `reply_style` is set in
-# `plugins/slack.toml`. `reply_style` itself stays a plain user string — it is
+# Appended to `reply_instructions` only when `reply_style` is set in the
+# `[slack]` table of `~/.config/totsuka/config.toml`. `reply_style` itself stays a plain user string — it is
 # content, not a template.
 #
 # Placeholders: {style}
@@ -116,16 +119,51 @@ body_template = """
 #
 # Placeholders: {count}
 #
-# The "中身は取得していません" sentence is load-bearing, not decoration: the
-# plugin has no `files:read` scope, so it can name a file and nothing more. An
+# **This key is split by language on purpose** (ADR-0054): the heading is a
+# label a human reads in the pane, so it stays in the operator's language; the
+# parenthetical addresses the *agent*, so it is English like every other
+# instruction in this file. The test is who the sentence talks to, not which
+# key it lives in — this one key holds both kinds.
+#
+# The "the content was not handed over" sentence is load-bearing, not decoration:
+# the plugin has no `files:read` scope, so it can name a file and nothing more.
+# An
 # agent handed "md ファイルにしました" with the file erased answered as if the
 # message had no attachment; this section is what stops it inventing the
 # content instead of saying it could not read it.
+#
+# **The permission to fetch it anyway is equally load-bearing**, and was added
+# after production showed why: an agent whose Slack MCP was configured parsed
+# the file id out of the permalink on the line below and read the attachment
+# itself — under the `answer` profile, which denies the shell entirely. The
+# first wording listed only 名前・種類・サイズ and told the agent to reply that
+# it could not read the file, which steers away from the one path that works.
+# So: say what the task carries, allow the agent its own route, and keep the
+# "do not guess" instruction for the case where that route is unavailable.
+#
+# **Refer only to what the prompt itself shows.** The agent reads instructions
+# and a body, and nothing else: it cannot see the orchestrator, and it has no
+# notion of a "task" as a unit of work. Two earlier drafts of this key made
+# that mistake in turn — one named the orchestrator, the other pointed at "this
+# task", and neither is a thing the reader can identify. The wording that
+# survives says the content was not handed over and then points at the lines
+# directly below it, both of which are visible from where the agent is
+# standing. Every other prompt default in this repo already obeys this; only
+# this key has broken it.
+#
+# No tool is named on purpose. `slack_read_file` is one route among several and
+# naming it sends an agent that does not have it looking for a tool that is not
+# there.
+#
+# The permission is **conditional on a link actually being shown**, because
+# `SlackFile.permalink` is an `Option` and the line omits it when Slack did not
+# supply one (a tombstone file, for instance). Promising a link that is not
+# there would point the agent at a handle it cannot find.
 body_attachment_header = """
 
 ## 添付ファイル（{count} 件）
 
-（ファイルの中身は取得していません。名前・種類・サイズだけが分かっています。内容が必要な場合は推測で補わず、添付を読めていないことを返信に書いてください）
+(The attachment content was not handed over — only what the lines below show is known. Where a line carries a link, fetch the file from it yourself if you need its content and have a way to do so. When you cannot, or when the line carries no link, do not fill the gap with a guess: say in your reply that you could not read the attachment.)
 
 """
 

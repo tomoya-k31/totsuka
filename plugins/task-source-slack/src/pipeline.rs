@@ -1387,8 +1387,11 @@ fn describe_file(file: &SlackFile) -> String {
     if !meta.is_empty() {
         line.push_str(&format!("（{}）", meta.join("・")));
     }
-    // The permalink is the operator's own handle on the file: the agent
-    // cannot fetch it, but the human reading the pane can open it.
+    // The permalink is the handle on the file for **both** readers: the
+    // operator opens it from the pane, and an agent with a Slack tool of its
+    // own parses the file id out of it and fetches the content (observed in
+    // production, under the `answer` profile). It is the only part of this
+    // line that leads anywhere.
     if let Some(permalink) = &file.permalink {
         line.push(' ');
         line.push_str(permalink);
@@ -1496,13 +1499,22 @@ async fn thread_context<T: SlackTransport>(
             message.text.clone()
         };
         // A context message's attachment would vanish the same way the
-        // mention's did. Names only, and no download — this is the same
-        // metadata-only contract as the body's section.
+        // mention's did. Still no download — but the permalink rides along,
+        // because that link is what lets an agent fetch the file itself, and
+        // a name alone makes a thread attachment unreadable in a way the
+        // triggering message's is not.
         let attached = if message.files.is_empty() {
             String::new()
         } else {
-            let names: Vec<&str> = message.files.iter().map(|f| f.name.as_str()).collect();
-            format!("（添付: {}）", names.join(", "))
+            let described: Vec<String> = message
+                .files
+                .iter()
+                .map(|file| match &file.permalink {
+                    Some(permalink) => format!("{} {permalink}", file.name),
+                    None => file.name.clone(),
+                })
+                .collect();
+            format!("（添付: {}）", described.join(", "))
         };
         lines.push(format!("{speaker}: {}{attached}", text.replace('\n', " ")));
     }
@@ -1644,6 +1656,40 @@ mod tests {
         assert_eq!(lines, vec!["アリス: これです（添付: auth-flow.md）"]);
     }
 
+    /// …and when Slack supplies the permalink, the context line carries it, so
+    /// a thread attachment is as reachable as the triggering message's. A bare
+    /// name is a dead end: the agent's own Slack tool needs the file id, and
+    /// the permalink path is where that id comes from.
+    #[tokio::test]
+    async fn a_context_attachment_carries_its_permalink() {
+        let script = vec![
+            Ok(json!({"ok": true, "messages": [{
+                "user": "U_OTHER",
+                "text": "これです",
+                "ts": "1.0",
+                "files": [{
+                    "name": "auth-flow.md",
+                    "permalink": "https://example.slack.com/files/U1/F1/auth-flow.md"
+                }]
+            }]})),
+            Ok(
+                json!({"ok": true, "user": {"name": "alice", "profile": {"display_name": "アリス"}}}),
+            ),
+        ];
+        let api = scripted(script);
+        let config = small_limit_config();
+        let mut names = NameCache::default();
+        let lines = thread_context(&api, &config, &mut names, &threaded_mention(None))
+            .await
+            .expect("context fetched");
+        assert_eq!(
+            lines,
+            vec![
+                "アリス: これです（添付: auth-flow.md https://example.slack.com/files/U1/F1/auth-flow.md）"
+            ]
+        );
+    }
+
     /// …and an ordinary mention still gets the window it always got.
     #[tokio::test]
     async fn a_mention_still_gets_the_configured_window() {
@@ -1745,7 +1791,13 @@ mod tests {
         let body = task.body.expect("body is set");
 
         assert!(body.contains("## 添付ファイル（1 件）"), "body: {body}");
-        assert!(body.contains("中身は取得していません"), "body: {body}");
+        assert!(body.contains("content was not handed over"), "body: {body}");
+        // The agent's own route is what actually delivered the content in
+        // production, so the permission to use it is pinned alongside.
+        assert!(
+            body.contains("fetch the file from it yourself"),
+            "body: {body}"
+        );
         assert!(
             body.contains("- auth-flow.md（text/plain・2.8 KB）"),
             "body: {body}"
