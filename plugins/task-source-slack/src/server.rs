@@ -712,7 +712,7 @@ async fn token_guard<T: SlackTransport>(
     Ok(())
 }
 
-/// Warn when the user token lacks a scope the config depends on (#379).
+/// Warn when the user token lacks a scope this plugin needs (#379).
 ///
 /// **A missing scope is silent.** Slack simply does not deliver the events it
 /// gates, and reports nothing: a reaction trigger set against a token without
@@ -720,8 +720,14 @@ async fn token_guard<T: SlackTransport>(
 /// the feature is configured, `doctor` is green, and nothing happens.
 /// That cost hours to diagnose live, which is why the check exists at all.
 ///
+/// **Most warnings are keyed to something the config asks for**, so a feature
+/// nobody enabled is never mentioned. `usergroups:read` (#658) is the one that
+/// is not: group mentions have no setting to turn them on, so there is no
+/// config field whose absence could excuse the check. See
+/// [`scope_warnings`], which draws the line.
+///
 /// **Warn rather than fail.** The plugin still does its main job (mentions,
-/// drafts, approvals) with the scope missing; only the opt-in feature is dead.
+/// drafts, approvals) with a scope missing; only part of it goes dead.
 /// Refusing to start would take a working setup down over a feature the
 /// operator may not even be relying on yet.
 ///

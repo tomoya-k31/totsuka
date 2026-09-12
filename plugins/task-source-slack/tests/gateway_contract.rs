@@ -366,7 +366,10 @@ fn the_gateway_never_drops_what_the_filter_would_accept() {
 
         assert!(
             !accepted || published,
-            "{}: `mention.rs` treats this as a mention, but the gateway publishes nothing —              the message would disappear with no record anywhere",
+            concat!(
+                "{}: `mention.rs` treats this as a mention, but the gateway publishes ",
+                "nothing — the message would disappear with no record anywhere",
+            ),
             case.name
         );
         checked += 1;

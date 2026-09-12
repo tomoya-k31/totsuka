@@ -403,9 +403,10 @@ where
         match api.usergroups_for_user(&config.target_user_id).await {
             Ok(subteams) => {
                 if subteams.is_empty() {
-                    tracing::info!(
-                        "the operator belongs to no Slack user groups; only personal                          mentions will become tasks"
-                    );
+                    tracing::info!(concat!(
+                        "the operator belongs to no Slack user groups; only personal ",
+                        "mentions will become tasks",
+                    ));
                 } else {
                     tracing::info!(
                         groups = subteams.len(),
@@ -417,7 +418,14 @@ where
             Err(e) => {
                 tracing::warn!(
                     error = %e,
-                    "could not resolve the operator's Slack user groups → GROUP MENTIONS WILL                      NOT BECOME TASKS this run (personal mentions are unaffected). The usual                      cause is a user token without the `usergroups:read` scope: update the app                      with the current manifest, Reinstall to Workspace, then store the NEW                      `xoxp-` and `xoxb-` tokens — a reinstall reissues both"
+                    concat!(
+                        "could not resolve the operator's Slack user groups → GROUP MENTIONS ",
+                        "WILL NOT BECOME TASKS this run (personal mentions are unaffected). ",
+                        "The usual cause is a user token without the `usergroups:read` scope: ",
+                        "update the app with the current manifest, Reinstall to Workspace, ",
+                        "then store the NEW `xoxp-` and `xoxb-` tokens — a reinstall reissues ",
+                        "both",
+                    )
                 );
             }
         }
