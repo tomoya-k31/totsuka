@@ -1,5 +1,8 @@
 # Rust build artifacts
 /target
+# The Event Gateway is outside the workspace (see the root Cargo.toml),
+# so it builds into its own target directory.
+/slack-event-gateway/target
 **/*.rs.bk
 
 # Coverage
