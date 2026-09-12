@@ -1,0 +1,44 @@
+# Copy to `terraform.tfvars` and fill in. **Do not commit the result** — it
+# holds every operator's Slack signing secret.
+#
+# These values also end up in the OpenTofu state file, which the tooling does
+# not encrypt. Keep state in a bucket only the deployer can read.
+
+project_id = "my-totsuka-gateway"
+
+# Tokyo is a tier 1 Cloud Run region, which is what the cost estimate assumes.
+region = "asia-northeast1"
+
+operators = [
+  {
+    key           = "alice"
+    slack_user_id = "U01ALICE"
+
+    # Generate it. Do not invent it:  openssl rand -hex 24
+    #
+    # This is the routing credential on an endpoint with no IAM in front of it,
+    # so it has to be unguessable in the way a random string is, not in the way
+    # a chosen word feels.
+    path_token = "REPLACE-ME-openssl-rand-hex-24"
+
+    # Slack app → Basic Information → App Credentials → Signing Secret.
+    # NOT a token: it never appears in `config.toml`, only here.
+    signing_secret = "REPLACE-ME"
+
+    # Who may pull alice's two subscriptions. Nobody else can.
+    google_principal = "user:alice@example.com"
+  },
+
+  # Adding a second person is this block and nothing else: topics,
+  # subscriptions, IAM and the registration table all follow.
+  # {
+  #   key              = "bob"
+  #   slack_user_id    = "U02BOB"
+  #   path_token       = "REPLACE-ME"
+  #   signing_secret   = "REPLACE-ME"
+  #   google_principal = "user:bob@example.com"
+  # },
+]
+
+# Pin your own build instead of the official image if you prefer:
+# image = "asia-northeast1-docker.pkg.dev/my-project/totsuka/slack-event-gateway:v0.7.5"

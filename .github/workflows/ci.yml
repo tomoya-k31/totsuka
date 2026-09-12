@@ -231,6 +231,23 @@ jobs:
       - name: Build the container image
         if: steps.changed.outputs.gateway == 'true'
         run: docker build -f Dockerfile -t slack-event-gateway:ci .
+      # The OpenTofu module (#661) is the deployment path an operator actually
+      # follows, and nothing else in this repository would notice it rotting —
+      # a typo'd attribute name only shows up at someone else's `tofu plan`.
+      # `validate` checks names against the provider schema, so it catches that
+      # without any credentials or a project.
+      - name: Set up OpenTofu
+        if: steps.changed.outputs.gateway == 'true'
+        uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_wrapper: false
+      - name: Check the OpenTofu module
+        if: steps.changed.outputs.gateway == 'true'
+        working-directory: slack-event-gateway/tofu
+        run: |
+          tofu fmt -check -diff -recursive
+          tofu init -backend=false -input=false
+          tofu validate
 
   # cargo-audit / cargo-deny moved to audit.yml (daily cron + dependency-file
   # PRs): advisories change with time, not with PR content.

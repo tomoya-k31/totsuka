@@ -1,4 +1,7 @@
 target/
+# Infrastructure, not application source. It would only invalidate the build
+# cache on an unrelated change.
+tofu/
 tests/
 README.md
 README.ja.md

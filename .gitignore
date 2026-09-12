@@ -9,6 +9,14 @@
 # branch checkouts, so an ignore added higher up leaves the branches below it
 # one `git add <dir>` away from committing a provider binary.
 /slack-event-gateway/tofu/.terraform/
+
+# OpenTofu working state. `terraform.tfvars` holds every operator's Slack
+# signing secret and the state file holds it again — neither belongs in git.
+# `terraform.tfvars.example` is committed and has no real values.
+/slack-event-gateway/tofu/.terraform.lock.hcl
+/slack-event-gateway/tofu/terraform.tfvars
+*.tfstate
+*.tfstate.*
 **/*.rs.bk
 
 # Coverage
