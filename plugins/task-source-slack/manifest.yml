@@ -33,6 +33,12 @@
 # app; the re-install issues a NEW `xoxp-` token AND a NEW `xoxb-` token, so
 # update BOTH Keychain entries (`totsuka doctor` will tell you when a stored
 # token went bad).
+#
+# UPGRADING FROM A PRE-#658 INSTALL: `usergroups:read` was added to the user
+# scopes below. Until you re-apply this manifest and reinstall, mentions of a
+# GROUP you belong to (`@team-name`) will not become tasks — personal mentions
+# are unaffected. totsuka warns about this at startup rather than failing, so
+# nothing breaks if you put it off.
 display_information:
   name: totsuka reply assistant
   description: Turns mentions of you into totsuka tasks and posts approved replies under your own name.
@@ -57,6 +63,10 @@ oauth_config:
       - chat:write # post the approved reply / draft records as you
       - im:write # open your self-DM to record drafts
       - reactions:read # receive reaction_added for the :eyes: task trigger (#319)
+      # Group mentions (#658): which user groups you belong to is resolved at
+      # startup via `usergroups.list`. Without this scope personal mentions
+      # still work and group ones silently do not, so totsuka warns at startup.
+      - usergroups:read
 settings:
   event_subscriptions:
     # user_events (not bot_events): delivered over Socket Mode for the

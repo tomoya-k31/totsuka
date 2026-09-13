@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](slack-setup.ja.md)
 
-<!-- generated-from: ai-docs/operations/slack-quickstart.md sha256:54a60d7edd7d5bc2f4ed2e3c95cb8b60ba13012459772372a379e1bbd59c9042 -->
+<!-- generated-from: ai-docs/operations/slack-quickstart.md sha256:4ac47ac7fd572fc94715d745bfe7109fc22c008d054e2f0d8b67656b4b595c5d -->
 
 # Setting up the Slack source
 
@@ -157,6 +157,7 @@ To try it end to end, have someone mention you. After the agent finishes, a draf
 | Reacting does not create a task | Check that a workflow has `trigger = { reaction = "…" }` (**order in the file does not matter** — mentions and reactions arrive on separate event paths, so a reaction workflow written after the catch-all is not hidden by it), that the emoji name matches (👀 is `eyes`, 👁 is `eye`; a custom emoji arrives under the name actually clicked, so list aliases too), that **you** were the one who reacted, that the app was reinstalled with a manifest containing `reactions:read` — without that scope the event never arrives **and nothing reports an error** — and that the message was not **already handled as a mention**: both paths share one set of processed messages, so reacting to a message that already became a task does nothing |
 | Re-adding a reaction does not re-run it | Intended. A message that was handled successfully is not handled again, so removing and re-adding a reaction cannot start a second agent. A message whose fetch **failed** can be retried this way |
 | The draft arrives but the buttons no longer work | They expire after 24 hours, or were evicted once more than 1024 drafts accumulated. Reply by hand from the self-DM copy, or mention again. Drafts survive a restart |
+| A group mention (`@team-name`) does not create a task | Check that the app was reinstalled with a manifest containing `usergroups:read`. **Without that scope the startup lookup of your groups fails, your group set stays empty, and no group mention becomes a task** — personal mentions keep working, so it looks like "only part of it is broken". totsuka logs one warning at startup; look there. Your groups are resolved **once, at startup**, so restart after being added to a group. `@here`, `@channel` and `@everyone` are **out of scope by design**: they name no one |
 | You changed the app's scopes | A scope change requires reinstalling the app, which **reissues both `xoxp-` and `xoxb-`**. Update both stored values, then run `doctor`. Updating only one leaves the app half-broken |
 | Channel-prefix rules never apply, so every mention falls back to the classifier LLM (or to the picker, if no LLM is configured) | The app cannot read channel names. Reinstall with a manifest containing `channels:read` and `groups:read`, then update the stored tokens as above |
 | No notification DM arrives | Check that `bot_token` is set and valid (`doctor` probes it), look for a warning about resolving the bot DM in the startup log, and check that you have not muted the app's DMs in Slack |

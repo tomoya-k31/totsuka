@@ -9,7 +9,8 @@
 //!    approved auto-reply)
 //! 3. the self-DM record channel → ignore (defense in depth against
 //!    re-detecting our own records)
-//! 4. no `<@target_user_id>` in the text → ignore (mentions only)
+//! 4. the text names neither the operator (`<@target_user_id>`) nor a user
+//!    group they belong to (`<!subteam^S…>`) → ignore
 //! 5. no workflow answers mentions → ignore, **without spending the dedup
 //!    key**, so a channel watch covering this channel can still claim the
 //!    message (#617)
@@ -20,7 +21,7 @@ use std::collections::{HashSet, VecDeque};
 
 use serde_json::Value;
 
-use crate::gateway_contract::MentionTags;
+use crate::gateway_contract::{MentionTags, extract_subteam_ids};
 use crate::slack_api::{SlackFile, parse_files};
 
 /// Bound on the processed-id set. Old entries fall out FIFO; a redelivery
@@ -148,6 +149,11 @@ pub struct MentionFilter {
     /// a tag this says is not a mention is one the gateway never publishes,
     /// and that record does not exist for anyone to notice.
     tags: MentionTags,
+    /// The user groups the operator belongs to (#658). Resolved once at
+    /// startup from `usergroups.list`; empty until then, and empty for good
+    /// when the token lacks `usergroups:read` — in which case personal
+    /// mentions keep working and a startup warning says group ones will not.
+    subteams: HashSet<String>,
     self_dm_channel: Option<String>,
     /// The workflow a plain mention belongs to (0.6.0, #554). `None` means
     /// none is configured, and mentions are dropped rather than submitted to
@@ -163,6 +169,7 @@ impl MentionFilter {
         Self {
             target_user_id: target_user_id.to_string(),
             tags: MentionTags::new(target_user_id),
+            subteams: HashSet::new(),
             self_dm_channel: None,
             mention_workflow,
             processed: HashSet::new(),
@@ -173,6 +180,15 @@ impl MentionFilter {
     /// Register the resolved self-DM channel (filter row 3).
     pub fn set_self_dm_channel(&mut self, channel: String) {
         self.self_dm_channel = Some(channel);
+    }
+
+    /// Register the user groups the operator belongs to (filter row 4, #658).
+    ///
+    /// Membership is checked here rather than at the Event Gateway because the
+    /// edge cannot know it without a second copy of the answer, and a stale
+    /// copy drops group mentions silently (ADR-0072 decision 8).
+    pub fn set_subteams(&mut self, subteams: impl IntoIterator<Item = String>) {
+        self.subteams = subteams.into_iter().collect();
     }
 
     /// The operator's own user id — the identity the reaction trigger
@@ -197,6 +213,21 @@ impl MentionFilter {
         self.processed.contains(key)
     }
 
+    /// Whether `text` names a user group the operator belongs to.
+    ///
+    /// The extraction is shared with the Event Gateway's pre-filter
+    /// ([`crate::gateway_contract::extract_subteam_ids`]) so the two cannot
+    /// disagree about what counts as a group tag — the gateway publishes on
+    /// *any* group id, and this decides which of those are the operator's.
+    fn names_my_subteam(&self, text: &str) -> bool {
+        if self.subteams.is_empty() {
+            return false;
+        }
+        extract_subteam_ids(text)
+            .iter()
+            .any(|id| self.subteams.contains(id))
+    }
+
     /// Run one raw `message` event through the filter table. `Some` means a
     /// fresh mention (and the event is now remembered as processed).
     pub fn assess(&mut self, event: &Value) -> Option<Mention> {
@@ -218,9 +249,14 @@ impl MentionFilter {
         if self.self_dm_channel.as_deref() == Some(channel) {
             return None;
         }
-        // 4. mentions only
+        // 4. named, personally or through a group the operator is in.
+        //
+        // `<!here>` / `<!channel>` / `<!everyone>` are out of scope by
+        // decision 8 of ADR-0072 — they are "to whoever is here" rather than a
+        // name, and turning them into tasks makes noise dominant. Nothing here
+        // matches them: neither predicate looks at a broadcast tag.
         let text = text_of("text").unwrap_or("");
-        if !self.tags.matches(text) {
+        if !self.tags.matches(text) && !self.names_my_subteam(text) {
             return None;
         }
         // 5. no workflow answers mentions.
@@ -368,6 +404,89 @@ mod tests {
             "ts": "100.1",
             "thread_ts": "100.0"
         })
+    }
+
+    /// A filter that knows the operator belongs to one group.
+    fn filter_in_group() -> MentionFilter {
+        let mut f = filter();
+        f.set_subteams(["S0MINE".to_string()]);
+        f
+    }
+
+    fn said(text: &str) -> Value {
+        let mut event = mention_event();
+        event["text"] = json!(text);
+        event
+    }
+
+    /// Being named through a group is being named (#658).
+    #[test]
+    fn a_mention_of_a_group_the_operator_is_in_becomes_a_task() {
+        for text in [
+            "<!subteam^S0MINE> 障害対応お願いします",
+            "<!subteam^S0MINE|@team-a> 障害対応お願いします",
+            // Alongside someone else's personal mention: the group tag is
+            // still addressed to the operator.
+            "<@U_OTHER> と <!subteam^S0MINE> で見てください",
+        ] {
+            assert!(
+                filter_in_group().assess(&said(text)).is_some(),
+                "`{text}` should have become a task"
+            );
+        }
+    }
+
+    /// …and only that group. A workspace has many, and picking up every one
+    /// would make a busy channel unusable.
+    #[test]
+    fn a_group_the_operator_is_not_in_is_ignored() {
+        assert!(
+            filter_in_group()
+                .assess(&said("<!subteam^S0THEIRS> よろしく"))
+                .is_none()
+        );
+        // No groups resolved at all (the `usergroups:read` case): personal
+        // mentions keep working, group ones do not.
+        assert!(filter().assess(&said("<!subteam^S0MINE> hi")).is_none());
+        assert!(filter().assess(&mention_event()).is_some());
+    }
+
+    /// Broadcasts are out of scope by ADR-0072 decision 8: they are "to
+    /// whoever is here", not a name, and taking them would make noise
+    /// dominant in exactly the channels worth watching.
+    #[test]
+    fn broadcasts_are_not_mentions() {
+        for text in [
+            "<!here> 明日はリリースです",
+            "<!channel> 明日はリリースです",
+            "<!everyone> 明日はリリースです",
+        ] {
+            assert!(
+                filter_in_group().assess(&said(text)).is_none(),
+                "`{text}` must not become a task"
+            );
+        }
+    }
+
+    /// A group mention is still a mention: every earlier filter row applies.
+    #[test]
+    fn the_earlier_filter_rows_still_outrank_a_group_mention() {
+        let mut bot = said("<!subteam^S0MINE> deploy finished");
+        bot["bot_id"] = json!("B0DEPLOY");
+        assert!(filter_in_group().assess(&bot).is_none());
+
+        let mut edited = said("<!subteam^S0MINE> 直しました");
+        edited["subtype"] = json!("message_changed");
+        assert!(filter_in_group().assess(&edited).is_none());
+
+        let mut own = said("<!subteam^S0MINE> 自分の投稿");
+        own["user"] = json!("U_ME");
+        assert!(filter_in_group().assess(&own).is_none());
+
+        // And the dedup: one message, one task, whichever predicate matched.
+        let mut once = filter_in_group();
+        assert!(once.assess(&said("<!subteam^S0MINE> hi")).is_some());
+        assert!(once.assess(&said("<!subteam^S0MINE> hi")).is_none());
     }
 
     #[test]

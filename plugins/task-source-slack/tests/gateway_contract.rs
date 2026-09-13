@@ -22,6 +22,7 @@ use serde_json::Value;
 use task_source_slack::gateway_contract::{
     Endpoint, GatewayRecord, Projection, Registration, Topic, project,
 };
+use task_source_slack::mention::MentionFilter;
 
 /// The registered operator every case is judged against.
 const CONFORMANCE_USER_ID: &str = "U_ME";
@@ -326,6 +327,99 @@ fn press_records_rebuild_into_a_payload_the_pipeline_reads() {
         }
     }
     assert!(checked >= 2, "the suite lost its block_actions cases");
+}
+
+/// **The asymmetry, checked end to end.**
+///
+/// The gateway's filter is a gate: a message it drops has no record and is
+/// invisible to totsuka forever. `mention.rs` is the authority on what a
+/// mention is. So for every `message` delivery in the suite, the one direction
+/// that must hold is:
+///
+/// > if `mention.rs` would accept the text, the gateway must have published it.
+///
+/// The converse is allowed — the gateway may publish something the filter then
+/// discards, at the cost of one `fetch_message`. Only this direction loses a
+/// mention.
+#[test]
+fn the_gateway_never_drops_what_the_filter_would_accept() {
+    /// Every group id the fixtures use. The operator belongs to all of them,
+    /// so a case the gateway dropped cannot be excused by non-membership.
+    const OPERATOR_GROUPS: [&str; 2] = ["S0ABCDEF", "S0TEAMB"];
+
+    let mut checked = 0;
+    for case in load_cases() {
+        if !matches!(endpoint_of(&case), Endpoint::Events) {
+            continue;
+        }
+        let Some(event) = case.body.pointer("/delivery/payload/event") else {
+            continue;
+        };
+        if event.get("type").and_then(Value::as_str) != Some("message") {
+            continue;
+        }
+
+        let mut filter = MentionFilter::new(CONFORMANCE_USER_ID, Some("slack-reply".into()));
+        filter.set_subteams(OPERATOR_GROUPS.iter().map(|g| (*g).to_string()));
+        let accepted = filter.assess(event).is_some();
+        let published = !expectations(&case).is_empty();
+
+        assert!(
+            !accepted || published,
+            concat!(
+                "{}: `mention.rs` treats this as a mention, but the gateway publishes ",
+                "nothing — the message would disappear with no record anywhere",
+            ),
+            case.name
+        );
+        checked += 1;
+    }
+    assert!(
+        checked >= 12,
+        "only {checked} message cases were checked against the filter"
+    );
+}
+
+/// The consumer half of decision 8: the group ids the gateway extracted are
+/// the ones `mention.rs` matches membership against.
+#[test]
+fn subteam_records_name_groups_the_filter_can_match() {
+    let mut checked = 0;
+    for case in load_cases() {
+        for expectation in expectations(&case) {
+            let record =
+                GatewayRecord::from_value(expectation.get("record").expect("record")).unwrap();
+            if record.subteam_ids.is_empty() {
+                continue;
+            }
+            let event = case
+                .body
+                .pointer("/delivery/payload/event")
+                .expect("a subteam record comes from a message event");
+
+            // A member of the named group is mentioned…
+            let mut member = MentionFilter::new(CONFORMANCE_USER_ID, Some("slack-reply".into()));
+            member.set_subteams(record.subteam_ids.clone());
+            assert!(
+                member.assess(event).is_some(),
+                "{}: the gateway recorded {:?} but the filter does not match a member",
+                case.name,
+                record.subteam_ids
+            );
+
+            // …and a non-member is not, unless they were also named directly.
+            let mut outsider = MentionFilter::new(CONFORMANCE_USER_ID, Some("slack-reply".into()));
+            outsider.set_subteams(["S0NOT_MINE".to_string()]);
+            assert_eq!(
+                outsider.assess(event).is_some(),
+                record.flags.mentions_me,
+                "{}: a non-member should become a task only on a personal mention",
+                case.name
+            );
+            checked += 1;
+        }
+    }
+    assert!(checked >= 3, "the suite lost its subteam cases");
 }
 
 /// The suite must keep covering the boundary shapes. Naming them here means

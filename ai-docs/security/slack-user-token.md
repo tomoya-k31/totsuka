@@ -4,7 +4,7 @@ title: Slack ユーザートークンの取り扱いポリシー
 description: task-source-slack が使う User OAuth Token（xoxp）/ App-Level Token（xapp）/ Bot User OAuth Token（xoxb、通知ナッジ専用・任意）の保管・権限・漏えい時の Revoke 手順・社用ワークスペースでの確認事項。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-slack
 tags: [security, slack, token, keychain, incident]
-generated: { by: human:tomoya-k31, at: 2026-07-31T17:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-13T17:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -18,6 +18,7 @@ task-source-slack は **User OAuth Token（`xoxp-`）で本人として** 動く
 - `users:read` — ワークスペースのユーザー情報読み取り
 - `chat:write` / `im:write` — **本人名義での投稿**・DM 開始
 - `reactions:read` — リアクションイベントの受信（#319、[ADR-0025](/decisions/adr-0025-reaction-task-trigger.md)）。**可視範囲は広がらない**（本人が参加しているチャンネルのまま）
+- `usergroups:read` — 本人が所属するユーザーグループの解決（#658、[ADR-0072](/decisions/adr-0072-slack-event-gateway.md) 決定 8）。起動時に `usergroups.list` を 1 回呼ぶだけで、**メッセージは読まない**。ワークスペースのグループ一覧とそのメンバーは元から本人に見えているので、**可視範囲は広がらない**
 
 ## リアクショントリガが本人限定である理由（#319）
 

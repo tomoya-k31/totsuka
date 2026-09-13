@@ -390,6 +390,45 @@ where
                      continuing without that filter row");
             }
         }
+        // Resolve the operator's user groups (#658). Once, at startup: group
+        // membership changes rarely, a restart picks it up, and this plugin's
+        // premise is a laptop that stops and starts often.
+        //
+        // **Non-fatal, like the two resolutions around it.** The usual reason
+        // this fails is a token without `usergroups:read`, and refusing to
+        // start would take a working mention setup down over a feature the
+        // operator may not be using yet — the same call `check_scopes` makes.
+        // The warning has to be loud, though: the symptom otherwise is group
+        // mentions quietly never becoming tasks.
+        match api.usergroups_for_user(&config.target_user_id).await {
+            Ok(subteams) => {
+                if subteams.is_empty() {
+                    tracing::info!(concat!(
+                        "the operator belongs to no Slack user groups; only personal ",
+                        "mentions will become tasks",
+                    ));
+                } else {
+                    tracing::info!(
+                        groups = subteams.len(),
+                        "resolved the operator's Slack user groups"
+                    );
+                }
+                filter.set_subteams(subteams);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    concat!(
+                        "could not resolve the operator's Slack user groups → GROUP MENTIONS ",
+                        "WILL NOT BECOME TASKS this run (personal mentions are unaffected). ",
+                        "The usual cause is a user token without the `usergroups:read` scope: ",
+                        "update the app with the current manifest, Reinstall to Workspace, ",
+                        "then store the NEW `xoxp-` and `xoxb-` tokens — a reinstall reissues ",
+                        "both",
+                    )
+                );
+            }
+        }
         // Resolve the bot↔operator DM the notification nudges go to (#305).
         // Also once, also non-fatal: without it the nudges are skipped and
         // the draft/picker surfaces still work — the operator just gets no

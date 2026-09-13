@@ -4,7 +4,7 @@ title: Slack セットアップ Quickstart（task-source-slack）
 description: manifest からの Slack アプリ作成 → トークン発行 → トークン保管 → totsuka setup → doctor → run --watch までの導入手順と、手で書く場合のフォールバック、トークン失効・スコープ変更時の対処。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-slack
 tags: [slack, setup, runbook, secrets, doctor]
-generated: { by: claude-code/opus-5, at: 2026-09-10T03:20:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-13T17:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -162,6 +162,7 @@ totsuka run --watch       # Socket Mode 常駐 + 5 秒周期の吸い上げ
 | リアクションを付けてもタスク化されない | ①`[[workflows]]` に `trigger = { reaction = "…" }` を持つ workflow があるか（**定義順は関係ない** — #554 以降はメンションとリアクションが別のイベント経路なので、catch-all より後ろに書いても隠れない）②絵文字名が一致しているか（👀 は `eyes`、👁 は `eye`。カスタム絵文字の alias は「実際に押された名前」で届くので alias を使うなら両方列挙）③**付けたのが自分か**（他人のリアクションでは起動しない。緩和する設定は無い — [ADR-0025](/decisions/adr-0025-reaction-task-trigger.md)）④`reactions:read` を含む manifest で再インストール済みか（スコープが無いとイベント自体が届かず、**エラーにもならない**）⑤同じメッセージを既に mention 経由で処理していないか（dedup は共有） |
 | リアクションを付け直しても再実行されない | 意図した挙動。dedup キーが `{channel}:{メッセージの ts}` なので、**成功したものは付け直しても再実行しない**（誤って外して付け直しただけで二重にエージェントが走る方が事故が大きい）。ただし**取得に失敗した場合は付け直しで再試行できる**（失敗時はキーを消費しない）。強制的に再実行するならプロセス再起動で LRU が消える |
 | 返信案は届くがボタンが失効 | TTL 24h 超過、または FIFO 追い出し（上限 1024 件）。self-DM 記録のテキストから手動返信するか、再メンションで再実行（#122 以降、下書きは `~/.local/state/totsuka/plugins/{source_name}/drafts.json` に永続化されるため再起動ではボタンは失効しない） |
+| グループメンション（`@team-name`）がタスクにならない | `usergroups:read` を含む manifest で再インストール済みか（#658）。**このスコープが無いと、起動時の `usergroups.list` が失敗して所属グループが空になり、グループ宛のメンションは 1 件もタスクにならない** —— 個人宛メンションは影響を受けないので、「一部だけ動かない」形で気づきにくい。totsuka は起動時に WARN を 1 回出すので、そこを見る。所属は**起動時に 1 回だけ**解決するので、グループに追加された直後は再起動が要る。`@here` / `@channel` / `@everyone` は**仕様として対象外**（名指しではないため、[ADR-0072](/decisions/adr-0072-slack-event-gateway.md) 決定 8） |
 | スコープを変更した | アプリ再インストールが必要 → **`xoxp-` と `xoxb-` の両方が再発行される**ので保管先の値を両方更新 → `doctor` で確認（[manifest 雛形](https://github.com/tomoya-k31/totsuka/blob/main/plugins/task-source-slack/manifest.yml) のコメント参照）。既存アプリへ bot user を後から足す場合（#305）も同じ — `slack-bot` を追加するだけだと再発行済みの `xoxp-` が死んだままになる |
 | 通知ナッジ（bot DM）が届かない | ① `bot_token` が未設定/失効（`doctor` の bot probe を確認）② 起動ログに bot DM 解決失敗の WARN がないか ③ Slack 側でこのアプリの DM をミュートしていると push は出ない（コードでは解決不能） |
 | prefix ルール（`[[channel_groups]]`）が効かず常に LLM/エフェメラル選択になる | `conversations.info` が `missing_scope` で失敗しチャンネル名が取れていない（ログ WARN 参照）。`channels:read` / `groups:read` を含む manifest でアプリを再インストール → 保管先の値を更新（上の「スコープを変更した」と同手順） |
