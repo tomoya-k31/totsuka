@@ -101,6 +101,114 @@ jobs:
           git commit -m "chore: sync Cargo.lock to the release version"
           git push origin "HEAD:${RELEASE_BRANCH}"
 
+  # The Event Gateway container (#660, ADR-0072 decision 9).
+  #
+  # **Why totsuka ships this image at all.** OpenTofu cannot build from source;
+  # it needs an image URL. Telling operators to "build it and push it to your
+  # own Artifact Registry first" would undo the point of shipping OpenTofu,
+  # which is that constructing this thing should be automatable. So the
+  # repository publishes an official image and the module defaults to it — and
+  # a company deployment substitutes its own registry with one variable.
+  #
+  # **Versioned with totsuka itself, deliberately.** An independent version for
+  # the gateway would mean a compatibility matrix between the image and the
+  # plugin that reads its records, maintained by hand, consulted by nobody. The
+  # contract between the two is frozen as a test suite
+  # (`contracts/slack-event-gateway/`), so the useful question is "which
+  # totsuka release is this image from", and the tag answers it directly.
+  #
+  # Same-run gating as the universal binary below, for the same reason: a
+  # Release published with the default GITHUB_TOKEN triggers no `on: release`
+  # workflow.
+  gateway-image:
+    name: Publish the Event Gateway image
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Only this job writes packages, and it needs nothing else — no release to
+    # create, no PR to update. Declaring it here rather than at the workflow
+    # level keeps `packages: write` off `release-please`, `sync-lockfile` and
+    # `universal-binary`, none of which touch a registry.
+    permissions:
+      contents: read
+      packages: write
+    env:
+      TAG: ${{ needs.release-please.outputs.tag_name }}
+      IMAGE: ghcr.io/${{ github.repository }}/slack-event-gateway
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+      - name: Log in to ghcr.io
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      # The tag carries a leading `v` (`v0.7.5`); an image tag may keep it, and
+      # keeping it makes "which release is this" answerable without knowing the
+      # convention.
+      #
+      # linux/amd64 only: Cloud Run runs amd64, and a second architecture would
+      # double the build time of every release to produce something nothing
+      # pulls.
+      #
+      # `:latest` is deliberately NOT published. The OpenTofu module pins an
+      # exact version, and a floating tag would let `tofu apply` silently
+      # change what is deployed — for a service that holds Slack signing
+      # secrets, "it redeployed itself" is not a property worth having.
+      - name: Build and push
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: slack-event-gateway
+          file: slack-event-gateway/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.IMAGE }}:${{ env.TAG }}
+          # Provenance attestation, so a puller can check which workflow run
+          # built the image. Free here, and it is the only answer this
+          # repository can give to "who built what you are about to run in your
+          # own project".
+          provenance: mode=max
+          # **No `cache-to: type=gha`.** GitHub's Actions cache is a 10 GB
+          # repository-wide LRU, and this repository already sits near the
+          # ceiling; writing every intermediate layer of a release-profile Rust
+          # build into it would evict the rust-cache entries `warm-cache.yml`
+          # exists to keep warm. Releases happen a few times a month, so the
+          # hit rate would be near zero anyway — the trade is "no benefit here,
+          # slower CI on every PR", which is not a trade.
+
+      # **ghcr packages are private on first publish, and a public repository
+      # does not change that** — a package inherits the repository's access
+      # permissions but not its visibility. Cloud Run can only pull a *public*
+      # ghcr image directly; a private one needs an Artifact Registry remote
+      # repository in front of it.
+      #
+      # So the first release silently produces an image nobody can deploy: the
+      # job is green, and only the operator running `tofu apply` finds out.
+      # This repository has already been bitten by exactly that shape — see the
+      # visibility gate in the release runbook, where a Homebrew bump was
+      # skipped for a release and `brew install` kept succeeding with the old
+      # version. Check it, and go red rather than quiet.
+      - name: The published package must be public
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          visibility=$(gh api \
+            "/users/${{ github.repository_owner }}/packages/container/totsuka%2Fslack-event-gateway" \
+            --jq '.visibility' 2>/dev/null || echo "unknown")
+          if [ "${visibility}" != "public" ]; then
+            echo "::error::the image was pushed but the package is '${visibility}', not public."
+            echo "Cloud Run can only pull a public ghcr.io image directly, so ${IMAGE}:${TAG}"
+            echo "cannot be deployed as-is. Fix it once, by hand:"
+            echo "  Packages → slack-event-gateway → Package settings → Change visibility → Public"
+            echo "Then re-run this job. The setting is sticky, so later releases inherit it."
+            exit 1
+          fi
+          echo "package visibility: ${visibility}"
+
   # Build in the SAME workflow run: a Release published with the default
   # GITHUB_TOKEN does not trigger a separate `on: release` workflow, so the
   # universal-binary build is gated on release-please's `release_created`

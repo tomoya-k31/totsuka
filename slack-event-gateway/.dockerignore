@@ -1,0 +1,6 @@
+target/
+tests/
+README.md
+README.ja.md
+Dockerfile
+.dockerignore

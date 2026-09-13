@@ -38,11 +38,29 @@ sha2 = "0.10"
 subtle = "2"
 # Pub/Sub publish and the metadata-server token. rustls rather than the
 # platform TLS stack, because a distroless image has no platform stack.
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots"] }
+#
+# **Roots compiled in, not read from the filesystem.** `native-roots` would
+# make TLS depend on the base image shipping `ca-certificates` — and swapping
+# the base for `scratch` would then break every publish at runtime with a TLS
+# error rather than at build time. Compiling the roots in removes that coupling
+# entirely; the cost is that updating them is a dependency bump, which is
+# exactly how the rest of this lockfile is maintained anyway.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt"] }
 percent-encoding = "2"
 thiserror = "2"
+
+# Symbols are stripped by cargo rather than by a `strip` invocation in the
+# Dockerfile: `binutils` is not in the builder image, and a missing `strip`
+# would fail the release build at the last step.
+#
+# `panic` stays at the default `unwind`. With `abort`, a panic anywhere takes
+# the whole process down — every delivery in flight with it — instead of ending
+# one connection. For a service whose failures are counted by Slack and used to
+# disable the subscription, that is the wrong trade.
+[profile.release]
+strip = true
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

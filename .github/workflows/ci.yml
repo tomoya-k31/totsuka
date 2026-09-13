@@ -152,7 +152,15 @@ jobs:
     name: gateway (slack-event-gateway)
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # The image build is a release-profile Rust compile from a cold layer
+    # cache, so this needs more room than the Rust checks alone do.
+    timeout-minutes: 30
+    # Job-level permissions REPLACE the workflow-level block rather than
+    # merging with it, so `contents` has to be restated. `pull-requests: read`
+    # is for `gh pr diff` in the change-detection step below.
+    permissions:
+      contents: read
+      pull-requests: read
     defaults:
       run:
         working-directory: slack-event-gateway
@@ -183,6 +191,46 @@ jobs:
       # than a sparse path.
       - name: Test
         run: cargo test
+      # The Dockerfile is only exercised at release time (#660), and a release
+      # that fails halfway has already created a tag. Building it here — but
+      # only when this directory changed — means a broken Dockerfile is a red
+      # PR rather than a stranded release.
+      #
+      # `gh pr diff` rather than `git diff`, and rather than a paths-filter
+      # action: it asks the API, so it needs no new dependency to pin AND it
+      # works on the shallow checkout the runner does by default.
+      #
+      # `git diff origin/<base>...HEAD` does **not** work here, and fails in the
+      # worst available way: with `fetch-depth: 1` there is no merge base, git
+      # errors, the pipeline's exit status comes from `grep` on empty input, and
+      # the step concludes "unchanged" — green, and doing nothing. That is the
+      # shape this check exists to prevent, so it is worth the comment.
+      #
+      # The `test -n` is the same lesson: an API failure returns an empty list,
+      # which is indistinguishable from "this PR changed nothing". A PR always
+      # changes something, so empty means the query failed, and the step goes
+      # red rather than quietly answering no.
+      - name: Did this PR touch the gateway?
+        id: changed
+        working-directory: ${{ github.workspace }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          files=$(gh pr diff "${PR}" --name-only)
+          test -n "${files}"
+          if grep -q '^slack-event-gateway/' <<< "${files}"; then
+            echo "gateway=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "gateway=false" >> "${GITHUB_OUTPUT}"
+          fi
+          echo "changed files touching the gateway:"
+          grep '^slack-event-gateway/' <<< "${files}" || echo "  (none)"
+      # No push and no registry login: this proves the image builds, nothing
+      # more. Publishing happens only from a release (release-please.yml).
+      - name: Build the container image
+        if: steps.changed.outputs.gateway == 'true'
+        run: docker build -f Dockerfile -t slack-event-gateway:ci .
 
   # cargo-audit / cargo-deny moved to audit.yml (daily cron + dependency-file
   # PRs): advisories change with time, not with PR content.

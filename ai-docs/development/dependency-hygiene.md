@@ -1,10 +1,10 @@
 ---
 type: Guide
 title: 依存関係ハイジーン（未使用依存と Cargo.lock ドリフトの検出）
-description: cargo-machete による毎 PR の未使用依存チェックの運用、誤検知の抑制手順（package.metadata.cargo-machete）、高精度な cargo-shear / cargo-udeps の定期手動実行手順、および cargo metadata --locked による Cargo.lock ドリフト検出（宣言はあるが lock に無い、という逆方向のドリフト）。
+description: cargo-machete による毎 PR の未使用依存チェックの運用、誤検知の抑制手順（package.metadata.cargo-machete）、高精度な cargo-shear / cargo-udeps の定期手動実行手順、cargo metadata --locked による Cargo.lock ドリフト検出、および配布するコンテナイメージのベースイメージ監視方針と供給鎖の説明。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/.github/workflows/ci.yml
 tags: [rust, ci, dependencies, cargo-machete, cargo-shear, cargo-udeps, cargo-lock, drift]
-generated: { by: human:tomoya-k31, at: 2026-07-26T23:30:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-13T21:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -126,6 +126,59 @@ cargo +nightly udeps --workspace --all-targets --all-features
 ## 手動実行の記録
 
 手動実行で削除・ignore 追加を行った PR には、実行したツールとバージョンを PR 本文に記録する（次回実行時の基準点になる）。
+
+# コンテナイメージの面（#660）
+
+`cargo audit` / `cargo deny` が見ているのは **Rust の依存だけ**である。#660 で
+[Event Gateway](/components/slack-event-gateway.md) の公式イメージを ghcr.io に出した時点で、
+**ベースイメージも脆弱性対応の対象になった** —— 配るものの中身は、保守する側の責任になる。
+
+## 何を監視するか
+
+面を最小化した結果、監視対象は 3 つしかない。
+
+| 対象 | どう追うか |
+|---|---|
+| `slack-event-gateway/Cargo.lock` | `cargo audit` / `cargo deny`。**ただし workspace 外なので `audit.yml` の既定では回らない** —— このディレクトリで別途実行する |
+| ビルダーイメージ（`rust:…-alpine`） | Dockerfile が**ダイジェストで固定**している。Rust のリリースに追随して手で上げる。コメントにタグ名が書いてあるのはそのため |
+| ランタイムイメージ（`gcr.io/distroless/static-debian12`） | 同じくダイジェスト固定。distroless の `static` は **libc すら持たない**（バイナリは musl で静的リンク）ので、面は実質「Google が再ビルドしたときに変わる CA 証明書と tzdata」だけになる |
+
+**イメージの中にはパッケージマネージャもシェルも無い。** CVE を当てる先はこの 3 つ以外に存在せず、
+逆に言えば**再ビルドしない限り何も直らない**。これは「面が小さい」のと引き換えに受け入れた性質である。
+
+## なぜダイジェストで固定するのか
+
+このリポジトリが GitHub Actions を SHA で固定しているのと同じ理由である。タグは可変で、
+「何から作ったか」はサプライチェーンの起点になる。**Slack の signing secret を持つコンテナ**の
+起点をタグに委ねる理由が無い。
+
+更新は `Dockerfile` のコメントにあるタグから新しいダイジェストを引いて差し替える:
+
+```bash
+curl -s "https://hub.docker.com/v2/repositories/library/rust/tags/<tag>" | jq -r .digest
+TOKEN=$(curl -s "https://gcr.io/v2/token?scope=repository:distroless/static-debian12:pull&service=gcr.io" | jq -r .token)
+curl -sI -H "Authorization: Bearer ${TOKEN}" \
+  -H "Accept: application/vnd.oci.image.index.v1+json" \
+  "https://gcr.io/v2/distroless/static-debian12/manifests/nonroot" | grep -i docker-content-digest
+```
+
+## 供給鎖 —— 誰がビルドし、どう検証できるか
+
+- **ビルドするのは GitHub Actions のリリースジョブだけ**（`release-please.yml` の `gateway-image`）。
+  手元からの push は行わない
+- タグは **totsuka 本体のバージョンと同じ**（`v0.7.5` 等）。独立した版付けにすると、
+  イメージとレコードを読むプラグインとのあいだに手作業の互換表ができ、誰も参照しない。
+  契約は適合テストスイートとして凍結されている（[ADR-0072](/decisions/adr-0072-slack-event-gateway.md) 決定 7）ので、
+  有用な問いは「どの totsuka リリースのものか」であり、タグがそれに直接答える
+- **`:latest` は出さない。** OpenTofu 側は正確なバージョンを固定する。浮動タグがあると
+  `tofu apply` が黙ってデプロイ内容を変えられるようになり、signing secret を持つサービスで
+  「勝手に入れ替わる」性質は持ちたくない
+- ビルドには **provenance attestation**（`mode=max`）を付ける。どのワークフロー実行が作ったかを
+  引く側が確認できる。自分のプロジェクトで動かすものについての「誰が作ったのか」に、
+  このリポジトリが出せる唯一の答えがこれである
+- **自前ビルドへの差し替え**は `slack-event-gateway/README.md` の手順で、OpenTofu の `image` 変数を
+  自社 Artifact Registry に向ける。イメージを信用しない選択肢が常にあることが、
+  この配布形態の前提である
 
 # 関連
 

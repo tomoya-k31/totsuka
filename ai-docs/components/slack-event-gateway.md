@@ -1,10 +1,10 @@
 ---
 type: Service
 title: slack-event-gateway
-description: Slack の配信を HTTPS で受け、署名を検証し、本文を保存せずに座標へ射影して Pub/Sub へ publish する常駐しないサービス。event_source = "gateway" のときだけ経路に入る。同一リポジトリの workspace 外に置き、適合テストスイートだけを totsuka と共有する。
+description: Slack の配信を HTTPS で受け、署名を検証し、本文を保存せずに座標へ射影して Pub/Sub へ publish する常駐しないサービス。event_source = "gateway" のときだけ経路に入る。同一リポジトリの workspace 外に置き、適合テストスイートだけを totsuka と共有する。公式イメージは ghcr.io にリリースごとに公開する。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/slack-event-gateway
 tags: [rust, service, slack, gateway, cloud-run, pubsub, hmac, security]
-generated: { by: claude-code/opus-5, at: 2026-09-13T20:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-13T22:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -99,8 +99,31 @@ JSON として読むと全押下がパースエラーになる（症状は「ボ
 **適合テストスイート**だけになる（[ADR-0072](/decisions/adr-0072-slack-event-gateway.md) 決定 7）。
 **このゲートウェイをフォークした実装も、スイートを通せば適合している。**
 
-CI は `ci.yml` の `gateway` ジョブ 1 本（fmt / clippy / test）。`--workspace` は除外
-ディレクトリに届かないので、これが無いと**このコードには CI が一切かからない**。
+CI は `ci.yml` の `gateway` ジョブ 1 本（fmt / clippy / test に加えて、**このディレクトリが
+変わった PR でだけ** `docker build`）。`--workspace` は除外ディレクトリに届かないので、
+これが無いと**このコードには CI が一切かからない**。同じ理由で `cargo audit` も届かないため、
+`audit.yml` はこのディレクトリを別ステップで走査する（[依存関係ハイジーン](/development/dependency-hygiene.md)）。
+
+# 入手と配布（#660）
+
+totsuka のリリースごとに `ghcr.io/tomoya-k31/totsuka/slack-event-gateway:<tag>` を公開し、
+OpenTofu モジュールの `image` 変数の既定値にする。**OpenTofu はソースからビルドできず、
+イメージの URL を要求する**ためで、「まず自分でビルドして push してください」と言うことは
+「構築を自動化する」という目的と両立しない。会社での利用では変数 1 つで自社の Artifact
+Registry に差し替えられる。
+
+| 決めごと | 理由 |
+|---|---|
+| タグは **totsuka 本体のバージョン** | 独立させると、イメージとレコードを読むプラグインのあいだに手作業の互換表ができて誰も参照しない。契約は適合スイートで凍結済みなので、有用な問いは「どの totsuka リリースのものか」である |
+| **`:latest` を出さない** | OpenTofu 側は正確なバージョンを固定する。浮動タグは `tofu apply` が黙ってデプロイ内容を変えられることを意味し、signing secret を持つサービスでその性質は持ちたくない |
+| ベースイメージは**ダイジェスト固定** | GitHub Actions を SHA で固定するのと同じ理由。起点をタグに委ねない |
+| TLS ルートを**バイナリに焼き込む** | `native-roots` はベースイメージが `ca-certificates` を積んでいることに依存し、`scratch` に差し替えた瞬間に**ビルドではなく実行時の TLS エラー**で全 publish が壊れる |
+
+**初回公開時、ghcr のパッケージは private になる。** リポジトリが public でも**可視性は継承
+されない**（継承されるのはアクセス権限のほうである）。Cloud Run が直接 pull できるのは
+public な ghcr イメージだけなので、**放置すると「ジョブは緑、デプロイする人だけが落ちる」**という
+形になる。リリースジョブは push の後に可視性を検査して、public でなければ赤くする
+（手順は[リリース Runbook](/operations/release-runbook.md)）。
 
 # 関連
 

@@ -99,6 +99,37 @@ Socket Mode delivered both down one WebSocket, so it is easy to wire up only
 the first — and the symptom is that approval and repository-picker buttons
 never arrive at all, while mentions keep working.
 
+## The official image, and replacing it
+
+Each totsuka release publishes `ghcr.io/tomoya-k31/totsuka/slack-event-gateway:<tag>`,
+tagged with the totsuka version it was built from. That is the OpenTofu
+module's default, so a deployment needs nothing built by hand.
+
+There is **no `:latest`**. The module pins an exact version, because a floating
+tag would let `tofu apply` silently change what is running — not a property to
+want for a service holding Slack signing secrets.
+
+To build and run your own instead — a company deployment usually should, so the
+image comes from a registry it controls:
+
+```bash
+cd slack-event-gateway
+docker build --platform linux/amd64 -t <your-registry>/slack-event-gateway:<tag> .
+docker push <your-registry>/slack-event-gateway:<tag>
+```
+
+**`--platform linux/amd64` is not optional on an Apple-Silicon machine.** Docker
+would otherwise build and push `linux/arm64` only, and the image would fail to
+start on Cloud Run — which runs amd64 — with an error about the platform rather
+than about anything you changed.
+
+Then point the module's `image` variable at it. The build takes no arguments
+and no secrets; everything the process needs arrives as environment at runtime.
+
+Both base images are pinned by digest, with the tag in a comment next to each —
+same reasoning as pinning GitHub Actions by SHA. Updating them is a manual bump;
+`ai-docs/development/dependency-hygiene.md` has the commands.
+
 ## Running the tests
 
 ```bash
