@@ -204,11 +204,29 @@ pub struct ReqwestPubSub<A: AccessTokens> {
     tokens: A,
 }
 
+/// Ceiling on one Pub/Sub request.
+///
+/// **Without it the drain loop can park forever.** A `pull` whose connection
+/// never answers is not an error reqwest reports, so the backoff and the
+/// "queue is unreachable" warning below are never reached — the process looks
+/// healthy and receives nothing, which is the exact failure mode this whole
+/// design exists to remove. The Slack transport has had a bounded timeout for
+/// the same reason since #104.
+///
+/// Generous, because an unset `returnImmediately` lets the server hold the
+/// request open while it waits for a message.
+const PUBSUB_REQUEST_TIMEOUT: Duration = Duration::from_secs(90);
+
 impl<A: AccessTokens> ReqwestPubSub<A> {
     /// A transport against `base_url`, authenticating with `tokens`.
     pub fn new(base_url: &str, tokens: A) -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .timeout(PUBSUB_REQUEST_TIMEOUT)
+                .build()
+                // Only fails if the TLS backend cannot be initialised, which
+                // is the same condition that would fail `Client::new()`.
+                .unwrap_or_else(|_| reqwest::Client::new()),
             base_url: base_url.trim_end_matches('/').to_string(),
             tokens,
         }
@@ -437,14 +455,44 @@ fn event_time(record: &GatewayRecord) -> Option<SystemTime> {
     }
 }
 
-/// An RFC 3339 UTC timestamp (`2026-09-13T00:00:00Z`) as a [`SystemTime`].
+/// An RFC 3339 timestamp as a [`SystemTime`].
 ///
 /// Hand-rolled for the same reason the base64 decoder is: this is the only
-/// date the plugin parses, and the shape is fixed by the contract. `None` for
-/// anything else, which [`DrainWindow::admits`] reads as "no evidence of age".
+/// date the plugin parses. `None` for anything it cannot read, which
+/// [`DrainWindow::admits`] treats as "no evidence of age" — the safe
+/// direction, but it is also why the accepted shape has to be wide enough.
+///
+/// **Offsets are handled, not just `Z`.** This gateway always writes `Z`, but
+/// the record may come from a replacement one (ADR-0072 decision 9), and a
+/// perfectly valid `2026-09-13T09:00:00+09:00` returning `None` would let a
+/// stale reaction slip past the age window after a long outage.
 fn rfc3339_to_system_time(text: &str) -> Option<SystemTime> {
     let (date, rest) = text.split_once('T')?;
-    let time = rest.trim_end_matches('Z');
+    // Split the offset off before parsing the clock. `+`/`-` cannot appear in
+    // the time itself, and the search starts past the hour so a leading sign
+    // (which RFC 3339 does not allow here anyway) cannot be mistaken for one.
+    let (time, offset_secs) = match rest
+        .char_indices()
+        .find(|(i, c)| *i > 0 && (*c == '+' || *c == '-'))
+    {
+        Some((at, sign)) => {
+            let (clock, offset) = rest.split_at(at);
+            // `+09:00` and `+0900` are both legal. Splitting the second form
+            // on the absent colon would read the whole `0900` as hours — a
+            // 37-day offset, which a test caught.
+            let body = &offset[1..];
+            let (hours, minutes) = match body.split_once(':') {
+                Some(pair) => pair,
+                None if body.len() >= 4 => body.split_at(2),
+                None => (body, "0"),
+            };
+            let magnitude = hours.parse::<i64>().ok()? * 3_600 + minutes.parse::<i64>().ok()? * 60;
+            // A `+09:00` stamp is *earlier* in UTC than the same digits are,
+            // so the offset is subtracted.
+            (clock, if sign == '+' { -magnitude } else { magnitude })
+        }
+        None => (rest.trim_end_matches('Z'), 0),
+    };
     let mut date = date.split('-');
     let year: i64 = date.next()?.parse().ok()?;
     let month: i64 = date.next()?.parse().ok()?;
@@ -466,7 +514,7 @@ fn rfc3339_to_system_time(text: &str) -> Option<SystemTime> {
     let day_of_year = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
     let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
     let days = era * 146_097 + day_of_era - 719_468;
-    let seconds = days * 86_400 + hour * 3_600 + minute * 60 + second;
+    let seconds = days * 86_400 + hour * 3_600 + minute * 60 + second + offset_secs;
     u64::try_from(seconds)
         .ok()
         .map(|s| SystemTime::UNIX_EPOCH + Duration::from_secs(s))
@@ -777,16 +825,25 @@ async fn drain_forever<T, P>(
                 continue;
             }
             if filed >= window.limit {
-                // Over the per-pass budget. Acked and dropped rather than left
-                // queued: the window is a policy about what to file, and
-                // holding it back would only mean filing it later under a
-                // window it no longer fits.
+                // Over the per-pass budget: **left unacked**, so the next pass
+                // picks it up.
+                //
+                // This used to ack and drop, on the reasoning that the drain
+                // window is a policy about what to file. That conflated two
+                // different settings. `drain_max_age_hours` *is* such a policy
+                // — an event outside it will never be filed, so holding it
+                // costs nothing. `drain_limit` is pacing: these events are
+                // inside the window and would be filed, just not right now.
+                // Acking them turned a small configured limit into silent loss
+                // of mentions and button presses.
+                //
+                // Not remembered in `seen` either, for the same reason: this
+                // delivery has not been handled.
                 tracing::info!(
                     subscription = %subscription, limit = window.limit,
-                    "drain limit reached for this pass; dropping the remainder"
+                    "drain limit reached for this pass; leaving the remainder \
+                     queued for the next one"
                 );
-                seen.remember(delivery_id);
-                ack_ids.push(message.ack_id);
                 continue;
             }
             match to_socket_event(api.as_ref(), &record, now).await {
@@ -958,6 +1015,31 @@ mod tests {
         );
         assert!(rfc3339_to_system_time("not a date").is_none());
         assert!(rfc3339_to_system_time("2026-13-01T00:00:00Z").is_none());
+    }
+
+    /// A replacement gateway may stamp an offset rather than `Z`. Returning
+    /// `None` there would read as "no evidence of age", which lets a stale
+    /// reaction through the window after a long outage.
+    #[test]
+    fn rfc3339_offsets_resolve_to_the_same_instant_as_z() {
+        let at = |text: &str| {
+            rfc3339_to_system_time(text)
+                .unwrap_or_else(|| panic!("`{text}` must parse"))
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .expect("after the epoch")
+                .as_secs()
+        };
+        // Same instant, three spellings.
+        assert_eq!(at("2026-09-13T09:00:00+09:00"), at("2026-09-13T00:00:00Z"));
+        assert_eq!(at("2026-09-12T19:00:00-05:00"), at("2026-09-13T00:00:00Z"));
+        // Offsets with no colon, and a half-hour offset.
+        assert_eq!(at("2026-09-13T09:00:00+0900"), at("2026-09-13T00:00:00Z"));
+        assert_eq!(at("2026-09-13T05:30:00+05:30"), at("2026-09-13T00:00:00Z"));
+        // Fractional seconds are still tolerated alongside an offset.
+        assert_eq!(
+            at("2026-09-13T09:00:00.123+09:00"),
+            at("2026-09-13T00:00:00Z")
+        );
     }
 
     #[test]

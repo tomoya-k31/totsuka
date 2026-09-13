@@ -356,6 +356,34 @@ async fn a_transient_slack_failure_leaves_the_record_queued() {
     );
 }
 
+/// `drain_limit` paces the work; it does not decide what is worth filing.
+/// Acking the overflow would turn a small configured limit into silent loss of
+/// mentions — the events are inside the age window and *would* be filed.
+#[tokio::test]
+async fn events_over_the_drain_limit_stay_queued() {
+    let shared = Shared::default();
+    // Three distinct records, all inside the age window, and a limit of one.
+    let stamps: Vec<String> = [60_u64, 120, 180].iter().map(|ago| ts_ago(*ago)).collect();
+    for stamp in &stamps {
+        shared.push_for("conversations.history", history_reply(stamp, "<@U_ME> hi"));
+    }
+    let records: Vec<GatewayRecord> = stamps
+        .iter()
+        .map(|ts| message_record(ts, true, &[]))
+        .collect();
+    let mut config = gateway_config();
+    config.drain_limit = Some(1);
+    let pubsub = Arc::new(FakePubSub::with_records(&records));
+
+    let events = collect(&shared, config, Arc::clone(&pubsub), 2).await;
+    assert_eq!(events.len(), 1, "the limit paces the pass");
+    assert_eq!(
+        pubsub.acked(),
+        vec!["ack-0".to_string()],
+        "only the filed record is acked; the other two must be redelivered, not destroyed"
+    );
+}
+
 /// `pull` is specified as *may* wait, so an immediately-empty answer is legal
 /// — and a loop that does not back off around it spins a core.
 #[tokio::test]

@@ -4,7 +4,7 @@ title: 設定リファレンス（config.toml）
 description: "config.toml の全キー・デフォルト値・意味の一覧。設定ファイルは 1 本で、プラグイン個別設定もトップレベルの [<name>] テーブルに入る。シークレット参照、設定スキーマのバージョニング方針、[[projects]] の domain 宣言とワークフローからの参照、プラグインが定義する追加プロパティ、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-github の [github]、task-source-notion の [notion]、task-source-slack の [slack]、agent-ide-herdr の [herdr] を含む。"
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
 tags: [config, reference, toml, secrets, workflow, worktree, github, notion, slack, hooks, versioning]
-generated: { by: claude-code/opus-5, at: 2026-09-13T15:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-14T03:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -1017,7 +1017,7 @@ kind = "task_source"
 | `[slack.gateway]` | テーブル | なし | `event_source = "gateway"` のときの Pub/Sub 座標（#657）。`project` / `subscription`（メッセージ・リアクション）/ `block_actions_subscription`（ボタン押下）/ `pubsub_url`（既定 `https://pubsub.googleapis.com`、テスト用上書き）/ `pull_max_messages`（既定 50）。**サブスクリプションを 2 本に分けるのは保持期間が違うから**で、同じ名前を指すと押下が日単位の保持に載り、2 つの取り込みループが同じメッセージを取り合うので拒否する（[ADR-0072](/decisions/adr-0072-slack-event-gateway.md) 決定 5）。**このテーブルは #656 の契約に含まれない** —— ゲートウェイはこの名前を見ないので、両側が合意すべきものではなく totsuka 側の配線である。認証は `gcloud auth application-default print-access-token` へのシェルアウトで、**サービスアカウントキーは配らない**（各利用者が自分の Google アカウントで自分のサブスクリプションだけを引く、決定 6） |
 | `drain_max_age_hours` | int? | 24 | `gateway` 方式で、キューに溜まったイベントを起票する時間窓（#652）。Pub/Sub 側の保持は 7 日あるので長期不在でも失われないが、復帰した瞬間に 1 週間ぶんのメンションが一斉にタスクになるのは望まれない。**窓を totsuka 側に置いているので、出張明けに拾いたければ設定を一時的に上げるだけでよく、クラウドの再デプロイが要らない。** 窓の外は ack して捨てる。**`0` は拒否される** —— 「全部捨てる」を無言の 0 で表さないため。`socket` 方式では読まれない |
 | `drain_limit` | int? | 100 | 同、1 回の取り込みで起票する件数の上限。**`0` は拒否される**。`socket` 方式では読まれない |
-| `watch_poll_interval_secs` | int? | 60 | `gateway` 方式での[チャンネル監視](/glossary/channel-watch.md)のポーリング間隔（秒）。**監視はゲートウェイに載せられない** —— ADR-0072 決定 4 で publish 対象を「自分に関係しうるもの」に絞ったため、監視チャンネルへの（メンションを含まない）投稿はそもそも流れてこない。ゲートウェイに監視チャンネル一覧を持たせると設定が 2 箇所に分かれ、ずれたときの症状が「監視が黙って効かない」になるので採らなかった。代わりに `conversations.history` を定期ポーリングする（[ADR-0068](/decisions/adr-0068-channel-watch-trigger.md) の起動時バックフィルを周期実行に広げるだけ）。**遅延が増えるのは監視経路だけ**で、メンション・リアクション・承認ボタンは Pub/Sub の long-poll のまま Socket Mode との差が 1〜2 秒に収まる。**`0` は拒否される**。`socket` 方式では読まれない（Slack が push してくる） |
+| `watch_poll_interval_secs` | int? | 60 | `gateway` 方式での[チャンネル監視](/glossary/channel-watch.md)のポーリング間隔（秒）。**監視はゲートウェイに載せられない** —— ADR-0072 決定 4 で publish 対象を「自分に関係しうるもの」に絞ったため、監視チャンネルへの（メンションを含まない）投稿はそもそも流れてこない。ゲートウェイに監視チャンネル一覧を持たせると設定が 2 箇所に分かれ、ずれたときの症状が「監視が黙って効かない」になるので採らなかった。代わりに `conversations.history` を定期ポーリングする（[ADR-0068](/decisions/adr-0068-channel-watch-trigger.md) の起動時バックフィルを周期実行に広げるだけ）。**遅くなるのは監視経路だけ**で、メンション・リアクション・承認ボタンはキューの取り込みのままである。ただし**そちらも「1〜2 秒」の保証ではない** —— REST の `pull` は「メッセージが得られるまで**有界時間だけ待つことがある**」という規定で、待つことは保証されておらず、空応答が続くと取り込み側がバックオフする。**`0` は拒否される**。`socket` 方式では読まれない（Slack が push してくる） |
 | `thread_context_limit` | int | 6 | タスク本文に含めるスレッド直近メッセージ数 |
 | `reply_style` | string? | なし | 返信トーンの指示（タスク本文へ注入、例 `"丁寧語で簡潔に"`） |
 | `[prompts]` | テーブル | — | このプラグインが送るプロンプト文の上書き（下記、#318） |
