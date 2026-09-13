@@ -148,22 +148,55 @@ async fn a_signed_mention_is_published_and_answered() {
     );
 }
 
-/// The path is a credential. An unregistered one must not be distinguishable
-/// from a registered one with a bad signature, or it becomes worth guessing.
+/// The path **is** a credential, so an unregistered one must be
+/// indistinguishable from a registered one with a bad signature. Anything else
+/// is an oracle: a caller could tell live path tokens from dead ones by the
+/// answer alone, and the path is one of only three things holding the door.
+///
+/// The assertion compares the two responses to each other rather than to a
+/// hardcoded status, because what matters is that they are the same — not
+/// which of the two it happens to be.
 #[tokio::test]
 async fn an_unknown_path_is_refused_the_same_way_a_bad_signature_is() {
     let mut unknown = Delivery::events(mention_payload());
     unknown.path = "/slack/e/not-a-real-token".into();
-    let (unknown_status, _, publisher) = send(FakePublisher::default(), &unknown).await;
-    assert_eq!(unknown_status, StatusCode::NOT_FOUND);
+    let (unknown_status, unknown_body, publisher) = send(FakePublisher::default(), &unknown).await;
     assert!(publisher.published.lock().unwrap().is_empty());
 
-    // …and the prefix alone is not a path.
+    // A registered path whose signature does not match.
+    let mut wrong_signature = Delivery::events(mention_payload());
+    wrong_signature.signature = Some(sign("a-different-secret", &wrong_signature.timestamp, b"x"));
+    let (bad_status, bad_body, _) = send(FakePublisher::default(), &wrong_signature).await;
+
+    assert_eq!(
+        (unknown_status, unknown_body.as_str()),
+        (bad_status, bad_body.as_str()),
+        "an unknown token and a bad signature must be indistinguishable"
+    );
+
+    // The prefix itself is public knowledge and carries no token, so a request
+    // that never named one is an ordinary 404 — there is nothing to leak.
     let mut bare = Delivery::events(mention_payload());
     bare.path = "/slack/e/".into();
     assert_eq!(
         send(FakePublisher::default(), &bare).await.0,
         StatusCode::NOT_FOUND
+    );
+}
+
+/// Cloud Run stops instances with SIGTERM. Dropping a connection mid-publish
+/// makes Slack count a failed delivery, so the process has to drain — and the
+/// handler is what the drain is protecting.
+#[test]
+fn shutdown_handles_sigterm_and_drains() {
+    let source = include_str!("../src/main.rs");
+    assert!(
+        source.contains("SignalKind::terminate()"),
+        "SIGTERM must be handled; Cloud Run does not send SIGINT"
+    );
+    assert!(
+        source.contains("graceful.watch(") && source.contains("graceful.shutdown()"),
+        "connections must be watched and drained, not dropped with the runtime"
     );
 }
 

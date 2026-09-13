@@ -16,6 +16,12 @@
 //! publishes no stable source-IP list, so there is no layer in front of this
 //! container — the path, the signature and the window are what stand between
 //! it and the open internet (decision 11).
+//!
+//! **Which is why every refusal below step 1 looks identical.** An unknown
+//! path token and a known one with a bad signature get the same status and the
+//! same body; only the log says which. Answering differently would turn the
+//! endpoint into an oracle for guessing path tokens, and the path token is one
+//! of the three things holding the door.
 
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -32,6 +38,14 @@ use crate::signature::{self, SignatureError};
 
 /// Path prefix every delivery arrives on.
 const PATH_PREFIX: &str = "/slack/e/";
+
+/// The key an unregistered path is "verified" against.
+///
+/// Not a secret and not used for anything real: it exists so that refusing an
+/// unknown token costs the same work, and returns the same answer, as refusing
+/// a known one with a bad signature. A constant is fine — nothing can match a
+/// signature made with a different key.
+const DECOY_SECRET: &str = "unregistered-path-decoy";
 
 /// Largest body accepted.
 ///
@@ -88,17 +102,32 @@ where
     let timestamp = header("x-slack-request-timestamp");
     let content_type = header("content-type").unwrap_or_default();
 
-    let Some(registration) = gateway.registry.lookup(path_token) else {
-        // Deliberately the same answer an unroutable path gets. Telling an
-        // unauthenticated caller "that token exists but the signature was
-        // wrong" turns the path into something worth brute-forcing.
-        tracing::info!("refused a delivery on an unregistered path");
-        return text(StatusCode::NOT_FOUND, "not found");
-    };
+    let registration = gateway.registry.lookup(path_token);
 
     let body = match read_body(request).await {
         Ok(body) => body,
         Err(status) => return text(status, "bad request"),
+    };
+
+    // **An unregistered token and a bad signature must be indistinguishable.**
+    // This used to answer 404 here and 401 below, which made the endpoint an
+    // oracle: an attacker could tell a live path token from a dead one by the
+    // status code alone, and the path is the only thing keeping them out.
+    //
+    // So the unknown case is verified too — against a fixed decoy secret it
+    // cannot match — and then refused by the same code path, with the same
+    // status and the same body. The wasted HMAC is the point: it keeps the
+    // response time comparable as well.
+    let Some(registration) = registration else {
+        let _ = signature::verify(
+            DECOY_SECRET,
+            signature.as_deref(),
+            timestamp.as_deref(),
+            &body,
+            now,
+        );
+        tracing::info!("refused a delivery on an unregistered path");
+        return text(StatusCode::UNAUTHORIZED, "unauthorized");
     };
 
     if let Err(e) = signature::verify(

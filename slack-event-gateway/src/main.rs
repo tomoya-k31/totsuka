@@ -8,6 +8,7 @@ use std::time::SystemTime;
 
 use hyper::service::service_fn;
 use hyper_util::rt::TokioIo;
+use hyper_util::server::graceful::GracefulShutdown;
 
 use slack_event_gateway::http::{self, Gateway};
 use slack_event_gateway::publish::{self, MetadataTokens, PubSub};
@@ -15,6 +16,13 @@ use slack_event_gateway::registry::Registry;
 
 /// Default Pub/Sub endpoint.
 const DEFAULT_PUBSUB_URL: &str = "https://pubsub.googleapis.com";
+
+/// How long a shutdown waits for in-flight requests.
+///
+/// Comfortably over one publish budget (2.5s) so a delivery mid-publish
+/// finishes and gets its 200, and comfortably under Cloud Run's own grace
+/// period so the process exits on its own terms rather than being killed.
+const SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -49,11 +57,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listener = tokio::net::TcpListener::bind(address).await?;
     tracing::info!(%address, "listening");
 
+    // **Cloud Run stops an instance with SIGTERM, not SIGINT.** Waiting only on
+    // `ctrl_c` meant a deploy or a scale-down killed the process outright — and
+    // a publish that Pub/Sub already accepted but which never got to answer 200
+    // becomes a delivery Slack counts as *failed*. Enough of those is exactly
+    // the condition that disables the subscription, which is the disease this
+    // whole design exists to cure. So both signals are handled, and in-flight
+    // connections are drained rather than dropped with the runtime.
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    let graceful = GracefulShutdown::new();
+
     loop {
-        // A shutdown signal ends the accept loop; in-flight requests finish on
-        // their own tasks. Cloud Run sends SIGTERM before it stops an
-        // instance, and a delivery dropped mid-flight is one Slack counts as
-        // failed.
         let stream = tokio::select! {
             accepted = listener.accept() => match accepted {
                 Ok((stream, _)) => stream,
@@ -62,31 +76,49 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     continue;
                 }
             },
+            _ = sigterm.recv() => {
+                tracing::info!("SIGTERM; draining in-flight requests");
+                break;
+            }
             _ = tokio::signal::ctrl_c() => {
-                tracing::info!("shutting down");
-                return Ok(());
+                tracing::info!("SIGINT; draining in-flight requests");
+                break;
             }
         };
         let gateway = Arc::clone(&gateway);
+        let service = service_fn(move |request| {
+            let gateway = Arc::clone(&gateway);
+            async move {
+                Ok::<_, std::convert::Infallible>(
+                    http::handle(gateway, request, SystemTime::now()).await,
+                )
+            }
+        });
+        let connection = hyper::server::conn::http1::Builder::new()
+            .serve_connection(TokioIo::new(stream), service);
+        // Watched, so the drain below actually waits for it. A bare
+        // `tokio::spawn` would be dropped along with the runtime.
+        let watched = graceful.watch(connection);
         tokio::spawn(async move {
-            let service = service_fn(move |request| {
-                let gateway = Arc::clone(&gateway);
-                async move {
-                    Ok::<_, std::convert::Infallible>(
-                        http::handle(gateway, request, SystemTime::now()).await,
-                    )
-                }
-            });
-            if let Err(e) = hyper::server::conn::http1::Builder::new()
-                .serve_connection(TokioIo::new(stream), service)
-                .await
-            {
+            if let Err(e) = watched.await {
                 // Connection-level, not request-level: a client that hung up
                 // mid-request lands here, and it is not worth a warning.
                 tracing::debug!(error = %e, "connection ended");
             }
         });
     }
+
+    // Bounded: Cloud Run's own grace period is finite, and a keep-alive
+    // connection with no request in flight would otherwise hold the process
+    // open until the client chose to close it.
+    tokio::select! {
+        () = graceful.shutdown() => tracing::info!("all connections drained"),
+        () = tokio::time::sleep(SHUTDOWN_GRACE) => tracing::warn!(
+            seconds = SHUTDOWN_GRACE.as_secs(),
+            "shutdown grace elapsed with requests still in flight"
+        ),
+    }
+    Ok(())
 }
 
 /// The registration table, from a mounted file or the environment.
