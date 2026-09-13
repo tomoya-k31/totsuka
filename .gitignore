@@ -9,6 +9,23 @@
 # branch checkouts, so an ignore added higher up leaves the branches below it
 # one `git add <dir>` away from committing a provider binary.
 /slack-event-gateway/tofu/.terraform/
+
+# OpenTofu. What must never be committed is anything holding an operator's
+# Slack signing secret: the variables file and the state file both do.
+#
+# The pattern is `*.tfvars`, not the exact name `terraform.tfvars`, because
+# `prod.auto.tfvars` and `secrets.tfvars` are perfectly ordinary names — and
+# what is being protected is the content, not one filename. The `.example` is
+# committed and contains no real values.
+*.tfvars
+!*.tfvars.example
+*.tfstate
+*.tfstate.*
+
+# `.terraform.lock.hcl` is deliberately NOT ignored. It holds provider
+# versions and checksums, no secrets, and committing it is what makes a
+# `tofu init` here resolve what CI validated — the same reason `Cargo.lock` is
+# committed.
 **/*.rs.bk
 
 # Coverage
