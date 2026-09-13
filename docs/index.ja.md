@@ -7,7 +7,8 @@
 |---|---|
 | [totsuka とは](orchestrator-spec.ja.md) | モデル、何をするか、意図的にやらないこと |
 | [セットアップ Playbook](setup-playbook.ja.md) | ゼロから動くまで。新マシン、開発機、トークンのローテーション、復旧 |
-| [Slack セットアップ](slack-setup.ja.md) | Slack アプリの作成、3 つのトークンの保管、本人名義での返信 |
+| [Slack セットアップ](slack-setup.ja.md) | 受信方式の選択、Slack アプリの作成、トークンの保管、本人名義での返信 |
+| [Event Gateway 構築手順](event-gateway-setup.ja.md) | Slack の任意構成。HTTPS で受けることで、totsuka を止めている間も失わない |
 | [click-to-focus セットアップ](click-to-focus-setup.ja.md) | 通知クリックでターミナルを前面化し、タスクの pane を開く（macOS） |
 | [設定リファレンス](config-reference.ja.md) | `config.toml` とプラグイン個別設定の全キー |
 | [運用ガイド](operations-guide.ja.md) | `doctor` の読み方、worktree と pane の掃除、タスク操作、よくある問題 |
