@@ -1,7 +1,7 @@
 > 🌐 [English](event-gateway-setup.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/event-gateway-setup.md sha256:b6cbdaf83662abbb5d859dc1a508a8501723ca236dec3944347d377b7f07ec49 -->
+<!-- generated-from: ai-docs/operations/event-gateway-setup.md sha256:2a5ad12c23fac14e57a467c0b45532c65e8ea88e470f8be5c65729f05e646acc -->
 
 # Event Gateway 構築手順
 
@@ -203,6 +203,29 @@ gcloud auth application-default login
 totsuka は**この identity で**キューを読む。起動時に各キューを 1 回読むので、identity 違い・
 権限の欠落・名前の打ち間違いはその場で落ちる —— 放っておくと 3 つとも同じものを生む。
 **緑の `doctor` と、1 件も来ないイベント**である。
+
+## 何も来ないとき —— 症状から原因を引く
+
+この構成は「繋がっているのに何も来ない」の原因がソケット方式より多い。見え方はどれも同じ
+「タスクが 1 件も立たない」である。まず `totsuka doctor` を実行する。`plugin:slack` の行が
+答えを持っている。
+
+| `doctor` の出力 | 原因 | 直し方 |
+|---|---|---|
+| `roles/pubsub.subscriber` が無いという行 | アカウントは通っているが権限が無い | そのアカウントにロールを付けるか、既に持っているアカウントでログインし直す |
+| キューが `does not exist` という行 | `[slack.gateway]` の project / subscription 名が違う | `tofu output totsuka_config` が正しい値を印字する |
+| `gcloud auth application-default login` を促す行 | 資格情報が切れている、または受理されない | そのコマンドを実行する |
+| **`never delivered anything`（黄色）** | **Slack から Gateway までが繋がっていない** | Slack アプリの Request URL が **2 箇所とも**入っているか確認する。`tofu output request_urls` が入れるべき値を印字する |
+| `delivered nothing for N days`（黄色） | 動いた実績はある。**静かなだけかもしれない** | 静かなはずがないなら、Request URL がまだ有効か・Slack が購読を無効化していないかを確認する |
+| `plugin:slack` が緑 | この側は正常 | 送ったメンションが判定を通っているかを疑う（自分宛か、bot からでないか） |
+
+**「一度も受信していない」と「しばらく静か」は別の行になる。** 前者は構築が終わっていない形で、
+後者は正常でありうる。この 2 つが同じ見え方をしていると、動いている設定を何度も疑うことになる。
+区別は `{state_dir}/plugins/{source_name}/gateway-receipt.json` が持っていて、受信のたびに
+書かれる。消しても警告が 1 つ出なくなるだけである。
+
+**Request URL は 2 箇所ある。** 片方だけ入れると**メンションは動くのに承認ボタンが全部死ぬ**という、
+原因の分かりにくい壊れ方をする。
 
 ## 人を増やす
 

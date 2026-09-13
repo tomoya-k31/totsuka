@@ -393,6 +393,7 @@ fn ok_validate(id: RequestId, errors: Vec<String>) -> Reply {
     let result = ConfigValidateResult {
         valid: errors.is_empty(),
         errors,
+        warnings: Vec::new(),
     };
     Reply::respond(Response::result(
         id,

@@ -658,19 +658,166 @@ pub async fn probe<P: PubSubTransport>(
     gateway: &GatewayConfig,
 ) -> Result<(), SlackError> {
     for subscription in [gateway.events_path(), gateway.block_actions_path()] {
-        pubsub.pull(&subscription, 1).await.map_err(|e| {
-            SlackError::InvalidRequest(format!(
-                concat!(
-                    "could not read the Event Gateway queue `{}`: {} → check that ",
-                    "`[slack.gateway]` names the right project and subscriptions, that ",
-                    "`gcloud auth application-default login` has been run as the account ",
-                    "holding `roles/pubsub.subscriber` on it, and that the subscription exists",
-                ),
-                subscription, e
-            ))
-        })?;
+        pubsub
+            .pull(&subscription, 1)
+            .await
+            .map_err(|e| diagnose(&subscription, e))?;
     }
     Ok(())
+}
+
+/// Turn one failed `pull` into the message that names its actual cause.
+///
+/// **The causes need different answers, so they cannot share a message**
+/// (#662). Expired credentials, a missing role and a mistyped subscription all
+/// produce the same visible symptom — nothing ever arrives — and a single
+/// "check everything" sentence leaves the operator to try all three. Pub/Sub
+/// already distinguishes them by status code, so the information exists and
+/// was simply being thrown away.
+///
+/// A token-acquisition failure arrives already diagnosed (see
+/// [`gcloud_access_token`]), so it is passed through rather than re-wrapped:
+/// wrapping would bury "run `gcloud auth application-default login`" inside a
+/// sentence about subscriptions.
+fn diagnose(subscription: &str, error: SlackError) -> SlackError {
+    let detail = match &error {
+        SlackError::Http { status: 403, .. } => format!(
+            concat!(
+                "the Event Gateway queue `{}` refused this identity → the account ",
+                "behind `gcloud auth application-default login` is authenticated but ",
+                "lacks `roles/pubsub.subscriber` on that subscription. Grant the role ",
+                "to that account, or log in as one that already holds it",
+            ),
+            subscription
+        ),
+        SlackError::Http { status: 404, .. } => format!(
+            concat!(
+                "the Event Gateway queue `{}` does not exist → the name is built from ",
+                "`[slack.gateway]`'s project and subscription settings, so one of ",
+                "them is wrong. `tofu output totsuka_config` prints the values this ",
+                "deployment expects",
+            ),
+            subscription
+        ),
+        SlackError::Http { status: 401, .. } => format!(
+            concat!(
+                "the Event Gateway queue `{}` rejected the credential → the ",
+                "Application Default Credentials are present but not accepted. ",
+                "Re-run `gcloud auth application-default login`",
+            ),
+            subscription
+        ),
+        // Already carries its own remedy, or is a transport fault with no
+        // remedy to add. Either way, inventing one here would be guessing.
+        _ => return error,
+    };
+    SlackError::InvalidRequest(detail)
+}
+
+/// How long a queue may stay silent before `doctor` mentions it.
+///
+/// A day, not an hour: an idle evening, a weekend and a holiday are all
+/// normal, and a check that fires on them stops being read. What it is really
+/// looking for is a gateway that *used* to work — a subscription deleted
+/// underneath a running deployment, a Slack app whose Request URL was
+/// disabled — which shows up as silence measured in days.
+const QUIET_AFTER: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// The one fact the drain loop leaves behind for `config/validate` (#662).
+///
+/// **Unix seconds, not RFC 3339.** Nothing here renders a date — the warning
+/// says "for N days", which is the part an operator acts on — and storing a
+/// formatted string would mean either adding a date dependency or writing a
+/// second formatter by hand, for a field only this file reads.
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+struct Receipt {
+    /// When a delivery was last pulled off either queue, in Unix seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    last_delivery_unix: Option<u64>,
+}
+
+/// Note that a delivery arrived. Best effort in every direction.
+///
+/// **A failure here must never touch the drain loop.** This exists to improve
+/// a diagnostic; losing the diagnostic costs a warning that does not appear,
+/// while failing the loop costs the events themselves. So an unresolvable
+/// path, an unwritable directory and a full disk are all logged at debug and
+/// otherwise ignored.
+fn record_delivery(config: &SlackConfig, at: SystemTime) {
+    let Some(path) =
+        crate::persist::gateway_receipt_path(config.state_dir.as_deref(), &config.source_name)
+    else {
+        return;
+    };
+    let Ok(since_epoch) = at.duration_since(SystemTime::UNIX_EPOCH) else {
+        // A clock set before 1970 is not a case worth carrying logic for.
+        return;
+    };
+    let receipt = Receipt {
+        last_delivery_unix: Some(since_epoch.as_secs()),
+    };
+    match serde_json::to_vec(&receipt) {
+        Ok(bytes) => {
+            if let Err(e) = crate::persist::atomic_write(&path, &bytes) {
+                tracing::debug!(error = %e, "could not record the Event Gateway receipt");
+            }
+        }
+        Err(e) => tracing::debug!(error = %e, "could not encode the Event Gateway receipt"),
+    }
+}
+
+/// What `config/validate` should say about the gateway queues, if anything.
+///
+/// Offline by construction — it reads one local file — which is what lets it
+/// live in `config/validate` at all (that method is deliberately network-free
+/// so `doctor` needs no credentials to run it).
+///
+/// **Returns nothing under `event_source = "socket"`.** An existing Socket
+/// Mode operator's `doctor` output must not change (#662).
+pub fn config_warnings(config: &SlackConfig, now: SystemTime) -> Vec<String> {
+    if config.event_source != crate::config::EventSource::Gateway {
+        return Vec::new();
+    }
+    let Some(path) =
+        crate::persist::gateway_receipt_path(config.state_dir.as_deref(), &config.source_name)
+    else {
+        return Vec::new();
+    };
+    let receipt: Receipt = std::fs::read(&path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default();
+    let Some(last) = receipt.last_delivery_unix else {
+        // **Never, not merely quiet.** The two are indistinguishable from
+        // outside and mean opposite things, which is the whole reason the
+        // receipt exists. This one is an unfinished setup, and the Slack app
+        // has *two* Request URL fields — wiring only the first leaves
+        // mentions working and every approval button dead, so both get named.
+        return vec![
+            concat!(
+                "the Event Gateway queues have never delivered anything → this is ",
+                "what an unfinished setup looks like. Check that the Slack app has a ",
+                "Request URL in **both** places: Event Subscriptions (mentions and ",
+                "reactions) and Interactivity & Shortcuts (approval buttons). ",
+                "`tofu output request_urls` prints them",
+            )
+            .to_string(),
+        ];
+    };
+    let at = SystemTime::UNIX_EPOCH + Duration::from_secs(last);
+    match now.duration_since(at) {
+        Ok(quiet) if quiet >= QUIET_AFTER => vec![format!(
+            concat!(
+                "the Event Gateway queues have delivered nothing for {} days → this ",
+                "may simply be a quiet stretch, since they have worked before. If it ",
+                "should not be quiet, check that the Slack app's Request URLs are ",
+                "still set and that Slack has not disabled the subscription",
+            ),
+            quiet.as_secs() / (24 * 60 * 60)
+        )],
+        // Recent, or a clock that moved backwards. Neither is worth a line.
+        _ => Vec::new(),
+    }
 }
 
 /// Drain both subscriptions until the receiver is dropped, emitting
@@ -783,6 +930,13 @@ async fn drain_forever<T, P>(
             continue;
         }
         empty_polls = 0;
+        // **Anything at all is the signal**, before any filtering decision.
+        // What the receipt answers is "does the path from Slack to here
+        // work", and a record this build drops proves that just as well as
+        // one it files — while keying it to `filed` would report "never
+        // received" through a quiet week and send the operator to re-check a
+        // Request URL that was right all along (#662).
+        record_delivery(&config, SystemTime::now());
 
         let now = SystemTime::now();
         let mut filed = 0u32;
@@ -887,6 +1041,121 @@ async fn drain_forever<T, P>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A `SlackConfig` in gateway mode whose state lives under `dir`.
+    fn gateway_config(dir: &std::path::Path) -> SlackConfig {
+        serde_json::from_value(serde_json::json!({
+            "user_token": "xoxp-user-test",
+            "target_user_id": "U_ME",
+            "event_source": "gateway",
+            "state_dir": dir,
+            "gateway": {
+                "project": "p",
+                "subscription": "sub-events",
+                "block_actions_subscription": "sub-presses",
+            },
+        }))
+        .expect("config parses")
+    }
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("totsuka-gateway-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    /// The three causes need three different answers, so they must not share
+    /// a sentence (#662). Before this they did, and "check all of the above"
+    /// left the operator to try each one.
+    #[test]
+    fn each_probe_failure_names_its_own_cause() {
+        let denied = diagnose(
+            "projects/p/subscriptions/sub",
+            SlackError::Http {
+                status: 403,
+                body: String::new(),
+            },
+        )
+        .to_string();
+        assert!(denied.contains("roles/pubsub.subscriber"), "{denied}");
+
+        let missing = diagnose(
+            "projects/p/subscriptions/sub",
+            SlackError::Http {
+                status: 404,
+                body: String::new(),
+            },
+        )
+        .to_string();
+        assert!(missing.contains("does not exist"), "{missing}");
+        assert!(missing.contains("totsuka_config"), "{missing}");
+
+        let rejected = diagnose(
+            "projects/p/subscriptions/sub",
+            SlackError::Http {
+                status: 401,
+                body: String::new(),
+            },
+        )
+        .to_string();
+        assert!(rejected.contains("application-default login"), "{rejected}");
+
+        // Every one of them is a *different* message. A test that only checked
+        // each in isolation would still pass if they were all the same string.
+        assert_ne!(denied, missing);
+        assert_ne!(missing, rejected);
+        assert_ne!(denied, rejected);
+
+        // An already-diagnosed failure keeps its own remedy rather than being
+        // wrapped in a sentence about subscriptions.
+        let adc = SlackError::InvalidRequest("run `gcloud auth ...`".into());
+        let passed_through = diagnose("projects/p/subscriptions/sub", adc).to_string();
+        assert!(
+            passed_through.ends_with("run `gcloud auth ...`"),
+            "{passed_through}"
+        );
+        assert!(!passed_through.contains("subscription"), "{passed_through}");
+    }
+
+    /// An existing Socket Mode operator's `doctor` output must not change.
+    #[test]
+    fn socket_mode_produces_no_gateway_warnings() {
+        let dir = scratch("socket");
+        let mut config = gateway_config(&dir);
+        config.event_source = crate::config::EventSource::Socket;
+        assert!(config_warnings(&config, SystemTime::now()).is_empty());
+    }
+
+    /// The point of the receipt: "never" and "quiet" look identical from
+    /// outside and mean opposite things.
+    #[test]
+    fn never_received_is_distinguished_from_merely_quiet() {
+        let dir = scratch("receipt");
+        let config = gateway_config(&dir);
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_800_000_000);
+
+        // Nothing recorded yet: an unfinished setup, and both Request URL
+        // fields get named because wiring only one is the common half-failure.
+        let never = config_warnings(&config, now);
+        assert_eq!(never.len(), 1, "{never:?}");
+        assert!(never[0].contains("never delivered anything"), "{never:?}");
+        assert!(never[0].contains("Interactivity"), "{never:?}");
+
+        // Delivered a moment ago: nothing to say.
+        record_delivery(&config, now - Duration::from_secs(60));
+        assert!(config_warnings(&config, now).is_empty());
+
+        // Delivered, but long ago: a different message, and not the "never"
+        // one — that distinction is the whole feature.
+        record_delivery(&config, now - Duration::from_secs(5 * 24 * 60 * 60));
+        let quiet = config_warnings(&config, now);
+        assert_eq!(quiet.len(), 1, "{quiet:?}");
+        assert!(quiet[0].contains("for 5 days"), "{quiet:?}");
+        assert!(!quiet[0].contains("never delivered"), "{quiet:?}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn base64_round_trips_both_alphabets() {

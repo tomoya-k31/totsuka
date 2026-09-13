@@ -328,7 +328,22 @@ use semver::{Version, VersionReq};
 /// produce a name that is still legal, still unique, and merely less legible.
 /// `None` is also the *right* answer for a source whose ids carry nothing a
 /// person reads, so the field being absent is not evidence of an old plugin.
-pub const PROTOCOL_VERSION: &str = "0.7.2";
+/// 0.7.3 (#662): [`ConfigValidateResult::warnings`](crate::methods::ConfigValidateResult::warnings)
+/// — a channel for what a plugin knows but must not refuse a config over.
+///
+/// **Patch, additive, and no manifest moves.** An old plugin omits the field
+/// and `#[serde(default)]` reads it as "no warnings", which is exactly what
+/// such a plugin means; an old orchestrator ignores an unknown key. Nothing
+/// downstream changes behaviour on absence, because absence and emptiness are
+/// the same statement here.
+///
+/// It exists because the two pre-existing channels were both wrong for this.
+/// `errors` refuses a config that is correct — a freshly built Event Gateway
+/// has legitimately never delivered anything, and turning that into a red
+/// `doctor` teaches the operator that red is normal. The plugin's log is worse:
+/// `doctor` does not read it, so the knowledge never reaches the one command
+/// whose whole job is to surface it.
+pub const PROTOCOL_VERSION: &str = "0.7.3";
 
 /// [`PROTOCOL_VERSION`] parsed into a [`Version`].
 pub fn protocol_version() -> Version {
@@ -352,7 +367,7 @@ mod tests {
 
     #[test]
     fn current_version_parses() {
-        assert_eq!(protocol_version(), Version::new(0, 7, 2));
+        assert_eq!(protocol_version(), Version::new(0, 7, 3));
     }
 
     #[test]

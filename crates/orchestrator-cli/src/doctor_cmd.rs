@@ -1645,17 +1645,28 @@ fn check_plugins(
     let validated = runtime.block_on(plugin_host::validate_all(specs));
     for plugin_host::ValidatedPlugin { name, result, .. } in &validated {
         match result {
-            Ok(v) if v.valid => {
+            // A plugin may be correctly configured and still know something
+            // worth saying (protocol 0.7.3, #662) — "this queue has never
+            // delivered anything" is true of a setup that is otherwise
+            // perfect. Warnings never fail `doctor`, and a plugin that sends
+            // none is reported exactly as before.
+            Ok(v) if v.valid && v.warnings.is_empty() => {
                 checks.push(Check::ok(
                     &format!("plugin:{name}"),
                     "launches and accepts its config",
                 ));
             }
-            Ok(v) => checks.push(Check::fail(
-                &format!("plugin:{name}"),
-                v.errors.join("; "),
-                format!("fix `[{name}]` in config.toml"),
-            )),
+            Ok(v) if v.valid => push_warnings(name, &v.warnings, checks),
+            Ok(v) => {
+                checks.push(Check::fail(
+                    &format!("plugin:{name}"),
+                    v.errors.join("; "),
+                    format!("fix `[{name}]` in config.toml"),
+                ));
+                // Still worth showing: a config can be refused for one reason
+                // while a second, unrelated thing is also wrong.
+                push_warnings(name, &v.warnings, checks);
+            }
             Err(e) => checks.push(Check::fail(
                 &format!("plugin:{name}"),
                 e.to_string(),
@@ -1664,6 +1675,26 @@ fn check_plugins(
         }
     }
     check_project_claims(&validated, &not_probed, checks);
+}
+
+/// One advisory check per plugin warning (protocol 0.7.3, #662).
+///
+/// Warnings share the `errors` convention of "cause → next action", so the
+/// arrow is where the two halves of a [`Check`] come from. A warning written
+/// without one still reports — it becomes the detail, and the action says to
+/// read it — because dropping the line entirely would be the one outcome
+/// worse than an imperfectly split one.
+fn push_warnings(name: &str, warnings: &[String], checks: &mut Vec<Check>) {
+    for warning in warnings {
+        let (detail, action) = match warning.split_once(" → ") {
+            Some((cause, next)) => (cause.to_string(), next.to_string()),
+            None => (
+                warning.clone(),
+                format!("reported by `{name}`; act on it or ignore it"),
+            ),
+        };
+        checks.push(Check::warn(&format!("plugin:{name}"), detail, action));
+    }
 }
 
 /// How many repositories have a project to file into (#542, narrowed by #554).
@@ -2278,12 +2309,42 @@ mod tests {
 
     // --- `projects` (#542) -------------------------------------------------
 
+    /// Warnings share `errors`' "cause → next action" shape, so the arrow is
+    /// where a check's two halves come from (#662).
+    #[test]
+    fn a_plugin_warning_becomes_an_advisory_check_not_a_failure() {
+        let mut checks = Vec::new();
+        push_warnings(
+            "slack",
+            &["the queue has never delivered → check the Request URL".to_string()],
+            &mut checks,
+        );
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0].name, "plugin:slack");
+        // Advisory: `doctor` must not exit non-zero over it.
+        assert!(checks[0].ok);
+        assert!(checks[0].warning);
+        assert_eq!(checks[0].detail, "the queue has never delivered");
+        assert_eq!(checks[0].action.as_deref(), Some("check the Request URL"));
+    }
+
+    /// A warning written without the arrow still reports. Dropping the line
+    /// would be the one outcome worse than splitting it imperfectly.
+    #[test]
+    fn a_warning_without_an_arrow_is_still_reported() {
+        let mut checks = Vec::new();
+        push_warnings("slack", &["something is odd".to_string()], &mut checks);
+        assert_eq!(checks[0].detail, "something is odd");
+        assert!(checks[0].action.is_some());
+    }
+
     fn validated(name: &str, claims: &[(&str, &str)]) -> plugin_host::ValidatedPlugin {
         plugin_host::ValidatedPlugin {
             name: name.to_string(),
             result: Ok(plugin_protocol::methods::ConfigValidateResult {
                 valid: true,
                 errors: Vec::new(),
+                warnings: Vec::new(),
             }),
             claimed_options: Vec::new(),
             claimed_repos: claims

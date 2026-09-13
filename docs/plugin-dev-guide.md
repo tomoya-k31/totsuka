@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](plugin-dev-guide.ja.md)
 
-<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:616dfde53ef36e3208315095cbc1e78a4bdae7a35d0a6bd70f91a95234cfa0a1 -->
+<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:169cf4edcaf251e7803be704108aab508b9cdaa7bc548f8220d8045c2ae8cd46 -->
 
 # Plugin development guide
 
@@ -70,7 +70,7 @@ The cases that *don't* line up show the rule better. In 0.4.0 only the herdr plu
 | Method | Direction | What it does |
 |---|---|---|
 | `initialize` | O→P | Passes resolved config and the protocol version; you return your version and capabilities |
-| `config/validate` | O→P | Validates your plugin's configuration. The same workflows, projects and repositories from `initialize` come with it, so you validate what you are being asked about rather than what you remembered |
+| `config/validate` | O→P | Validates your plugin's configuration. The same workflows, projects and repositories from `initialize` come with it, so you validate what you are being asked about rather than what you remembered. **`warnings` is the channel for "the config is fine, but you should know this"**: it does not affect `valid`, `totsuka doctor` renders it as an advisory check, and it appears in `--json`. Write it in the same "cause → next action" shape as `errors` — a warning nobody can act on is noise, and noise is how a diagnostic stops being read. It is optional, so a plugin that sends none produces exactly the `doctor` output it always did |
 | `shutdown` | O→P | Asks you to exit, with a grace period |
 
 `initialize` also hands a `task_source` several things it would otherwise have to configure twice. All are optional — ignore what you do not use.

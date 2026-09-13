@@ -382,6 +382,24 @@ pub struct ConfigValidateResult {
     /// Human-readable problems ("cause + next action"), empty when valid.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub errors: Vec<String>,
+    /// Things worth saying that are **not** reasons to refuse the config
+    /// (0.7.3, #662).
+    ///
+    /// A plugin can be correctly configured and still know something the
+    /// operator would want to hear — "this queue has never delivered
+    /// anything", "the token is missing a scope that only part of me needs".
+    /// Before this field the only channels were `errors`, which refuses a
+    /// config that is fine, and the plugin's own log, which `totsuka doctor`
+    /// never shows. Both answers were wrong, so such knowledge stayed
+    /// invisible exactly where it was most useful.
+    ///
+    /// **Warnings do not affect `valid`.** A result may be valid with
+    /// warnings, and that is the common case.
+    ///
+    /// Same "cause + next action" shape as `errors`: a warning a reader
+    /// cannot act on is noise, and noise is how a diagnostic stops being read.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1089,6 +1107,11 @@ mod tests {
         round_trip(&ConfigValidateResult {
             valid: false,
             errors: vec!["missing socket_path → set it".into()],
+            warnings: vec![
+                "the Event Gateway queue has never delivered anything → check the \
+                 Request URL in the Slack app"
+                    .into(),
+            ],
         });
     }
 

@@ -220,6 +220,30 @@ totsuka は**この ADC で**自分のキューを引く。起動時に各サブ
 identity 違い・権限の欠落・名前の打ち間違いをその場で落とす（どれも放っておくと
 「`doctor` は緑なのにイベントが 1 件も来ない」形で失敗する）。
 
+# 何も来ないとき —— 症状から原因を引く
+
+**この構成は「繋がっているのに何も来ない」の原因が Socket Mode より多い。** 見え方はどれも同じ
+「タスクが 1 件も立たない」なので、原因を分ける道具を先に用意してある（#662）。
+
+まず `totsuka doctor` を実行する。`plugin:slack` の行が答えを持っている。
+
+| `doctor` の出力 | 原因 | 直し方 |
+|---|---|---|
+| `roles/pubsub.subscriber` が無いという行 | ADC の**アカウントは通っているが権限が無い** | そのアカウントにロールを付けるか、既に持っているアカウントでログインし直す |
+| キューが `does not exist` という行 | `[slack.gateway]` の project / subscription 名が違う | `tofu output totsuka_config` が正しい値を印字する |
+| `gcloud auth application-default login` を促す行 | ADC が切れている、または受理されない | そのコマンドを実行する |
+| **`never delivered anything`（黄色）** | **Slack から Gateway までが繋がっていない** | Slack アプリの Request URL が **2 箇所とも**入っているか確認する。`tofu output request_urls` が入れるべき値を印字する |
+| `delivered nothing for N days`（黄色） | 経路は動いた実績がある。**静かなだけかもしれない** | 静かなはずがないなら、Request URL がまだ有効か・Slack が購読を無効化していないかを確認する |
+| `plugin:slack` が緑 | totsuka 側は正常 | 送ったメンションが判定を通っているかを疑う（自分宛か、`bot_id` が付いていないか） |
+
+**「一度も受信していない」と「しばらく静か」は別の行になる。** 前者は構築が終わっていない形で、
+後者は正常でありうる —— この 2 つが同じ見え方をしていると、動いている設定を何度も疑うことになる。
+区別は `{state_dir}/plugins/{source_name}/gateway-receipt.json` が持っていて、これは受信のたびに
+書かれる。消しても警告が 1 つ出なくなるだけで、動作には影響しない。
+
+**Request URL は 2 箇所ある**（手順 4）。片方だけ入れると**メンションは動くのに承認ボタンが全部
+死ぬ**という、原因の分かりにくい壊れ方をする。
+
 # 人を増やす
 
 `terraform.tfvars` の `operators` に 1 エントリ足して `tofu apply`。トピック・サブスクリプション・

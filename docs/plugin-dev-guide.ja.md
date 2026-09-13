@@ -1,7 +1,7 @@
 > 🌐 [English](plugin-dev-guide.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:616dfde53ef36e3208315095cbc1e78a4bdae7a35d0a6bd70f91a95234cfa0a1 -->
+<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:169cf4edcaf251e7803be704108aab508b9cdaa7bc548f8220d8045c2ae8cd46 -->
 
 # プラグイン開発ガイド
 
@@ -73,7 +73,7 @@ Orchestrator は起動前に `protocol_version` の互換性を検査し、宣�
 | メソッド | 方向 | 内容 |
 |---|---|---|
 | `initialize` | O→P | 解決済みの設定とプロトコル版を渡す。プラグインは自分の版と capability を返す |
-| `config/validate` | O→P | プラグイン設定を検証する。`initialize` と同じ workflows / projects / repositories も一緒に届くので、記憶ではなく「今聞かれているもの」を検証する |
+| `config/validate` | O→P | プラグイン設定を検証する。`initialize` と同じ workflows / projects / repositories も一緒に届くので、記憶ではなく「今聞かれているもの」を検証する。**`warnings` は「設定は正しいが伝えたいこと」の口**で、`valid` には影響せず、`totsuka doctor` が黄色のチェックとして描き `--json` にも出る。`errors` と同じ「原因 → 次のアクション」の形で書くこと —— 行動できない警告は雑音で、雑音は診断が読まれなくなる原因そのものである。省略できるので、送らないプラグインの `doctor` 出力は 1 バイトも変わらない |
 | `shutdown` | O→P | 猶予付きで終了を要求する |
 
 `initialize` は `task_source` に対して、二重に設定せずに済むものをいくつか渡す。いずれも任意なので、使わないなら無視してよい。

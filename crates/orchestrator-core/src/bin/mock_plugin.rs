@@ -193,6 +193,7 @@ fn main() {
                         } else {
                             vec![]
                         },
+                        warnings: Vec::new(),
                     })
                     .unwrap(),
                 )

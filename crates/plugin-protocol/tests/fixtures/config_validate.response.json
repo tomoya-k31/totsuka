@@ -3,6 +3,7 @@
   "id": 2,
   "result": {
     "valid": false,
-    "errors": ["missing socket_path → set it"]
+    "errors": ["missing socket_path → set it"],
+    "warnings": ["the Event Gateway queue has never delivered anything → check the Request URL in the Slack app"]
   }
 }
