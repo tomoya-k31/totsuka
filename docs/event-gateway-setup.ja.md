@@ -1,7 +1,7 @@
 > 🌐 [English](event-gateway-setup.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/event-gateway-setup.md sha256:2a5ad12c23fac14e57a467c0b45532c65e8ea88e470f8be5c65729f05e646acc -->
+<!-- generated-from: ai-docs/operations/event-gateway-setup.md sha256:3fcb047d7fe3be52e320a76ca19b174be8dd21651c91fb6771f895412ccfbe83 -->
 
 # Event Gateway 構築手順
 

@@ -4,7 +4,7 @@ title: ADR-0073 プラグインの「エラーではない警告」を protocol 
 description: "プラグインが「設定は正しいが伝えたいこと」をホストへ渡す口を ConfigValidateResult.warnings として足す決定。それまでの選択肢は errors（正しい設定を拒否する）とプラグインのログ（doctor が読まない）の 2 つだけで、どちらも誤りだったため、知っている事実が最も役に立つ場所で不可視になっていた。加算的・省略可能なので既存プラグインは無改修、マニフェストの下限も動かない。doctor は warning チェックとして描き、ok は true のまま。第 1 の利用者は Event Gateway の「一度も受信していない / しばらく静か」の区別。"
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/plugin-protocol/src/methods.rs
 tags: [decision, adr, plugin-protocol, doctor, diagnostics, slack, gateway]
-generated: { by: claude-code/opus-5, at: 2026-09-13T23:43:32+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-14T00:01:11+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -65,6 +65,8 @@ pub struct ConfigValidateResult {
 分割は ` → ` で行う。矢印の無い警告も落とさず、全文を detail にして表示する ——
 **行を落とすことだけが、不完全に分割することより悪い結果**だからである。
 
+**1 プラグインにつきチェックは 1 行**にし、複数の警告は `errors` と同じく連結する。警告ごとに 1 行にすると `plugin:{name}` という name が重複し、**`--json` の消費者は name で引く**ので 2 件目以降は誰にも読まれない行になる。
+
 ## 4. 最初の利用者: 受信履歴の 1 ファイル
 
 ドレインループが、**空でない `pull` が返るたび**に受信時刻を `{state_dir}/plugins/{source_name}/gateway-receipt.json` に記録する。`config/validate` がそれを読み、
@@ -72,6 +74,8 @@ pub struct ConfigValidateResult {
 - 記録なし → **「一度も受信していない」**。構築が未完の形であり、Slack アプリの Request URL は **2 箇所**あるので両方を名指しする
 - 記録あり・24 時間以上前 → 「N 日間受信なし」。静かなだけかもしれないと明示する
 - 記録あり・最近 → **何も言わない**
+
+書き込みは **process 内 mutex で直列化し、読んでから書く**。ドレインループは 2 本走っており、`atomic_write` の一時ファイル名は対象名から作られるので、直列化しないと片方がもう片方の一時ファイルを書き込み中に unlink しうる。ロックを読み書きに跨いで持つことで値が**単調**になり、ファイルは「最後に書き終えたスレッド」ではなく「**最後の受信**」を答える。読み出しは `checked_add` —— ただのファイルなので壊れた値で `SystemTime` の加算が panic しうる。
 
 **フィルタを通ったレコードではなく、`pull` が何かを返したこと自体を記録する。** この受信履歴が答える問いは「Slack からここまでの経路が動くか」であり、このビルドが捨てたレコードもそれを同じだけ証明する。`filed` を鍵にすると、静かな週を「一度も受信していない」と報告して、正しかった Request URL を再確認させに行くことになる。
 

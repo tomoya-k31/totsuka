@@ -707,9 +707,15 @@ fn diagnose(subscription: &str, error: SlackError) -> SlackError {
             ),
             subscription
         ),
-        // Already carries its own remedy, or is a transport fault with no
-        // remedy to add. Either way, inventing one here would be guessing.
-        _ => return error,
+        // The token fetch already diagnosed itself and named its remedy, so
+        // it passes through untouched.
+        SlackError::InvalidRequest(_) => return error,
+        // Everything else — a transport fault, a 5xx, an unparseable body —
+        // has no remedy to invent, but it does need the one piece of context
+        // it would otherwise lose. These variants render as `Slack API …`,
+        // and a Pub/Sub outage reported as a Slack fault sends the reader to
+        // the wrong service entirely.
+        other => format!("could not read the Event Gateway queue `{subscription}`: {other}"),
     };
     SlackError::InvalidRequest(detail)
 }
@@ -753,8 +759,34 @@ fn record_delivery(config: &SlackConfig, at: SystemTime) {
         // A clock set before 1970 is not a case worth carrying logic for.
         return;
     };
+    let seconds = since_epoch.as_secs();
+
+    // **Two drain loops write this file** — one per subscription, running
+    // concurrently under `tokio::join!`. `atomic_write` builds its temp path
+    // from the target name, so without this the two would share it and one
+    // could unlink the other's file mid-write. Holding the lock across the
+    // read and the write also makes the value monotonic: a write whose
+    // timestamp is older than what is already there is dropped, so the file
+    // always answers "the most recent delivery" rather than "the last thread
+    // to finish".
+    //
+    // A poisoned lock is not a reason to stop recording — nothing here can
+    // leave a half-built invariant behind — so the guard is taken either way.
+    static RECEIPT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = RECEIPT.lock().unwrap_or_else(|e| e.into_inner());
+
+    let current: Receipt = std::fs::read(&path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default();
+    if current
+        .last_delivery_unix
+        .is_some_and(|stored| stored >= seconds)
+    {
+        return;
+    }
     let receipt = Receipt {
-        last_delivery_unix: Some(since_epoch.as_secs()),
+        last_delivery_unix: Some(seconds),
     };
     match serde_json::to_vec(&receipt) {
         Ok(bytes) => {
@@ -804,7 +836,13 @@ pub fn config_warnings(config: &SlackConfig, now: SystemTime) -> Vec<String> {
             .to_string(),
         ];
     };
-    let at = SystemTime::UNIX_EPOCH + Duration::from_secs(last);
+    // `checked_add`, not `+`: the receipt is a plain file on disk, so a
+    // corrupted or hand-edited value can be anything at all, and `SystemTime`
+    // addition **panics** on overflow. A diagnostic that can crash the thing
+    // it is diagnosing is worse than no diagnostic.
+    let Some(at) = SystemTime::UNIX_EPOCH.checked_add(Duration::from_secs(last)) else {
+        return Vec::new();
+    };
     match now.duration_since(at) {
         Ok(quiet) if quiet >= QUIET_AFTER => vec![format!(
             concat!(
@@ -1142,10 +1180,6 @@ mod tests {
         assert!(never[0].contains("never delivered anything"), "{never:?}");
         assert!(never[0].contains("Interactivity"), "{never:?}");
 
-        // Delivered a moment ago: nothing to say.
-        record_delivery(&config, now - Duration::from_secs(60));
-        assert!(config_warnings(&config, now).is_empty());
-
         // Delivered, but long ago: a different message, and not the "never"
         // one — that distinction is the whole feature.
         record_delivery(&config, now - Duration::from_secs(5 * 24 * 60 * 60));
@@ -1153,6 +1187,20 @@ mod tests {
         assert_eq!(quiet.len(), 1, "{quiet:?}");
         assert!(quiet[0].contains("for 5 days"), "{quiet:?}");
         assert!(!quiet[0].contains("never delivered"), "{quiet:?}");
+
+        // Delivered a moment ago: nothing to say.
+        record_delivery(&config, now - Duration::from_secs(60));
+        assert!(config_warnings(&config, now).is_empty());
+
+        // **A stale write does not move the clock backwards.** Two drain
+        // loops write this file concurrently, so "the last thread to finish"
+        // and "the most recent delivery" are different questions — and only
+        // the second one is worth answering.
+        record_delivery(&config, now - Duration::from_secs(9 * 24 * 60 * 60));
+        assert!(
+            config_warnings(&config, now).is_empty(),
+            "an older timestamp overwrote a newer one"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -1677,24 +1677,42 @@ fn check_plugins(
     check_project_claims(&validated, &not_probed, checks);
 }
 
-/// One advisory check per plugin warning (protocol 0.7.3, #662).
+/// **One** advisory check carrying all of a plugin's warnings (protocol 0.7.3,
+/// #662).
+///
+/// One per warning would repeat the `plugin:{name}` key, and `--json`
+/// consumers look checks up by name — a second entry under a name already
+/// present is a row nobody reads. So the warnings are joined, exactly as
+/// `errors` already are for the failure case.
 ///
 /// Warnings share the `errors` convention of "cause → next action", so the
 /// arrow is where the two halves of a [`Check`] come from. A warning written
-/// without one still reports — it becomes the detail, and the action says to
+/// without one still reports — it becomes the cause, and the action says to
 /// read it — because dropping the line entirely would be the one outcome
 /// worse than an imperfectly split one.
 fn push_warnings(name: &str, warnings: &[String], checks: &mut Vec<Check>) {
-    for warning in warnings {
-        let (detail, action) = match warning.split_once(" → ") {
-            Some((cause, next)) => (cause.to_string(), next.to_string()),
-            None => (
-                warning.clone(),
-                format!("reported by `{name}`; act on it or ignore it"),
-            ),
-        };
-        checks.push(Check::warn(&format!("plugin:{name}"), detail, action));
+    if warnings.is_empty() {
+        return;
     }
+    let mut causes = Vec::with_capacity(warnings.len());
+    let mut actions = Vec::with_capacity(warnings.len());
+    for warning in warnings {
+        match warning.split_once(" → ") {
+            Some((cause, next)) => {
+                causes.push(cause.to_string());
+                actions.push(next.to_string());
+            }
+            None => {
+                causes.push(warning.clone());
+                actions.push(format!("reported by `{name}`; act on it or ignore it"));
+            }
+        }
+    }
+    checks.push(Check::warn(
+        &format!("plugin:{name}"),
+        causes.join("; "),
+        actions.join("; "),
+    ));
 }
 
 /// How many repositories have a project to file into (#542, narrowed by #554).
@@ -2326,6 +2344,28 @@ mod tests {
         assert!(checks[0].warning);
         assert_eq!(checks[0].detail, "the queue has never delivered");
         assert_eq!(checks[0].action.as_deref(), Some("check the Request URL"));
+    }
+
+    /// **One check, however many warnings.** `--json` consumers look checks
+    /// up by name, so a second entry under a name already present is a row
+    /// nobody reads.
+    #[test]
+    fn several_warnings_from_one_plugin_share_a_single_check() {
+        let mut checks = Vec::new();
+        push_warnings(
+            "slack",
+            &[
+                "the queue is silent → check the Request URL".to_string(),
+                "a scope is missing → reinstall the app".to_string(),
+            ],
+            &mut checks,
+        );
+        assert_eq!(checks.len(), 1, "one check per plugin");
+        assert!(checks[0].detail.contains("the queue is silent"));
+        assert!(checks[0].detail.contains("a scope is missing"));
+        let action = checks[0].action.as_deref().unwrap();
+        assert!(action.contains("check the Request URL"), "{action}");
+        assert!(action.contains("reinstall the app"), "{action}");
     }
 
     /// A warning written without the arrow still reports. Dropping the line

@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](event-gateway-setup.ja.md)
 
-<!-- generated-from: ai-docs/operations/event-gateway-setup.md sha256:2a5ad12c23fac14e57a467c0b45532c65e8ea88e470f8be5c65729f05e646acc -->
+<!-- generated-from: ai-docs/operations/event-gateway-setup.md sha256:3fcb047d7fe3be52e320a76ca19b174be8dd21651c91fb6771f895412ccfbe83 -->
 
 # Event Gateway setup
 
