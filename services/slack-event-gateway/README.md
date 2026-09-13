@@ -113,7 +113,7 @@ To build and run your own instead — a company deployment usually should, so th
 image comes from a registry it controls:
 
 ```bash
-cd slack-event-gateway
+cd services/slack-event-gateway
 docker build --platform linux/amd64 -t <your-registry>/slack-event-gateway:<tag> .
 docker push <your-registry>/slack-event-gateway:<tag>
 ```
@@ -133,7 +133,7 @@ same reasoning as pinning GitHub Actions by SHA. Updating them is a manual bump;
 ## Running the tests
 
 ```bash
-cd slack-event-gateway
+cd services/slack-event-gateway
 cargo fmt --all --check
 cargo clippy --all-targets -- -D warnings
 cargo test

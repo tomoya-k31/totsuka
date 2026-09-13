@@ -139,7 +139,7 @@ cargo +nightly udeps --workspace --all-targets --all-features
 
 | 対象 | どう追うか |
 |---|---|
-| `slack-event-gateway/Cargo.lock` | `cargo audit` / `cargo deny`。**ただし workspace 外なので `audit.yml` の既定では回らない** —— このディレクトリで別途実行する |
+| `services/slack-event-gateway/Cargo.lock` | `cargo audit` / `cargo deny`。**ただし workspace 外なので `audit.yml` の既定では回らない** —— このディレクトリで別途実行する |
 | ビルダーイメージ（`rust:…-alpine`） | Dockerfile が**ダイジェストで固定**している。Rust のリリースに追随して手で上げる。コメントにタグ名が書いてあるのはそのため |
 | ランタイムイメージ（`gcr.io/distroless/static-debian12`） | 同じくダイジェスト固定。distroless の `static` は **libc すら持たない**（バイナリは musl で静的リンク）ので、面は実質「Google が再ビルドしたときに変わる CA 証明書と tzdata」だけになる |
 
@@ -176,7 +176,7 @@ curl -sI -H "Authorization: Bearer ${TOKEN}" \
 - ビルドには **provenance attestation**（`mode=max`）を付ける。どのワークフロー実行が作ったかを
   引く側が確認できる。自分のプロジェクトで動かすものについての「誰が作ったのか」に、
   このリポジトリが出せる唯一の答えがこれである
-- **自前ビルドへの差し替え**は `slack-event-gateway/README.md` の手順で、OpenTofu の `image` 変数を
+- **自前ビルドへの差し替え**は `services/slack-event-gateway/README.md` の手順で、OpenTofu の `image` 変数を
   自社 Artifact Registry に向ける。イメージを信用しない選択肢が常にあることが、
   この配布形態の前提である
 

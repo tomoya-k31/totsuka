@@ -17,7 +17,7 @@ on:
       # without a `**/` prefix does not reach it — and that lockfile is what
       # ships inside a published container (#660). Named explicitly rather
       # than loosening the pattern, so the omission cannot come back.
-      - "slack-event-gateway/Cargo.lock"
+      - "services/slack-event-gateway/Cargo.lock"
       - "deny.toml"
   workflow_dispatch:
 
@@ -60,5 +60,5 @@ jobs:
       # a second policy is a decision to take deliberately, not a line to
       # sneak into an audit job.
       - name: Run cargo-audit on the Event Gateway
-        working-directory: slack-event-gateway
+        working-directory: services/slack-event-gateway
         run: cargo audit

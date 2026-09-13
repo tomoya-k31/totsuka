@@ -228,7 +228,7 @@ totsuka は macOS 向けの OSS であり、この機能はオプションであ
 
 イメージを配る以上、その中身は totsuka が保守する一級の成果物になる。ソース・`Dockerfile`・ghcr への push ワークフローはこのリポジトリに入る。GCP プロジェクト ID・Slack アプリ ID・signing secret・登録表の中身は入らない（利用者の Secret Manager にある）。
 
-**ルート `Cargo.toml` の `exclude` で workspace から外す。** `plugins/` 配下は arch-lint が `plugin.toml` と一致する bin をちょうど 1 つ持つことを要求するので置けず、`crates/` のメンバーにすると全員の `cargo build --workspace` に乗る。`ci.yml` にそのディレクトリ専用の `fmt` / `clippy` / `test` ジョブを足す。ベースイメージは distroless か scratch にして、増える脆弱性対応の面を最小化する。
+**ルート `Cargo.toml` の `exclude` で workspace から外す。** `plugins/` 配下は arch-lint が `plugin.toml` と一致する bin をちょうど 1 つ持つことを要求するので置けず、`crates/` のメンバーにすると全員の `cargo build --workspace` に乗る。`ci.yml` にそのディレクトリ専用の `fmt` / `clippy` / `test` ジョブを足す。ベースイメージは distroless か scratch にして、増える脆弱性対応の面を最小化する。**置き場は `services/slack-event-gateway/`**—— `crates/` `plugins/` と同じ複数形のカテゴリを 1 つ足し、workspace 外のデプロイ対象はそこに入れる。
 
 ## 10. 実費の前提
 

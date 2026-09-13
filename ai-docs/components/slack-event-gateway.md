@@ -2,7 +2,7 @@
 type: Service
 title: slack-event-gateway
 description: Slack の配信を HTTPS で受け、署名を検証し、本文を保存せずに座標へ射影して Pub/Sub へ publish する常駐しないサービス。event_source = "gateway" のときだけ経路に入る。同一リポジトリの workspace 外に置き、適合テストスイートだけを totsuka と共有する。公式イメージは ghcr.io にリリースごとに公開する。
-resource: https://github.com/tomoya-k31/totsuka/tree/main/slack-event-gateway
+resource: https://github.com/tomoya-k31/totsuka/tree/main/services/slack-event-gateway
 tags: [rust, service, slack, gateway, cloud-run, pubsub, hmac, security]
 generated: { by: claude-code/opus-5, at: 2026-09-13T22:00:00+09:00 }
 status: stable

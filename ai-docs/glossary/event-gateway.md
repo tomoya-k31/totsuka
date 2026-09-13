@@ -2,7 +2,7 @@
 type: Term
 title: Event Gateway（イベントゲートウェイ）
 description: "Slack の配信を HTTPS で受け、本文を保存せずに座標へ射影して Pub/Sub へ流す、totsuka の外で動く常駐しないサービス。event_source = \"gateway\" のときだけ経路に入る。ゲートウェイが健全に動いているかぎり、totsuka が止まっている間もイベントは失われず、Slack による購読の自動無効化も起きない。"
-resource: https://github.com/tomoya-k31/totsuka/tree/main/slack-event-gateway
+resource: https://github.com/tomoya-k31/totsuka/tree/main/services/slack-event-gateway
 tags: [glossary, slack, gateway, pubsub, cloud-run, event-source]
 generated: { by: claude-code/opus-5, at: 2026-09-14T01:00:00+09:00 }
 status: stable

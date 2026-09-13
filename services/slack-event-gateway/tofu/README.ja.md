@@ -57,7 +57,7 @@ terraform {
 ## apply
 
 ```bash
-cd slack-event-gateway/tofu
+cd services/slack-event-gateway/tofu
 cp terraform.tfvars.example terraform.tfvars   # 中身を埋める
 tofu init
 tofu plan

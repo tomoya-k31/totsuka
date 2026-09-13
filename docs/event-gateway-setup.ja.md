@@ -1,7 +1,7 @@
 > 🌐 [English](event-gateway-setup.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/event-gateway-setup.md sha256:09e88bec4f404d4a75abf1bfbbcec928803048abb071aa28193ef104ba45b7f5 -->
+<!-- generated-from: ai-docs/operations/event-gateway-setup.md sha256:ccbdac86a42b582d87360855142427d2bfd43edd34b62a8aca6a3a2bebec6998 -->
 
 # Event Gateway 構築手順
 
@@ -79,7 +79,7 @@ gcloud config set project <PROJECT_ID>
 ## 3. apply
 
 ```bash
-cd slack-event-gateway/tofu
+cd services/slack-event-gateway/tofu
 cp terraform.tfvars.example terraform.tfvars
 # 手順 2 の値で埋める
 tofu init

@@ -2,7 +2,7 @@
 type: Runbook
 title: Event Gateway 構築手順（event_source = "gateway"）
 description: GCP 側の構築手順。着手前の組織ポリシー確認、OpenTofu による Cloud Run / Pub/Sub / Secret Manager / IAM の一括構築、Slack の Request URL 2 箇所の設定、totsuka 側の config、人を増やす手順、破棄、費用の前提。Socket Mode を使う読者はこのページを読む必要がない。
-resource: https://github.com/tomoya-k31/totsuka/tree/main/slack-event-gateway/tofu
+resource: https://github.com/tomoya-k31/totsuka/tree/main/services/slack-event-gateway/tofu
 tags: [slack, gateway, gcp, cloud-run, pubsub, secret-manager, opentofu, runbook, cost]
 generated: { by: claude-code/opus-5, at: 2026-09-14T06:00:00+09:00 }
 status: stable
@@ -88,7 +88,7 @@ gcloud config set project <PROJECT_ID>
 # 3. `tofu apply`
 
 ```bash
-cd slack-event-gateway/tofu
+cd services/slack-event-gateway/tofu
 cp terraform.tfvars.example terraform.tfvars
 # 手順 2 の値で埋める
 tofu init

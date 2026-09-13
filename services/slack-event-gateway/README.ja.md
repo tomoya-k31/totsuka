@@ -105,7 +105,7 @@ totsuka のリリースごとに `ghcr.io/tomoya-k31/totsuka/slack-event-gateway
 レジストリからイメージが来る形になる）:
 
 ```bash
-cd slack-event-gateway
+cd services/slack-event-gateway
 docker build --platform linux/amd64 -t <your-registry>/slack-event-gateway:<tag> .
 docker push <your-registry>/slack-event-gateway:<tag>
 ```
@@ -124,7 +124,7 @@ docker push <your-registry>/slack-event-gateway:<tag>
 ## テストの回し方
 
 ```bash
-cd slack-event-gateway
+cd services/slack-event-gateway
 cargo fmt --all --check
 cargo clippy --all-targets -- -D warnings
 cargo test
