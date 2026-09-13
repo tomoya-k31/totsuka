@@ -4,7 +4,7 @@ title: ADR-0073 プラグインの「エラーではない警告」を protocol 
 description: "プラグインが「設定は正しいが伝えたいこと」をホストへ渡す口を ConfigValidateResult.warnings として足す決定。それまでの選択肢は errors（正しい設定を拒否する）とプラグインのログ（doctor が読まない）の 2 つだけで、どちらも誤りだったため、知っている事実が最も役に立つ場所で不可視になっていた。加算的・省略可能なので既存プラグインは無改修、マニフェストの下限も動かない。doctor は warning チェックとして描き、ok は true のまま。第 1 の利用者は Event Gateway の「一度も受信していない / しばらく静か」の区別。"
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/plugin-protocol/src/methods.rs
 tags: [decision, adr, plugin-protocol, doctor, diagnostics, slack, gateway]
-generated: { by: claude-code/opus-5, at: 2026-09-14T00:01:11+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-14T00:03:52+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -56,11 +56,13 @@ pub struct ConfigValidateResult {
 
 0.7.1 / 0.7.2 が patch を選んだのと同じ理由である（この 0.x 系では patch が後方互換な追加を表す）。
 
-## 3. `doctor` は warning チェックとして描く
+## 3. `doctor` と `config validate` の両方が描く
 
 `Check::warn` は既にある（`ok: true` のまま、アクション付きで表示）。`--json` にも `warning: true` として出る。
 
 **警告を 1 件も送らないプラグインの出力は 1 バイトも変わらない。** これは #662 の受け入れ条件でもある —— Socket Mode の既存利用者の `doctor` が変化してはならない。
+
+**`totsuka config validate` も同じ `ConfigValidateResult` を受け取るので、同じ警告を出す。** ここを落とすと、**同じ 1 つの事実について 2 つのコマンドが食い違う** —— しかも黙るほうは、人が問題を疑う*前*に実行するコマンドである。`warning:` 行を出すだけで、**終了コードには影響させない**（警告とは「設定を無効にしないもの」の定義そのものなので）。
 
 分割は ` → ` で行う。矢印の無い警告も落とさず、全文を detail にして表示する ——
 **行を落とすことだけが、不完全に分割することより悪い結果**だからである。

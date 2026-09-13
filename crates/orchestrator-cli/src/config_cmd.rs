@@ -85,6 +85,13 @@ fn validate(cx: &Cx, offline: bool) -> Result<(), CliError> {
                 Ok(v) if v.valid => {
                     claims.insert(name.clone(), claimed_options);
                     println!("ok: plugin `{name}` accepted its config");
+                    // Same `ConfigValidateResult` `doctor` reads, so the same
+                    // warnings must appear here (protocol 0.7.3, #662). Two
+                    // commands answering one question differently is worse
+                    // than either answer alone — and the one that stayed
+                    // quiet is the one people run *before* they suspect a
+                    // problem.
+                    print_warnings(&name, &v.warnings);
                 }
                 Ok(v) => {
                     errors = true;
@@ -92,6 +99,7 @@ fn validate(cx: &Cx, offline: bool) -> Result<(), CliError> {
                     for problem in v.errors {
                         println!("error: plugin `{name}`: {problem}");
                     }
+                    print_warnings(&name, &v.warnings);
                 }
                 Err(e) => {
                     errors = true;
@@ -119,6 +127,17 @@ fn validate(cx: &Cx, offline: bool) -> Result<(), CliError> {
     }
     println!("configuration is valid");
     Ok(())
+}
+
+/// Advisory lines from a plugin's `config/validate` (protocol 0.7.3, #662).
+///
+/// **Never sets the error flag.** A warning is by definition something that
+/// does not make the config invalid, so printing it must not change the exit
+/// code — `doctor` draws the same distinction with `Check::warn`.
+fn print_warnings(name: &str, warnings: &[String]) {
+    for warning in warnings {
+        println!("warning: plugin `{name}`: {warning}");
+    }
 }
 
 fn show(cx: &Cx, redacted: bool) -> Result<(), CliError> {
