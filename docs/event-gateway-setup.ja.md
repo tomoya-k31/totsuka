@@ -1,7 +1,7 @@
 > 🌐 [English](event-gateway-setup.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/event-gateway-setup.md sha256:ca3178e615683b2d91fdbfd634bdc931bace9261daaa5c29f7f5017cce1f2cc6 -->
+<!-- generated-from: ai-docs/operations/event-gateway-setup.md sha256:b6cbdaf83662abbb5d859dc1a508a8501723ca236dec3944347d377b7f07ec49 -->
 
 # Event Gateway 構築手順
 
@@ -43,10 +43,23 @@ gcloud org-policies describe \
 `--effective` を付けるのも同じ理由である。付けないと、未適用のときの答えが `NOT_FOUND` という
 *エラー*になる。付ければどちらの場合も肯定形で返り、出力が一意に読める。
 
+値は `spec.rules[]` の下にぶら下がって返る:
+
+```text
+name: organizations/<ORG_ID>/policies/run.managed.requireInvokerIam
+spec:
+  rules:
+  - enforce: false
+```
+
 | 出力 | 意味 |
 |---|---|
 | `enforce: false` | 未適用。この構成は成立する |
 | `enforce: true` | 適用済み。**成立しない** |
+| 権限エラー、または `gcloud organizations list` が空 | **判定できていない。未適用ではない。** 組織を見る権限が無いだけなので、管理者に聞くか、下の `--project` で問い合わせる |
+
+**エラーを「未適用」と読まないこと。** この節全体が、まさにその読み違いを防ぐために書いてある
+—— コマンドを 1 つ間違えただけで、同じ「エラーが出た」という見え方が反対の意味になる。
 
 `--effective` は継承と上書きを畳んだ実効値なので、組織で `false` なら組織のポリシーとしては通る。
 プロジェクトが既にあるなら、**`--organization <ORG_ID>` を `--project <PROJECT_ID>` に置き換えて**

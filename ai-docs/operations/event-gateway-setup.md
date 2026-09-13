@@ -50,10 +50,23 @@ gcloud org-policies describe \
 **`--effective` を付けるのも同じ理由である。** 付けないと、未適用のときの答えが
 `NOT_FOUND` という*エラー*になる。付ければ未適用でも肯定形で返るので、出力が一意に読める:
 
+値は `spec.rules[]` の下にぶら下がって返る:
+
+```text
+name: organizations/<ORG_ID>/policies/run.managed.requireInvokerIam
+spec:
+  rules:
+  - enforce: false
+```
+
 | 出力 | 意味 |
 |---|---|
 | `enforce: false` | 未適用。この構成は成立する |
 | `enforce: true` | 適用済み。**成立しない** |
+| 権限エラー、または `gcloud organizations list` が空 | **判定できていない。未適用ではない。** 組織を見る権限が無いだけなので、管理者に聞くか、下の `--project` で問い合わせる |
+
+**エラーを「未適用」と読まないこと。** この節全体が、まさにその読み違いを防ぐために書いてある
+—— コマンドを 1 つ間違えただけで、同じ「エラーが出た」という見え方が反対の意味になる。
 
 `--effective` は継承と上書きを畳んだ実効値なので、組織で見て `false` なら組織のポリシーとしては
 通る。プロジェクトを既に決めているなら、**`--organization <ORG_ID>` を `--project <PROJECT_ID>` に

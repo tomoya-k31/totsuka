@@ -200,11 +200,11 @@ jobs:
             "/users/${{ github.repository_owner }}/packages/container/totsuka%2Fslack-event-gateway" \
             --jq '.visibility' 2>/dev/null || echo "unknown")
           if [ "${visibility}" != "public" ]; then
-            echo "::error::the image was pushed but the package is '${visibility}', not public."
-            echo "Cloud Run can only pull a public ghcr.io image directly, so ${IMAGE}:${TAG}"
-            echo "cannot be deployed as-is. Fix it once, by hand:"
-            echo "  Packages → slack-event-gateway → Package settings → Change visibility → Public"
-            echo "Then re-run this job. The setting is sticky, so later releases inherit it."
+            # `%0A` for the line breaks: `::error::` is parsed per invocation,
+            # so plain follow-up echoes never reach the annotation and the
+            # Checks UI would show the first sentence alone — without the one
+            # instruction that fixes it.
+            echo "::error::the image was pushed but the package is '${visibility}', not public.%0ACloud Run can only pull a public ghcr.io image directly, so ${IMAGE}:${TAG} cannot be deployed as-is. Fix it once, by hand: Packages -> slack-event-gateway -> Package settings -> Change visibility -> Public%0AThen re-run this job. The setting is sticky, so later releases inherit it."
             exit 1
           fi
           echo "package visibility: ${visibility}"

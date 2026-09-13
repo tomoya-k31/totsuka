@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](event-gateway-setup.ja.md)
 
-<!-- generated-from: ai-docs/operations/event-gateway-setup.md sha256:ca3178e615683b2d91fdbfd634bdc931bace9261daaa5c29f7f5017cce1f2cc6 -->
+<!-- generated-from: ai-docs/operations/event-gateway-setup.md sha256:b6cbdaf83662abbb5d859dc1a508a8501723ca236dec3944347d377b7f07ec49 -->
 
 # Event Gateway setup
 
@@ -48,10 +48,24 @@ reads like "not enforced", so the wrong command inverts the answer.
 `--effective` is there for the same reason: without it, "not enforced" comes
 back as a `NOT_FOUND` *error*. With it, the output is unambiguous either way.
 
+The value comes back nested under `spec.rules[]`:
+
+```text
+name: organizations/<ORG_ID>/policies/run.managed.requireInvokerIam
+spec:
+  rules:
+  - enforce: false
+```
+
 | Output | Meaning |
 |---|---|
 | `enforce: false` | Not enforced. This construction works |
 | `enforce: true` | Enforced. **It does not work** |
+| A permission error, or an empty `gcloud organizations list` | **You have no answer — this is not "not enforced".** You simply cannot see the organization: ask whoever administers it, or query with `--project` below |
+
+**Never read an error as "not enforced".** This whole section exists to stop
+that reading — one wrong flag makes the same "it errored" appearance mean the
+opposite thing.
 
 `--effective` folds in inheritance and overrides, so `false` at the
 organization settles the organization's policy. If the project already exists,
