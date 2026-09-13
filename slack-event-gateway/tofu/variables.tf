@@ -23,8 +23,11 @@ variable "service_name" {
     # The service account id is `<service_name>-sa`, and GCP requires 6-30
     # characters of this shape. Caught here rather than partway through an
     # apply that has already created topics.
-    condition     = can(regex("^[a-z][a-z0-9-]{2,26}[a-z0-9]$", var.service_name))
-    error_message = "service_name must be 4-28 characters of lowercase letters, digits and hyphens, starting with a letter: it prefixes the service account id, which GCP caps at 30."
+    # 27 characters, not 28: the id is `<service_name>-sa`, so the bound has
+    # to leave room for the suffix. At 28 the id is 31 and the apply fails
+    # after the topics already exist.
+    condition     = can(regex("^[a-z][a-z0-9-]{2,25}[a-z0-9]$", var.service_name))
+    error_message = "service_name must be 4-27 characters of lowercase letters, digits and hyphens, starting with a letter: `<service_name>-sa` becomes the service account id, which GCP caps at 30."
   }
 }
 
@@ -144,6 +147,17 @@ variable "operators" {
   validation {
     condition     = length(distinct([for o in var.operators : o.key])) == length(var.operators)
     error_message = "Operator keys must be unique; they name the resources."
+  }
+
+  validation {
+    # `key` is interpolated into topic, subscription and secret names, all of
+    # which GCP restricts to this shape. Unchecked, a capital letter or an
+    # underscore fails partway through an apply that has already created
+    # other people's resources.
+    condition = alltrue([
+      for o in var.operators : can(regex("^[a-z][a-z0-9-]{0,28}[a-z0-9]$", o.key))
+    ])
+    error_message = "Each operator key must be 2-30 characters of lowercase letters, digits and hyphens, starting with a letter: it is interpolated into Pub/Sub and Secret Manager resource names."
   }
 
   validation {

@@ -4,7 +4,7 @@ title: Event Gateway の OpenTofu モジュール
 description: slack-event-gateway/tofu/ の構成。Cloud Run 1 サービス・利用者ごとの Pub/Sub トピックとサブスクリプション 2 組・Secret Manager の登録表・利用者を自分のキューだけに閉じる IAM を tofu apply で立てる。min-instances 0 と max-instances 上限が費用の前提であること、invoker_iam_disabled が組織ポリシーを緩めずに公開する唯一の手段であること、IP 制限と VPC Service Controls を既定に入れない理由を含む。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/slack-event-gateway/tofu
 tags: [gcp, cloud-run, pubsub, secret-manager, iam, opentofu, terraform, slack, cost]
-generated: { by: claude-code/opus-5, at: 2026-09-14T00:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-14T05:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -72,6 +72,15 @@ gcloud resource-manager org-policies describe \
   リソースは作り直されない
 - `deletion_protection = false` を明示している。provider の既定は true で、そのままだと
   `tofu destroy` が**利用者が選んだ覚えのない設定**を理由に失敗する
+- **state の置き場はモジュールが決めない。** backend を宣言していない（利用者の組織の
+  バケットを知らないため）ので、**選ばなければローカルファイルになり、そこに全利用者の
+  signing secret が平文で入る**。README は最初の `init` より前に `backend.tf` を置く手順を
+  持つ。あとから `-migrate-state` で移せるが、その時点でローカルのコピーは既に存在している
+- **シークレットのバージョンは `ABANDON`（`DISABLE` ではない）。** どちらも旧版を残すが、
+  **Secret Manager は無効化されたバージョンからの読み取りを拒否する** —— マウントが版を
+  正確に指している以上、rollout 中に旧リビジョンのインスタンスが自分の表を読めなくなる。
+  `ABANDON` は管理から外すだけで読める状態を保つ。`destroy` は親シークレットを消すので
+  バージョンも道連れになり、掃除は効く
 - **シークレットのマウントは `latest` ではなく版を正確に指す。** `latest` だと
   サービス側の引数が 1 つも変わらないため**リビジョンが作られず**、利用者を足しても
   稼働中のインスタンスは回収されるまで古い表を配り続ける。さらに、サービスと版のあいだに

@@ -33,6 +33,28 @@ It is not enforced by default. If it *is* enforced in your organisation, this
 construction does not work — and an external load balancer does not rescue it,
 because a serverless NEG still reaches Cloud Run unauthenticated.
 
+## Decide where state goes, first
+
+**`tofu init` with no backend writes state to a local file**, and that file
+holds every operator's Slack signing secret in clear text. The module declares
+no backend on purpose — it does not know your organisation's bucket — which
+means the default applies unless you choose otherwise.
+
+For anything but a throwaway experiment, put it in a bucket only the deployer
+can read. Create `backend.tf` next to this file *before* the first `init`:
+
+```hcl
+terraform {
+  backend "gcs" {
+    bucket = "my-tofu-state"     # versioning on, uniform bucket-level access
+    prefix = "slack-event-gateway"
+  }
+}
+```
+
+Moving state later works (`tofu init -migrate-state`), but the local copy has
+already existed by then — with the secrets in it.
+
 ## Apply
 
 ```bash
@@ -69,10 +91,14 @@ be recycled.
 tofu destroy
 ```
 
-Works as-is: `deletion_protection` is off on the Cloud Run service, and the
-secret's old versions are disabled rather than destroyed so the table can be
-recovered. APIs enabled by this module are left enabled — another workload in
-the project may be using them.
+Works as-is: `deletion_protection` is off on the Cloud Run service. APIs
+enabled by this module are left enabled — another workload in the project may
+be using them.
+
+**The registration table goes with it.** Old secret versions are *abandoned*
+rather than deleted while the stack is alive — which is what makes a rollback
+possible — but `destroy` removes the parent secret, and that takes every
+version with it. Keep a copy of `terraform.tfvars` if you intend to rebuild.
 
 ## Two things this module will not do
 
@@ -93,5 +119,9 @@ would break the common case to harden the uncommon one.
 ## Secrets and state
 
 `terraform.tfvars` holds every operator's Slack signing secret, and **so does
-the state file** — OpenTofu does not encrypt it. Keep state in a bucket only
-the deployer can read. Both are gitignored.
+the state file** — OpenTofu does not encrypt it. Both are gitignored, but that
+only keeps them out of git; see "Decide where state goes" above for the part
+that matters.
+
+Treat read access to the state bucket as read access to every operator's Slack
+app.

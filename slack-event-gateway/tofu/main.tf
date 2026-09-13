@@ -158,11 +158,22 @@ resource "google_secret_manager_secret_version" "registrations" {
   secret      = google_secret_manager_secret.registrations.id
   secret_data = local.registrations
 
-  # Keep the previous version around: a bad table takes the gateway down for
-  # everyone, and rolling back by pointing the service at version N-1 is faster
-  # than reconstructing it. Secret Manager bills per *version* beyond six free,
-  # so this is not free forever — prune old ones when they pile up.
-  deletion_policy = "DISABLE"
+  # `ABANDON`, not `DISABLE`.
+  #
+  # Both keep the previous version around, which is the point: a bad table
+  # takes the gateway down for everyone, and rolling back by pointing at
+  # version N-1 beats reconstructing it. But `DISABLE` *disables* the old
+  # version, and **Secret Manager refuses reads from a disabled version** —
+  # so during a rollout, any instance still on the previous revision (which
+  # pins the previous version, see the volume below) can no longer read its
+  # own table. `ABANDON` stops managing the old version and leaves it
+  # readable.
+  #
+  # `tofu destroy` still cleans up: the parent secret is destroyed, and that
+  # takes its versions with it. What abandoning does cost is versions piling
+  # up — Secret Manager bills per version beyond six free, so prune them when
+  # they accumulate.
+  deletion_policy = "ABANDON"
 }
 
 # ---- the service ----------------------------------------------------------

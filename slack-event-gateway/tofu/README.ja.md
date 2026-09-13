@@ -33,6 +33,27 @@ gcloud resource-manager org-policies describe \
 外部ロードバランサも助けにならない（Serverless NEG 経由でも Cloud Run には
 認証情報なしで到達するため）。
 
+## 先に state の置き場を決める
+
+**backend を指定しない `tofu init` は state をローカルファイルに書く。** そのファイルには
+全利用者の Slack signing secret が平文で入る。このモジュールが backend を宣言していないのは
+意図的で（利用者の組織のバケットを知らないため）、**選ばなければ既定のローカルになる**。
+
+使い捨ての実験でないなら、デプロイ担当だけが読めるバケットに置くこと。**最初の `init` より前に**
+このファイルの隣に `backend.tf` を作る:
+
+```hcl
+terraform {
+  backend "gcs" {
+    bucket = "my-tofu-state"     # バージョニング有効・均一アクセス制御
+    prefix = "slack-event-gateway"
+  }
+}
+```
+
+あとから移すこともできる（`tofu init -migrate-state`）が、その時点で**ローカルのコピーは
+既に存在してしまっている** —— 秘密を含んだまま。
+
 ## apply
 
 ```bash
@@ -67,9 +88,13 @@ apply は Cloud Run の新しいリビジョンも作るので、完了した時
 tofu destroy
 ```
 
-そのまま動く。Cloud Run の `deletion_protection` は off にしてあり、シークレットの古い
-バージョンは破棄ではなく無効化するので登録表は復元できる。このモジュールが有効化した API は
-有効なまま残す —— 同じプロジェクトの別のワークロードが使っているかもしれないためである。
+そのまま動く。Cloud Run の `deletion_protection` は off にしてある。このモジュールが
+有効化した API は有効なまま残す —— 同じプロジェクトの別のワークロードが使っているかも
+しれないためである。
+
+**登録表は一緒に消える。** シークレットの古いバージョンは、構成が生きているあいだは破棄ではなく
+**放棄**される（それがロールバックを可能にしている）が、`destroy` は親シークレットを消し、
+それが全バージョンを道連れにする。作り直す予定があるなら `terraform.tfvars` を取っておくこと。
 
 ## このモジュールがやらないこと 2 つ
 
@@ -87,5 +112,7 @@ Pub/Sub にペリメータを張るのが方法だが、**既定ではなく意�
 ## シークレットと state
 
 `terraform.tfvars` には全利用者の Slack signing secret が入り、**state ファイルにも同じものが入る**
-（OpenTofu は暗号化しない）。state はデプロイ担当だけが読めるバケットに置くこと。
-どちらも gitignore 済みである。
+（OpenTofu は暗号化しない）。どちらも gitignore 済みだが、それは git に入れないというだけの話で、
+本題は上の「先に state の置き場を決める」のほうである。
+
+**state バケットへの読み取り権限は、全利用者の Slack アプリへの読み取り権限**とみなすこと。
