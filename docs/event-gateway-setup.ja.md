@@ -1,7 +1,7 @@
 > 🌐 [English](event-gateway-setup.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/event-gateway-setup.md sha256:ccbdac86a42b582d87360855142427d2bfd43edd34b62a8aca6a3a2bebec6998 -->
+<!-- generated-from: ai-docs/operations/event-gateway-setup.md sha256:b6cbdaf83662abbb5d859dc1a508a8501723ca236dec3944347d377b7f07ec49 -->
 
 # Event Gateway 構築手順
 
@@ -30,9 +30,40 @@ Google がまさにこの状況向けに文書化しているものである。*
 ただし管理者はこれ自体も塞げる:
 
 ```bash
-gcloud resource-manager org-policies describe \
-  constraints/run.managed.requireInvokerIam --organization <ORG_ID>
+gcloud organizations list   # ORG_ID を調べる
+gcloud org-policies describe \
+  constraints/run.managed.requireInvokerIam --organization <ORG_ID> --effective
 ```
+
+**`gcloud org-policies`（V2）であって `gcloud resource-manager org-policies`（V1）ではない。**
+`run.managed.*` は managed constraint で、V1 で叩くと制約を評価する前に
+`INVALID_CONSTRAINT_NAME` で落ちる —— 「エラーが出た＝適用されていない」と読めてしまうので、
+コマンドを間違えると判定が逆に転ぶ。
+
+`--effective` を付けるのも同じ理由である。付けないと、未適用のときの答えが `NOT_FOUND` という
+*エラー*になる。付ければどちらの場合も肯定形で返り、出力が一意に読める。
+
+値は `spec.rules[]` の下にぶら下がって返る:
+
+```text
+name: organizations/<ORG_ID>/policies/run.managed.requireInvokerIam
+spec:
+  rules:
+  - enforce: false
+```
+
+| 出力 | 意味 |
+|---|---|
+| `enforce: false` | 未適用。この構成は成立する |
+| `enforce: true` | 適用済み。**成立しない** |
+| 権限エラー、または `gcloud organizations list` が空 | **判定できていない。未適用ではない。** 組織を見る権限が無いだけなので、管理者に聞くか、下の `--project` で問い合わせる |
+
+**エラーを「未適用」と読まないこと。** この節全体が、まさにその読み違いを防ぐために書いてある
+—— コマンドを 1 つ間違えただけで、同じ「エラーが出た」という見え方が反対の意味になる。
+
+`--effective` は継承と上書きを畳んだ実効値なので、組織で `false` なら組織のポリシーとしては通る。
+プロジェクトが既にあるなら、**`--organization <ORG_ID>` を `--project <PROJECT_ID>` に置き換えて**
+同じ問い合わせをして、プロジェクト単位の上書きを潰しておく。2 つは排他なので、両方付けると断られる。
 
 **既定では未適用**なので、大半の組織はそのまま通る。**適用されている**場合、この構成は成立しない ——
 外部ロードバランサも助けにならない（Serverless NEG 経由でも Cloud Run には認証情報なしで到達するので、
@@ -77,6 +108,22 @@ gcloud config set project <PROJECT_ID>
 **毎メッセージ追加の API 呼び出し**が要る。
 
 ## 3. apply
+
+**先にイメージが実在することを確かめる。** `image` の既定値は公式イメージで、リリースごとに
+追従する。ただし**公式イメージが出るようになったのはある版からで、それ以前のタグには存在しない**。
+存在しないタグも文字列としては妥当なので `tofu validate` も `tofu plan` も通ってしまい、
+**失敗するのは apply の最後、Cloud Run がリビジョンを起動しようとした時点**である。
+1 コマンドで先に潰せる:
+
+```bash
+cd services/slack-event-gateway/tofu
+image=$(grep -m1 'slack-event-gateway:' variables.tf | sed -E 's/.*"([^"]+)".*/\1/')
+docker manifest inspect "${image}"
+```
+
+`manifest unknown` が返るなら、そのリリースには公式イメージが無い。自前でビルドして push し
+（手順はゲートウェイ自身の README にある）、`image` 変数で指すこと。手元に `docker` が無ければ、
+GitHub の Packages ページで同じことが確認できる。
 
 ```bash
 cd services/slack-event-gateway/tofu

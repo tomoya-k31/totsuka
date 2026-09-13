@@ -4,7 +4,7 @@ title: Event Gateway の OpenTofu モジュール
 description: services/slack-event-gateway/tofu/ の構成。Cloud Run 1 サービス・利用者ごとの Pub/Sub トピックとサブスクリプション 2 組・Secret Manager の登録表・利用者を自分のキューだけに閉じる IAM を tofu apply で立てる。min-instances 0 と max-instances 上限が費用の前提であること、invoker_iam_disabled が組織ポリシーを緩めずに公開する唯一の手段であること、IP 制限と VPC Service Controls を既定に入れない理由を含む。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/services/slack-event-gateway/tofu
 tags: [gcp, cloud-run, pubsub, secret-manager, iam, opentofu, terraform, slack, cost]
-generated: { by: claude-code/opus-5, at: 2026-09-14T05:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-13T23:16:36+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -39,6 +39,28 @@ totsuka は OSS で、この機能はオプションである。**実運用の�
 費用の前提と噛み合わない。既定の 4 は「利用者数人 × 1 人が追える範囲のチャンネル」という
 本設計の前提から取った（Cloud Run の既定同時実行数は 1 インスタンスあたり 80）。
 
+# `image` の既定値はリリースに追従する
+
+`image` の既定値は公式イメージ（`ghcr.io/<owner>/totsuka/slack-event-gateway:v<version>`）で、
+**リリースごとに自動で書き換わる**。`release-please-config.json` の `extra-files` に
+`variables.tf` を登録し、`default` 行に `# x-release-please-version` を付けてある。
+放っておくと既定値が固定されたまま古いイメージを配り続ける —— しかも**何も壊れない**ので、
+気づく契機が無い。
+
+**手で書き換えないこと。** 次のリリースで上書きされる。自前のレジストリを使うなら
+`terraform.tfvars` の `image` 変数で指す（それが変数である理由である）。
+
+CI（`ci.yml` の `gateway` ジョブ）が、この既定タグと workspace の版が一致することを検査する。
+**捕まえるのは「手で編集して版がずれた」ケース**である —— release-please の更新器は数値部分だけを
+置換して先頭の `v` を残すので、そちらは心配しなくてよい（`generic.ts` の実装を読んで確認した）。
+`gateway` は必須チェックではないので、ずれは Release PR 上の警告であって阻止ではない。
+
+**存在しないタグは検査をすり抜ける。** タグの*文字列*が版と一致するかしか見ておらず、
+そのタグにイメージが実在するかは見ていない —— そして存在しないタグも文字列としては妥当なので、
+`tofu plan` も `tofu validate` も通る。**失敗するのは apply の最後**、Cloud Run がリビジョンを
+起動しようとした時点である。`apply` の前に `docker manifest inspect` で潰すこと
+（→ [構築手順](/operations/event-gateway-setup.md)）。
+
 # 公開の仕方
 
 Slack は IAM プリンシパルになれないので Cloud Run は公開が要る。ドメイン制限共有が有効な
@@ -50,9 +72,13 @@ Slack は IAM プリンシパルになれないので Cloud Run は公開が要�
 Serverless NEG 経由でも Cloud Run には認証情報なしで到達する）。apply の前に確認する:
 
 ```bash
-gcloud resource-manager org-policies describe \
-  constraints/run.managed.requireInvokerIam --organization <ORG_ID>
+gcloud org-policies describe \
+  constraints/run.managed.requireInvokerIam --organization <ORG_ID> --effective
 ```
+
+**`gcloud org-policies`（V2）であり、`--effective` を付ける。** V1 は managed constraint を
+読めず、`--effective` 無しでは未適用の答えが `NOT_FOUND` エラーになる —— どちらの間違いも
+「エラーが出た＝未適用」と読めてしまい、判定が逆に転ぶ（→ [構築手順](/operations/event-gateway-setup.md)）。
 
 # 既定に入れないもの
 

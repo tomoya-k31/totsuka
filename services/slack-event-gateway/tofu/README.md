@@ -25,9 +25,15 @@ Restricted Sharing refuses an `allUsers` grant. An administrator can block that
 too:
 
 ```bash
-gcloud resource-manager org-policies describe \
-  constraints/run.managed.requireInvokerIam --organization <ORG_ID>
+gcloud org-policies describe \
+  constraints/run.managed.requireInvokerIam --organization <ORG_ID> --effective
 ```
+
+`gcloud org-policies` (V2), not `gcloud resource-manager org-policies` (V1):
+this is a managed constraint, and V1 fails with `INVALID_CONSTRAINT_NAME`
+before evaluating anything — an error that reads like "not enforced".
+`--effective` matters for the same reason; without it the "not enforced"
+answer is a `NOT_FOUND` error. Read `enforce: false` as clear to proceed.
 
 It is not enforced by default. If it *is* enforced in your organisation, this
 construction does not work — and an external load balancer does not rescue it,

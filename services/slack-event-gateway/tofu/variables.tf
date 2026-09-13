@@ -44,9 +44,19 @@ variable "image" {
     A company deployment usually wants this pointed at its own Artifact
     Registry instead; `services/slack-event-gateway/README.md` has the build and push
     commands.
+
+    **The tag is bumped by release-please**, via the annotation on the `default`
+    line and the `extra-files` entry in `release-please-config.json`. Hand-editing
+    it would be undone by the next release.
+
+    A CI step compares this tag against the workspace version, so a mismatch
+    shows up as a red `gateway` job. That job is **not** a required check (the
+    ruleset requires only `lint`), so it warns rather than blocks. What it
+    catches is a hand edit that drifted: release-please's own updater
+    substitutes only the numeric span and leaves the leading `v` alone.
   EOT
   type        = string
-  default     = "ghcr.io/tomoya-k31/totsuka/slack-event-gateway:v0.7.5"
+  default     = "ghcr.io/tomoya-k31/totsuka/slack-event-gateway:v0.7.5" # x-release-please-version
 }
 
 variable "max_instances" {

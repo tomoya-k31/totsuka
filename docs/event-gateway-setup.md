@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](event-gateway-setup.ja.md)
 
-<!-- generated-from: ai-docs/operations/event-gateway-setup.md sha256:ccbdac86a42b582d87360855142427d2bfd43edd34b62a8aca6a3a2bebec6998 -->
+<!-- generated-from: ai-docs/operations/event-gateway-setup.md sha256:b6cbdaf83662abbb5d859dc1a508a8501723ca236dec3944347d377b7f07ec49 -->
 
 # Event Gateway setup
 
@@ -35,9 +35,43 @@ change to any organization policy.**
 An administrator can, however, block that too:
 
 ```bash
-gcloud resource-manager org-policies describe \
-  constraints/run.managed.requireInvokerIam --organization <ORG_ID>
+gcloud organizations list   # find your ORG_ID
+gcloud org-policies describe \
+  constraints/run.managed.requireInvokerIam --organization <ORG_ID> --effective
 ```
+
+**Use `gcloud org-policies` (V2), not `gcloud resource-manager org-policies`
+(V1).** `run.managed.*` is a managed constraint, and V1 fails with
+`INVALID_CONSTRAINT_NAME` before it ever evaluates the policy — an error that
+reads like "not enforced", so the wrong command inverts the answer.
+
+`--effective` is there for the same reason: without it, "not enforced" comes
+back as a `NOT_FOUND` *error*. With it, the output is unambiguous either way.
+
+The value comes back nested under `spec.rules[]`:
+
+```text
+name: organizations/<ORG_ID>/policies/run.managed.requireInvokerIam
+spec:
+  rules:
+  - enforce: false
+```
+
+| Output | Meaning |
+|---|---|
+| `enforce: false` | Not enforced. This construction works |
+| `enforce: true` | Enforced. **It does not work** |
+| A permission error, or an empty `gcloud organizations list` | **You have no answer — this is not "not enforced".** You simply cannot see the organization: ask whoever administers it, or query with `--project` below |
+
+**Never read an error as "not enforced".** This whole section exists to stop
+that reading — one wrong flag makes the same "it errored" appearance mean the
+opposite thing.
+
+`--effective` folds in inheritance and overrides, so `false` at the
+organization settles the organization's policy. If the project already exists,
+**replace `--organization <ORG_ID>` with `--project <PROJECT_ID>`** and run the
+same query to rule out a project-level override. The two flags are mutually
+exclusive — passing both is rejected.
 
 It is **not enforced by default**, so most organizations pass straight through.
 If it *is* enforced, this construction does not work — and an external load
@@ -91,6 +125,24 @@ single event, and working out who it was for costs an extra API call on every
 message.
 
 ## 3. Apply
+
+**Check that the image exists first.** The `image` default points at the
+official image and follows each release, but the official image only exists
+from the release that started publishing it — earlier tags have none. A tag
+that does not exist is still a valid string, so `tofu validate` and `tofu plan`
+both pass and **the failure lands at the end of `apply`**, when Cloud Run tries
+to start the revision. One command settles it:
+
+```bash
+cd services/slack-event-gateway/tofu
+image=$(grep -m1 'slack-event-gateway:' variables.tf | sed -E 's/.*"([^"]+)".*/\1/')
+docker manifest inspect "${image}"
+```
+
+`manifest unknown` means that release has no official image: build and push
+your own (the commands are in the gateway's own README) and point the `image`
+variable at it. Without `docker` to hand, the GitHub Packages page answers the
+same question.
 
 ```bash
 cd services/slack-event-gateway/tofu

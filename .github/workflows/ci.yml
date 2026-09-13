@@ -167,6 +167,43 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      # The OpenTofu `image` default is bumped by release-please, via the
+      # annotation on the `default` line and the `extra-files` entry in
+      # `release-please-config.json`. What this guards is a **hand edit that
+      # drifted** from the workspace version — the published image tag is
+      # `v<version>`, and a default pointing anywhere else resolves to no image.
+      # `tofu validate` cannot see that, because a tag that does not exist is
+      # still a perfectly valid string, so the symptom lands on whoever runs
+      # `tofu apply` first: the one person who cannot fix it.
+      #
+      # **Not** a guard against the updater mangling the `v`. That was the
+      # original worry, and it turned out to be unfounded: `generic.ts`'s
+      # `VERSION_REGEX` matches only the numeric span and `line.replace`
+      # substitutes just that, so `:v0.7.5"` becomes `:v0.8.0"`. Checked rather
+      # than assumed, because the failure would have been silent.
+      #
+      # This job is not a required check (see the header), so a mismatch warns
+      # on the Release PR rather than blocking it. Cheapest step in the job, and
+      # it needs no toolchain, so it runs first.
+      - name: The image default matches the workspace version
+        working-directory: ${{ github.workspace }}
+        run: |
+          version=$(grep -m1 'x-release-please-version' Cargo.toml \
+                    | sed -E 's/.*"([^"]+)".*/\1/')
+          tag=$(grep -m1 'x-release-please-version' \
+                    services/slack-event-gateway/tofu/variables.tf \
+                | sed -E 's/.*:([^"]+)".*/\1/')
+          test -n "${version}"
+          test -n "${tag}"
+          if [ "${tag}" != "v${version}" ]; then
+            # One `::error::` invocation, newlines as `%0A`. GitHub parses the
+            # annotation per invocation, so a second `echo` is an ordinary log
+            # line — the Checks UI would show only the first sentence, cut off,
+            # with the actual instruction buried in the raw log.
+            echo "::error::the OpenTofu image default is pinned to ${tag}, but the workspace version is ${version} — expected the tag v${version}.%0AThe release job publishes the image under the release tag, which carries a leading v.%0AFix the default in services/slack-event-gateway/tofu/variables.tf to match."
+            exit 1
+          fi
+          echo "image default: ${tag} (workspace ${version})"
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
         with:

@@ -41,4 +41,6 @@ operators = [
 ]
 
 # Pin your own build instead of the official image if you prefer:
-# image = "asia-northeast1-docker.pkg.dev/my-project/totsuka/slack-event-gateway:v0.7.5"
+# The official image is the default, so this line is only for your own build.
+# Pin an exact tag: there is no `:latest`, deliberately.
+# image = "asia-northeast1-docker.pkg.dev/my-project/totsuka/slack-event-gateway:<tag>"

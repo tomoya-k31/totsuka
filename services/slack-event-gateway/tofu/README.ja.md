@@ -25,9 +25,14 @@ Slack アプリ側の設定は別の手順で、サービスが何であるか�
 管理者はこれ自体も塞げる:
 
 ```bash
-gcloud resource-manager org-policies describe \
-  constraints/run.managed.requireInvokerIam --organization <ORG_ID>
+gcloud org-policies describe \
+  constraints/run.managed.requireInvokerIam --organization <ORG_ID> --effective
 ```
+
+`gcloud resource-manager org-policies`（V1）ではなく `gcloud org-policies`（V2）である
+—— これは managed constraint で、V1 は評価に入る前に `INVALID_CONSTRAINT_NAME` で落ちる。
+「エラーが出た＝未適用」と読めてしまう形なので注意すること。`--effective` も同じ理由で、
+付けないと未適用の答えが `NOT_FOUND` エラーになる。`enforce: false` なら進んでよい。
 
 既定では未適用である。**適用されている**なら、この構成は成立しない ——
 外部ロードバランサも助けにならない（Serverless NEG 経由でも Cloud Run には

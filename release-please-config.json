@@ -11,6 +11,10 @@
         {
           "type": "generic",
           "path": "Cargo.toml"
+        },
+        {
+          "type": "generic",
+          "path": "services/slack-event-gateway/tofu/variables.tf"
         }
       ]
     }
