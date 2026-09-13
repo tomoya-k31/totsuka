@@ -4,7 +4,7 @@ title: Slack セットアップ Quickstart（task-source-slack）
 description: 受信方式（Socket Mode / Event Gateway）の選択から始まり、manifest からの Slack アプリ作成 → トークン発行 → トークン保管 → totsuka setup → doctor → run --watch までの導入手順と、手で書く場合のフォールバック、トークン失効・スコープ変更時の対処。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-slack
 tags: [slack, setup, runbook, secrets, doctor]
-generated: { by: claude-code/opus-5, at: 2026-09-14T02:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-14T06:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -26,7 +26,7 @@ owner: tomoya-k31
 |---|---|---|
 | 用意するもの | 無し | GCP プロジェクト 1 つ。月 1 ドル程度 |
 | totsuka を止めている間 | **メンションは失われる。取り戻す手段は無い** | Pub/Sub に溜まり、起動後に拾う |
-| 長く止めたとき | **Slack が購読を自動で無効化する**（60 分の配信試行の 95% 超が失敗したアプリ）。復旧は Slack の設定画面での手作業で、無効化されたことを totsuka から知る方法は API に無い | 起きない。配信は常に成功する |
+| 長く止めたとき | **Slack が購読を自動で無効化する**（60 分の配信試行の 95% 超が失敗したアプリ）。復旧は Slack の設定画面での手作業で、無効化されたことを totsuka から知る方法は API に無い | **totsuka の停止が原因では起きない。** ゲートウェイ自身が落ちる・URL が誤っている・publish が失敗する、はそれぞれ配信失敗になるので「常に成功する」わけではない |
 | 設定 | `event_source = "socket"`（既定なので書かなくてよい） | `event_source = "gateway"` + `[slack.gateway]` |
 | manifest | `manifest.yml` | `manifest.gateway.yml` |
 | チャンネル監視の遅延 | 即時 | `watch_poll_interval_secs`（既定 60 秒）。**遅くなるのは監視だけ**で、メンション・リアクション・承認ボタンは 1〜2 秒差に収まる |
@@ -49,7 +49,15 @@ owner: tomoya-k31
    `manifest.gateway.yml` の `<gateway-host>` は**プレースホルダのままでよい**
 2. [Event Gateway 構築手順](/operations/event-gateway-setup.md) を通す
 3. 出てきた Request URL を**アプリに戻って 2 箇所に入れる**
-4. このページの手順 2 以降に戻る
+4. このページの手順 2（トークン保管）と手順 3（`totsuka setup`）を通す
+5. **`setup` が書いた `[slack]` テーブルに `event_source` と `[slack.gateway]` を足す**
+
+**手順 5 を飛ばせない理由。** `setup` は**既に存在する `[slack]` テーブルには触らない**ので、
+先に自分で `[slack]` を書いてしまうと、`user_token` と `target_user_id` が**永久に入らない**。
+逆に `setup` に任せると Socket Mode 前提の `app_token` が書かれ、その場で走る `doctor` が
+App-Level Token を要求して落ちる。**どちらも「先に全部書く」では解けない**ので、
+`setup` に書かせてから足す、という順序になる。`setup` 中の `doctor` が赤いのは想定内で、
+手順 5 を終えてから `totsuka doctor` を回し直せばよい。
 
 # 1. Slack アプリを作成（manifest 貼り付け）
 
@@ -230,8 +238,8 @@ Gateway 方式では `gcloud auth application-default login` が済んでいる�
 | グループメンション（`@team-name`）がタスクにならない | `usergroups:read` を含む manifest で再インストール済みか（#658）。**このスコープが無いと、起動時の `usergroups.list` が失敗して所属グループが空になり、グループ宛のメンションは 1 件もタスクにならない** —— 個人宛メンションは影響を受けないので、「一部だけ動かない」形で気づきにくい。totsuka は起動時に WARN を 1 回出すので、そこを見る。所属は**起動時に 1 回だけ**解決するので、グループに追加された直後は再起動が要る。`@here` / `@channel` / `@everyone` は**仕様として対象外**（名指しではないため、[ADR-0072](/decisions/adr-0072-slack-event-gateway.md) 決定 8） |
 | **Gateway** メンションが 1 件も来ない | ①`gcloud auth application-default login` が済んでいるか（`doctor` の起動時プローブが落ちていないか）②Slack 側の Request URL が保存できているか（保存時に URL 検証が走るので、ゲートウェイが動いていないと保存自体が失敗する）③`[slack.gateway]` の `project` / `subscription` が `tofu output totsuka_config` と一致しているか |
 | **Gateway** メンションは動くのに承認ボタンだけ届かない | **Interactivity & Shortcuts の Request URL** が未設定。Event Subscriptions とは別の設定項目で、Socket Mode ではどちらも同じ WebSocket で届いていたので見落としやすい |
-| **Gateway** 復帰してもメンションが起票されない | `drain_max_age_hours`（既定 24）の窓の外。Pub/Sub 側は 7 日保持しているので、**設定を一時的に上げれば拾える**（クラウドの再デプロイは要らない） |
-| **Gateway** 監視チャンネルの反応が遅い | 仕様。Gateway 方式では監視は `conversations.history` のポーリング（`watch_poll_interval_secs`、既定 60 秒）で、**メンション・リアクション・ボタンは遅くならない**。監視対象への投稿はゲートウェイを通らないため（publish 対象は「自分に関係しうるもの」だけ） |
+| **Gateway** 復帰してもメンションが起票されない | `drain_max_age_hours`（既定 24）の窓の外。Pub/Sub 側は 7 日保持しているので設定を上げれば拾えるが、**上げるのは復帰後の最初の起動より前**でなければならない —— 窓の外と判定したレコードはその場で ack して捨てるので、**一度起動した後に上げても、捨てたぶんは戻らない**。長期不在から戻る前に上げておくこと |
+| **Gateway** 監視チャンネルの反応が遅い | 仕様。Gateway 方式では監視は `conversations.history` のポーリング（`watch_poll_interval_secs`、既定 60 秒）で、**メンション・リアクション・ボタンはキュー経由のまま**である。ただしそちらも秒数の保証ではない —— キューの読み取りは待つことが保証されておらず、空応答が続くと取り込み側がバックオフする。監視対象への投稿がゲートウェイを通らないのは、publish 対象が「自分に関係しうるもの」だけだからである |
 | **Gateway** の切り替えを config だけでやろうとした | できない。Socket Mode と Request URL は**Slack アプリ単位で排他**なので、もう一方の manifest でアプリを作り直す（トークンも全部再発行される）。`event_source` を変えるだけでは、Slack 側が何も変わらない |
 | スコープを変更した | アプリ再インストールが必要 → **`xoxp-` と `xoxb-` の両方が再発行される**ので保管先の値を両方更新 → `doctor` で確認（[manifest 雛形](https://github.com/tomoya-k31/totsuka/blob/main/plugins/task-source-slack/manifest.yml) のコメント参照）。既存アプリへ bot user を後から足す場合（#305）も同じ — `slack-bot` を追加するだけだと再発行済みの `xoxp-` が死んだままになる |
 | 通知ナッジ（bot DM）が届かない | ① `bot_token` が未設定/失効（`doctor` の bot probe を確認）② 起動ログに bot DM 解決失敗の WARN がないか ③ Slack 側でこのアプリの DM をミュートしていると push は出ない（コードでは解決不能） |

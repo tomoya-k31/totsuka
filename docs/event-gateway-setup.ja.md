@@ -1,7 +1,7 @@
 > 🌐 [English](event-gateway-setup.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/event-gateway-setup.md sha256:4586c1b14ebe4b6d765706b86808d9ed41a7b926859384fa01d3d787091494c3 -->
+<!-- generated-from: ai-docs/operations/event-gateway-setup.md sha256:09e88bec4f404d4a75abf1bfbbcec928803048abb071aa28193ef104ba45b7f5 -->
 
 # Event Gateway 構築手順
 
@@ -12,6 +12,9 @@
 totsuka が止まっている間に届いたメンションは失われ、長く止まったままだと Slack がそのアプリの
 イベント購読そのものを止める。ゲートウェイは totsuka の代わりに受けてキューに積むので、
 Slack が配信するために動き続けるものが無くなる。対価は GCP プロジェクト 1 つと月 1 ドル程度。
+
+これが消すのは**「totsuka が止まっていること」が配信失敗の原因になる経路**であって、配信失敗そのものではない。
+ゲートウェイが落ちていれば、Request URL が誤っていれば、publish に失敗すれば、いずれも配信は失敗する。
 
 ## 0. まず組織ポリシーを 1 つ確認する
 
@@ -121,10 +124,17 @@ tofu output -json request_urls
 tofu output -json totsuka_config
 ```
 
-出た値を `~/.config/totsuka/config.toml` に入れる:
+**これは `[slack]` テーブル全体ではなく、そこに足すキーである。**
+
+先に `totsuka setup` を通し（[Slack セットアップ](slack-setup.ja.md) の手順 3）、
+`user_token` と `target_user_id` を含む `[slack]` を書かせること。**`setup` は既に存在する
+`[slack]` テーブルには触らない**ので、このブロックだけを先に貼ると必須キーが永久に入らない。
+
+`setup` が書いたものに足す:
 
 ```toml
 [slack]
+# …setup が書いた user_token / target_user_id はそのまま…
 event_source = "gateway"
 
 [slack.gateway]
@@ -133,7 +143,9 @@ subscription               = "slack-event-gateway-<key>-events"
 block_actions_subscription = "slack-event-gateway-<key>-block-actions"
 ```
 
-`app_token`（`xapp-`）は要らない —— WebSocket を開かないためである。
+`setup` が書いた `app_token` の行は消してよい —— WebSocket を開かないためである。
+`setup` の最後に走る `doctor` が App-Level Token を要求して落ちるのは**この編集の前だから**で、
+編集後に `totsuka doctor` を回し直せば緑になる。
 
 そのあと利用者ごとに、その人の機械で 1 回:
 

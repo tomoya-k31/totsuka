@@ -4,7 +4,7 @@ title: Event Gateway 構築手順（event_source = "gateway"）
 description: GCP 側の構築手順。着手前の組織ポリシー確認、OpenTofu による Cloud Run / Pub/Sub / Secret Manager / IAM の一括構築、Slack の Request URL 2 箇所の設定、totsuka 側の config、人を増やす手順、破棄、費用の前提。Socket Mode を使う読者はこのページを読む必要がない。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/slack-event-gateway/tofu
 tags: [slack, gateway, gcp, cloud-run, pubsub, secret-manager, opentofu, runbook, cost]
-generated: { by: claude-code/opus-5, at: 2026-09-14T02:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-14T06:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -137,10 +137,17 @@ tofu output -json request_urls
 tofu output -json totsuka_config
 ```
 
-出た値を `~/.config/totsuka/config.toml` に入れる:
+**これは `[slack]` テーブル全体ではなく、そこに足すキーである。**
+
+先に [Quickstart の手順 3](/operations/slack-quickstart.md) で `totsuka setup` を通し、
+`user_token` / `target_user_id` を含む `[slack]` を書かせること。**`setup` は既に存在する
+`[slack]` テーブルには触らない**ので、先にこのブロックだけを貼ると必須キーが永久に入らない。
+
+`setup` が書いた `[slack]` に次を足す:
 
 ```toml
 [slack]
+# …setup が書いた user_token / target_user_id はそのまま…
 event_source = "gateway"
 
 [slack.gateway]
@@ -149,8 +156,11 @@ subscription               = "slack-event-gateway-<key>-events"
 block_actions_subscription = "slack-event-gateway-<key>-block-actions"
 ```
 
-キーの意味は [設定リファレンス](/development/config-reference.md)。`app_token`（`xapp-`）は
-**要らない** —— WebSocket を開かないので用途が無い。
+そして **`setup` が書いた `app_token` の行は消してよい** —— WebSocket を開かないので用途が無い。
+`setup` の最後に走る `doctor` が App-Level Token を要求して赤くなるのは**この編集の前だから**で、
+編集後に `totsuka doctor` を回し直せば緑になる。
+
+キーの意味は [設定リファレンス](/development/config-reference.md)。
 
 各利用者の手元で 1 回:
 

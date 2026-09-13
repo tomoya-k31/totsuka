@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](slack-setup.ja.md)
 
-<!-- generated-from: ai-docs/operations/slack-quickstart.md sha256:1d984312a60b22cbd824d6805822973604e13db43f0650454201d69c9d9daf33 -->
+<!-- generated-from: ai-docs/operations/slack-quickstart.md sha256:fc41354fbb26bfdc31522429d6cdb5d3c0ef3e24a65f339f0c3c06acb71d14bc -->
 
 # Setting up the Slack source
 
@@ -21,7 +21,7 @@ not a later tuning decision.
 |---|---|---|
 | What you need | Nothing | One GCP project, about $1/month |
 | While totsuka is stopped | **Mentions are lost, with no way to recover them** | They queue, and are picked up when you start |
-| After a long stop | **Slack disables the app's event subscription** (any app failing more than 95% of deliveries over 60 minutes). Re-enabling is a manual step in the Slack settings, and nothing tells totsuka it happened | Does not occur. Delivery always succeeds |
+| After a long stop | **Slack disables the app's event subscription** (any app failing more than 95% of deliveries over 60 minutes). Re-enabling is a manual step in the Slack settings, and nothing tells totsuka it happened | **totsuka being stopped is no longer a cause.** Delivery can still fail for other reasons — the gateway itself being down, a wrong URL, a failed publish — so this is not "always succeeds" |
 | Setting | `event_source = "socket"` (the default; you can omit it) | `event_source = "gateway"` plus `[slack.gateway]` |
 | Manifest | `manifest.yml` | `manifest.gateway.yml` |
 | Channel-watch latency | Immediate | `watch_poll_interval_secs` (60s default). **Only watching is slower**; mentions, reactions and approval buttons stay within a second or two |
@@ -46,7 +46,17 @@ Split it like this:
    `manifest.gateway.yml` alone.
 2. Work through [Event Gateway setup](event-gateway-setup.md).
 3. **Go back to the app** and put the Request URL it produced into both places.
-4. Return to step 2 on this page.
+4. Do step 2 (store the tokens) and step 3 (`totsuka setup`) on this page.
+5. **Add `event_source` and `[slack.gateway]` to the `[slack]` table that
+   `setup` wrote.**
+
+**Step 5 cannot be folded into step 4.** `setup` leaves an existing `[slack]`
+table alone, so writing one yourself first means `user_token` and
+`target_user_id` never get added. Let `setup` write it and you get Socket
+Mode's `app_token` instead, and the `doctor` run at the end of `setup` fails
+asking for an app-level token. Neither "write it all up front" ordering works —
+hence: let `setup` write the table, then add to it. A red `doctor` during
+`setup` is expected; re-run `totsuka doctor` after step 5.
 
 ## 1. Create the Slack app from the manifest
 
@@ -226,8 +236,8 @@ To try it end to end, have someone mention you. After the agent finishes, a draf
 | A group mention (`@team-name`) does not create a task | Check that the app was reinstalled with a manifest containing `usergroups:read`. **Without that scope the startup lookup of your groups fails, your group set stays empty, and no group mention becomes a task** — personal mentions keep working, so it looks like "only part of it is broken". totsuka logs one warning at startup; look there. Your groups are resolved **once, at startup**, so restart after being added to a group. `@here`, `@channel` and `@everyone` are **out of scope by design**: they name no one |
 | **Gateway**: not a single mention arrives | Check that `gcloud auth application-default login` has been run (the startup check reports it), that Slack accepted the Request URL when you saved it (it verifies the URL on save, so saving fails if the gateway is not running), and that `[slack.gateway]` matches what the deployment produced |
 | **Gateway**: mentions work but no approval button arrives | The **Interactivity & Shortcuts** Request URL is not set. It is a separate setting from Event Subscriptions, and easy to miss because Socket Mode delivered both down one connection |
-| **Gateway**: nothing is filed after coming back | The events are older than `drain_max_age_hours` (24 by default). The queue holds 7 days, so **raising the setting temporarily picks them up** — nothing needs redeploying |
-| **Gateway**: a watched channel reacts slowly | Expected. With the gateway, watching is a poll of the channel history (`watch_poll_interval_secs`, 60s default); mentions, reactions and buttons are not slower. Only things that name you travel through the gateway, and an ordinary post in a watched channel does not |
+| **Gateway**: nothing is filed after coming back | The events are older than `drain_max_age_hours` (24 by default). The queue holds 7 days, so raising the setting picks them up — but **raise it before the first start after the absence**. Events judged outside the window are acknowledged and discarded on the spot, so raising it afterwards does not bring back what was already dropped |
+| **Gateway**: a watched channel reacts slowly | Expected. With the gateway, watching is a poll of the channel history (`watch_poll_interval_secs`, 60s default), while mentions, reactions and buttons keep coming off the queue — which is not a guaranteed number of seconds either, since the queue read is allowed but not required to wait and the reader backs off on empty answers. Only things that name you travel through the gateway, and an ordinary post in a watched channel does not |
 | You tried to switch modes by editing the config | It does not work that way. Socket Mode and a Request URL are **mutually exclusive per Slack app**, so switching means recreating the app from the other manifest (reissuing every token). Changing `event_source` alone changes nothing on Slack's side |
 | You changed the app's scopes | A scope change requires reinstalling the app, which **reissues both `xoxp-` and `xoxb-`**. Update both stored values, then run `doctor`. Updating only one leaves the app half-broken |
 | Channel-prefix rules never apply, so every mention falls back to the classifier LLM (or to the picker, if no LLM is configured) | The app cannot read channel names. Reinstall with a manifest containing `channels:read` and `groups:read`, then update the stored tokens as above |

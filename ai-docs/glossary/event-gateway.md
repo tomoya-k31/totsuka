@@ -1,7 +1,7 @@
 ---
 type: Term
 title: Event Gateway（イベントゲートウェイ）
-description: "Slack の配信を HTTPS で受け、本文を保存せずに座標へ射影して Pub/Sub へ流す、totsuka の外で動く常駐しないサービス。event_source = \"gateway\" のときだけ経路に入る。totsuka が止まっている間もイベントが失われず、Slack が購読を自動で無効化することも起きない。"
+description: "Slack の配信を HTTPS で受け、本文を保存せずに座標へ射影して Pub/Sub へ流す、totsuka の外で動く常駐しないサービス。event_source = \"gateway\" のときだけ経路に入る。ゲートウェイが健全に動いているかぎり、totsuka が止まっている間もイベントは失われず、Slack による購読の自動無効化も起きない。"
 resource: https://github.com/tomoya-k31/totsuka/tree/main/slack-event-gateway
 tags: [glossary, slack, gateway, pubsub, cloud-run, event-source]
 generated: { by: claude-code/opus-5, at: 2026-09-14T01:00:00+09:00 }
@@ -26,7 +26,12 @@ Socket Mode では **`totsuka run` のプロセス自身が WebSocket を握る*
 知る方法は API に無い**。
 
 ゲートウェイは「常時稼働するプロセス」を足して解決するのではなく、**Slack の配信先そのものを
-HTTP に変える**。Slack から見た配信は常に成功し、totsuka は好きなときに起動すればよくなる。
+HTTP に変える**。totsuka の起動・停止が Slack から見た配信の成否と切り離され、好きなときに
+起動すればよくなる。
+
+**「常に成功する」わけではない。** ゲートウェイ自身が落ちていれば、URL が間違っていれば、
+publish に失敗すれば、配信は失敗する（実装は publish 失敗とタイムアウトで 500 を返す）。
+消えるのは**「totsuka が動いていないこと」が失敗の原因になる経路**であって、失敗一般ではない。
 
 # 性質
 

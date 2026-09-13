@@ -22,5 +22,5 @@
 * [要対応（Attention）](attention.md) - 人間が動かさない限り永久に進まない非終端タスクの集合。pending / waiting_input / verifying / escalated / queued+wait_reason の 5 状態からなり、メニューバーのバッジ（F-109）が数える対象。終端状態を含めないのは、含めると数字が単調増加して 0 に戻らなくなるため。
 * [チャンネル監視トリガ（channel watch）](channel-watch.md) - 特定チャンネルへのトップレベル投稿そのものをトリガにして 1 投稿 = 1 タスクを起こす仕組み。メンションもリアクションも要らないぶん「投稿できる人」が実行できる人になるため、既定の起動者は操作者本人だけで、trigger.from が唯一の明示的な緩和口になる。会話継続の対象外。
 * [起動時バックフィル（startup backfill）](startup-backfill.md) - チャンネル監視ソースが起動時に、監視チャンネルの直近 N 件かつ年齢上限以内を無条件に再送してプラグイン停止中の取りこぼしを回収する仕組み。台帳が重複を Duplicate として無害化するため永続カーソルを持たず、取りすぎ側に倒してある。
-* [Event Gateway（イベントゲートウェイ）](event-gateway.md) - Slack の配信を HTTPS で受け、本文を保存せずに座標へ射影して Pub/Sub へ流す、totsuka の外で動く常駐しないサービス。event_source = "gateway" のときだけ経路に入る。totsuka が止まっている間もイベントが失われず、Slack が購読を自動で無効化することも起きない。
+* [Event Gateway（イベントゲートウェイ）](event-gateway.md) - Slack の配信を HTTPS で受け、本文を保存せずに座標へ射影して Pub/Sub へ流す、totsuka の外で動く常駐しないサービス。event_source = "gateway" のときだけ経路に入る。ゲートウェイが健全に動いているかぎり、totsuka が止まっている間もイベントは失われず、Slack による購読の自動無効化も起きない。
 <!-- okf:index:end -->

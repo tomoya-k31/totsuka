@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](event-gateway-setup.ja.md)
 
-<!-- generated-from: ai-docs/operations/event-gateway-setup.md sha256:4586c1b14ebe4b6d765706b86808d9ed41a7b926859384fa01d3d787091494c3 -->
+<!-- generated-from: ai-docs/operations/event-gateway-setup.md sha256:09e88bec4f404d4a75abf1bfbbcec928803048abb071aa28193ef104ba45b7f5 -->
 
 # Event Gateway setup
 
@@ -13,6 +13,10 @@ itself**: mentions that arrive while totsuka is stopped are lost, and if it stay
 stopped long enough Slack switches the app's event subscription off entirely.
 The gateway receives on totsuka's behalf and queues, so nothing has to be
 running for Slack to deliver. The price is one GCP project and about $1/month.
+
+What this removes is **totsuka being stopped as a cause of failed delivery** —
+not failed delivery. A gateway that is down, a wrong Request URL, or a failed
+publish all still produce one.
 
 ## 0. Check one organization policy first
 
@@ -136,10 +140,18 @@ either the gateway is not running or the URL is wrong.
 tofu output -json totsuka_config
 ```
 
-Put the values in `~/.config/totsuka/config.toml`:
+**These are keys to add to the `[slack]` table, not a table to paste.**
+
+Run `totsuka setup` first (step 3 of [Slack setup](slack-setup.md)) and let it
+write `[slack]` with `user_token` and `target_user_id`. **`setup` leaves an
+existing `[slack]` table alone**, so pasting only this block first means those
+required keys never get added.
+
+Then add to what `setup` wrote:
 
 ```toml
 [slack]
+# …the user_token / target_user_id setup wrote, unchanged…
 event_source = "gateway"
 
 [slack.gateway]
@@ -148,7 +160,10 @@ subscription               = "slack-event-gateway-<key>-events"
 block_actions_subscription = "slack-event-gateway-<key>-block-actions"
 ```
 
-No `app_token` (`xapp-`) is needed — nothing opens a WebSocket.
+The `app_token` line `setup` wrote can be deleted — nothing opens a WebSocket.
+The `doctor` run at the end of `setup` fails asking for an app-level token
+because it happens *before* this edit; re-run `totsuka doctor` afterwards and it
+goes green.
 
 Then, once per person, on their own machine:
 
