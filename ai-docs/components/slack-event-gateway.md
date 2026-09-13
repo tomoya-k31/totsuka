@@ -4,7 +4,7 @@ title: slack-event-gateway
 description: Slack の配信を HTTPS で受け、署名を検証し、本文を保存せずに座標へ射影して Pub/Sub へ publish する常駐しないサービス。event_source = "gateway" のときだけ経路に入る。同一リポジトリの workspace 外に置き、適合テストスイートだけを totsuka と共有する。公式イメージは ghcr.io にリリースごとに公開する。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/services/slack-event-gateway
 tags: [rust, service, slack, gateway, cloud-run, pubsub, hmac, security]
-generated: { by: claude-code/opus-5, at: 2026-09-13T22:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-14T00:37:53+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -122,11 +122,14 @@ Registry に差し替えられる。
 | ベースイメージは**ダイジェスト固定** | GitHub Actions を SHA で固定するのと同じ理由。起点をタグに委ねない |
 | TLS ルートを**バイナリに焼き込む** | `native-roots` はベースイメージが `ca-certificates` を積んでいることに依存し、`scratch` に差し替えた瞬間に**ビルドではなく実行時の TLS エラー**で全 publish が壊れる |
 
-**初回公開時、ghcr のパッケージは private になる。** リポジトリが public でも**可視性は継承
-されない**（継承されるのはアクセス権限のほうである）。Cloud Run が直接 pull できるのは
-public な ghcr イメージだけなので、**放置すると「ジョブは緑、デプロイする人だけが落ちる」**という
-形になる。リリースジョブは push の後に可視性を検査して、public でなければ赤くする
-（手順は[リリース Runbook](/operations/release-runbook.md)）。
+**Cloud Run が直接 pull できるのは public な ghcr イメージだけ**なので、private で出ると
+**「ジョブは緑、デプロイする人だけが落ちる」**という形になる。リリースジョブは push の後に
+可視性を検査して、public でなければ赤くする（手順は[リリース Runbook](/operations/release-runbook.md)）。
+
+**初回は private になると決めてかからないこと。** ここには当初「初回公開時、ghcr のパッケージは
+private になり、リポジトリが public でも可視性は継承されない」と書いてあったが、**実際の初回リリース
+（v0.7.6、2026-09-13）はそうならなかった** —— 検査は 1 回目で `public` を返し、手作業は発生していない。
+**理由は調べていない**ので、条件が違えば private で出うるという前提のまま検査だけ残している。
 
 # 関連
 
