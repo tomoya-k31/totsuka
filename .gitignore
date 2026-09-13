@@ -1,5 +1,14 @@
 # Rust build artifacts
 /target
+# The Event Gateway is outside the workspace (see the root Cargo.toml),
+# so it builds into its own target directory.
+/slack-event-gateway/target
+# OpenTofu downloads provider binaries here (hundreds of MB). The rule lives
+# with the directory that can contain them rather than with the OpenTofu
+# module itself: during stacked work the untracked directory travels across
+# branch checkouts, so an ignore added higher up leaves the branches below it
+# one `git add <dir>` away from committing a provider binary.
+/slack-event-gateway/tofu/.terraform/
 **/*.rs.bk
 
 # Coverage

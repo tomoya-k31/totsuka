@@ -57,6 +57,8 @@ disable = [
 # 名指しのほうが読んで分かるため。
 "contracts/slack-event-gateway/README.md" = ["MD041"]
 "contracts/slack-event-gateway/README.ja.md" = ["MD041"]
+"slack-event-gateway/README.md" = ["MD041"]
+"slack-event-gateway/README.ja.md" = ["MD041"]
 
 # 人間向け docs/ も同じ言語スイッチャ規約に従う。さらに 1 行目の直後に
 # `<!-- generated-from: … -->` マーカー（scripts/docs-freshness.sh が読む）が入るので、

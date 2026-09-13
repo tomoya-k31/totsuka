@@ -141,6 +141,49 @@ jobs:
           TEST_SUPPORT_PREBUILT_BINS: "1"
         run: cargo test --workspace --all-features
 
+  # The Event Gateway (#659) is outside the workspace by design (see the root
+  # Cargo.toml), so the jobs above do not see it at all — `--workspace` cannot
+  # reach an excluded directory. Without this job it would have no CI whatsoever.
+  #
+  # One job, not three: billing rounds every job up to a full minute, and this
+  # crate is small enough that fmt + clippy + test together finish well inside
+  # one (#281).
+  gateway:
+    name: gateway (slack-event-gateway)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: slack-event-gateway
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: stable
+          components: clippy,rustfmt
+      # Lockfile drift, same check and same reasoning as the workspace job.
+      - name: Cargo.lock is in sync
+        run: cargo metadata --locked --format-version 1 > /dev/null
+      # Its own key space: this crate shares no dependency graph with the
+      # workspace, so mixing them would only evict entries both sides want.
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: slack-event-gateway
+          shared-key: gateway-${{ hashFiles('slack-event-gateway/Cargo.toml') }}
+      - name: Check formatting
+        run: cargo fmt --all --check
+      - name: Run clippy
+        run: cargo clippy --all-targets -- -D warnings
+      # The conformance suite reads `contracts/slack-event-gateway/` from the
+      # repository root, which is why this job checks out the whole repo rather
+      # than a sparse path.
+      - name: Test
+        run: cargo test
+
   # cargo-audit / cargo-deny moved to audit.yml (daily cron + dependency-file
   # PRs): advisories change with time, not with PR content.
 

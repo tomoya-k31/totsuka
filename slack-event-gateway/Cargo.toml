@@ -1,0 +1,49 @@
+[package]
+name = "slack-event-gateway"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT"
+repository = "https://github.com/tomoya-k31/totsuka"
+description = "Receives Slack Events API deliveries, projects them to coordinates, and publishes to Pub/Sub. Never stores, forwards or logs the message body."
+publish = false
+
+[lints.rust]
+warnings = "deny"
+missing_docs = "warn"
+
+[[bin]]
+name = "slack-event-gateway"
+path = "src/main.rs"
+
+# The dependency list is short on purpose. This process is deployed by
+# operators into their own cloud project and handles every Slack message the
+# operator can see; every crate here is attack surface they inherit, and the
+# container is distroless, so there is nothing to patch a CVE in but this
+# lockfile.
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }
+hyper = { version = "1", features = ["server", "http1"] }
+# `server-graceful` is what lets a SIGTERM finish the deliveries already in
+# flight instead of dropping them; see the shutdown block in `main.rs`.
+hyper-util = { version = "0.1", features = ["tokio", "server-graceful"] }
+http-body-util = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# HMAC-SHA256 over the raw body, per Slack's signing scheme.
+hmac = "0.12"
+sha2 = "0.10"
+# Constant-time comparison. Hand-rolling this is exactly the thing not to
+# hand-roll: a `==` on the digest leaks it one byte at a time.
+subtle = "2"
+# Pub/Sub publish and the metadata-server token. rustls rather than the
+# platform TLS stack, because a distroless image has no platform stack.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt"] }
+percent-encoding = "2"
+thiserror = "2"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+percent-encoding = "2"

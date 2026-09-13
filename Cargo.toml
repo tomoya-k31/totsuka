@@ -14,6 +14,19 @@ members = [
     "plugins/agent-ide-orca",
     "plugins/notifier-macos",
 ]
+# The Event Gateway (#652, ADR-0072 decision 9) lives in this repository but
+# outside the workspace, deliberately.
+#
+# It cannot go under `plugins/`: `scripts/arch-lint.sh` requires every member
+# there to have exactly one bin matching its `plugin.toml`, and this is not a
+# totsuka plugin. It must not go under `crates/`: it would then land in every
+# contributor's `cargo build --workspace`, and it is an optional service that
+# most of them will never deploy.
+#
+# The cost is that it has its own lockfile and its own CI job (`gateway` in
+# `ci.yml`), and cannot share types with the plugin. That last point is the
+# reason `contracts/slack-event-gateway/` exists.
+exclude = ["slack-event-gateway"]
 
 [workspace.package]
 version = "0.7.5" # x-release-please-version
