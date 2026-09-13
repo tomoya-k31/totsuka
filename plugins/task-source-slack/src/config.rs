@@ -409,12 +409,54 @@ pub enum EventSource {
     Gateway,
 }
 
+/// Pub/Sub coordinates for [`EventSource::Gateway`].
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GatewayConfig {
+    /// GCP project holding the subscriptions.
+    pub project: String,
+    /// Subscription carrying messages and reactions.
+    pub subscription: String,
+    /// Subscription carrying button presses. Separate because its retention
+    /// has to clear `response_url`'s ~30-minute life while the other's is
+    /// measured in days (ADR-0072 decision 5).
+    pub block_actions_subscription: String,
+    /// Pub/Sub base URL. Overridable so tests need no network.
+    #[serde(default = "default_pubsub_url")]
+    pub pubsub_url: String,
+    /// Messages requested per `pull`. Pub/Sub caps the response at this many;
+    /// it is not a promise that many exist.
+    #[serde(default = "default_pull_max_messages")]
+    pub pull_max_messages: u32,
+}
+
+impl GatewayConfig {
+    /// The fully-qualified name of the events subscription.
+    pub fn events_path(&self) -> String {
+        format!(
+            "projects/{}/subscriptions/{}",
+            self.project, self.subscription
+        )
+    }
+
+    /// The fully-qualified name of the button-press subscription.
+    pub fn block_actions_path(&self) -> String {
+        format!(
+            "projects/{}/subscriptions/{}",
+            self.project, self.block_actions_subscription
+        )
+    }
+}
+
 /// Slack task-source settings.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SlackConfig {
-    /// App-Level Token (`xapp-`) for Socket Mode.
-    pub app_token: String,
+    /// App-Level Token (`xapp-`) for Socket Mode. Required under
+    /// [`EventSource::Socket`]; unused — and omittable — under
+    /// [`EventSource::Gateway`], which opens no WebSocket.
+    #[serde(default)]
+    pub app_token: Option<String>,
     /// User OAuth Token (`xoxp-`); replies are posted as the operator.
     pub user_token: String,
     /// Bot User OAuth Token (`xoxb-`); when set, the bot DMs the operator a
@@ -492,6 +534,14 @@ pub struct SlackConfig {
     /// Which transport delivers Slack events (#652). Default [`EventSource::Socket`].
     #[serde(default)]
     pub event_source: EventSource,
+    /// Where the Event Gateway's Pub/Sub queues live. Required under
+    /// [`EventSource::Gateway`], meaningless otherwise.
+    ///
+    /// **Deliberately not part of the frozen contract** (#656): the gateway
+    /// never sees these names. They are totsuka's own wiring, so they belong
+    /// with the consumer rather than with the schema both sides must agree on.
+    #[serde(default)]
+    pub gateway: Option<GatewayConfig>,
     /// How old a queued event may be and still be filed, in hours.
     /// `None` means [`DEFAULT_DRAIN_MAX_AGE_HOURS`].
     ///
@@ -593,6 +643,13 @@ pub const DEFAULT_DRAIN_MAX_AGE_HOURS: u64 = 24;
 pub const DEFAULT_DRAIN_LIMIT: u32 = 100;
 /// Default [`SlackConfig::watch_poll_interval_secs`].
 pub const DEFAULT_WATCH_POLL_INTERVAL_SECS: u64 = 60;
+
+fn default_pubsub_url() -> String {
+    "https://pubsub.googleapis.com".to_string()
+}
+fn default_pull_max_messages() -> u32 {
+    50
+}
 pub(crate) fn default_confidence_threshold() -> f64 {
     0.6
 }
@@ -604,13 +661,24 @@ pub(crate) fn default_confidence_threshold() -> f64 {
 pub fn static_config_errors(config: &SlackConfig) -> Vec<String> {
     let mut errors = Vec::new();
 
-    if !config.app_token.starts_with("xapp-") {
-        errors.push(
+    match (config.event_source, config.app_token.as_deref()) {
+        // Socket Mode cannot open a connection without it.
+        (EventSource::Socket, None) => errors.push(
+            "`app_token` is missing → `event_source = \"socket\"` opens a Socket Mode \
+             connection, which needs an App-Level Token. Generate one under the Slack app's \
+             Basic Information > App-Level Tokens (scope `connections:write`), or switch to \
+             `event_source = \"gateway\"`"
+                .into(),
+        ),
+        (_, Some(token)) if !token.starts_with("xapp-") => errors.push(
             "`app_token` is not an App-Level Token (must start with `xapp-`) → generate one \
              under the Slack app's Basic Information > App-Level Tokens (scope \
              `connections:write`) and update `[slack]` in config.toml"
                 .into(),
-        );
+        ),
+        // Set but unused under `gateway`: harmless, and leaving it in place
+        // makes switching back a one-line edit.
+        _ => {}
     }
     if !config.user_token.starts_with("xoxp-") {
         errors.push(
@@ -758,19 +826,53 @@ pub fn static_config_errors(config: &SlackConfig) -> Vec<String> {
         }
     }
 
-    // #656 freezes the contract; #657 is what reads it. Until then, selecting
-    // `gateway` would leave `initialize` probing the App-Level Token and
-    // spawning the Socket Mode loop — running the *other* transport without
-    // saying so, which is the silent misconfiguration this option exists to
-    // prevent. Refusing is the loud alternative, and the check disappears in
-    // the change that adds the consumer.
-    if config.event_source == EventSource::Gateway {
+    // Without the queue names there is nothing to pull from, and the failure
+    // would otherwise be a process that starts cleanly and receives nothing.
+    if config.event_source == EventSource::Gateway && config.gateway.is_none() {
         errors.push(
-            "`event_source = \"gateway\"` has no consumer yet — leaving it set would quietly \
-             keep running Socket Mode → keep `event_source = \"socket\"` until the Pub/Sub \
-             source lands"
+            "`event_source = \"gateway\"` needs a `[slack.gateway]` table → add `project`, \
+             `subscription` and `block_actions_subscription` naming the Pub/Sub \
+             subscriptions the Event Gateway publishes to"
                 .into(),
         );
+    }
+    if let Some(gateway) = &config.gateway {
+        for (key, value) in [
+            ("project", &gateway.project),
+            ("subscription", &gateway.subscription),
+            (
+                "block_actions_subscription",
+                &gateway.block_actions_subscription,
+            ),
+        ] {
+            if value.trim().is_empty() {
+                errors.push(format!(
+                    "`[slack.gateway] {key}` is empty → name the Pub/Sub resource, or remove \
+                     the table and use `event_source = \"socket\"`"
+                ));
+            }
+        }
+        // One subscription for both kinds would deliver presses under the
+        // other's retention, which is days rather than the ~35 minutes a
+        // `response_url` lives — and both consumers would race for the same
+        // messages.
+        if gateway.subscription == gateway.block_actions_subscription
+            && !gateway.subscription.trim().is_empty()
+        {
+            errors.push(
+                "`[slack.gateway] subscription` and `block_actions_subscription` name the \
+                 same subscription → they carry different kinds with different retentions \
+                 (ADR-0072 decision 5); create a second subscription"
+                    .into(),
+            );
+        }
+        if gateway.pull_max_messages == 0 {
+            errors.push(
+                "`[slack.gateway] pull_max_messages = 0` would ask for no messages and never \
+                 receive one → remove the key for the default (50)"
+                    .into(),
+            );
+        }
     }
 
     // The gateway window knobs. Zero is refused for the same reason

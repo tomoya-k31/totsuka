@@ -4,7 +4,7 @@ title: 設定リファレンス（config.toml）
 description: "config.toml の全キー・デフォルト値・意味の一覧。設定ファイルは 1 本で、プラグイン個別設定もトップレベルの [<name>] テーブルに入る。シークレット参照、設定スキーマのバージョニング方針、[[projects]] の domain 宣言とワークフローからの参照、プラグインが定義する追加プロパティ、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-github の [github]、task-source-notion の [notion]、task-source-slack の [slack]、agent-ide-herdr の [herdr] を含む。"
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
 tags: [config, reference, toml, secrets, workflow, worktree, github, notion, slack, hooks, versioning]
-generated: { by: claude-code/opus-5, at: 2026-09-13T12:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-14T03:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -1007,16 +1007,17 @@ kind = "task_source"
 
 | キー | 型 | 既定 | 意味 |
 |---|---|---|---|
-| `app_token` | string | 必須 | App-Level Token（`xapp-`、Socket Mode 用）。`op://` 参照推奨 |
+| `app_token` | string? | `socket` では必須 | App-Level Token（`xapp-`、Socket Mode 用）。`op://` 参照推奨。**`event_source = "gateway"` では不要**（WebSocket を開かないので用途が無い）—— 省略してよく、置いたままでも `xapp-` 形式の検査だけは効く。`socket` で欠けていると起動しない |
 | `user_token` | string | 必須 | User OAuth Token（`xoxp-`、本人名義の読み書き）。`op://` 参照推奨 |
 | `bot_token` | string? | なし | Bot User OAuth Token（`xoxb-`、[ADR-0021](/decisions/adr-0021-slack-bot-notification-nudge.md)・#305）。設定すると返信案・ピッカー到着時に bot が本人へ通知 DM（ナッジ）を送る。**未設定なら機能 off**（起動時 warn 1 回）。設定時は TokenGuard が `auth.test` で probe。`op://` 参照推奨。**チャンネル監視トリガ（#617）を使うなら必須**になる —— 監視の結果は bot 名義で投稿するので、未設定だと `initialize` が落ちる。加えて bot を監視チャンネルに招待しておくこと（未招待だと投稿時に `not_in_channel`） |
 | `target_user_id` | string | 必須 | 自分の Slack ユーザー ID（`U…`）。このユーザー宛メンションをタスク化し、TokenGuard が `auth.test` の identity と一致検証 |
 | `watch_backfill_limit` | int? | 100 | [チャンネル監視トリガ](/glossary/channel-watch.md)の[起動時バックフィル](/glossary/startup-backfill.md)が 1 チャンネルあたり読み直す件数の上限（#617）。監視チャンネルが 1 つも無ければ読まれない。**`0` は拒否される** —— 「バックフィルしない」を無言の 0 で表さないため |
 | `watch_backfill_max_age_hours` | int? | 24 | 同バックフィルが遡る時間の上限（#617）。件数上限だけだと、**履歴のある既存チャンネルを初めて監視対象にした瞬間に過去の投稿が最大 `watch_backfill_limit` 件そのままタスクになる** —— それを 1 日ぶんに有界化する。通常の再起動（数分〜数時間）の取りこぼしは全件拾えるので回復力は落ちない。**`0` は拒否される** |
 | `event_source` | `"socket"` \| `"gateway"` | `socket` | イベントの受信経路（#652、[ADR-0072](/decisions/adr-0072-slack-event-gateway.md) 決定 2）。`socket` は `totsuka run` のプロセス自身が Socket Mode の WebSocket を握る従来方式で、**totsuka が止まっている間のメンションは失われる**（さらに配信失敗が続くと Slack が購読を自動で無効化し、復旧は Slack アプリ設定画面での手作業になる）。`gateway` は Slack の配信先を HTTP Request URL に移し、[イベントゲートウェイ](/decisions/adr-0072-slack-event-gateway.md)が座標を Pub/Sub に置き、totsuka は起動しているあいだにそれを引く。**Slack アプリ側で Socket Mode と Request URL は排他**なので、切り替えには Slack アプリの manifest 変更（`manifest.yml` ↔ `manifest.gateway.yml`）と再設定が要る —— したがって**ゲートウェイ障害時に自動で `socket` へ落ちるフォールバックは無い**（落ちようがない）。到達不能時は backoff して警告を出す |
+| `[slack.gateway]` | テーブル | なし | `event_source = "gateway"` のときの Pub/Sub 座標（#657）。`project` / `subscription`（メッセージ・リアクション）/ `block_actions_subscription`（ボタン押下）/ `pubsub_url`（既定 `https://pubsub.googleapis.com`、テスト用上書き）/ `pull_max_messages`（既定 50）。**サブスクリプションを 2 本に分けるのは保持期間が違うから**で、同じ名前を指すと押下が日単位の保持に載り、2 つの取り込みループが同じメッセージを取り合うので拒否する（[ADR-0072](/decisions/adr-0072-slack-event-gateway.md) 決定 5）。**このテーブルは #656 の契約に含まれない** —— ゲートウェイはこの名前を見ないので、両側が合意すべきものではなく totsuka 側の配線である。認証は `gcloud auth application-default print-access-token` へのシェルアウトで、**サービスアカウントキーは配らない**（各利用者が自分の Google アカウントで自分のサブスクリプションだけを引く、決定 6） |
 | `drain_max_age_hours` | int? | 24 | `gateway` 方式で、キューに溜まったイベントを起票する時間窓（#652）。Pub/Sub 側の保持は 7 日あるので長期不在でも失われないが、復帰した瞬間に 1 週間ぶんのメンションが一斉にタスクになるのは望まれない。**窓を totsuka 側に置いているので、出張明けに拾いたければ設定を一時的に上げるだけでよく、クラウドの再デプロイが要らない。** 窓の外は ack して捨てる。**`0` は拒否される** —— 「全部捨てる」を無言の 0 で表さないため。`socket` 方式では読まれない |
 | `drain_limit` | int? | 100 | 同、1 回の取り込みで起票する件数の上限。**`0` は拒否される**。`socket` 方式では読まれない |
-| `watch_poll_interval_secs` | int? | 60 | `gateway` 方式での[チャンネル監視](/glossary/channel-watch.md)のポーリング間隔（秒）。**監視はゲートウェイに載せられない** —— ADR-0072 決定 4 で publish 対象を「自分に関係しうるもの」に絞ったため、監視チャンネルへの（メンションを含まない）投稿はそもそも流れてこない。ゲートウェイに監視チャンネル一覧を持たせると設定が 2 箇所に分かれ、ずれたときの症状が「監視が黙って効かない」になるので採らなかった。代わりに `conversations.history` を定期ポーリングする（[ADR-0068](/decisions/adr-0068-channel-watch-trigger.md) の起動時バックフィルを周期実行に広げるだけ）。**遅延が増えるのは監視経路だけ**で、メンション・リアクション・承認ボタンは Pub/Sub の long-poll のまま Socket Mode との差が 1〜2 秒に収まる。**`0` は拒否される**。`socket` 方式では読まれない（Slack が push してくる） |
+| `watch_poll_interval_secs` | int? | 60 | `gateway` 方式での[チャンネル監視](/glossary/channel-watch.md)のポーリング間隔（秒）。**監視はゲートウェイに載せられない** —— ADR-0072 決定 4 で publish 対象を「自分に関係しうるもの」に絞ったため、監視チャンネルへの（メンションを含まない）投稿はそもそも流れてこない。ゲートウェイに監視チャンネル一覧を持たせると設定が 2 箇所に分かれ、ずれたときの症状が「監視が黙って効かない」になるので採らなかった。代わりに `conversations.history` を定期ポーリングする（[ADR-0068](/decisions/adr-0068-channel-watch-trigger.md) の起動時バックフィルを周期実行に広げるだけ）。**遅くなるのは監視経路だけ**で、メンション・リアクション・承認ボタンはキューの取り込みのままである。ただし**そちらも「1〜2 秒」の保証ではない** —— REST の `pull` は「メッセージが得られるまで**有界時間だけ待つことがある**」という規定で、待つことは保証されておらず、空応答が続くと取り込み側がバックオフする。**`0` は拒否される**。`socket` 方式では読まれない（Slack が push してくる） |
 | `thread_context_limit` | int | 6 | タスク本文に含めるスレッド直近メッセージ数 |
 | `reply_style` | string? | なし | 返信トーンの指示（タスク本文へ注入、例 `"丁寧語で簡潔に"`） |
 | `[prompts]` | テーブル | — | このプラグインが送るプロンプト文の上書き（下記、#318） |
