@@ -303,6 +303,7 @@ where
                     serde_json::to_value(ConfigValidateResult {
                         valid: false,
                         errors: vec![message],
+                        warnings: Vec::new(),
                     })
                     .unwrap_or(Value::Null),
                 ));
@@ -317,6 +318,7 @@ where
             serde_json::to_value(ConfigValidateResult {
                 valid: errors.is_empty(),
                 errors,
+                warnings: Vec::new(),
             })
             .unwrap_or(Value::Null),
         ))

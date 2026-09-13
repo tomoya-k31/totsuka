@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](event-gateway-setup.ja.md)
 
-<!-- generated-from: ai-docs/operations/event-gateway-setup.md sha256:b6cbdaf83662abbb5d859dc1a508a8501723ca236dec3944347d377b7f07ec49 -->
+<!-- generated-from: ai-docs/operations/event-gateway-setup.md sha256:3fcb047d7fe3be52e320a76ca19b174be8dd21651c91fb6771f895412ccfbe83 -->
 
 # Event Gateway setup
 
@@ -227,6 +227,31 @@ totsuka reads its queues with **that** identity. At startup it reads each queue
 once, so a wrong identity, a missing permission or a mistyped name fails
 immediately — left unchecked, all three produce the same thing: a green
 `doctor` and not one event.
+
+## Nothing arrives — reading the symptom back to a cause
+
+This setup has more ways to be silently disconnected than the socket one does,
+and they all look the same from outside: no tasks appear. Run `totsuka doctor`
+first — the `plugin:slack` line carries the answer.
+
+| What `doctor` says | Cause | Fix |
+|---|---|---|
+| A line mentioning `roles/pubsub.subscriber` | The account is authenticated but has no permission | Grant the role to that account, or log in as one that already holds it |
+| A line saying the queue `does not exist` | The project or subscription name in `[slack.gateway]` is wrong | `tofu output totsuka_config` prints the right values |
+| A line telling you to run `gcloud auth application-default login` | The credentials expired, or are not accepted | Run that command |
+| **`never delivered anything`** (advisory) | **Slack is not reaching the gateway at all** | Check that the Slack app has a Request URL in **both** places. `tofu output request_urls` prints what to paste |
+| `delivered nothing for N days` (advisory) | It has worked before, so this may just be quiet | If it should not be quiet, check the Request URLs are still set and that Slack has not disabled the subscription |
+| `plugin:slack` is green | This side is fine | Look at whether the message you sent passes the mention test — addressed to you, and not from a bot |
+
+**"Never received anything" and "quiet for a while" are different lines.** The
+first is what an unfinished setup looks like; the second can be perfectly
+normal. Telling them apart is the difference between fixing the problem and
+re-checking a setting that was right all along. The distinction lives in
+`{state_dir}/plugins/{source_name}/gateway-receipt.json`, written whenever
+something arrives. Deleting it costs one advisory line and nothing else.
+
+**There are two Request URL fields.** Filling only one leaves mentions working
+and every approval button dead — a failure whose cause is hard to see.
 
 ## Adding a person
 

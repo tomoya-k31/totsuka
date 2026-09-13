@@ -534,13 +534,20 @@ where
         // useless for the one config change #396 forces.
         let removed = crate::config::removed_keys_in(&parsed.config);
         if !removed.is_empty() {
-            return ok_validate(id, removed);
+            return ok_validate(id, removed, Vec::new());
         }
         let config: SlackConfig = match serde_json::from_value(parsed.config) {
             Ok(c) => c,
-            Err(e) => return ok_validate(id, vec![format!("config does not parse: {e}")]),
+            Err(e) => {
+                return ok_validate(id, vec![format!("config does not parse: {e}")], Vec::new());
+            }
         };
-        ok_validate(id, static_config_errors(&config))
+        // Offline, like everything else here: it reads one local file the
+        // drain loop wrote. What it adds is the state no static check can see
+        // — whether this deployment has ever actually received anything
+        // (#662).
+        let warnings = gateway::config_warnings(&config, std::time::SystemTime::now());
+        ok_validate(id, static_config_errors(&config), warnings)
     }
 
     /// `task/update_status`: accepted and ignored — Slack has no status
@@ -896,10 +903,14 @@ fn parse_params<T: DeserializeOwned>(params: &Value) -> Result<T, DeferredError>
 
 /// A `config/validate` success reply (the RPC itself succeeds; validity is in
 /// the payload).
-fn ok_validate(id: RequestId, errors: Vec<String>) -> Reply {
+fn ok_validate(id: RequestId, errors: Vec<String>, warnings: Vec<String>) -> Reply {
     let result = ConfigValidateResult {
+        // **Warnings do not make a config invalid.** Valid-with-warnings is
+        // the case this channel exists for; folding them into `valid` would
+        // turn "you may want to know" into "I refuse to run".
         valid: errors.is_empty(),
         errors,
+        warnings,
     };
     Reply::respond(Response::result(
         id,

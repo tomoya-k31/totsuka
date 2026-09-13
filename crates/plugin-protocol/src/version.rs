@@ -328,7 +328,34 @@ use semver::{Version, VersionReq};
 /// produce a name that is still legal, still unique, and merely less legible.
 /// `None` is also the *right* answer for a source whose ids carry nothing a
 /// person reads, so the field being absent is not evidence of an old plugin.
-pub const PROTOCOL_VERSION: &str = "0.7.2";
+/// 0.7.3 (#662): [`ConfigValidateResult::warnings`](crate::methods::ConfigValidateResult::warnings)
+/// — a channel for what a plugin knows but must not refuse a config over.
+///
+/// **Patch, additive, and no manifest moves — on the wire.** An old plugin
+/// omits the field and `#[serde(default)]` reads it as "no warnings", which is
+/// exactly what such a plugin means; an old orchestrator ignores an unknown
+/// key. Nothing changes behaviour on absence, because absence and emptiness
+/// are the same statement here.
+///
+/// **It is still a source break for out-of-tree Rust plugins**, and that is a
+/// different question from wire compatibility. `ConfigValidateResult` has no
+/// `Default` and is a struct literal each plugin builds itself, so a plugin
+/// writing `ConfigValidateResult { valid, errors }` stops compiling against
+/// this crate until it adds the field — the same shape as 0.4.2's
+/// `SessionReleaseResult.not_released`. The bundled plugins are the evidence:
+/// every one of their construction sites had to change in the same commit.
+/// The distinction matters because the two failures look nothing alike — a
+/// wire break silently misbehaves at runtime, a source break stops the build
+/// with the field named in the error. The same applies to 0.7.2's
+/// `Task::handle` above, which the paragraph there does not say.
+///
+/// It exists because the two pre-existing channels were both wrong for this.
+/// `errors` refuses a config that is correct — a freshly built Event Gateway
+/// has legitimately never delivered anything, and turning that into a red
+/// `doctor` teaches the operator that red is normal. The plugin's log is worse:
+/// `doctor` does not read it, so the knowledge never reaches the one command
+/// whose whole job is to surface it.
+pub const PROTOCOL_VERSION: &str = "0.7.3";
 
 /// [`PROTOCOL_VERSION`] parsed into a [`Version`].
 pub fn protocol_version() -> Version {
@@ -352,7 +379,7 @@ mod tests {
 
     #[test]
     fn current_version_parses() {
-        assert_eq!(protocol_version(), Version::new(0, 7, 2));
+        assert_eq!(protocol_version(), Version::new(0, 7, 3));
     }
 
     #[test]

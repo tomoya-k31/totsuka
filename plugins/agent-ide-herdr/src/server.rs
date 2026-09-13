@@ -366,6 +366,7 @@ impl<F: TransportFactory> Server<F> {
         let result = ConfigValidateResult {
             valid: errors.is_empty(),
             errors,
+            warnings: Vec::new(),
         };
         self.send(Response::result(id, to_value(&result)));
     }

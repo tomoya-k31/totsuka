@@ -1645,17 +1645,28 @@ fn check_plugins(
     let validated = runtime.block_on(plugin_host::validate_all(specs));
     for plugin_host::ValidatedPlugin { name, result, .. } in &validated {
         match result {
-            Ok(v) if v.valid => {
+            // A plugin may be correctly configured and still know something
+            // worth saying (protocol 0.7.3, #662) — "this queue has never
+            // delivered anything" is true of a setup that is otherwise
+            // perfect. Warnings never fail `doctor`, and a plugin that sends
+            // none is reported exactly as before.
+            Ok(v) if v.valid && v.warnings.is_empty() => {
                 checks.push(Check::ok(
                     &format!("plugin:{name}"),
                     "launches and accepts its config",
                 ));
             }
-            Ok(v) => checks.push(Check::fail(
-                &format!("plugin:{name}"),
-                v.errors.join("; "),
-                format!("fix `[{name}]` in config.toml"),
-            )),
+            Ok(v) if v.valid => push_warnings(name, &v.warnings, checks),
+            Ok(v) => {
+                checks.push(Check::fail(
+                    &format!("plugin:{name}"),
+                    v.errors.join("; "),
+                    format!("fix `[{name}]` in config.toml"),
+                ));
+                // Still worth showing: a config can be refused for one reason
+                // while a second, unrelated thing is also wrong.
+                push_warnings(name, &v.warnings, checks);
+            }
             Err(e) => checks.push(Check::fail(
                 &format!("plugin:{name}"),
                 e.to_string(),
@@ -1664,6 +1675,51 @@ fn check_plugins(
         }
     }
     check_project_claims(&validated, &not_probed, checks);
+}
+
+/// **One** advisory check carrying all of a plugin's warnings (protocol 0.7.3,
+/// #662).
+///
+/// One per warning would repeat the `plugin:{name}` key, and `--json`
+/// consumers look checks up by name — a second entry under a name already
+/// present is a row nobody reads. So the warnings are joined, exactly as
+/// `errors` already are for the failure case.
+///
+/// Warnings share the `errors` convention of "cause → next action", so the
+/// arrow is where the two halves of a [`Check`] come from. A warning written
+/// without one still reports — it becomes the cause, and the action says to
+/// read it — because dropping the line entirely would be the one outcome
+/// worse than an imperfectly split one.
+fn push_warnings(name: &str, warnings: &[String], checks: &mut Vec<Check>) {
+    if warnings.is_empty() {
+        return;
+    }
+    let mut causes = Vec::with_capacity(warnings.len());
+    let mut actions = Vec::with_capacity(warnings.len());
+    for warning in warnings {
+        match warning.split_once(" → ") {
+            Some((cause, next)) => {
+                causes.push(cause.to_string());
+                actions.push(next.to_string());
+            }
+            None => {
+                causes.push(warning.clone());
+                actions.push(format!("reported by `{name}`; act on it or ignore it"));
+            }
+        }
+    }
+    // The `ok` line is *replaced*, not accompanied — one line per plugin
+    // either way. So it has to keep saying the thing the `ok` line said,
+    // or "did it even launch?" becomes unanswerable the moment a plugin
+    // has anything to report.
+    checks.push(Check::warn(
+        &format!("plugin:{name}"),
+        format!(
+            "launches and accepts its config, but: {}",
+            causes.join("; ")
+        ),
+        actions.join("; "),
+    ));
 }
 
 /// How many repositories have a project to file into (#542, narrowed by #554).
@@ -2278,12 +2334,77 @@ mod tests {
 
     // --- `projects` (#542) -------------------------------------------------
 
+    /// Warnings share `errors`' "cause → next action" shape, so the arrow is
+    /// where a check's two halves come from (#662).
+    #[test]
+    fn a_plugin_warning_becomes_an_advisory_check_not_a_failure() {
+        let mut checks = Vec::new();
+        push_warnings(
+            "slack",
+            &["the queue has never delivered → check the Request URL".to_string()],
+            &mut checks,
+        );
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0].name, "plugin:slack");
+        // Advisory: `doctor` must not exit non-zero over it.
+        assert!(checks[0].ok);
+        assert!(checks[0].warning);
+        // The line keeps saying what the `ok` line said — it replaces it.
+        assert_eq!(
+            checks[0].detail,
+            "launches and accepts its config, but: the queue has never delivered"
+        );
+        assert_eq!(checks[0].action.as_deref(), Some("check the Request URL"));
+    }
+
+    /// **One check, however many warnings.** `--json` consumers look checks
+    /// up by name, so a second entry under a name already present is a row
+    /// nobody reads.
+    #[test]
+    fn several_warnings_from_one_plugin_share_a_single_check() {
+        let mut checks = Vec::new();
+        push_warnings(
+            "slack",
+            &[
+                "the queue is silent → check the Request URL".to_string(),
+                "a scope is missing → reinstall the app".to_string(),
+            ],
+            &mut checks,
+        );
+        assert_eq!(checks.len(), 1, "one check per plugin");
+        assert!(
+            checks[0]
+                .detail
+                .starts_with("launches and accepts its config, but: ")
+        );
+        assert!(checks[0].detail.contains("the queue is silent"));
+        assert!(checks[0].detail.contains("a scope is missing"));
+        let action = checks[0].action.as_deref().unwrap();
+        assert!(action.contains("check the Request URL"), "{action}");
+        assert!(action.contains("reinstall the app"), "{action}");
+    }
+
+    /// A warning written without the arrow still reports. Dropping the line
+    /// would be the one outcome worse than splitting it imperfectly.
+    #[test]
+    fn a_warning_without_an_arrow_is_still_reported() {
+        let mut checks = Vec::new();
+        push_warnings("slack", &["something is odd".to_string()], &mut checks);
+        assert!(
+            checks[0].detail.ends_with("something is odd"),
+            "{}",
+            checks[0].detail
+        );
+        assert!(checks[0].action.is_some());
+    }
+
     fn validated(name: &str, claims: &[(&str, &str)]) -> plugin_host::ValidatedPlugin {
         plugin_host::ValidatedPlugin {
             name: name.to_string(),
             result: Ok(plugin_protocol::methods::ConfigValidateResult {
                 valid: true,
                 errors: Vec::new(),
+                warnings: Vec::new(),
             }),
             claimed_options: Vec::new(),
             claimed_repos: claims

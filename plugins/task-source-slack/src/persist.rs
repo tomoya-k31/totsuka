@@ -33,8 +33,47 @@ fn xdg_state_dir(env: impl Fn(&str) -> Option<String>) -> Option<PathBuf> {
 /// no persistable path could be resolved — the caller degrades to an
 /// in-memory store rather than failing startup.
 pub fn drafts_path(state_dir: Option<&Path>, source_name: &str) -> Option<PathBuf> {
+    plugin_file(
+        state_dir,
+        source_name,
+        "drafts.json",
+        "the draft store stays in-memory",
+    )
+}
+
+/// This plugin instance's Event Gateway receipt:
+/// `{state_dir}/plugins/{source_name}/gateway-receipt.json` (#662).
+///
+/// It holds one fact — when a delivery was last pulled off the queue — so that
+/// `config/validate` can tell **"never received anything"** from **"quiet for
+/// a while"**. Those look identical from the outside and mean opposite things:
+/// the first is an unfinished setup (a Request URL not entered in the Slack
+/// app is the usual cause), the second is what an idle weekend looks like.
+///
+/// Separate from the draft store on purpose. The two have different lifetimes
+/// and different consequences on loss — deleting this one costs a warning,
+/// deleting drafts costs the operator's unsent text.
+pub fn gateway_receipt_path(state_dir: Option<&Path>, source_name: &str) -> Option<PathBuf> {
+    plugin_file(
+        state_dir,
+        source_name,
+        "gateway-receipt.json",
+        "the Event Gateway receipt is not recorded",
+    )
+}
+
+/// `{state_dir}/plugins/{source_name}/{file}`, or `None` when no path
+/// resolves. `consequence` completes the warning logged when `source_name`
+/// is unusable, so each caller says what it loses rather than sharing a
+/// vague one.
+fn plugin_file(
+    state_dir: Option<&Path>,
+    source_name: &str,
+    file: &str,
+    consequence: &str,
+) -> Option<PathBuf> {
     // `source_name` is operator-supplied config; as defense in depth, refuse
-    // anything that is not a single plain path segment so the store can
+    // anything that is not a single plain path segment so the file can
     // never land outside `{state_dir}/plugins/` (e.g. `..`, `a/b`).
     if source_name.is_empty()
         || source_name == "."
@@ -43,7 +82,8 @@ pub fn drafts_path(state_dir: Option<&Path>, source_name: &str) -> Option<PathBu
     {
         tracing::warn!(
             source_name,
-            "source_name is not a plain directory name; the draft store stays in-memory"
+            consequence,
+            "source_name is not a plain directory name"
         );
         return None;
     }
@@ -51,7 +91,7 @@ pub fn drafts_path(state_dir: Option<&Path>, source_name: &str) -> Option<PathBu
         Some(dir) => dir.to_path_buf(),
         None => xdg_state_dir(|key| std::env::var(key).ok())?,
     };
-    Some(base.join("plugins").join(source_name).join("drafts.json"))
+    Some(base.join("plugins").join(source_name).join(file))
 }
 
 /// Write `bytes` to `path` atomically (temp file + rename) with 0600
@@ -64,7 +104,17 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
         .parent()
         .ok_or_else(|| io::Error::other("path has no parent directory"))?;
     std::fs::create_dir_all(parent)?;
-    let tmp = path.with_extension("json.tmp");
+    // **Unique per process.** Two totsuka processes can hold the same state
+    // directory at once — `totsuka doctor` and `config validate` both launch
+    // the plugin, and `initialize` starts its drain loops, so running either
+    // while `totsuka run` is live gives two writers for a few seconds. With a
+    // shared temp path one can unlink or truncate the other's file mid-write;
+    // the rename stays atomic, but the loser's `rename` fails with ENOENT and
+    // the worse interleaving leaves a torn temp file for the winner to
+    // publish. A crash can now leave a `<pid>` temp behind — a few dozen
+    // bytes, against a corrupted file the reader would silently take as
+    // "never received anything".
+    let tmp = path.with_extension(format!("{}.tmp", std::process::id()));
     // Owner-only from the moment the file exists (a later chmod would leave
     // a umask-mode window where the draft text is world-readable): the store
     // holds draft text and thread coordinates (no tokens). Remove any
@@ -87,6 +137,25 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    /// The receipt sits beside the draft store and refuses the same names
+    /// (#662): `source_name` is operator-supplied, so a path segment is the
+    /// only shape allowed to reach the filesystem.
+    #[test]
+    fn the_gateway_receipt_sits_beside_the_drafts_and_refuses_traversal() {
+        let dir = Path::new("/tmp/state");
+        let receipt = gateway_receipt_path(Some(dir), "slack").expect("resolves");
+        let drafts = drafts_path(Some(dir), "slack").expect("resolves");
+        assert_eq!(receipt.parent(), drafts.parent());
+        assert_eq!(receipt.file_name().unwrap(), "gateway-receipt.json");
+
+        for bad in ["", ".", "..", "a/b", "a\\b"] {
+            assert!(
+                gateway_receipt_path(Some(dir), bad).is_none(),
+                "accepted `{bad}`"
+            );
+        }
+    }
 
     fn env_from(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
         let map: HashMap<String, String> = pairs
@@ -148,7 +217,19 @@ mod tests {
         atomic_write(&path, b"{\"v\":1}").unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), b"{\"v\":1}");
         // The temp file must not survive the rename.
-        assert!(!path.with_extension("json.tmp").exists());
+        // No temp file survives a successful write — checked by scanning the
+        // directory rather than by naming one, because the temp name now
+        // carries the pid and a test that names it would pass by accident.
+        let leftovers: Vec<_> = std::fs::read_dir(path.parent().unwrap())
+            .expect("readable")
+            .filter_map(Result::ok)
+            .map(|e| e.file_name())
+            .filter(|n| n.to_string_lossy().ends_with(".tmp"))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "temp files left behind: {leftovers:?}"
+        );
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;

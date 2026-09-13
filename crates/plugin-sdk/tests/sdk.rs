@@ -63,6 +63,7 @@ impl TaskSourceHandler for Recording {
         Ok(ConfigValidateResult {
             valid: true,
             errors: vec![],
+            warnings: vec![],
         })
     }
 
