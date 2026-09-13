@@ -92,9 +92,12 @@ JSON として読むと全押下がパースエラーになる（症状は「ボ
 
 # 置き場と、totsuka との関係
 
-**同一リポジトリの workspace 外**（ADR-0072 決定 9）。ルート `Cargo.toml` の
-`[workspace] exclude` で外している —— `plugins/` は arch-lint が「totsuka プラグインで
-あること」を要求し、`crates/` に入れると全員の `cargo build --workspace` に乗るためである。
+**同一リポジトリの `services/slack-event-gateway/`、workspace の外**（ADR-0072 決定 9）。
+ルート `Cargo.toml` の `[workspace] exclude` で外している —— `plugins/` は arch-lint が
+「totsuka プラグインであること」を要求し、`crates/` に入れると全員の
+`cargo build --workspace` に乗るためである。どちらにも入れられないので `services/` という
+3 つ目のカテゴリを足して受けている（[`contracts/README.md`](https://github.com/tomoya-k31/totsuka/blob/main/contracts/README.md)
+に置き場の線引きがある）。
 代償として totsuka と型を共有できないので、合意は `contracts/slack-event-gateway/` の
 **適合テストスイート**だけになる（[ADR-0072](/decisions/adr-0072-slack-event-gateway.md) 決定 7）。
 **このゲートウェイをフォークした実装も、スイートを通せば適合している。**
