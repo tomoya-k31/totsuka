@@ -761,14 +761,20 @@ fn record_delivery(config: &SlackConfig, at: SystemTime) {
     };
     let seconds = since_epoch.as_secs();
 
-    // **Two drain loops write this file** — one per subscription, running
-    // concurrently under `tokio::join!`. `atomic_write` builds its temp path
-    // from the target name, so without this the two would share it and one
-    // could unlink the other's file mid-write. Holding the lock across the
-    // read and the write also makes the value monotonic: a write whose
-    // timestamp is older than what is already there is dropped, so the file
-    // always answers "the most recent delivery" rather than "the last thread
-    // to finish".
+    // **The lock buys monotonicity, not mutual exclusion.** The two drain
+    // loops run under one `tokio::join!` on a single task and this function
+    // has no `.await`, so within the process they cannot interleave today —
+    // but that is a property of how `spawn` happens to be written, and this
+    // file's correctness should not depend on it. What the lock does earn is
+    // holding the read and the write together, so a write carrying an older
+    // timestamp than what is already stored is dropped: the file answers
+    // "the most recent delivery", not "the last writer to finish".
+    //
+    // **Across processes it guarantees nothing** — `doctor` and `config
+    // validate` each launch their own plugin process — so the read-then-write
+    // there is a plain race whose worst outcome is a receipt a few seconds
+    // stale. That is acceptable; a *torn* file would not be, and the unique
+    // temp name in `atomic_write` is what rules that out.
     //
     // A poisoned lock is not a reason to stop recording — nothing here can
     // leave a half-built invariant behind — so the guard is taken either way.

@@ -104,7 +104,17 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
         .parent()
         .ok_or_else(|| io::Error::other("path has no parent directory"))?;
     std::fs::create_dir_all(parent)?;
-    let tmp = path.with_extension("json.tmp");
+    // **Unique per process.** Two totsuka processes can hold the same state
+    // directory at once — `totsuka doctor` and `config validate` both launch
+    // the plugin, and `initialize` starts its drain loops, so running either
+    // while `totsuka run` is live gives two writers for a few seconds. With a
+    // shared temp path one can unlink or truncate the other's file mid-write;
+    // the rename stays atomic, but the loser's `rename` fails with ENOENT and
+    // the worse interleaving leaves a torn temp file for the winner to
+    // publish. A crash can now leave a `<pid>` temp behind — a few dozen
+    // bytes, against a corrupted file the reader would silently take as
+    // "never received anything".
+    let tmp = path.with_extension(format!("{}.tmp", std::process::id()));
     // Owner-only from the moment the file exists (a later chmod would leave
     // a umask-mode window where the draft text is world-readable): the store
     // holds draft text and thread coordinates (no tokens). Remove any
@@ -207,7 +217,19 @@ mod tests {
         atomic_write(&path, b"{\"v\":1}").unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), b"{\"v\":1}");
         // The temp file must not survive the rename.
-        assert!(!path.with_extension("json.tmp").exists());
+        // No temp file survives a successful write — checked by scanning the
+        // directory rather than by naming one, because the temp name now
+        // carries the pid and a test that names it would pass by accident.
+        let leftovers: Vec<_> = std::fs::read_dir(path.parent().unwrap())
+            .expect("readable")
+            .filter_map(Result::ok)
+            .map(|e| e.file_name())
+            .filter(|n| n.to_string_lossy().ends_with(".tmp"))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "temp files left behind: {leftovers:?}"
+        );
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;

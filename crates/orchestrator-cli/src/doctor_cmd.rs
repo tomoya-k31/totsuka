@@ -1708,9 +1708,16 @@ fn push_warnings(name: &str, warnings: &[String], checks: &mut Vec<Check>) {
             }
         }
     }
+    // The `ok` line is *replaced*, not accompanied — one line per plugin
+    // either way. So it has to keep saying the thing the `ok` line said,
+    // or "did it even launch?" becomes unanswerable the moment a plugin
+    // has anything to report.
     checks.push(Check::warn(
         &format!("plugin:{name}"),
-        causes.join("; "),
+        format!(
+            "launches and accepts its config, but: {}",
+            causes.join("; ")
+        ),
         actions.join("; "),
     ));
 }
@@ -2342,7 +2349,11 @@ mod tests {
         // Advisory: `doctor` must not exit non-zero over it.
         assert!(checks[0].ok);
         assert!(checks[0].warning);
-        assert_eq!(checks[0].detail, "the queue has never delivered");
+        // The line keeps saying what the `ok` line said — it replaces it.
+        assert_eq!(
+            checks[0].detail,
+            "launches and accepts its config, but: the queue has never delivered"
+        );
         assert_eq!(checks[0].action.as_deref(), Some("check the Request URL"));
     }
 
@@ -2361,6 +2372,11 @@ mod tests {
             &mut checks,
         );
         assert_eq!(checks.len(), 1, "one check per plugin");
+        assert!(
+            checks[0]
+                .detail
+                .starts_with("launches and accepts its config, but: ")
+        );
         assert!(checks[0].detail.contains("the queue is silent"));
         assert!(checks[0].detail.contains("a scope is missing"));
         let action = checks[0].action.as_deref().unwrap();
@@ -2374,7 +2390,11 @@ mod tests {
     fn a_warning_without_an_arrow_is_still_reported() {
         let mut checks = Vec::new();
         push_warnings("slack", &["something is odd".to_string()], &mut checks);
-        assert_eq!(checks[0].detail, "something is odd");
+        assert!(
+            checks[0].detail.ends_with("something is odd"),
+            "{}",
+            checks[0].detail
+        );
         assert!(checks[0].action.is_some());
     }
 
