@@ -28,7 +28,8 @@ WebSocket を握るので、**totsuka が止まっている間のメンション
 ルートの `Cargo.toml` がこのディレクトリを除外している。`plugins/` には置けない ——
 アーキテクチャ lint がそこのメンバー全部に totsuka プラグインであることを要求する ——
 し、`crates/` に入れると、大半の人が一生デプロイしないサービスが全員の
-`cargo build --workspace` に乗る。
+`cargo build --workspace` に乗る。だから `services/` である —— 「リポジトリにはあるが
+workspace の外にある、デプロイ対象」のための 3 つ目のカテゴリを足した。
 
 代償はプラグインと型を共有できないことである。`contracts/slack-event-gateway/` が
 あるのはそのためで、そこの適合ケースが両者の合意のすべてであり、双方が独立にそれを
@@ -105,7 +106,7 @@ totsuka のリリースごとに `ghcr.io/tomoya-k31/totsuka/slack-event-gateway
 レジストリからイメージが来る形になる）:
 
 ```bash
-cd slack-event-gateway
+cd services/slack-event-gateway
 docker build --platform linux/amd64 -t <your-registry>/slack-event-gateway:<tag> .
 docker push <your-registry>/slack-event-gateway:<tag>
 ```
@@ -124,7 +125,7 @@ docker push <your-registry>/slack-event-gateway:<tag>
 ## テストの回し方
 
 ```bash
-cd slack-event-gateway
+cd services/slack-event-gateway
 cargo fmt --all --check
 cargo clippy --all-targets -- -D warnings
 cargo test

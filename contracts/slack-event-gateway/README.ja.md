@@ -28,7 +28,7 @@
 
 ## 置き場と、両側からの読み方
 
-このディレクトリはリポジトリのルート直下にある。ゲートウェイ（`slack-event-gateway/`）は
+このディレクトリはリポジトリのルート直下にある。ゲートウェイ（`services/slack-event-gateway/`）は
 `[workspace] exclude` で Cargo workspace の外に出る（決定 9）ため totsuka の型を共有できず、
 共有できるのはこのファイル群だけである。
 

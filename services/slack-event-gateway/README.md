@@ -31,7 +31,9 @@ somewhere else. The guarantee is the code plus the tests that pin it
 The root `Cargo.toml` excludes this directory. It cannot go under `plugins/` —
 the architecture lint requires every member there to be a totsuka plugin — and
 putting it under `crates/` would land it in every contributor's
-`cargo build --workspace` for a service most of them will never deploy.
+`cargo build --workspace` for a service most of them will never deploy. Hence
+`services/`: a third top-level category for exactly this, deployable things
+that live in the repository but outside the workspace.
 
 The cost is that it cannot share types with the plugin. That is why
 `contracts/slack-event-gateway/` exists: the conformance cases under it are the
@@ -113,7 +115,7 @@ To build and run your own instead — a company deployment usually should, so th
 image comes from a registry it controls:
 
 ```bash
-cd slack-event-gateway
+cd services/slack-event-gateway
 docker build --platform linux/amd64 -t <your-registry>/slack-event-gateway:<tag> .
 docker push <your-registry>/slack-event-gateway:<tag>
 ```
@@ -133,7 +135,7 @@ same reasoning as pinning GitHub Actions by SHA. Updating them is a manual bump;
 ## Running the tests
 
 ```bash
-cd slack-event-gateway
+cd services/slack-event-gateway
 cargo fmt --all --check
 cargo clippy --all-targets -- -D warnings
 cargo test

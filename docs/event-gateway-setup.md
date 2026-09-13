@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](event-gateway-setup.ja.md)
 
-<!-- generated-from: ai-docs/operations/event-gateway-setup.md sha256:09e88bec4f404d4a75abf1bfbbcec928803048abb071aa28193ef104ba45b7f5 -->
+<!-- generated-from: ai-docs/operations/event-gateway-setup.md sha256:ccbdac86a42b582d87360855142427d2bfd43edd34b62a8aca6a3a2bebec6998 -->
 
 # Event Gateway setup
 
@@ -93,7 +93,7 @@ message.
 ## 3. Apply
 
 ```bash
-cd slack-event-gateway/tofu
+cd services/slack-event-gateway/tofu
 cp terraform.tfvars.example terraform.tfvars
 # fill in the values from step 2
 tofu init

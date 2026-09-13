@@ -1,8 +1,8 @@
 ---
 type: IaC Module
 title: Event Gateway の OpenTofu モジュール
-description: slack-event-gateway/tofu/ の構成。Cloud Run 1 サービス・利用者ごとの Pub/Sub トピックとサブスクリプション 2 組・Secret Manager の登録表・利用者を自分のキューだけに閉じる IAM を tofu apply で立てる。min-instances 0 と max-instances 上限が費用の前提であること、invoker_iam_disabled が組織ポリシーを緩めずに公開する唯一の手段であること、IP 制限と VPC Service Controls を既定に入れない理由を含む。
-resource: https://github.com/tomoya-k31/totsuka/tree/main/slack-event-gateway/tofu
+description: services/slack-event-gateway/tofu/ の構成。Cloud Run 1 サービス・利用者ごとの Pub/Sub トピックとサブスクリプション 2 組・Secret Manager の登録表・利用者を自分のキューだけに閉じる IAM を tofu apply で立てる。min-instances 0 と max-instances 上限が費用の前提であること、invoker_iam_disabled が組織ポリシーを緩めずに公開する唯一の手段であること、IP 制限と VPC Service Controls を既定に入れない理由を含む。
+resource: https://github.com/tomoya-k31/totsuka/tree/main/services/slack-event-gateway/tofu
 tags: [gcp, cloud-run, pubsub, secret-manager, iam, opentofu, terraform, slack, cost]
 generated: { by: claude-code/opus-5, at: 2026-09-14T05:00:00+09:00 }
 status: stable

@@ -2,7 +2,7 @@
 type: Service
 title: slack-event-gateway
 description: Slack の配信を HTTPS で受け、署名を検証し、本文を保存せずに座標へ射影して Pub/Sub へ publish する常駐しないサービス。event_source = "gateway" のときだけ経路に入る。同一リポジトリの workspace 外に置き、適合テストスイートだけを totsuka と共有する。公式イメージは ghcr.io にリリースごとに公開する。
-resource: https://github.com/tomoya-k31/totsuka/tree/main/slack-event-gateway
+resource: https://github.com/tomoya-k31/totsuka/tree/main/services/slack-event-gateway
 tags: [rust, service, slack, gateway, cloud-run, pubsub, hmac, security]
 generated: { by: claude-code/opus-5, at: 2026-09-13T22:00:00+09:00 }
 status: stable
@@ -92,9 +92,12 @@ JSON として読むと全押下がパースエラーになる（症状は「ボ
 
 # 置き場と、totsuka との関係
 
-**同一リポジトリの workspace 外**（ADR-0072 決定 9）。ルート `Cargo.toml` の
-`[workspace] exclude` で外している —— `plugins/` は arch-lint が「totsuka プラグインで
-あること」を要求し、`crates/` に入れると全員の `cargo build --workspace` に乗るためである。
+**同一リポジトリの `services/slack-event-gateway/`、workspace の外**（ADR-0072 決定 9）。
+ルート `Cargo.toml` の `[workspace] exclude` で外している —— `plugins/` は arch-lint が
+「totsuka プラグインであること」を要求し、`crates/` に入れると全員の
+`cargo build --workspace` に乗るためである。どちらにも入れられないので `services/` という
+3 つ目のカテゴリを足して受けている（[`contracts/README.md`](https://github.com/tomoya-k31/totsuka/blob/main/contracts/README.md)
+に置き場の線引きがある）。
 代償として totsuka と型を共有できないので、合意は `contracts/slack-event-gateway/` の
 **適合テストスイート**だけになる（[ADR-0072](/decisions/adr-0072-slack-event-gateway.md) 決定 7）。
 **このゲートウェイをフォークした実装も、スイートを通せば適合している。**

@@ -58,7 +58,7 @@ already existed by then — with the secrets in it.
 ## Apply
 
 ```bash
-cd slack-event-gateway/tofu
+cd services/slack-event-gateway/tofu
 cp terraform.tfvars.example terraform.tfvars   # then fill it in
 tofu init
 tofu plan

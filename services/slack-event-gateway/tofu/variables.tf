@@ -42,7 +42,7 @@ variable "image" {
     secrets.
 
     A company deployment usually wants this pointed at its own Artifact
-    Registry instead; `slack-event-gateway/README.md` has the build and push
+    Registry instead; `services/slack-event-gateway/README.md` has the build and push
     commands.
   EOT
   type        = string

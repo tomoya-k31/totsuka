@@ -29,7 +29,7 @@ delivery, and the records it must become.
 ## Where this lives, and how each side reads it
 
 This directory sits at the repository root. The gateway
-(`slack-event-gateway/`) is outside the Cargo workspace via `[workspace]
+(`services/slack-event-gateway/`) is outside the Cargo workspace via `[workspace]
 exclude` (decision 9), so it cannot share totsuka's types — these files are all
 there is.
 

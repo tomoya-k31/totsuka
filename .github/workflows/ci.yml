@@ -163,7 +163,7 @@ jobs:
       pull-requests: read
     defaults:
       run:
-        working-directory: slack-event-gateway
+        working-directory: services/slack-event-gateway
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -180,8 +180,8 @@ jobs:
       - name: Cache cargo build
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          workspaces: slack-event-gateway
-          shared-key: gateway-${{ hashFiles('slack-event-gateway/Cargo.toml') }}
+          workspaces: services/slack-event-gateway
+          shared-key: gateway-${{ hashFiles('services/slack-event-gateway/Cargo.toml') }}
       - name: Check formatting
         run: cargo fmt --all --check
       - name: Run clippy
@@ -219,13 +219,13 @@ jobs:
         run: |
           files=$(gh pr diff "${PR}" --name-only)
           test -n "${files}"
-          if grep -q '^slack-event-gateway/' <<< "${files}"; then
+          if grep -q '^services/slack-event-gateway/' <<< "${files}"; then
             echo "gateway=true" >> "${GITHUB_OUTPUT}"
           else
             echo "gateway=false" >> "${GITHUB_OUTPUT}"
           fi
           echo "changed files touching the gateway:"
-          grep '^slack-event-gateway/' <<< "${files}" || echo "  (none)"
+          grep '^services/slack-event-gateway/' <<< "${files}" || echo "  (none)"
       # No push and no registry login: this proves the image builds, nothing
       # more. Publishing happens only from a release (release-please.yml).
       - name: Build the container image
@@ -243,7 +243,7 @@ jobs:
           tofu_wrapper: false
       - name: Check the OpenTofu module
         if: steps.changed.outputs.gateway == 'true'
-        working-directory: slack-event-gateway/tofu
+        working-directory: services/slack-event-gateway/tofu
         run: |
           tofu fmt -check -diff -recursive
           tofu init -backend=false -input=false
