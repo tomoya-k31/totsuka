@@ -11,6 +11,30 @@ Note: the plugin protocol is versioned independently of the application (see
 `crates/plugin-protocol`); a totsuka release does not imply a protocol-version
 change.
 
+## [0.7.6](https://github.com/tomoya-k31/totsuka/compare/v0.7.5...v0.7.6) (2026-09-13)
+
+
+### Features
+
+* **slack-event-gateway:** HMAC 検証・判定・射影・publish を実装する ([#672](https://github.com/tomoya-k31/totsuka/issues/672)) ([b3bc85b](https://github.com/tomoya-k31/totsuka/commit/b3bc85b750e6c3407d5756ae001a1e1d276f2589)), closes [#659](https://github.com/tomoya-k31/totsuka/issues/659)
+* **slack-event-gateway:** OpenTofu モジュールを提供する ([#674](https://github.com/tomoya-k31/totsuka/issues/674)) ([c6db798](https://github.com/tomoya-k31/totsuka/commit/c6db798e5a05aaa2e3cb87a07524e1e451cdd67a)), closes [#661](https://github.com/tomoya-k31/totsuka/issues/661)
+* **task-source-slack:** Event Gateway の契約を適合テストスイートとして凍結する ([#668](https://github.com/tomoya-k31/totsuka/issues/668)) ([c50761f](https://github.com/tomoya-k31/totsuka/commit/c50761fdd98f10a8ea5e252a44a2a5d8741d3e20)), closes [#656](https://github.com/tomoya-k31/totsuka/issues/656)
+* **task-source-slack:** event_source = "gateway" で Pub/Sub から受け取る ([#669](https://github.com/tomoya-k31/totsuka/issues/669)) ([1829dd7](https://github.com/tomoya-k31/totsuka/commit/1829dd73f39c7e38edbd07e699d07f2abeda3478)), closes [#657](https://github.com/tomoya-k31/totsuka/issues/657)
+* **task-source-slack:** グループメンション（subteam）をタスク化する ([#671](https://github.com/tomoya-k31/totsuka/issues/671)) ([680ad12](https://github.com/tomoya-k31/totsuka/commit/680ad120043bd319c8c5c8104bf7da6c310a9093)), closes [#658](https://github.com/tomoya-k31/totsuka/issues/658)
+
+
+### Refactors
+
+* **services:** イベントゲートウェイを services/ 配下へ移す ([#676](https://github.com/tomoya-k31/totsuka/issues/676)) ([0c0dfb9](https://github.com/tomoya-k31/totsuka/commit/0c0dfb9f9a72738fa96721c2fd6ec2348e8d48c2))
+
+
+### Documentation
+
+* **decisions:** ADR-0072 Slack イベント受信を Event Gateway 経由に切り替える ([#664](https://github.com/tomoya-k31/totsuka/issues/664)) ([9ab0e22](https://github.com/tomoya-k31/totsuka/commit/9ab0e22af163dbe43697a915b5f863e9ac77608c))
+* **decisions:** ADR-0072 に信頼境界の決定を足し、公開方法の誤りを訂正する ([#666](https://github.com/tomoya-k31/totsuka/issues/666)) ([40f5297](https://github.com/tomoya-k31/totsuka/commit/40f52979a5e115e1ce9036489337a36797786fb4))
+* **decisions:** ADR-0072 の訂正が未検証の断定になっていたのを直す ([#667](https://github.com/tomoya-k31/totsuka/issues/667)) ([ccf4ca2](https://github.com/tomoya-k31/totsuka/commit/ccf4ca21b0c2698f637315df9d310bd458d143ad))
+* **slack:** 受信方式の選択と Event Gateway 構築手順を書く ([#675](https://github.com/tomoya-k31/totsuka/issues/675)) ([df70db0](https://github.com/tomoya-k31/totsuka/commit/df70db066686c69d6cab0e602924929a21d36c19)), closes [#663](https://github.com/tomoya-k31/totsuka/issues/663)
+
 ## [0.7.5](https://github.com/tomoya-k31/totsuka/compare/v0.7.4...v0.7.5) (2026-09-12)
 
 
