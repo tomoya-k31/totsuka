@@ -37,9 +37,27 @@ Google がドメイン制限共有下での推奨として明示しているも�
 ただし管理者は、この無効化自体を別の制約で塞げる:
 
 ```bash
-gcloud resource-manager org-policies describe \
-  constraints/run.managed.requireInvokerIam --organization <ORG_ID>
+gcloud organizations list   # ORG_ID を調べる
+gcloud org-policies describe \
+  constraints/run.managed.requireInvokerIam --organization <ORG_ID> --effective
 ```
+
+**`gcloud org-policies`（V2）であって `gcloud resource-manager org-policies`（V1）ではない。**
+`run.managed.*` は managed constraint で、V1 で叩くと制約を評価する前に
+`INVALID_CONSTRAINT_NAME` で落ちる —— 「エラーが出た＝適用されていない」と読めてしまうので、
+コマンドを間違えると**判定が逆に転ぶ**。
+
+**`--effective` を付けるのも同じ理由である。** 付けないと、未適用のときの答えが
+`NOT_FOUND` という*エラー*になる。付ければ未適用でも肯定形で返るので、出力が一意に読める:
+
+| 出力 | 意味 |
+|---|---|
+| `enforce: false` | 未適用。この構成は成立する |
+| `enforce: true` | 適用済み。**成立しない** |
+
+`--effective` は継承と上書きを畳んだ実効値なので、組織で見て `false` なら組織のポリシーとしては
+通る。プロジェクトを既に決めているなら `--project <PROJECT_ID>` でも同じ問い合わせをしておくと、
+プロジェクト単位の上書きまで潰せる。
 
 **既定では未適用**なので大半の組織では素通りする。適用されていた場合、この構成は成立しない ——
 **外部ロードバランサも助けにならない**（Serverless NEG 経由でも Cloud Run には認証情報なしで到達するので、

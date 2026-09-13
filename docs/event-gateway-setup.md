@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](event-gateway-setup.ja.md)
 
-<!-- generated-from: ai-docs/operations/event-gateway-setup.md sha256:ccbdac86a42b582d87360855142427d2bfd43edd34b62a8aca6a3a2bebec6998 -->
+<!-- generated-from: ai-docs/operations/event-gateway-setup.md sha256:31fcb430fa74dfae6b163a1071c3ebe36c3540e2b97649c5e155029760f33547 -->
 
 # Event Gateway setup
 
@@ -35,9 +35,28 @@ change to any organization policy.**
 An administrator can, however, block that too:
 
 ```bash
-gcloud resource-manager org-policies describe \
-  constraints/run.managed.requireInvokerIam --organization <ORG_ID>
+gcloud organizations list   # find your ORG_ID
+gcloud org-policies describe \
+  constraints/run.managed.requireInvokerIam --organization <ORG_ID> --effective
 ```
+
+**Use `gcloud org-policies` (V2), not `gcloud resource-manager org-policies`
+(V1).** `run.managed.*` is a managed constraint, and V1 fails with
+`INVALID_CONSTRAINT_NAME` before it ever evaluates the policy — an error that
+reads like "not enforced", so the wrong command inverts the answer.
+
+`--effective` is there for the same reason: without it, "not enforced" comes
+back as a `NOT_FOUND` *error*. With it, the output is unambiguous either way.
+
+| Output | Meaning |
+|---|---|
+| `enforce: false` | Not enforced. This construction works |
+| `enforce: true` | Enforced. **It does not work** |
+
+`--effective` folds in inheritance and overrides, so `false` at the
+organization settles the organization's policy. If the project already exists,
+run the same query with `--project <PROJECT_ID>` to rule out a project-level
+override.
 
 It is **not enforced by default**, so most organizations pass straight through.
 If it *is* enforced, this construction does not work — and an external load

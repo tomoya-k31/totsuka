@@ -1,7 +1,7 @@
 > 🌐 [English](event-gateway-setup.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/event-gateway-setup.md sha256:ccbdac86a42b582d87360855142427d2bfd43edd34b62a8aca6a3a2bebec6998 -->
+<!-- generated-from: ai-docs/operations/event-gateway-setup.md sha256:31fcb430fa74dfae6b163a1071c3ebe36c3540e2b97649c5e155029760f33547 -->
 
 # Event Gateway 構築手順
 
@@ -30,9 +30,27 @@ Google がまさにこの状況向けに文書化しているものである。*
 ただし管理者はこれ自体も塞げる:
 
 ```bash
-gcloud resource-manager org-policies describe \
-  constraints/run.managed.requireInvokerIam --organization <ORG_ID>
+gcloud organizations list   # ORG_ID を調べる
+gcloud org-policies describe \
+  constraints/run.managed.requireInvokerIam --organization <ORG_ID> --effective
 ```
+
+**`gcloud org-policies`（V2）であって `gcloud resource-manager org-policies`（V1）ではない。**
+`run.managed.*` は managed constraint で、V1 で叩くと制約を評価する前に
+`INVALID_CONSTRAINT_NAME` で落ちる —— 「エラーが出た＝適用されていない」と読めてしまうので、
+コマンドを間違えると判定が逆に転ぶ。
+
+`--effective` を付けるのも同じ理由である。付けないと、未適用のときの答えが `NOT_FOUND` という
+*エラー*になる。付ければどちらの場合も肯定形で返り、出力が一意に読める。
+
+| 出力 | 意味 |
+|---|---|
+| `enforce: false` | 未適用。この構成は成立する |
+| `enforce: true` | 適用済み。**成立しない** |
+
+`--effective` は継承と上書きを畳んだ実効値なので、組織で `false` なら組織のポリシーとしては通る。
+プロジェクトが既にあるなら `--project <PROJECT_ID>` でも同じ問い合わせをして、
+プロジェクト単位の上書きを潰しておく。
 
 **既定では未適用**なので、大半の組織はそのまま通る。**適用されている**場合、この構成は成立しない ——
 外部ロードバランサも助けにならない（Serverless NEG 経由でも Cloud Run には認証情報なしで到達するので、

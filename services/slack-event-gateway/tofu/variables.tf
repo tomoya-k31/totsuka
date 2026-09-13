@@ -44,9 +44,15 @@ variable "image" {
     A company deployment usually wants this pointed at its own Artifact
     Registry instead; `services/slack-event-gateway/README.md` has the build and push
     commands.
+
+    **The tag is bumped by release-please**, via the annotation on the `default`
+    line and the `extra-files` entry in `release-please-config.json`. Hand-editing
+    it would be undone by the next release. A CI step checks that the tag here
+    still matches the workspace version, so a Release PR that writes the wrong
+    shape goes red before it is merged rather than after it is deployed.
   EOT
   type        = string
-  default     = "ghcr.io/tomoya-k31/totsuka/slack-event-gateway:v0.7.5"
+  default     = "ghcr.io/tomoya-k31/totsuka/slack-event-gateway:v0.7.5" # x-release-please-version
 }
 
 variable "max_instances" {

@@ -167,6 +167,38 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      # The OpenTofu `image` default is bumped by release-please, via the
+      # annotation on the `default` line and the `extra-files` entry in
+      # `release-please-config.json`. Two things can go wrong there and neither
+      # announces itself: the updater could write a bare `0.8.0` where the
+      # published image tag is `v0.8.0`, or a hand edit could drift from the
+      # workspace version. Both leave a default that resolves to no image —
+      # and `tofu validate` cannot see it, because a tag that does not exist is
+      # still a perfectly valid string. The symptom lands on whoever runs
+      # `tofu apply` first, which is the one person who cannot fix it.
+      #
+      # A Release PR rewrites both files in the same commit, so comparing them
+      # turns that into a red Release PR instead. Cheapest step in the job, and
+      # it needs no toolchain, so it runs first.
+      - name: The image default matches the workspace version
+        working-directory: ${{ github.workspace }}
+        run: |
+          version=$(grep -m1 'x-release-please-version' Cargo.toml \
+                    | sed -E 's/.*"([^"]+)".*/\1/')
+          tag=$(grep -m1 'x-release-please-version' \
+                    services/slack-event-gateway/tofu/variables.tf \
+                | sed -E 's/.*:([^"]+)".*/\1/')
+          test -n "${version}"
+          test -n "${tag}"
+          if [ "${tag}" != "v${version}" ]; then
+            echo "::error::the OpenTofu image default is pinned to ${tag}, but the"
+            echo "workspace version is ${version} — expected the tag v${version}."
+            echo "The release job publishes ghcr.io/<owner>/totsuka/slack-event-gateway"
+            echo "under the release tag, which carries a leading v. Fix the default in"
+            echo "services/slack-event-gateway/tofu/variables.tf to match."
+            exit 1
+          fi
+          echo "image default: ${tag} (workspace ${version})"
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
         with:
