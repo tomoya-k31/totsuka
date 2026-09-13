@@ -388,6 +388,27 @@ fn default_classifier_correction() -> String {
     DEFAULTS.classifier_correction.clone()
 }
 
+/// Where Slack events reach this plugin from ([ADR-0072](/decisions/adr-0072-slack-event-gateway.md)
+/// decision 2, #656).
+///
+/// **The two are mutually exclusive in the Slack app itself** — an app either
+/// holds a Socket Mode connection or answers a Request URL, never both — so
+/// this is not a runtime fallback. Switching means editing the app's manifest,
+/// which is why nothing here changes it automatically: a gateway outage that
+/// silently reconnected over Socket Mode would need a Slack-side change this
+/// process cannot make, and pretending otherwise would just hide the outage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EventSource {
+    /// The resident WebSocket (`socket_mode.rs`). The default, and what every
+    /// installation before #652 used.
+    #[default]
+    Socket,
+    /// Coordinates pulled from Pub/Sub, published by an Event Gateway that
+    /// answers Slack's HTTP Request URL. Survives totsuka being stopped.
+    Gateway,
+}
+
 /// Slack task-source settings.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -468,6 +489,35 @@ pub struct SlackConfig {
     /// would recover the last `watch_backfill_limit` posts however old.
     #[serde(default)]
     pub watch_backfill_max_age_hours: Option<u64>,
+    /// Which transport delivers Slack events (#652). Default [`EventSource::Socket`].
+    #[serde(default)]
+    pub event_source: EventSource,
+    /// How old a queued event may be and still be filed, in hours.
+    /// `None` means [`DEFAULT_DRAIN_MAX_AGE_HOURS`].
+    ///
+    /// Pub/Sub keeps 7 days (decision 5) so a long absence loses nothing, but
+    /// filing a week of stale mentions on the first start back is not what
+    /// anyone wants. Keeping the window here rather than in the retention
+    /// setting means widening it after a trip is a local edit, not a cloud
+    /// redeploy. Events outside the window are acked and dropped.
+    /// Only meaningful under [`EventSource::Gateway`].
+    #[serde(default)]
+    pub drain_max_age_hours: Option<u64>,
+    /// Most queued events filed per drain pass, `None` meaning
+    /// [`DEFAULT_DRAIN_LIMIT`]. Only meaningful under [`EventSource::Gateway`].
+    #[serde(default)]
+    pub drain_limit: Option<u32>,
+    /// Seconds between `conversations.history` polls of watched channels,
+    /// `None` meaning [`DEFAULT_WATCH_POLL_INTERVAL_SECS`].
+    ///
+    /// Channel watching cannot ride the gateway: decision 4 narrowed what gets
+    /// published to things naming the operator, and a watched channel's posts
+    /// do not. Giving the gateway the watch list instead would split the
+    /// configuration across two places, and the failure mode when they drift
+    /// is that watching stops working *silently*. Only meaningful under
+    /// [`EventSource::Gateway`]; Socket Mode gets these posts pushed to it.
+    #[serde(default)]
+    pub watch_poll_interval_secs: Option<u64>,
     /// Prompt text overrides (#318). Every key falls back to the embedded
     /// default when omitted.
     #[serde(default)]
@@ -534,6 +584,15 @@ fn default_api_url() -> String {
 fn default_max_retries() -> u32 {
     3
 }
+
+/// Default [`SlackConfig::drain_max_age_hours`]. One day, matching
+/// `watch_backfill_max_age_hours` — the same question about the same kind of
+/// gap, so the same answer.
+pub const DEFAULT_DRAIN_MAX_AGE_HOURS: u64 = 24;
+/// Default [`SlackConfig::drain_limit`].
+pub const DEFAULT_DRAIN_LIMIT: u32 = 100;
+/// Default [`SlackConfig::watch_poll_interval_secs`].
+pub const DEFAULT_WATCH_POLL_INTERVAL_SECS: u64 = 60;
 pub(crate) fn default_confidence_threshold() -> f64 {
     0.6
 }
@@ -699,6 +758,51 @@ pub fn static_config_errors(config: &SlackConfig) -> Vec<String> {
         }
     }
 
+    // #656 freezes the contract; #657 is what reads it. Until then, selecting
+    // `gateway` would leave `initialize` probing the App-Level Token and
+    // spawning the Socket Mode loop — running the *other* transport without
+    // saying so, which is the silent misconfiguration this option exists to
+    // prevent. Refusing is the loud alternative, and the check disappears in
+    // the change that adds the consumer.
+    if config.event_source == EventSource::Gateway {
+        errors.push(
+            "`event_source = \"gateway\"` has no consumer yet — leaving it set would quietly \
+             keep running Socket Mode → keep `event_source = \"socket\"` until the Pub/Sub \
+             source lands"
+                .into(),
+        );
+    }
+
+    // The gateway window knobs. Zero is refused for the same reason
+    // `watch_backfill_max_age_hours = 0` is: it reads as "turn this off" but
+    // means "consider nothing recent enough", which drops every queued event
+    // without saying so. A key that is simply *inactive* — these under
+    // `event_source = "socket"` — is not an error, matching
+    // `watch_backfill_limit` with no watched channels.
+    if config.drain_max_age_hours == Some(0) {
+        errors.push(
+            "`drain_max_age_hours = 0` would consider no queued event recent enough and drop \
+             them all → remove the key for the default (24), or set the hours you want \
+             to recover after a stop"
+                .into(),
+        );
+    }
+    if config.drain_limit == Some(0) {
+        errors.push(
+            "`drain_limit = 0` would file nothing from the queue → remove the key for the \
+             default (100), or set the number of events to file per pass"
+                .into(),
+        );
+    }
+    if config.watch_poll_interval_secs == Some(0) {
+        errors.push(
+            "`watch_poll_interval_secs = 0` would poll `conversations.history` without pause \
+             and exhaust the Slack rate limit → remove the key for the default (60), or \
+             set the seconds between polls"
+                .into(),
+        );
+    }
+
     errors
 }
 
@@ -706,6 +810,56 @@ pub fn static_config_errors(config: &SlackConfig) -> Vec<String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// The gateway knobs reject the value that reads as "off" but means
+    /// "discard everything", and the source itself is refused while nothing
+    /// consumes it.
+    #[test]
+    fn the_gateway_options_reject_their_silent_failure_values() {
+        let base: SlackConfig = serde_json::from_value(json!({
+            "app_token": "xapp-1",
+            "user_token": "xoxp-1",
+            "target_user_id": "U_ME",
+        }))
+        .expect("minimal config");
+        assert!(
+            static_config_errors(&base).is_empty(),
+            "the baseline used by these cases must itself be clean"
+        );
+
+        let with = |key: &str, value: serde_json::Value| -> Vec<String> {
+            let mut raw = json!({
+                "app_token": "xapp-1",
+                "user_token": "xoxp-1",
+                "target_user_id": "U_ME",
+            });
+            raw[key] = value;
+            static_config_errors(&serde_json::from_value(raw).expect("config parses"))
+        };
+
+        for key in [
+            "drain_max_age_hours",
+            "drain_limit",
+            "watch_poll_interval_secs",
+        ] {
+            let errors = with(key, json!(0));
+            assert!(
+                errors.iter().any(|e| e.contains(key)),
+                "`{key} = 0` must be rejected by name, got {errors:?}"
+            );
+            assert!(
+                with(key, json!(5)).is_empty(),
+                "`{key}` must accept an ordinary value"
+            );
+        }
+
+        let errors = with("event_source", json!("gateway"));
+        assert!(
+            errors.iter().any(|e| e.contains("event_source")),
+            "selecting an unconsumed source must not be silent, got {errors:?}"
+        );
+        assert!(with("event_source", json!("socket")).is_empty());
+    }
 
     /// `reply_instructions` must not ask for a deliverable other than the
     /// reply.

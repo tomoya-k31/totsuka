@@ -1,0 +1,43 @@
+{
+  "name": "message-mention-inside-thread",
+  "why": "スレッド内のメンションで `thread_ts` が保存されること。返信先の決定に使う座標なので、落とすと新しいスレッドに返信してしまう。",
+  "delivery": {
+    "endpoint": "events",
+    "content_type": "application/json",
+    "payload": {
+      "token": "deprecated-verification-token",
+      "team_id": "T_WS",
+      "api_app_id": "A_APP",
+      "type": "event_callback",
+      "event_id": "Ev0001",
+      "event_time": 1757640000,
+      "event": {
+        "type": "message",
+        "channel": "C0LOBBY",
+        "user": "U_SENDER",
+        "ts": "1757640050.000300",
+        "text": "<@U_ME> スレッドの中から",
+        "thread_ts": "1757640000.000100"
+      }
+    }
+  },
+  "expect": [
+    {
+      "topic": "events",
+      "identity": "message:C0LOBBY:1757640050.000300",
+      "record": {
+        "v": 1,
+        "kind": "message",
+        "channel": "C0LOBBY",
+        "ts": "1757640050.000300",
+        "thread_ts": "1757640000.000100",
+        "user": "U_SENDER",
+        "flags": {
+          "mentions_me": true
+        },
+        "subteam_ids": [],
+        "received_at": "2026-09-13T00:00:00Z"
+      }
+    }
+  ]
+}

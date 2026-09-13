@@ -1,0 +1,15 @@
+{
+  "name": "url-verification-challenge",
+  "why": "Request URL 登録時の `url_verification` に `challenge` をエコーし、**何も publish しない**こと。ここで publish すると、登録操作のたびにレコードが増える。",
+  "delivery": {
+    "endpoint": "events",
+    "content_type": "application/json",
+    "payload": {
+      "token": "deprecated-verification-token",
+      "type": "url_verification",
+      "challenge": "3eZbrw1aB1Cd2Ef3Gh4Ij5Kl6Mn7Op8Qr9St0Uv"
+    }
+  },
+  "expect": [],
+  "expect_challenge": "3eZbrw1aB1Cd2Ef3Gh4Ij5Kl6Mn7Op8Qr9St0Uv"
+}

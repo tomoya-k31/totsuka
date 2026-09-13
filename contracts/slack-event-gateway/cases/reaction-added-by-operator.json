@@ -1,0 +1,49 @@
+{
+  "name": "reaction-added-by-operator",
+  "why": "操作者本人が付けた `reaction_added` が通ること。座標は `item.channel` / `item.ts` から取る —— リアクションイベントに本文は入っていない。",
+  "delivery": {
+    "endpoint": "events",
+    "content_type": "application/json",
+    "payload": {
+      "token": "deprecated-verification-token",
+      "team_id": "T_WS",
+      "api_app_id": "A_APP",
+      "type": "event_callback",
+      "event_id": "Ev0001",
+      "event_time": 1757640000,
+      "event": {
+        "type": "reaction_added",
+        "user": "U_ME",
+        "reaction": "eyes",
+        "item": {
+          "type": "message",
+          "channel": "C0LOBBY",
+          "ts": "1757640000.000100"
+        },
+        "item_user": "U_SENDER",
+        "event_ts": "1757640300.000400"
+      }
+    }
+  },
+  "expect": [
+    {
+      "topic": "events",
+      "identity": "reaction:C0LOBBY:1757640000.000100:U_ME:eyes",
+      "record": {
+        "v": 1,
+        "kind": "reaction",
+        "channel": "C0LOBBY",
+        "ts": "1757640000.000100",
+        "thread_ts": null,
+        "user": "U_ME",
+        "flags": {
+          "mentions_me": false
+        },
+        "subteam_ids": [],
+        "received_at": "2026-09-13T00:00:00Z",
+        "reaction": "eyes",
+        "item_user": "U_SENDER"
+      }
+    }
+  ]
+}

@@ -1,0 +1,119 @@
+# Slack App Manifest for the totsuka task-source-slack plugin —
+# **Event Gateway (Request URL) variant**, `event_source = "gateway"`.
+#
+# Use THIS manifest when you run an Event Gateway (ADR-0072, #652). Use the
+# sibling `manifest.yml` when you run Socket Mode.
+#
+# ─────────────────────────────────────────────────────────────────────────
+# READ THIS BEFORE CREATING THE APP
+#
+# Socket Mode and Request URLs are MUTUALLY EXCLUSIVE per Slack app. Choosing
+# afterwards means redoing the manifest, so decide first:
+#
+#   Socket Mode  — totsuka's own process holds the WebSocket. Nothing to
+#                  deploy, no cloud account. Events that arrive while totsuka
+#                  is stopped are LOST, and a long enough outage makes Slack
+#                  disable the subscription outright (>95% delivery failures
+#                  over 60 minutes), which only a human can undo in the app
+#                  settings. Fine for a machine that stays on.
+#
+#   Gateway      — Slack POSTs to a Request URL answered by a scale-to-zero
+#                  Cloud Run service, which publishes coordinates to Pub/Sub;
+#                  totsuka pulls them when it is running. Nothing is lost
+#                  while totsuka is stopped and the subscription cannot be
+#                  auto-disabled. Costs a GCP project and roughly $1/month.
+#
+# THERE ARE TWO REQUEST URLS AND YOU NEED BOTH. Event Subscriptions carries
+# mentions and reactions; Interactivity & Shortcuts carries button presses
+# (`block_actions`) and is a SEPARATE setting. Socket Mode delivered both down
+# one WebSocket, so it is easy to wire up only the first — and the symptom is
+# that approval and repository-picker buttons never arrive at all, while
+# mentions keep working.
+#
+# Replace `<gateway-host>` and `<opaque-token>` below with your deployment's.
+# The path segment is per-operator and must be unguessable: it is what routes
+# a delivery to your signing secret and your Pub/Sub topic (ADR-0072
+# decision 6). Do not commit a real one.
+# ─────────────────────────────────────────────────────────────────────────
+#
+# The app acts as *you* for everything visible in a conversation: mention
+# detection, the approved reply, and the self-DM draft record all use the
+# user token. The bot user exists for exactly ONE thing — DM-ing you a
+# notification nudge when a draft/picker arrives (#305).
+#
+# After installing, put TWO tokens in your secret store and reference them
+# from the `[slack]` table of `~/.config/totsuka/config.toml`:
+#   - User OAuth Token (`xoxp-…`)      — OAuth & Permissions page
+#   - Bot User OAuth Token (`xoxb-…`)  — same page (optional: omit
+#     `bot_token` from `[slack]` to run without nudges)
+#
+# NO App-Level Token (`xapp-`) is needed here: it exists only to open a Socket
+# Mode connection.
+#
+# You also need the app's **Signing Secret** (Basic Information page). It does
+# NOT go in config.toml — it goes into the gateway's Secret Manager entry,
+# which is how the gateway proves a POST really came from Slack.
+#
+# If you ever change the scopes below, Slack requires you to RE-INSTALL the
+# app; the re-install issues a NEW `xoxp-` token AND a NEW `xoxb-` token, so
+# update BOTH Keychain entries (`totsuka doctor` will tell you when a stored
+# token went bad).
+display_information:
+  name: totsuka reply assistant
+  description: Turns mentions of you into totsuka tasks and posts approved replies under your own name.
+  background_color: "#1a2b3c"
+features:
+  bot_user:
+    display_name: totsuka reply assistant
+    always_online: true
+oauth_config:
+  scopes:
+    # Bot scopes: the notification nudge DM only (#305).
+    bot:
+      - chat:write # post the nudge into the bot<->operator DM
+      - im:write # open that DM (conversations.open)
+    # User scopes: everything conversation-visible is done as the operator.
+    user:
+      - channels:history # read public-channel messages (mention detection / thread context)
+      - channels:read # resolve channel names (conversations.info) for [[channel_groups]] prefix rules
+      - groups:history # read private-channel messages
+      - groups:read # resolve private-channel names for [[channel_groups]] prefix rules
+      - users:read # resolve display names for task context
+      - chat:write # post the approved reply / draft records as you
+      - im:write # open your self-DM to record drafts
+      - reactions:read # receive reaction_added for the :eyes: task trigger (#319)
+      # Group mentions (#658, ADR-0072 decision 8): which user groups you
+      # belong to is resolved in totsuka at startup via `usergroups.list`.
+      # The gateway only extracts the ids from the text — it cannot know
+      # membership, and a copy of it in the cloud would go stale silently.
+      - usergroups:read
+settings:
+  event_subscriptions:
+    # The Event Subscriptions Request URL. Slack verifies it once on save with
+    # a `url_verification` challenge the gateway echoes back.
+    request_url: https://<gateway-host>/slack/e/<opaque-token>
+    # user_events (not bot_events): delivered for the channels the *user* is a
+    # member of. Deliberately NO `message.im`: bot-DM nudges must never
+    # re-enter the mention pipeline.
+    user_events:
+      - message.channels
+      - message.groups
+      # #319: reactions the *operator* adds start a task like a mention does.
+      # `reaction_removed` is deliberately NOT subscribed to — removing a
+      # reaction is not a cancel signal, and not subscribing is clearer than
+      # receiving the event and dropping it.
+      - reaction_added
+  interactivity:
+    # Approve/reject buttons (block_actions). THE SAME GATEWAY, A DIFFERENT
+    # SETTING — see the note at the top of this file. Leaving this at the
+    # default kills every button while mentions carry on working, which is
+    # about the least obvious failure this app can have.
+    is_enabled: true
+    request_url: https://<gateway-host>/slack/e/<opaque-token>
+  org_deploy_enabled: false
+  # The whole point of this variant: no resident WebSocket, so nothing has to
+  # stay running for Slack to deliver.
+  socket_mode_enabled: false
+  # Long-lived tokens by design: rotation would require a refresh-token dance
+  # the plugin deliberately avoids (tokens live in the macOS Keychain).
+  token_rotation_enabled: false

@@ -1,0 +1,66 @@
+{
+  "name": "block-actions-channel-id-fallback",
+  "why": "`container.channel_id` が無いペイロードで `channel.id` に落ちること。`approval.rs` の `press_channel()` が現用しているフォールバックで、死にコードではない —— `container.channel_id` 単独に固定すると、この形のペイロードで消費側が落ちる。",
+  "delivery": {
+    "endpoint": "interactivity",
+    "content_type": "application/x-www-form-urlencoded",
+    "payload": {
+      "type": "block_actions",
+      "user": {
+        "id": "U_ME",
+        "username": "tomoya"
+      },
+      "api_app_id": "A_APP",
+      "team": {
+        "id": "T_WS"
+      },
+      "container": {
+        "type": "message",
+        "message_ts": "1757640100.000200"
+      },
+      "channel": {
+        "id": "D0SELFDM",
+        "name": "directmessage"
+      },
+      "response_url": "https://hooks.slack.com/actions/T_WS/1111/abcdef",
+      "trigger_id": "1111.2222.abcdef",
+      "actions": [
+        {
+          "type": "button",
+          "block_id": "b1",
+          "action_id": "approve_reply",
+          "text": {
+            "type": "plain_text",
+            "text": "承認"
+          },
+          "value": "{\"d\":\"draft-1\",\"c\":\"C0LOBBY\",\"ts\":\"1757640000.000100\"}",
+          "action_ts": "1757640200.111111"
+        }
+      ]
+    }
+  },
+  "expect": [
+    {
+      "topic": "block_actions",
+      "identity": "block_actions:D0SELFDM:1757640200.111111:approve_reply",
+      "record": {
+        "v": 1,
+        "kind": "block_actions",
+        "channel": "D0SELFDM",
+        "ts": "1757640100.000200",
+        "thread_ts": null,
+        "user": "U_ME",
+        "flags": {
+          "mentions_me": false
+        },
+        "subteam_ids": [],
+        "received_at": "2026-09-13T00:00:00Z",
+        "action_id": "approve_reply",
+        "value": "{\"d\":\"draft-1\",\"c\":\"C0LOBBY\",\"ts\":\"1757640000.000100\"}",
+        "response_url": "https://hooks.slack.com/actions/T_WS/1111/abcdef",
+        "container_channel": "D0SELFDM",
+        "action_ts": "1757640200.111111"
+      }
+    }
+  ]
+}

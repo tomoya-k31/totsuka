@@ -1,0 +1,24 @@
+{
+  "name": "message-subteam-tag-with-prose",
+  "why": "`<!subteam^S0ABC ここに本文>` からグループ ID を取り出さないこと。`>` までを丸ごと ID とみなすと、**本文を持たないはずのレコードに本文がそのまま乗る**。",
+  "delivery": {
+    "endpoint": "events",
+    "content_type": "application/json",
+    "payload": {
+      "token": "deprecated-verification-token",
+      "team_id": "T_WS",
+      "api_app_id": "A_APP",
+      "type": "event_callback",
+      "event_id": "Ev0001",
+      "event_time": 1757640000,
+      "event": {
+        "type": "message",
+        "channel": "C0LOBBY",
+        "user": "U_SENDER",
+        "ts": "1757640000.000100",
+        "text": "<!subteam^S0ABC and here is the secret> よろしく"
+      }
+    }
+  },
+  "expect": []
+}

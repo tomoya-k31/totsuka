@@ -445,7 +445,11 @@ fn parse_button_value(value: &str) -> (String, Option<(String, String)>) {
 }
 
 /// The channel a `block_actions` press happened in.
-fn press_channel(payload: &Value) -> Option<&str> {
+///
+/// `pub(crate)` so [`crate::gateway_contract`] can assert that the payload it
+/// rebuilds out of a flattened Pub/Sub record is read by the very function
+/// that reads Slack's own — rather than by a second copy of this lookup.
+pub(crate) fn press_channel(payload: &Value) -> Option<&str> {
     payload
         .pointer("/container/channel_id")
         .or_else(|| payload.pointer("/channel/id"))

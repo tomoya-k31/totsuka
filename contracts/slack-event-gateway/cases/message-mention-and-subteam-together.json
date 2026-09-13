@@ -1,0 +1,44 @@
+{
+  "name": "message-mention-and-subteam-together",
+  "why": "個人メンションとグループメンションが同一本文にあるとき、**両方**が記録されること。どちらか一方で早期 return すると、もう一方の情報が落ちる。",
+  "delivery": {
+    "endpoint": "events",
+    "content_type": "application/json",
+    "payload": {
+      "token": "deprecated-verification-token",
+      "team_id": "T_WS",
+      "api_app_id": "A_APP",
+      "type": "event_callback",
+      "event_id": "Ev0001",
+      "event_time": 1757640000,
+      "event": {
+        "type": "message",
+        "channel": "C0LOBBY",
+        "user": "U_SENDER",
+        "ts": "1757640000.000100",
+        "text": "<@U_ME> と <!subteam^S0ABCDEF> で見てください"
+      }
+    }
+  },
+  "expect": [
+    {
+      "topic": "events",
+      "identity": "message:C0LOBBY:1757640000.000100",
+      "record": {
+        "v": 1,
+        "kind": "message",
+        "channel": "C0LOBBY",
+        "ts": "1757640000.000100",
+        "thread_ts": null,
+        "user": "U_SENDER",
+        "flags": {
+          "mentions_me": true
+        },
+        "subteam_ids": [
+          "S0ABCDEF"
+        ],
+        "received_at": "2026-09-13T00:00:00Z"
+      }
+    }
+  ]
+}

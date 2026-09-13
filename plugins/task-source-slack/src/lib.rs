@@ -13,6 +13,7 @@ pub mod approval;
 pub mod config;
 pub mod draft;
 pub mod error;
+pub mod gateway_contract;
 pub mod llm;
 pub mod mention;
 pub mod notify;

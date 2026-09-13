@@ -1,0 +1,24 @@
+{
+  "name": "message-self-post",
+  "why": "送信者が本人の投稿を通さないこと。承認済み自動返信を再検知して**ループする**のを断つ。",
+  "delivery": {
+    "endpoint": "events",
+    "content_type": "application/json",
+    "payload": {
+      "token": "deprecated-verification-token",
+      "team_id": "T_WS",
+      "api_app_id": "A_APP",
+      "type": "event_callback",
+      "event_id": "Ev0001",
+      "event_time": 1757640000,
+      "event": {
+        "type": "message",
+        "channel": "C0LOBBY",
+        "user": "U_ME",
+        "ts": "1757640000.000100",
+        "text": "<@U_ME> 自分宛のメモ"
+      }
+    }
+  },
+  "expect": []
+}

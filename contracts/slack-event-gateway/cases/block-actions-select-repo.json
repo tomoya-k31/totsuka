@@ -1,0 +1,67 @@
+{
+  "name": "block-actions-select-repo",
+  "why": "リポジトリ選択ピッカーの押下も同じ正規化を通ること。`action_id` の空間は `select_repo_*` / `skip_mention` と `approve_reply` / `reject_reply` に分かれており、ゲートウェイはどれも区別せず素通しする（振り分けは消費側の仕事）。",
+  "delivery": {
+    "endpoint": "interactivity",
+    "content_type": "application/x-www-form-urlencoded",
+    "payload": {
+      "type": "block_actions",
+      "user": {
+        "id": "U_ME",
+        "username": "tomoya"
+      },
+      "api_app_id": "A_APP",
+      "team": {
+        "id": "T_WS"
+      },
+      "container": {
+        "type": "message",
+        "message_ts": "1757640100.000200",
+        "channel_id": "D0SELFDM"
+      },
+      "channel": {
+        "id": "D0SELFDM",
+        "name": "directmessage"
+      },
+      "response_url": "https://hooks.slack.com/actions/T_WS/1111/abcdef",
+      "trigger_id": "1111.2222.abcdef",
+      "actions": [
+        {
+          "type": "button",
+          "block_id": "b1",
+          "action_id": "select_repo_0",
+          "text": {
+            "type": "plain_text",
+            "text": "承認"
+          },
+          "value": "{\"k\":\"C0LOBBY:1757640000.000100\",\"r\":\"totsuka\"}",
+          "action_ts": "1757640200.111111"
+        }
+      ]
+    }
+  },
+  "expect": [
+    {
+      "topic": "block_actions",
+      "identity": "block_actions:D0SELFDM:1757640200.111111:select_repo_0",
+      "record": {
+        "v": 1,
+        "kind": "block_actions",
+        "channel": "D0SELFDM",
+        "ts": "1757640100.000200",
+        "thread_ts": null,
+        "user": "U_ME",
+        "flags": {
+          "mentions_me": false
+        },
+        "subteam_ids": [],
+        "received_at": "2026-09-13T00:00:00Z",
+        "action_id": "select_repo_0",
+        "value": "{\"k\":\"C0LOBBY:1757640000.000100\",\"r\":\"totsuka\"}",
+        "response_url": "https://hooks.slack.com/actions/T_WS/1111/abcdef",
+        "container_channel": "D0SELFDM",
+        "action_ts": "1757640200.111111"
+      }
+    }
+  ]
+}
