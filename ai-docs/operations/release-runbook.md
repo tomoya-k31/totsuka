@@ -4,7 +4,7 @@ title: リリース手順（release-please / ユニバーサルバイナリ / Gi
 description: "totsuka のリリース運用。release-please による Release PR、macOS ユニバーサルバイナリと同梱プラグインの自動ビルド・署名・GitHub Releases 配布、リリースごとの Homebrew tap 自動 bump と 2 本のトークン運用、Release PR の CI/ブランチ保護を通すトークン運用（GitHub App / PAT / admin）、Gatekeeper（ad-hoc 署名）の扱い。"
 resource: https://github.com/tomoya-k31/totsuka/tree/main/.github/workflows
 tags: [release, ci, distribution, homebrew, gatekeeper, semver, github-app, pat, branch-protection]
-generated: { by: claude-code/opus-5, at: 2026-09-13T22:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-14T00:37:53+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -97,13 +97,23 @@ App が Release PR を作る → 実 identity 扱いなので CI が走り `lint
 同じで、**`:latest` は出さない** —— OpenTofu 側は正確なバージョンを固定するので、浮動タグは
 `tofu apply` が黙ってデプロイ内容を変えられることを意味する。
 
-## 初回リリースで必ず 1 回、手作業が要る
+## 可視性は検査する。手作業が要るかは、やってみるまで分からない
 
-**ghcr のパッケージは初回公開時に private になり、リポジトリが public でも可視性は継承されない**
-（継承されるのはアクセス権限のほうである）。Cloud Run が直接 pull できるのは public な ghcr
-イメージだけなので、private のままだと**ジョブは緑で、デプロイする人だけが落ちる**。
+Cloud Run が直接 pull できるのは **public な ghcr イメージだけ**である。private のままだと
+**ジョブは緑で、デプロイする人だけが落ちる** —— 誰も気づかないまま、気づく人が直せない。
+だからジョブは push の後に可視性を問い合わせ、public でなければ赤くする。
 
-ジョブは push の後に可視性を検査して、public でなければ赤くする。赤くなったら:
+**初回に手作業が要ると決めてかからないこと。** 導入時この節には「ghcr のパッケージは初回公開時に
+private になり、リポジトリが public でも可視性は継承されない」と書いてあったが、**実際の初回リリース
+（v0.7.6、2026-09-13）でそうはならなかった** —— ゲートは 1 回目で `package visibility: public` を
+返して通過し、手作業は発生していない。匿名のトークンで manifest が 200 を返すこと、`linux/amd64` が
+存在することも別途確認した。
+
+**なぜ public で出たのかは調べていない**（利用者名前空間かつ public リポジトリという条件の帰結なのか、
+GitHub 側の既定が変わったのか）。分かっているのは観測した事実だけで、**条件が違えば private で出うる**
+以上、検査は残す価値がある —— コストは API 呼び出し 1 回である。
+
+赤くなった場合は:
 
 ```text
 Packages → slack-event-gateway → Package settings → Change visibility → Public

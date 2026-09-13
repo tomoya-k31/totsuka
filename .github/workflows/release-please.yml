@@ -180,18 +180,21 @@ jobs:
           # hit rate would be near zero anyway — the trade is "no benefit here,
           # slower CI on every PR", which is not a trade.
 
-      # **ghcr packages are private on first publish, and a public repository
-      # does not change that** — a package inherits the repository's access
-      # permissions but not its visibility. Cloud Run can only pull a *public*
-      # ghcr image directly; a private one needs an Artifact Registry remote
-      # repository in front of it.
+      # Cloud Run can only pull a *public* ghcr image directly; a private one
+      # needs an Artifact Registry remote repository in front of it. A package
+      # that lands private therefore produces an image nobody can deploy, in
+      # the worst shape: the job is green and only the operator running
+      # `tofu apply` finds out. This repository has been bitten by exactly that
+      # shape before — see the visibility gate in the release runbook, where a
+      # Homebrew bump was skipped for a release and `brew install` kept
+      # succeeding with the old version. So check, and go red rather than
+      # quiet.
       #
-      # So the first release silently produces an image nobody can deploy: the
-      # job is green, and only the operator running `tofu apply` finds out.
-      # This repository has already been bitten by exactly that shape — see the
-      # visibility gate in the release runbook, where a Homebrew bump was
-      # skipped for a release and `brew install` kept succeeding with the old
-      # version. Check it, and go red rather than quiet.
+      # **This is not a prediction that the first publish will be private.**
+      # It was written expecting one, and the first release to run it (v0.7.6)
+      # came out public and passed on the first attempt. Why is not known and
+      # is not worth guessing at — what the check is worth is the case where
+      # it does not, which costs one API call to rule out.
       - name: The published package must be public
         env:
           GH_TOKEN: ${{ github.token }}
