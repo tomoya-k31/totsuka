@@ -27,12 +27,17 @@ A directory earns a place here only when **both** of these hold:
 1. **At least one reader is outside this repository's build.** Not another
    workspace member, and not a dependency — something built separately, and
    possibly by someone else.
-2. **Neither side is the reference implementation for the other.** If one side
-   may be replaced wholesale, the fixtures are the only thing that survives the
-   replacement, and they cannot live inside either replaceable half.
+2. **The authoritative side cannot hand that authority over as a dependency.**
+   There *is* an authority here — decision 7 makes totsuka's `project()` the
+   reference projection, and `gateway_contract.rs` says so in as many words.
+   But the gateway is built in a separate workspace and may be a fork, so it
+   can never `use` that function. Fixtures are the only form the authority can
+   take for that reader, and a form written *for* someone outside does not
+   belong inside the half they cannot see.
 
 If only the first holds, keep the fixtures with their owner and point at them.
-If neither holds, they are ordinary test data.
+If the outside reader can simply depend on the authoritative crate, it needs no
+copy at all. If neither holds, they are ordinary test data.
 
 ## Rules for anything added here
 
