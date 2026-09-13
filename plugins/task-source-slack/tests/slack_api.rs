@@ -19,6 +19,8 @@ fn api(shared: &Shared) -> SlackApi<common::FakeTransport> {
 // auth.test / apps.connections.open
 // ---------------------------------------------------------------------------
 
+// (usergroups.list coverage lives at the bottom, with the other #658 work.)
+
 #[tokio::test]
 async fn auth_test_parses_identity() {
     let shared = Shared::default();
@@ -478,4 +480,93 @@ async fn non_credential_api_errors_pass_through() {
         "{err}"
     );
     assert!(!err.is_credential());
+}
+
+// ---------------------------------------------------------------------------
+// usergroups.list (#658)
+// ---------------------------------------------------------------------------
+
+/// The request shape matters as much as the parsing: without
+/// `include_users = true` Slack omits the member lists entirely, every group
+/// looks like one the operator is not in, and **group mentions go silently
+/// dead** with no error anywhere.
+#[tokio::test]
+async fn usergroups_for_user_asks_for_members_and_keeps_only_the_operators_groups() {
+    let shared = Shared::default();
+    shared.push(Canned::Data(json!({
+        "ok": true,
+        "usergroups": [
+            { "id": "S0MINE",   "handle": "team-a", "users": ["U_ME", "U_OTHER"] },
+            { "id": "S0THEIRS", "handle": "team-b", "users": ["U_OTHER"] },
+            // Disabled groups are filtered server-side, but a group with no
+            // `users` key at all is a shape Slack does return.
+            { "id": "S0EMPTY",  "handle": "team-c" },
+        ],
+    })));
+
+    let groups = api(&shared).usergroups_for_user("U_ME").await.unwrap();
+    assert_eq!(groups, vec!["S0MINE".to_string()]);
+
+    let requests = shared.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "usergroups.list");
+    assert_eq!(requests[0].token, TokenKind::User);
+    assert!(requests[0].idempotent, "a listing is safe to retry");
+    let body = requests[0].body.as_ref().expect("arguments are sent");
+    assert_eq!(
+        body.get("include_users")
+            .and_then(serde_json::Value::as_bool),
+        Some(true),
+        "without this Slack omits `users` and every group looks foreign"
+    );
+    assert_eq!(
+        body.get("include_disabled")
+            .and_then(serde_json::Value::as_bool),
+        Some(false)
+    );
+}
+
+/// Belonging to nothing is a normal answer, not a failure — the caller logs it
+/// and carries on with personal mentions only.
+#[tokio::test]
+async fn usergroups_for_user_returns_empty_when_the_operator_is_in_none() {
+    let shared = Shared::default();
+    shared.push(Canned::Data(json!({
+        "ok": true,
+        "usergroups": [{ "id": "S0THEIRS", "users": ["U_OTHER"] }],
+    })));
+    assert!(
+        api(&shared)
+            .usergroups_for_user("U_ME")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// A response without the array is a shape change, not an empty membership.
+/// Reporting it as "no groups" would be indistinguishable from the real thing
+/// and would disable group mentions with nothing to read.
+#[tokio::test]
+async fn usergroups_for_user_without_the_array_is_invalid_response() {
+    let shared = Shared::default();
+    shared.push(Canned::Data(json!({ "ok": true })));
+    let err = api(&shared).usergroups_for_user("U_ME").await.unwrap_err();
+    assert!(matches!(err, SlackError::InvalidResponse(_)), "{err}");
+}
+
+/// The usual cause of failure is a token without `usergroups:read`. It has to
+/// surface as an error so the caller can warn; swallowing it would leave the
+/// operator with a healthy log and no group mentions.
+#[tokio::test]
+async fn usergroups_for_user_surfaces_missing_scope() {
+    let shared = Shared::default();
+    shared.push(Canned::Data(
+        json!({ "ok": false, "error": "missing_scope" }),
+    ));
+    let err = api(&shared).usergroups_for_user("U_ME").await.unwrap_err();
+    assert!(
+        err.to_string().contains("missing_scope"),
+        "the cause has to reach the operator: {err}"
+    );
 }
