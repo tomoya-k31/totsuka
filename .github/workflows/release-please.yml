@@ -184,11 +184,12 @@ jobs:
       # needs an Artifact Registry remote repository in front of it. A package
       # that lands private therefore produces an image nobody can deploy, in
       # the worst shape: the job is green and only the operator running
-      # `tofu apply` finds out. This repository has been bitten by exactly that
-      # shape before — see the visibility gate in the release runbook, where a
-      # Homebrew bump was skipped for a release and `brew install` kept
-      # succeeding with the old version. So check, and go red rather than
-      # quiet.
+      # `tofu apply` finds out. The release runbook records a related case —
+      # a Homebrew bump skipped for a release, leaving `brew install`
+      # succeeding with the old version — and the shared lesson is that a
+      # distribution step can drift without anything going red, not that the
+      # two fail alike: that one succeeded with stale bytes, this one refuses
+      # to start at all. So check, and go red rather than quiet.
       #
       # **This is not a prediction that the first publish will be private.**
       # It was written expecting one, and the first release to run it (v0.7.6)
