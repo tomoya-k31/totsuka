@@ -106,9 +106,13 @@ totsuka のリリースごとに `ghcr.io/tomoya-k31/totsuka/slack-event-gateway
 
 ```bash
 cd slack-event-gateway
-docker build -t <your-registry>/slack-event-gateway:<tag> .
+docker build --platform linux/amd64 -t <your-registry>/slack-event-gateway:<tag> .
 docker push <your-registry>/slack-event-gateway:<tag>
 ```
+
+**Apple Silicon のマシンでは `--platform linux/amd64` は省略できない。** 付けないと Docker は
+`linux/arm64` だけをビルドして push し、amd64 で動く Cloud Run では**イメージが起動しない** ——
+しかもエラーは自分が変えた箇所ではなくプラットフォームについてのものになる。
 
 あとはモジュールの `image` 変数をそこに向ける。ビルドは引数もシークレットも取らない ——
 プロセスが必要とするものはすべて実行時に環境から届く。

@@ -114,9 +114,14 @@ image comes from a registry it controls:
 
 ```bash
 cd slack-event-gateway
-docker build -t <your-registry>/slack-event-gateway:<tag> .
+docker build --platform linux/amd64 -t <your-registry>/slack-event-gateway:<tag> .
 docker push <your-registry>/slack-event-gateway:<tag>
 ```
+
+**`--platform linux/amd64` is not optional on an Apple-Silicon machine.** Docker
+would otherwise build and push `linux/arm64` only, and the image would fail to
+start on Cloud Run — which runs amd64 — with an error about the platform rather
+than about anything you changed.
 
 Then point the module's `image` variable at it. The build takes no arguments
 and no secrets; everything the process needs arrives as environment at runtime.
