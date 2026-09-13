@@ -1,7 +1,7 @@
 > 🌐 [English](event-gateway-setup.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/event-gateway-setup.md sha256:31fcb430fa74dfae6b163a1071c3ebe36c3540e2b97649c5e155029760f33547 -->
+<!-- generated-from: ai-docs/operations/event-gateway-setup.md sha256:ca3178e615683b2d91fdbfd634bdc931bace9261daaa5c29f7f5017cce1f2cc6 -->
 
 # Event Gateway 構築手順
 
@@ -49,8 +49,8 @@ gcloud org-policies describe \
 | `enforce: true` | 適用済み。**成立しない** |
 
 `--effective` は継承と上書きを畳んだ実効値なので、組織で `false` なら組織のポリシーとしては通る。
-プロジェクトが既にあるなら `--project <PROJECT_ID>` でも同じ問い合わせをして、
-プロジェクト単位の上書きを潰しておく。
+プロジェクトが既にあるなら、**`--organization <ORG_ID>` を `--project <PROJECT_ID>` に置き換えて**
+同じ問い合わせをして、プロジェクト単位の上書きを潰しておく。2 つは排他なので、両方付けると断られる。
 
 **既定では未適用**なので、大半の組織はそのまま通る。**適用されている**場合、この構成は成立しない ——
 外部ロードバランサも助けにならない（Serverless NEG 経由でも Cloud Run には認証情報なしで到達するので、
@@ -95,6 +95,22 @@ gcloud config set project <PROJECT_ID>
 **毎メッセージ追加の API 呼び出し**が要る。
 
 ## 3. apply
+
+**先にイメージが実在することを確かめる。** `image` の既定値は公式イメージで、リリースごとに
+追従する。ただし**公式イメージが出るようになったのはある版からで、それ以前のタグには存在しない**。
+存在しないタグも文字列としては妥当なので `tofu validate` も `tofu plan` も通ってしまい、
+**失敗するのは apply の最後、Cloud Run がリビジョンを起動しようとした時点**である。
+1 コマンドで先に潰せる:
+
+```bash
+cd services/slack-event-gateway/tofu
+image=$(grep -m1 'slack-event-gateway:' variables.tf | sed -E 's/.*"([^"]+)".*/\1/')
+docker manifest inspect "${image}"
+```
+
+`manifest unknown` が返るなら、そのリリースには公式イメージが無い。自前でビルドして push し
+（手順はゲートウェイ自身の README にある）、`image` 変数で指すこと。手元に `docker` が無ければ、
+GitHub の Packages ページで同じことが確認できる。
 
 ```bash
 cd services/slack-event-gateway/tofu

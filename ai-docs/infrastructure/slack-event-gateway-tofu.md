@@ -50,9 +50,13 @@ Slack は IAM プリンシパルになれないので Cloud Run は公開が要�
 Serverless NEG 経由でも Cloud Run には認証情報なしで到達する）。apply の前に確認する:
 
 ```bash
-gcloud resource-manager org-policies describe \
-  constraints/run.managed.requireInvokerIam --organization <ORG_ID>
+gcloud org-policies describe \
+  constraints/run.managed.requireInvokerIam --organization <ORG_ID> --effective
 ```
+
+**`gcloud org-policies`（V2）であり、`--effective` を付ける。** V1 は managed constraint を
+読めず、`--effective` 無しでは未適用の答えが `NOT_FOUND` エラーになる —— どちらの間違いも
+「エラーが出た＝未適用」と読めてしまい、判定が逆に転ぶ（→ [構築手順](/operations/event-gateway-setup.md)）。
 
 # 既定に入れないもの
 

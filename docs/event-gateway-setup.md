@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](event-gateway-setup.ja.md)
 
-<!-- generated-from: ai-docs/operations/event-gateway-setup.md sha256:31fcb430fa74dfae6b163a1071c3ebe36c3540e2b97649c5e155029760f33547 -->
+<!-- generated-from: ai-docs/operations/event-gateway-setup.md sha256:ca3178e615683b2d91fdbfd634bdc931bace9261daaa5c29f7f5017cce1f2cc6 -->
 
 # Event Gateway setup
 
@@ -55,8 +55,9 @@ back as a `NOT_FOUND` *error*. With it, the output is unambiguous either way.
 
 `--effective` folds in inheritance and overrides, so `false` at the
 organization settles the organization's policy. If the project already exists,
-run the same query with `--project <PROJECT_ID>` to rule out a project-level
-override.
+**replace `--organization <ORG_ID>` with `--project <PROJECT_ID>`** and run the
+same query to rule out a project-level override. The two flags are mutually
+exclusive — passing both is rejected.
 
 It is **not enforced by default**, so most organizations pass straight through.
 If it *is* enforced, this construction does not work — and an external load
@@ -110,6 +111,24 @@ single event, and working out who it was for costs an extra API call on every
 message.
 
 ## 3. Apply
+
+**Check that the image exists first.** The `image` default points at the
+official image and follows each release, but the official image only exists
+from the release that started publishing it — earlier tags have none. A tag
+that does not exist is still a valid string, so `tofu validate` and `tofu plan`
+both pass and **the failure lands at the end of `apply`**, when Cloud Run tries
+to start the revision. One command settles it:
+
+```bash
+cd services/slack-event-gateway/tofu
+image=$(grep -m1 'slack-event-gateway:' variables.tf | sed -E 's/.*"([^"]+)".*/\1/')
+docker manifest inspect "${image}"
+```
+
+`manifest unknown` means that release has no official image: build and push
+your own (the commands are in the gateway's own README) and point the `image`
+variable at it. Without `docker` to hand, the GitHub Packages page answers the
+same question.
 
 ```bash
 cd services/slack-event-gateway/tofu

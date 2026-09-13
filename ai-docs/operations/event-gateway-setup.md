@@ -4,7 +4,7 @@ title: Event Gateway 構築手順（event_source = "gateway"）
 description: GCP 側の構築手順。着手前の組織ポリシー確認、OpenTofu による Cloud Run / Pub/Sub / Secret Manager / IAM の一括構築、Slack の Request URL 2 箇所の設定、totsuka 側の config、人を増やす手順、破棄、費用の前提。Socket Mode を使う読者はこのページを読む必要がない。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/services/slack-event-gateway/tofu
 tags: [slack, gateway, gcp, cloud-run, pubsub, secret-manager, opentofu, runbook, cost]
-generated: { by: claude-code/opus-5, at: 2026-09-14T06:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-13T23:04:11+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -56,8 +56,9 @@ gcloud org-policies describe \
 | `enforce: true` | 適用済み。**成立しない** |
 
 `--effective` は継承と上書きを畳んだ実効値なので、組織で見て `false` なら組織のポリシーとしては
-通る。プロジェクトを既に決めているなら `--project <PROJECT_ID>` でも同じ問い合わせをしておくと、
-プロジェクト単位の上書きまで潰せる。
+通る。プロジェクトを既に決めているなら、**`--organization <ORG_ID>` を `--project <PROJECT_ID>` に
+置き換えて**同じ問い合わせをしておくと、プロジェクト単位の上書きまで潰せる。2 つは排他なので、
+両方付けると `gcloud` に断られる。
 
 **既定では未適用**なので大半の組織では素通りする。適用されていた場合、この構成は成立しない ——
 **外部ロードバランサも助けにならない**（Serverless NEG 経由でも Cloud Run には認証情報なしで到達するので、
@@ -104,6 +105,22 @@ gcloud config set project <PROJECT_ID>
 毎イベント追加の API 呼び出しが要る（決定 6）。
 
 # 3. `tofu apply`
+
+**先にイメージが実在することを確かめる。** `image` の既定値は公式イメージで、リリースごとに
+追従するように固定してある。ただし**公式イメージが出るようになったのはある版からで、それ以前の
+タグには存在しない**。存在しないタグは文字列としては妥当なので `tofu plan` も `tofu validate` も
+通ってしまい、**失敗するのは apply の最後、Cloud Run がリビジョンを起動しようとした時点**である。
+1 コマンドで先に潰せる:
+
+```bash
+cd services/slack-event-gateway/tofu
+image=$(grep -m1 'slack-event-gateway:' variables.tf | sed -E 's/.*"([^"]+)".*/\1/')
+docker manifest inspect "${image}"
+```
+
+`manifest unknown` が返るなら、そのリリースには公式イメージが無い。自前でビルドして push し
+（手順は `services/slack-event-gateway/README.md`）、`image` 変数で指すこと。手元に `docker` が
+無ければ、GitHub の Packages ページで同じことが確認できる。
 
 ```bash
 cd services/slack-event-gateway/tofu

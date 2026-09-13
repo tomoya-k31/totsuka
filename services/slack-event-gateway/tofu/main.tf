@@ -242,8 +242,12 @@ resource "google_cloud_run_v2_service" "gateway" {
   # `constraints/run.managed.requireInvokerIam`. It is not enforced by default,
   # but check before deploying into an organisation you do not administer:
   #
-  #   gcloud resource-manager org-policies describe \
-  #     constraints/run.managed.requireInvokerIam --organization <ORG_ID>
+  #   gcloud org-policies describe \
+  #     constraints/run.managed.requireInvokerIam --organization <ORG_ID> --effective
+  #
+  # `gcloud org-policies` (V2), and `--effective`: V1 cannot read a managed
+  # constraint and "not enforced" without `--effective` comes back as an
+  # error, so either mistake reads as the opposite answer.
   #
   # If it is enforced, this construction does not work and an external load
   # balancer does not help — a serverless NEG still arrives unauthenticated.
