@@ -11,6 +11,14 @@ Note: the plugin protocol is versioned independently of the application (see
 `crates/plugin-protocol`); a totsuka release does not imply a protocol-version
 change.
 
+## [0.7.8](https://github.com/tomoya-k31/totsuka/compare/v0.7.7...v0.7.8) (2026-09-14)
+
+
+### Bug Fixes
+
+* **deps:** Gateway の rustls を 0.23.45 に上げる (RUSTSEC-2026-0285) ([#687](https://github.com/tomoya-k31/totsuka/issues/687)) ([b07a6bb](https://github.com/tomoya-k31/totsuka/commit/b07a6bb28b12aa38dc7cc0a570e565a7853fbb6a))
+* **slack:** 返信案の提示面を 1 つに減らし、自己 DM 記録を廃止する ([#684](https://github.com/tomoya-k31/totsuka/issues/684)) ([c1bbd62](https://github.com/tomoya-k31/totsuka/commit/c1bbd62d56dfa69fd1fbe21162ccfe916fa7b063))
+
 ## [0.7.7](https://github.com/tomoya-k31/totsuka/compare/v0.7.6...v0.7.7) (2026-09-13)
 
 
