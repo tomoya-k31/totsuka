@@ -246,6 +246,15 @@ struct EnrichedMention {
     sender_name: String,
     channel_name: String,
     permalink: Option<String>,
+    /// Permalink of the **thread root**, when the mention is a reply inside
+    /// one (#683).
+    ///
+    /// `permalink` above names the mention itself, which for a reply is a
+    /// message partway into a conversation the agent has no way back to: the
+    /// body carries a window of thread context, but that is a transcript, not
+    /// a handle. This is the handle. `None` for a top-level mention (where it
+    /// would equal `permalink`) and when the lookup failed.
+    thread_permalink: Option<String>,
     /// `name: text` lines, oldest first. `None` = lookup failed.
     context_lines: Option<Vec<String>>,
 }
@@ -1141,12 +1150,33 @@ async fn enrich<T: SlackTransport>(
             None
         }
     };
+    // The thread root's own link, and only when it is a different message:
+    // a top-level mention's `reply_ts` **is** its `ts`, so resolving it would
+    // spend an API call to learn the permalink already in hand.
+    let thread_permalink = if mention.reply_ts() == mention.ts {
+        None
+    } else {
+        match api
+            .chat_get_permalink(&mention.channel, mention.reply_ts())
+            .await
+        {
+            Ok(link) => Some(link),
+            // Same degradation as the mention's own permalink: the task is
+            // worth more without the thread link than not at all.
+            Err(e) => {
+                tracing::warn!(error = %e, "chat.getPermalink failed for the thread root; \
+                     the task body will not carry the parent thread's url");
+                None
+            }
+        }
+    };
     let context_lines = thread_context(api, config, names, &mention).await;
     EnrichedMention {
         mention,
         sender_name,
         channel_name,
         permalink,
+        thread_permalink,
         context_lines,
     }
 }
@@ -1367,6 +1397,17 @@ fn build_task(
                 &[("file", describe_file(file).as_str())],
             ));
         }
+    }
+    // The way back into the conversation (#683). Between the attachments and
+    // the thread context because it belongs to neither: the attachments are
+    // the mention's own, and the context below is a window this link is what
+    // reaches past. Emitted only for a mention inside a thread — a top-level
+    // one is already the root, and its link is the task's `url`.
+    if let Some(link) = &enriched.thread_permalink {
+        body.push_str(&template::render(
+            &p.body_thread_permalink,
+            &[("url", link.as_str())],
+        ));
     }
     match &enriched.context_lines {
         Some(lines) if !lines.is_empty() => {
@@ -1676,6 +1717,131 @@ mod tests {
         }
     }
 
+    /// A mention at `ts`, optionally inside the thread rooted at `thread_ts`.
+    fn mention_at(ts: &str, thread_ts: Option<&str>) -> Mention {
+        Mention {
+            workflow: Some("slack-reply".into()),
+            repo_pin: None,
+            channel: "C1".into(),
+            user: "U_OTHER".into(),
+            text: "<@U_ME> hi".into(),
+            ts: ts.into(),
+            thread_ts: thread_ts.map(str::to_string),
+            reaction: None,
+            task_id_prefix: None,
+            instructions_kind: None,
+            files: Vec::new(),
+        }
+    }
+
+    /// **`enrich` resolves the thread root's permalink for a reply (#683).**
+    ///
+    /// Two `chat.getPermalink` calls, and the second one's `message_ts` is the
+    /// thread root — asserted by the script order, since `ScriptedTransport`
+    /// hands out responses in sequence.
+    #[tokio::test]
+    async fn enrich_resolves_the_thread_root_permalink_for_a_reply() {
+        let api = scripted(vec![
+            // users.info (sender), conversations.info (channel)
+            Ok(
+                json!({"ok": true, "user": {"name": "alice", "profile": {"display_name": "アリス"}}}),
+            ),
+            Ok(json!({"ok": true, "channel": {"name": "general"}})),
+            // chat.getPermalink for the mention, then for the thread root
+            Ok(json!({"ok": true, "permalink": "https://example.slack.com/archives/C1/p1"})),
+            Ok(json!({"ok": true, "permalink": "https://example.slack.com/archives/C1/p0"})),
+            // conversations.replies + one users.info for the other speaker
+            Ok(json!({"ok": true, "messages": [
+                {"user": "U_OTHER", "text": "はじめ", "ts": "0.0"}
+            ]})),
+        ]);
+        let enriched = enrich(
+            &api,
+            &small_limit_config(),
+            &mut NameCache::default(),
+            mention_at("1.0", Some("0.0")),
+        )
+        .await;
+
+        assert_eq!(
+            enriched.permalink.as_deref(),
+            Some("https://example.slack.com/archives/C1/p1")
+        );
+        assert_eq!(
+            enriched.thread_permalink.as_deref(),
+            Some("https://example.slack.com/archives/C1/p0")
+        );
+    }
+
+    /// **A top-level mention spends no second call.** Its `reply_ts` *is* its
+    /// `ts`, so the answer is already in hand — the script below carries
+    /// exactly one `chat.getPermalink` response and an exhausted script
+    /// errors, so a regression that calls it twice fails here rather than
+    /// doubling the API traffic silently.
+    #[tokio::test]
+    async fn enrich_makes_no_extra_permalink_call_for_a_top_level_mention() {
+        let api = scripted(vec![
+            Ok(
+                json!({"ok": true, "user": {"name": "alice", "profile": {"display_name": "アリス"}}}),
+            ),
+            Ok(json!({"ok": true, "channel": {"name": "general"}})),
+            Ok(json!({"ok": true, "permalink": "https://example.slack.com/archives/C1/p1"})),
+        ]);
+        let enriched = enrich(
+            &api,
+            &small_limit_config(),
+            &mut NameCache::default(),
+            mention_at("1.0", None),
+        )
+        .await;
+
+        assert_eq!(
+            enriched.permalink.as_deref(),
+            Some("https://example.slack.com/archives/C1/p1")
+        );
+        assert_eq!(enriched.thread_permalink, None);
+        // No thread, so no `conversations.replies` either — the empty context
+        // is the "not in a thread" answer, not a failed lookup.
+        assert_eq!(enriched.context_lines, Some(Vec::new()));
+    }
+
+    /// A failed thread-root lookup degrades the body, never the task: the
+    /// mention is still worth working on without the way back into the thread.
+    #[tokio::test]
+    async fn a_failed_thread_root_lookup_still_produces_a_task() {
+        let api = scripted(vec![
+            Ok(
+                json!({"ok": true, "user": {"name": "alice", "profile": {"display_name": "アリス"}}}),
+            ),
+            Ok(json!({"ok": true, "channel": {"name": "general"}})),
+            Ok(json!({"ok": true, "permalink": "https://example.slack.com/archives/C1/p1"})),
+            Err(SlackError::Api {
+                method: "chat.getPermalink".into(),
+                error: "message_not_found".into(),
+            }),
+            Ok(json!({"ok": true, "messages": [
+                {"user": "U_OTHER", "text": "はじめ", "ts": "0.0"}
+            ]})),
+        ]);
+        let enriched = enrich(
+            &api,
+            &small_limit_config(),
+            &mut NameCache::default(),
+            mention_at("1.0", Some("0.0")),
+        )
+        .await;
+
+        assert_eq!(enriched.thread_permalink, None);
+        let (task, _pending) = build_task(&small_limit_config(), &enriched, None);
+        let body = task.body.expect("body is set");
+        assert!(!body.contains("## 親スレッド"), "body: {body}");
+        // The mention's own coordinates survived the failure.
+        assert_eq!(
+            task.url.as_deref(),
+            Some("https://example.slack.com/archives/C1/p1")
+        );
+    }
+
     fn small_limit_config() -> SlackConfig {
         serde_json::from_value(json!({
             "app_token": "xapp-1-A1-t",
@@ -1849,8 +2015,50 @@ mod tests {
             sender_name: "alice".into(),
             channel_name: "general".into(),
             permalink: None,
+            thread_permalink: None,
             context_lines: Some(Vec::new()),
         }
+    }
+
+    /// **A mention inside a thread carries the thread's own link (#683).**
+    ///
+    /// `Task.url` is the mention, which for a reply is a message partway into
+    /// a conversation; the body's thread context is a transcript of a window,
+    /// not a handle. This section is the handle, and the parenthetical is what
+    /// tells the agent the window has an outside.
+    #[test]
+    fn a_threaded_mention_carries_the_parent_threads_url() {
+        let mut e = enriched("300.1");
+        e.mention.thread_ts = Some("300.0".into());
+        e.permalink = Some("https://example.slack.com/archives/C1/p300000000000100".into());
+        e.thread_permalink = Some("https://example.slack.com/archives/C1/p300000000000000".into());
+        let (task, _pending) = build_task(&slack_config(), &e, None);
+        let body = task.body.expect("body is set");
+
+        assert!(body.contains("## 親スレッド"), "body: {body}");
+        assert!(
+            body.contains("https://example.slack.com/archives/C1/p300000000000000"),
+            "body: {body}"
+        );
+        assert!(
+            body.contains("only the most recent part of it"),
+            "the agent has to be told the context is a window: {body}"
+        );
+        // `url` still names the mention: the thread link is enrichment, not a
+        // replacement for the delivery's own coordinates.
+        assert_eq!(
+            task.url.as_deref(),
+            Some("https://example.slack.com/archives/C1/p300000000000100")
+        );
+    }
+
+    /// A top-level mention **is** the thread root, so the section is omitted
+    /// rather than repeating `Task.url` under a second heading.
+    #[test]
+    fn a_top_level_mention_renders_no_parent_thread_section() {
+        let (task, _pending) = build_task(&slack_config(), &enriched("300.0"), None);
+        let body = task.body.expect("body is set");
+        assert!(!body.contains("## 親スレッド"), "body: {body}");
     }
 
     /// The whole point of the section: the file is named, and the body says
