@@ -70,7 +70,8 @@ impl Registry {
     ///
     /// Every check here is something whose runtime symptom is silence rather
     /// than an error — a duplicate path routing to whichever row was read
-    /// first, an empty secret verifying nothing.
+    /// first, an empty secret verifying nothing, a shared topic delivering one
+    /// operator's messages to another.
     fn validate(&self) -> Result<(), RegistryError> {
         if self.users.is_empty() {
             return Err(RegistryError::Invalid(
@@ -78,6 +79,13 @@ impl Registry {
             ));
         }
         let mut seen: HashMap<&str, ()> = HashMap::new();
+        // **One set for both topic kinds, not two.** Split into a set per
+        // column and "A's `topic` equals B's `block_actions_topic`" walks
+        // through — which is the collision that breaks the retention premise
+        // (decision 5): presses need their own topic precisely because its
+        // retention has to clear a `response_url`'s ~30-minute life while the
+        // other's is measured in days.
+        let mut topics: HashMap<&str, &str> = HashMap::new();
         for user in &self.users {
             for (field, value) in [
                 ("path_token", &user.path_token),
@@ -105,6 +113,23 @@ impl Registry {
                     "two rows share a `path_token`; one of them would never receive anything"
                         .into(),
                 ));
+            }
+            // The same silence, one field over: two operators pointed at one
+            // topic start without a word, and then one person's deliveries —
+            // their channel ids, their `ts`, their reactions — land in the
+            // other's subscription. Decision 6 separates operators by path
+            // *and* topic; this is what makes the second half true.
+            for (field, topic) in [
+                ("topic", &user.topic),
+                ("block_actions_topic", &user.block_actions_topic),
+            ] {
+                if let Some(owner) = topics.insert(topic.as_str(), user.slack_user_id.as_str()) {
+                    return Err(RegistryError::Invalid(format!(
+                        "`{}` and `{owner}` both publish to `{topic}` (`{field}`); one \
+                         operator's deliveries would land in the other's subscription",
+                        user.slack_user_id
+                    )));
+                }
             }
         }
         Ok(())
@@ -191,6 +216,88 @@ mod tests {
             .is_err(),
             "one topic for both kinds"
         );
+    }
+
+    /// **Two operators pointed at one topic is refused, across all four
+    /// pairings.**
+    ///
+    /// The runtime symptom is the one this whole function exists for: nothing
+    /// is logged, the container starts, and one person's deliveries — their
+    /// channel ids, their `ts`, their reactions — arrive in the other's
+    /// subscription. Decision 6 separates operators by path *and* topic, and
+    /// until now only the path half was enforced.
+    ///
+    /// The cross pairings are the reason both kinds share **one** set. A set
+    /// per column accepts "A's `topic` is B's `block_actions_topic`", which
+    /// then puts presses into a subscription whose retention is measured in
+    /// days — the premise decision 5 splits the topics to hold.
+    #[test]
+    fn two_rows_sharing_a_topic_are_refused() {
+        let shared = |a_events, a_presses, b_events, b_presses| {
+            table(&format!(
+                r#"{{"path_token":"tok-a","slack_user_id":"U_A","signing_secret":"s",
+                     "topic":"{a_events}","block_actions_topic":"{a_presses}"}},
+                   {{"path_token":"tok-b","slack_user_id":"U_B","signing_secret":"s",
+                     "topic":"{b_events}","block_actions_topic":"{b_presses}"}}"#
+            ))
+        };
+        let t = "projects/p/topics";
+        for (case, raw) in [
+            (
+                "topic == topic",
+                shared(
+                    &format!("{t}/shared"),
+                    &format!("{t}/a-a"),
+                    &format!("{t}/shared"),
+                    &format!("{t}/b-a"),
+                ),
+            ),
+            (
+                "block_actions_topic == block_actions_topic",
+                shared(
+                    &format!("{t}/a-e"),
+                    &format!("{t}/shared"),
+                    &format!("{t}/b-e"),
+                    &format!("{t}/shared"),
+                ),
+            ),
+            (
+                "A's topic == B's block_actions_topic",
+                shared(
+                    &format!("{t}/shared"),
+                    &format!("{t}/a-a"),
+                    &format!("{t}/b-e"),
+                    &format!("{t}/shared"),
+                ),
+            ),
+            (
+                "A's block_actions_topic == B's topic",
+                shared(
+                    &format!("{t}/a-e"),
+                    &format!("{t}/shared"),
+                    &format!("{t}/shared"),
+                    &format!("{t}/b-a"),
+                ),
+            ),
+        ] {
+            let err = Registry::parse(&raw).expect_err(case);
+            // The message has to name the two operators and the topic: the
+            // table is a secret nobody can diff in a review, so "some rows
+            // collide" leaves the reader to find them by eye.
+            let text = err.to_string();
+            for needle in ["U_A", "U_B", "shared"] {
+                assert!(text.contains(needle), "{case}: `{needle}` missing: {text}");
+            }
+        }
+
+        // Distinct topics across the board still parse — the check must not
+        // refuse the arrangement the OpenTofu module produces.
+        Registry::parse(&table(&format!(
+            "{},{}",
+            row("tok-a", "U_A"),
+            row("tok-b", "U_B")
+        )))
+        .expect("two fully separated operators");
         // An unknown field is a typo in a secret nobody can diff; refuse it
         // rather than run with a key that turned out to do nothing.
         assert!(
