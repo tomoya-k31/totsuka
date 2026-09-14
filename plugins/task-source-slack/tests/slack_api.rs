@@ -8,7 +8,7 @@ use serde_json::json;
 
 use common::{Canned, Shared, transport};
 use task_source_slack::error::SlackError;
-use task_source_slack::slack_api::{PostEphemeral, PostMessage, SlackApi, UpdateMessage};
+use task_source_slack::slack_api::{PostEphemeral, PostMessage, SlackApi};
 use task_source_slack::transport::TokenKind;
 
 fn api(shared: &Shared) -> SlackApi<common::FakeTransport> {
@@ -393,29 +393,6 @@ async fn chat_post_ephemeral_targets_one_user_with_blocks() {
     let body = requests[0].body.as_ref().unwrap();
     assert_eq!(body["user"], "U_ME");
     assert_eq!(body["blocks"], blocks);
-}
-
-#[tokio::test]
-async fn chat_update_is_idempotent() {
-    let shared = Shared::default();
-    shared.push(Canned::Data(json!({ "ok": true, "ts": "9.0" })));
-
-    api(&shared)
-        .chat_update(&UpdateMessage {
-            channel: "D_SELF",
-            ts: "9.0",
-            text: "✅ sent",
-            blocks: None,
-        })
-        .await
-        .unwrap();
-
-    let requests = shared.requests();
-    assert_eq!(requests[0].method, "chat.update");
-    assert!(requests[0].idempotent);
-    let body = requests[0].body.as_ref().unwrap();
-    assert_eq!(body["channel"], "D_SELF");
-    assert_eq!(body["ts"], "9.0");
 }
 
 #[tokio::test]

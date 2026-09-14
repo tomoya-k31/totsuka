@@ -35,7 +35,10 @@ use crate::transport::SlackTransport;
 
 /// Slack coordinates a task needs again at `result/publish` time (where the
 /// approved reply goes). Keyed by task id; in-memory, lost on restart —
-/// acceptable, the draft text survives in the self-DM record.
+/// acceptable, because losing them costs a draft nobody could place, and the
+/// mention can simply be made again. (It used to be excused by the self-DM
+/// record holding the text; that record is gone, so the excuse is the cheap
+/// recovery, not a surviving copy.)
 #[derive(Debug, Clone)]
 pub struct PendingMention {
     /// Channel the mention was posted in.
@@ -82,15 +85,15 @@ const SELECTION_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 const SELECTION_SWEEP_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 /// State shared between the pipeline task and the JSON-RPC server: the
-/// pending-mention index, the draft store (#107), the resolved self-DM
-/// record channel, and the resolved bot-DM nudge channel (#305). (The task
-/// buffer is gone — tasks are pushed via `task/submit` the moment they are
-/// built, 0.1.6.)
+/// pending-mention index, the draft store (#107), and the resolved bot-DM
+/// nudge channel (#305). The self-DM channel is **not** here — it lives on
+/// `MentionFilter` alone, because nothing posts there any more and its only
+/// remaining job is filter row 3. (The task buffer is gone — tasks are pushed
+/// via `task/submit` the moment they are built, 0.1.6.)
 #[derive(Clone, Default)]
 pub struct SharedState {
     pending: Arc<Mutex<PendingIndex>>,
     drafts: Arc<Mutex<DraftStore>>,
-    self_dm: Arc<Mutex<Option<String>>>,
     bot_dm: Arc<Mutex<Option<String>>>,
 }
 
@@ -201,17 +204,6 @@ impl SharedState {
         }
     }
 
-    /// Record the resolved self-DM record channel (set once by the pipeline
-    /// at startup; read by the approval flow).
-    pub fn set_self_dm_channel(&self, channel: String) {
-        *self.self_dm.lock().unwrap() = Some(channel);
-    }
-
-    /// The self-DM record channel, when startup resolution succeeded.
-    pub fn self_dm_channel(&self) -> Option<String> {
-        self.self_dm.lock().unwrap().clone()
-    }
-
     /// Record the resolved bot↔operator DM channel the notification nudges
     /// go to (#305; set once by the pipeline at startup when a `bot_token`
     /// is configured).
@@ -233,11 +225,6 @@ impl SharedState {
     /// The draft behind `draft_id`, if it is still stored.
     pub fn draft(&self, draft_id: &str) -> Option<Draft> {
         self.drafts.lock().unwrap().get(draft_id).cloned()
-    }
-
-    /// Record a draft's self-DM record `ts`.
-    pub fn set_draft_dm_ts(&self, draft_id: &str, dm_ts: String) {
-        self.drafts.lock().unwrap().set_dm_ts(draft_id, dm_ts);
     }
 
     /// Move a draft to `status`.
@@ -377,13 +364,15 @@ where
             &config.target_user_id,
             trigger_reactions.mention_workflow().map(str::to_string),
         );
-        // Resolve the self-DM record channel up front (filter row 3). Failure
-        // is not fatal: row 2 (own posts) already breaks reply loops.
+        // Resolve the operator's own DM channel up front, for filter row 3.
+        // Failure is not fatal: row 2 (own posts) already breaks reply loops.
         match api.conversations_open_self(&config.target_user_id).await {
             Ok(channel) => {
-                filter.set_self_dm_channel(channel.clone());
-                // The approval flow posts its draft records there (#107).
-                state.set_self_dm_channel(channel);
+                // Filter row 3 only. **Nothing posts there any more** — the
+                // draft record that used to (#107) was retired, so this
+                // resolution exists purely to keep the operator's own DM out
+                // of the mention pipeline.
+                filter.set_self_dm_channel(channel);
             }
             Err(e) => {
                 tracing::warn!(error = %e, "could not resolve the self-DM channel; \

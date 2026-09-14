@@ -1,30 +1,35 @@
 //! The approval flow (#107): `result/publish` turns an agent-generated reply
 //! (mechanically prefixed with a `<@sender_id>` mention of the asker) into a
-//! [`Draft`] presented twice — an ephemeral inside the mention's thread and a
-//! persistent self-DM record — and the approve/reject `block_actions` finish
-//! it. In the draft flow only an approval posts to the thread; a
+//! [`Draft`] presented **once** — an ephemeral inside the mention's thread —
+//! and the approve/reject `block_actions` finish it. It used to be two
+//! surfaces (the thread plus a self-DM record); [ADR-0074] retired the second
+//! because two button surfaces had to be kept in step and drifted in practice.
+//! In the draft flow only an approval posts to the thread; a
 //! `result/publish` carrying `delivery = direct` (#548, ADR-0057) skips the
 //! draft and posts immediately. Either way the post is under the operator's
 //! own name (user token).
 //!
 //! Failure posture:
-//! - one presentation surface failing to post is logged and tolerated (the
-//!   other still carries the buttons); both failing keeps the draft text in
-//!   the error log, so the reply is never silently lost;
+//! - the one surface failing to post keeps the draft text in the error log
+//!   (the only way back) and **sends no nudge** — pointing the operator at
+//!   buttons that were never posted is worse than silence;
 //! - a failed approval send keeps the draft `Pending` and tells the operator
 //!   via an ephemeral notice, so the button can simply be pressed again;
 //! - stale buttons (restart, TTL, eviction) degrade to an "expired" notice —
 //!   posted inside the original mention thread when the button value carries
-//!   the thread coordinates (#121), at the pressed surface otherwise — and
-//!   non-`Pending` drafts to an "already handled" notice — the double-send
-//!   guard.
+//!   the thread coordinates (#121), at the pressed surface otherwise;
+//! - a press on a non-`Pending` draft is the double-send guard, and it
+//!   **repaints** the pressed surface to the final state rather than only
+//!   answering: reaching that branch is evidence the buttons are still up,
+//!   and `block_actions` arrive at-least-once through the Event Gateway, so a
+//!   redelivery lands there with nobody having pressed twice.
 
 use serde_json::{Value, json};
 
 use crate::config::SlackConfig;
 use crate::draft::{Draft, DraftStatus};
 use crate::pipeline::SharedState;
-use crate::slack_api::{PostEphemeral, PostMessage, SlackApi, UpdateMessage};
+use crate::slack_api::{PostEphemeral, PostMessage, SlackApi};
 use crate::transport::SlackTransport;
 
 /// Slack caps a section block's text at 3000 characters; clip below that and
@@ -123,9 +128,9 @@ pub async fn publish_direct<T: SlackTransport>(
 }
 
 /// `result/publish`: build a draft from the agent's `content`, store it, and
-/// present it (thread ephemeral + self-DM record). `Err` is reserved for
+/// present it (the thread ephemeral — the one surface). `Err` is reserved for
 /// requests that cannot become a draft at all (unknown task, empty reply);
-/// presentation failures are logged, not returned.
+/// a presentation failure is logged, not returned.
 pub async fn publish_draft<T: SlackTransport>(
     api: &SlackApi<T>,
     config: &SlackConfig,
@@ -172,83 +177,45 @@ pub async fn publish_draft<T: SlackTransport>(
         sender_name: pending.sender_name,
         permalink: pending.permalink,
         text,
-        dm_ts: None,
         status: DraftStatus::Pending,
         created_at: std::time::SystemTime::now(),
     };
     let draft_id = state.insert_draft(draft.clone());
     let blocks = draft_blocks(&draft, &draft_id, &config.source_name);
 
-    // Surface 1: the ephemeral inside the mention's thread (operator-only).
+    // **The only surface.** The self-DM record used to carry a second copy of
+    // these buttons (#107); it was retired because two button surfaces had to
+    // be kept in step and drifted in practice — a press cleared one and left
+    // the other live, so the operator pressed again and got "already handled"
+    // with the buttons still sitting there. One surface cannot disagree with
+    // itself.
     let ephemeral = api
         .chat_post_ephemeral(&PostEphemeral {
             channel: &draft.channel,
             user: &config.target_user_id,
             text: "返信案が届きました。承認すると本人名義でスレッドに返信します。",
             thread_ts: Some(&draft.reply_ts),
-            blocks: Some(blocks.clone()),
+            blocks: Some(blocks),
         })
         .await;
+
     if let Err(e) = &ephemeral {
-        tracing::warn!(task_id, draft_id, error = %e, "could not post the in-thread draft \
-             ephemeral; the self-DM record still carries the buttons");
-    }
-
-    // Surface 2: the self-DM record (survives restarts as plain text).
-    let dm = match state.self_dm_channel() {
-        Some(dm_channel) => {
-            let posted = api
-                .chat_post_message(&PostMessage {
-                    channel: &dm_channel,
-                    text: &format!(
-                        "{} さんへの返信案が届きました（task {task_id}）",
-                        draft.sender_name
-                    ),
-                    thread_ts: None,
-                    unfurl_links: Some(false),
-                    blocks: Some(blocks),
-                })
-                .await;
-            match posted {
-                Ok(ts) => {
-                    state.set_draft_dm_ts(&draft_id, ts);
-                    Ok(())
-                }
-                Err(e) => {
-                    tracing::warn!(task_id, draft_id, error = %e, "could not post the self-DM \
-                         draft record; the in-thread ephemeral still carries the buttons");
-                    Err(())
-                }
-            }
-        }
-        None => {
-            tracing::warn!(
-                task_id,
-                draft_id,
-                "self-DM channel unknown (startup resolution \
-                 failed); skipping the draft record"
-            );
-            Err(())
-        }
-    };
-
-    if ephemeral.is_err() && dm.is_err() {
-        // Neither surface exists: the draft has no buttons anywhere. Keep the
-        // full text in the log so the reply is recoverable by hand.
+        // Nowhere to press. Keep the full text in the log so the reply is
+        // recoverable by hand — the bot DM's copy is clipped for preview.
         tracing::error!(
             task_id,
             draft_id,
+            error = %e,
             draft_text = %draft.text,
-            "both draft presentations failed; the reply is only recoverable from this log"
+            "the draft ephemeral could not be posted; the reply is only \
+             recoverable from this log"
         );
     } else {
-        // Neither surface generates a Slack notification (ephemerals never
-        // do; the self-DM record is the operator's own message) — nudge via
-        // the bot DM so the draft is noticed (#305). The reply text rides
-        // along as a buttonless log (#456): the ephemeral is transient, and
-        // without a copy here the feed cannot answer "what was it about to
-        // send?" once that is gone. Never finalized on approve/reject: the
-        // bot DM stays a notification feed, not a record.
+        // The ephemeral generates no Slack notification and never has — so
+        // the bot DM is what makes the draft noticeable (#305). The reply
+        // text rides along as a buttonless log (#456), which matters more now
+        // that it is the only durable trace: the ephemeral is transient, and
+        // once it is gone nothing else answers "what was it about to send?".
         crate::notify::send_nudge(
             api,
             state,
@@ -302,9 +269,11 @@ pub async fn handle_approval_action<T: SlackTransport>(
             // Old-format value (no coordinates) or the thread post failed.
             notice(api, response_url, text).await;
         } else if press_channel(payload) != coords.as_ref().map(|(c, _)| c.as_str()) {
-            // Pressed away from the thread (the self-DM record): without this
-            // the press would look dead there, since the ephemeral above is
-            // only visible inside the thread.
+            // Pressed from somewhere other than the mention's thread — a
+            // button that outlived a surface this build no longer creates,
+            // or one carried into another channel. Without this the press
+            // would look dead there, since the ephemeral above is only
+            // visible inside the thread.
             notice(
                 api,
                 response_url,
@@ -315,18 +284,31 @@ pub async fn handle_approval_action<T: SlackTransport>(
         return;
     };
     if draft.status != DraftStatus::Pending {
-        // The double-send guard: a second press on either surface.
+        // The double-send guard. **It repaints the surface rather than just
+        // answering**, because a second press is evidence the buttons are
+        // still there — and buttons that survive a decision keep inviting the
+        // press that produced this branch. Reaching it twice is normal, not
+        // exceptional: `block_actions` arrive at-least-once through the Event
+        // Gateway, so a redelivery lands here with nobody having pressed
+        // anything a second time.
         tracing::info!(draft_id, action_id, ?draft.status, "draft already handled");
-        let state_label = match draft.status {
-            DraftStatus::Sent => "✅ 送信済み",
-            _ => "❌ 却下済み",
-        };
-        notice(
-            api,
-            response_url,
-            &format!("この下書きは処理済みです（{state_label}）。二重送信は行われません。"),
-        )
-        .await;
+        match response_url {
+            Some(url) => {
+                let body = json!({
+                    "replace_original": true,
+                    "text": final_fallback(draft.status),
+                    "blocks": draft_blocks(&draft, draft_id, &config.source_name),
+                });
+                if let Err(e) = api.post_response_url(url, body).await {
+                    tracing::warn!(draft_id, error = %e, "could not repaint an already-handled draft");
+                }
+            }
+            None => tracing::warn!(
+                draft_id,
+                "an already-handled draft was pressed with no response_url; \
+                 its buttons stay up"
+            ),
+        }
         return;
     }
 
@@ -371,50 +353,37 @@ pub async fn handle_approval_action<T: SlackTransport>(
     };
     state.set_draft_status(draft_id, status);
 
-    // Finalize both surfaces. The self-DM record is a persistent audit trail;
-    // the in-thread ephemeral is transient, so pressing a button deletes it —
-    // *provided* the record survives to carry the ✅/❌ outcome. When the record
-    // is missing (self-DM unresolved at startup, or its post failed so `dm_ts`
-    // is None), the ephemeral is the only surface, so we replace it in place
-    // instead of erasing the outcome — otherwise a reject would leave no trace
-    // anywhere.
+    // **Replace the ephemeral in place; never delete it.** Deleting used to be
+    // right when a self-DM record survived to carry the ✅/❌ outcome, but that
+    // record is gone (#107 retired), so erasing this one would leave a reject
+    // with no trace anywhere. What stays behind is the same block set with the
+    // buttons swapped for the final state.
     let finalized = Draft { status, ..draft };
-    let blocks = draft_blocks(&finalized, draft_id, &config.source_name);
-    let pressed_in_dm = press_channel(payload) == state.self_dm_channel().as_deref();
-    let ephemeral_is_sole_surface = finalized.dm_ts.is_none();
-    if let Some(url) = response_url {
-        // Delete the ephemeral only when the press came from it AND a durable
-        // record exists elsewhere; every other case keeps the final view.
-        let body = if pressed_in_dm || ephemeral_is_sole_surface {
-            json!({
+    // **`response_url` is the only way back to the surface now.** The record
+    // type makes it optional (`GatewayRecord.response_url`), so a delivery
+    // without one is contractually legal even though Slack always sends it
+    // for a message button. Acting anyway is still right — the operator
+    // decided, and refusing would drop a decision that was already made
+    // (for an approval the reply is posted by this point) — but it must not
+    // pass for success: the buttons stay live and nothing else can clear
+    // them. The double-press guard keeps a second press from re-sending.
+    match response_url {
+        Some(url) => {
+            let body = json!({
                 "replace_original": true,
                 "text": final_fallback(status),
-                "blocks": blocks.clone(),
-            })
-        } else {
-            // Ephemeral messages have no `ts` to `chat.update`; `delete_original`
-            // via the interaction's response_url is the only way to remove them.
-            json!({ "delete_original": true })
-        };
-        if let Err(e) = api.post_response_url(url, body).await {
-            tracing::warn!(draft_id, error = %e, "could not finalize the pressed draft view");
+                "blocks": draft_blocks(&finalized, draft_id, &config.source_name),
+            });
+            if let Err(e) = api.post_response_url(url, body).await {
+                tracing::warn!(draft_id, error = %e, "could not finalize the pressed draft view");
+            }
         }
-    }
-    // The self-DM record — unless the press came from it (then the
-    // response_url rewrite above already covered it).
-    if let Some(dm_ts) = &finalized.dm_ts
-        && let Some(dm_channel) = state.self_dm_channel()
-        && !pressed_in_dm
-    {
-        let update = UpdateMessage {
-            channel: &dm_channel,
-            ts: dm_ts,
-            text: final_fallback(status),
-            blocks: Some(blocks),
-        };
-        if let Err(e) = api.chat_update(&update).await {
-            tracing::warn!(draft_id, error = %e, "could not update the self-DM draft record");
-        }
+        None => tracing::warn!(
+            draft_id,
+            ?status,
+            "the press carried no response_url, so the draft was decided but its \
+             buttons could not be cleared; a second press is refused as handled"
+        ),
     }
 }
 
@@ -899,7 +868,6 @@ DEBUG: shutting down
             sender_name: "sender".into(),
             permalink: None,
             text: "返信案".into(),
-            dm_ts: None,
             status: DraftStatus::Pending,
             created_at: std::time::SystemTime::now(),
         };

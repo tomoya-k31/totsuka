@@ -123,7 +123,7 @@ pub struct PostMessage<'a> {
     pub text: &'a str,
     /// Reply into this thread instead of posting top-level.
     pub thread_ts: Option<&'a str>,
-    /// Disable link unfurling (the self-DM record sets `false`).
+    /// Disable link unfurling.
     pub unfurl_links: Option<bool>,
     /// Block Kit blocks.
     pub blocks: Option<Value>,
@@ -146,17 +146,6 @@ pub struct PostEphemeral<'a> {
 
 /// Arguments for `chat.update`.
 #[derive(Debug, Clone)]
-pub struct UpdateMessage<'a> {
-    /// Channel of the message being updated.
-    pub channel: &'a str,
-    /// Timestamp of the message being updated.
-    pub ts: &'a str,
-    /// Replacement text.
-    pub text: &'a str,
-    /// Replacement Block Kit blocks.
-    pub blocks: Option<Value>,
-}
-
 /// Slack Web API client, generic over its transport for testability.
 pub struct SlackApi<T> {
     transport: T,
@@ -476,8 +465,9 @@ impl<T: SlackTransport> SlackApi<T> {
             .collect())
     }
 
-    /// `conversations.open` with the operator's own user id — the self-DM
-    /// channel where drafts are recorded. Idempotent by Slack semantics
+    /// `conversations.open` with the operator's own user id — their own DM
+    /// channel. **Nothing is posted there**: the id exists so the mention
+    /// filter can skip messages in it (row 3). Idempotent by Slack semantics
     /// (opening an already-open IM returns the same channel).
     pub async fn conversations_open_self(&self, user_id: &str) -> Result<String, SlackError> {
         let response = self
@@ -651,23 +641,6 @@ impl<T: SlackTransport> SlackApi<T> {
                 "blocks": message.blocks,
             })),
             false,
-        )
-        .await?;
-        Ok(())
-    }
-
-    /// `chat.update` — rewrite an existing message (the self-DM record's
-    /// state transitions). Idempotent: re-applying the same content is safe.
-    pub async fn chat_update(&self, update: &UpdateMessage<'_>) -> Result<(), SlackError> {
-        self.call(
-            "chat.update",
-            Some(json!({
-                "channel": update.channel,
-                "ts": update.ts,
-                "text": update.text,
-                "blocks": update.blocks,
-            })),
-            true,
         )
         .await?;
         Ok(())

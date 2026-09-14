@@ -37,7 +37,7 @@
 # ─────────────────────────────────────────────────────────────────────────
 #
 # The app acts as *you* for everything visible in a conversation: mention
-# detection, the approved reply, and the self-DM draft record all use the
+# detection and the approved reply both use the
 # user token. The bot user exists for exactly ONE thing — DM-ing you a
 # notification nudge when a draft/picker arrives (#305).
 #
@@ -79,8 +79,8 @@ oauth_config:
       - groups:history # read private-channel messages
       - groups:read # resolve private-channel names for [[channel_groups]] prefix rules
       - users:read # resolve display names for task context
-      - chat:write # post the approved reply / draft records as you
-      - im:write # open your self-DM to record drafts
+      - chat:write # post the draft ephemeral and the approved reply as you
+      - im:write # identify your self-DM so the mention filter can skip it
       - reactions:read # receive reaction_added for the :eyes: task trigger (#319)
       # Group mentions (#658, ADR-0072 decision 8): which user groups you
       # belong to is resolved in totsuka at startup via `usergroups.list`.

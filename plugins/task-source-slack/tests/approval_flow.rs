@@ -377,7 +377,7 @@ async fn an_unreadable_publish_value_fails_initialize() {
 }
 
 #[tokio::test]
-async fn publish_presents_the_draft_in_thread_and_self_dm() {
+async fn publish_presents_the_draft_in_the_thread_only() {
     let (listener, url) = ws_listener().await;
     let shared = Shared::default();
     canned_web_api(&shared, &url);
@@ -416,17 +416,13 @@ async fn publish_presents_the_draft_in_thread_and_self_dm() {
     assert_eq!(parsed["c"], "C1");
     assert_eq!(parsed["ts"], "100.0");
 
-    // Surface 2: the self-DM record, unfurling off.
-    let messages = requests_for(&shared, "chat.postMessage");
-    assert_eq!(messages.len(), 1);
-    let body = messages[0].body.as_ref().unwrap();
-    assert_eq!(body["channel"], "D_SELF");
-    assert_eq!(body["unfurl_links"], false);
+    // **There is no second surface.** The self-DM record (#107) used to carry
+    // a copy of these buttons; it was retired because two button surfaces had
+    // to be kept in step and drifted in practice. Nothing is posted as a
+    // message at publish time any more — only the ephemeral above.
     assert!(
-        body["blocks"]
-            .to_string()
-            .contains(parsed["d"].as_str().unwrap()),
-        "the record carries the same draft id"
+        requests_for(&shared, "chat.postMessage").is_empty(),
+        "publishing a draft must post no message anywhere"
     );
 
     // Without a `bot_token`, no bot-authenticated call is ever made — the
@@ -446,11 +442,8 @@ async fn publish_sends_a_bot_nudge_when_configured() {
     let shared = Shared::default();
     canned_web_api(&shared, &url);
     canned_bot_ok(&shared);
-    // First postMessage: the self-DM record (user). Then: the nudge (bot).
-    shared.push_for(
-        "chat.postMessage",
-        Canned::Data(json!({ "ok": true, "ts": "555.1" })),
-    );
+    // The nudge is now the *only* postMessage a publish makes: the self-DM
+    // record it used to follow was retired (#107).
     shared.push_for(
         "chat.postMessage",
         Canned::Data(json!({ "ok": true, "ts": "888.8" })),
@@ -459,8 +452,8 @@ async fn publish_sends_a_bot_nudge_when_configured() {
 
     // The nudge went to the bot↔operator DM, as the bot, linking the thread.
     let messages = requests_for(&shared, "chat.postMessage");
-    assert_eq!(messages.len(), 2, "record + nudge");
-    let nudge = &messages[1];
+    assert_eq!(messages.len(), 1, "the nudge, and nothing else");
+    let nudge = &messages[0];
     assert_eq!(nudge.token, task_source_slack::transport::TokenKind::Bot);
     let body = nudge.body.as_ref().unwrap();
     assert_eq!(body["channel"], "D_BOT");
@@ -490,11 +483,8 @@ async fn publish_sends_a_bot_nudge_when_configured() {
         !blocks.iter().any(|b| b["type"] == "actions"),
         "the bot-DM log must carry no approve/reject buttons: {blocks:?}"
     );
-    // The record itself still went out as the operator (user token).
-    assert_eq!(
-        messages[0].token,
-        task_source_slack::transport::TokenKind::User
-    );
+    // Nothing goes out as the operator at publish time any more: the record
+    // that used to (#107) is retired, so the nudge is the only message.
 }
 
 #[tokio::test]
@@ -503,23 +493,18 @@ async fn nudge_failure_does_not_fail_result_publish() {
     let shared = Shared::default();
     canned_web_api(&shared, &url);
     canned_bot_ok(&shared);
-    shared.push_for(
-        "chat.postMessage",
-        Canned::Data(json!({ "ok": true, "ts": "555.1" })),
-    );
     shared.push_for("chat.postMessage", Canned::Network);
     // `call` (inside the flow) panics on an RPC error: completing the flow
     // IS the assertion that a dead nudge never fails `result/publish`.
     let (_srv, _ws) = publish_draft_flow_with(&shared, &listener, init_params_with_bot()).await;
 
-    // Both draft surfaces are intact.
+    // The one surface that matters is intact: a dead nudge costs the
+    // notification, never the buttons.
     assert_eq!(requests_for(&shared, "chat.postEphemeral").len(), 1);
-    let messages = requests_for(&shared, "chat.postMessage");
-    assert_eq!(messages.len(), 2, "record + attempted nudge");
     assert_eq!(
-        messages[0].body.as_ref().unwrap()["channel"],
-        "D_SELF",
-        "the record was posted before the nudge failed"
+        requests_for(&shared, "chat.postMessage").len(),
+        1,
+        "the attempted nudge"
     );
 }
 
@@ -535,31 +520,21 @@ async fn bot_dm_resolution_failure_degrades_to_no_nudge() {
         Canned::Data(json!({ "ok": true, "user_id": "U_BOT" })),
     );
     shared.push_for("conversations.open", Canned::Network);
-    shared.push_for(
-        "chat.postMessage",
-        Canned::Data(json!({ "ok": true, "ts": "555.1" })),
-    );
     let (_srv, _ws) = publish_draft_flow_with(&shared, &listener, init_params_with_bot()).await;
 
     assert_eq!(requests_for(&shared, "chat.postEphemeral").len(), 1);
-    let messages = requests_for(&shared, "chat.postMessage");
-    assert_eq!(messages.len(), 1, "the record only; no nudge attempt");
-    assert_eq!(
-        messages[0].token,
-        task_source_slack::transport::TokenKind::User
+    assert!(
+        requests_for(&shared, "chat.postMessage").is_empty(),
+        "no nudge attempt, and nothing else posts a message"
     );
 }
 
 #[tokio::test]
-async fn approve_posts_the_reply_and_finalizes_both_views_once() {
+async fn approve_posts_the_reply_and_finalizes_the_one_view() {
     let (listener, url) = ws_listener().await;
     let shared = Shared::default();
     canned_web_api(&shared, &url);
-    // First postMessage: the self-DM record. Then (sticky): the reply.
-    shared.push_for(
-        "chat.postMessage",
-        Canned::Data(json!({ "ok": true, "ts": "555.1" })),
-    );
+    // The only postMessage a draft makes is the approved reply itself.
     shared.push_for(
         "chat.postMessage",
         Canned::Data(json!({ "ok": true, "ts": "777.7" })),
@@ -574,14 +549,14 @@ async fn approve_posts_the_reply_and_finalizes_both_views_once() {
     )
     .await;
     wait_until("the approved reply post", || {
-        requests_for(&shared, "chat.postMessage").len() == 2
+        requests_for(&shared, "chat.postMessage").len() == 1
     })
     .await;
 
     // The reply went to the mention's thread: the full text verbatim as the
     // notification fallback, plus a single `markdown` block carrying the same
     // text so the agent's Markdown renders properly (#454).
-    let reply = &requests_for(&shared, "chat.postMessage")[1];
+    let reply = &requests_for(&shared, "chat.postMessage")[0];
     let body = reply.body.as_ref().unwrap();
     assert_eq!(body["channel"], "C1");
     assert_eq!(body["thread_ts"], "100.0");
@@ -592,19 +567,26 @@ async fn approve_posts_the_reply_and_finalizes_both_views_once() {
         "{body}"
     );
 
-    // The pressed in-thread ephemeral was deleted outright…
-    wait_until("the ephemeral deletion + record update", || {
-        !shared.posted_urls().is_empty() && !requests_for(&shared, "chat.update").is_empty()
-    })
-    .await;
+    // **The ephemeral is replaced, not deleted.** With the self-DM record
+    // retired there is nowhere else for the ✅ to live, so erasing this would
+    // leave the decision with no trace at all.
+    wait_until("the ephemeral rewrite", || !shared.posted_urls().is_empty()).await;
     let posted = shared.posted_urls();
-    assert_eq!(posted[0].body["delete_original"], true);
-    // …and the self-DM record was updated in place (carrying the ✅ evidence).
-    let updates = requests_for(&shared, "chat.update");
-    let body = updates[0].body.as_ref().unwrap();
-    assert_eq!(body["channel"], "D_SELF");
-    assert_eq!(body["ts"], "555.1");
-    assert!(body["blocks"].to_string().contains("送信済み"));
+    assert_eq!(posted[0].body["replace_original"], true);
+    assert!(
+        posted[0].body.get("delete_original").is_none(),
+        "{:?}",
+        posted[0].body
+    );
+    assert!(
+        posted[0].body["blocks"].to_string().contains("送信済み"),
+        "{:?}",
+        posted[0].body
+    );
+    assert!(
+        requests_for(&shared, "chat.update").is_empty(),
+        "nothing else to update any more"
+    );
 
     // The posted auto-reply comes back as a message event from U_ME and must
     // NOT become a new task (loop break, #105 filter row 2).
@@ -633,20 +615,21 @@ async fn approve_posts_the_reply_and_finalizes_both_views_once() {
         block_actions_envelope("e4", "approve_reply", &draft_id, "C1"),
     )
     .await;
-    wait_until("the already-handled notice", || {
+    wait_until("the already-handled repaint", || {
         shared.posted_urls().len() >= 2
     })
     .await;
     let posted = shared.posted_urls();
-    let notice = &posted.last().unwrap().body;
-    assert_eq!(notice["replace_original"], false);
-    assert!(
-        notice["text"].as_str().unwrap().contains("処理済み"),
-        "{notice}"
-    );
+    let again = &posted.last().unwrap().body;
+    // **A second press repaints rather than just answering.** Leaving the
+    // buttons up after a decision is what makes an operator press again —
+    // and under the Event Gateway a redelivery lands here with nobody having
+    // pressed twice at all.
+    assert_eq!(again["replace_original"], true, "{again}");
+    assert!(again["blocks"].to_string().contains("送信済み"), "{again}");
     assert_eq!(
         requests_for(&shared, "chat.postMessage").len(),
-        2,
+        1,
         "no double send"
     );
 }
@@ -659,10 +642,6 @@ async fn oversized_reply_falls_back_to_plain_text() {
     let (listener, url) = ws_listener().await;
     let shared = Shared::default();
     canned_web_api(&shared, &url);
-    shared.push_for(
-        "chat.postMessage",
-        Canned::Data(json!({ "ok": true, "ts": "555.1" })),
-    );
     shared.push_for(
         "chat.postMessage",
         Canned::Data(json!({ "ok": true, "ts": "777.7" })),
@@ -703,10 +682,10 @@ async fn oversized_reply_falls_back_to_plain_text() {
     )
     .await;
     wait_until("the approved reply post", || {
-        requests_for(&shared, "chat.postMessage").len() == 2
+        requests_for(&shared, "chat.postMessage").len() == 1
     })
     .await;
-    let body = requests_for(&shared, "chat.postMessage")[1]
+    let body = requests_for(&shared, "chat.postMessage")[0]
         .body
         .clone()
         .unwrap();
@@ -719,10 +698,6 @@ async fn reject_finalizes_without_sending() {
     let (listener, url) = ws_listener().await;
     let shared = Shared::default();
     canned_web_api(&shared, &url);
-    shared.push_for(
-        "chat.postMessage",
-        Canned::Data(json!({ "ok": true, "ts": "555.1" })),
-    );
     let (_srv, mut ws) = publish_draft_flow(&shared, &listener).await;
     let (draft_id, ..) = draft_buttons(&shared);
 
@@ -731,21 +706,24 @@ async fn reject_finalizes_without_sending() {
         block_actions_envelope("e2", "reject_reply", &draft_id, "C1"),
     )
     .await;
-    wait_until("the final view rewrites", || {
-        !shared.posted_urls().is_empty() && !requests_for(&shared, "chat.update").is_empty()
+    wait_until("the final view rewrite", || {
+        !shared.posted_urls().is_empty()
     })
     .await;
 
-    // Nothing was posted beyond the self-DM record.
-    assert_eq!(requests_for(&shared, "chat.postMessage").len(), 1);
-    // The in-thread ephemeral was deleted; the ❌ evidence lives on the DM record.
+    // Nothing was posted anywhere — rejecting sends no message.
+    assert!(requests_for(&shared, "chat.postMessage").is_empty());
+    // The ❌ evidence lives on the ephemeral itself, rewritten in place.
     let posted = shared.posted_urls();
-    assert_eq!(posted[0].body["delete_original"], true);
-    let updates = requests_for(&shared, "chat.update");
+    assert_eq!(posted[0].body["replace_original"], true);
     assert!(
-        updates[0].body.as_ref().unwrap()["blocks"]
-            .to_string()
-            .contains("却下済み")
+        posted[0].body["blocks"].to_string().contains("却下"),
+        "{:?}",
+        posted[0].body
+    );
+    assert!(
+        requests_for(&shared, "chat.update").is_empty(),
+        "there is no second surface to update"
     );
 }
 
@@ -754,11 +732,7 @@ async fn send_failure_keeps_the_draft_retryable() {
     let (listener, url) = ws_listener().await;
     let shared = Shared::default();
     canned_web_api(&shared, &url);
-    // DM record → reply attempt 1 fails (archived) → retry succeeds.
-    shared.push_for(
-        "chat.postMessage",
-        Canned::Data(json!({ "ok": true, "ts": "555.1" })),
-    );
+    // Reply attempt 1 fails (archived) → retry succeeds.
     shared.push_for(
         "chat.postMessage",
         Canned::Data(json!({ "ok": false, "error": "is_archived" })),
@@ -797,11 +771,10 @@ async fn send_failure_keeps_the_draft_retryable() {
     )
     .await;
     wait_until("the retried reply post", || {
-        requests_for(&shared, "chat.postMessage").len() == 3
-            && !requests_for(&shared, "chat.update").is_empty()
+        requests_for(&shared, "chat.postMessage").len() == 2 && shared.posted_urls().len() >= 2
     })
     .await;
-    let reply = &requests_for(&shared, "chat.postMessage")[2];
+    let reply = &requests_for(&shared, "chat.postMessage")[1];
     assert_eq!(
         reply.body.as_ref().unwrap()["text"],
         expected_posted_reply()
@@ -819,10 +792,6 @@ async fn drafts_survive_a_restart() {
     let (listener, url) = ws_listener().await;
     let shared1 = Shared::default();
     canned_web_api(&shared1, &url);
-    shared1.push_for(
-        "chat.postMessage",
-        Canned::Data(json!({ "ok": true, "ts": "555.1" })),
-    );
     let (mut srv1, mut harness1) = server(&shared1);
     call(&mut srv1, 1, "initialize", init_params_in(&state_dir)).await;
     let mut ws1 = accept_with_hello(&listener).await;
@@ -865,16 +834,13 @@ async fn drafts_survive_a_restart() {
     assert_eq!(body["channel"], "C1");
     assert_eq!(body["thread_ts"], "100.0");
     assert_eq!(body["text"], expected_posted_reply());
-    // The persisted dm_ts still points finalization at the run-1 record.
-    wait_until("the self-DM record update", || {
-        !requests_for(&shared2, "chat.update").is_empty()
+    // The run-1 ephemeral is long gone, but the press carries its own
+    // `response_url`, so the final view still lands where the button was.
+    wait_until("the final view rewrite after the restart", || {
+        !shared2.posted_urls().is_empty()
     })
     .await;
-    let update = requests_for(&shared2, "chat.update")[0]
-        .body
-        .clone()
-        .unwrap();
-    assert_eq!(update["ts"], "555.1");
+    assert_eq!(shared2.posted_urls()[0].body["replace_original"], true);
     drop(srv2);
 
     // ---- Run 3: another restart — Sent persisted, so a second press is
@@ -890,15 +856,13 @@ async fn drafts_survive_a_restart() {
         block_actions_envelope("e3", "approve_reply", &draft_id, "C1"),
     )
     .await;
-    wait_until("the already-handled notice after the restart", || {
+    wait_until("the already-handled repaint after the restart", || {
         !shared3.posted_urls().is_empty()
     })
     .await;
-    let notice = &shared3.posted_urls()[0].body;
-    assert!(
-        notice["text"].as_str().unwrap().contains("処理済み"),
-        "{notice}"
-    );
+    let again = &shared3.posted_urls()[0].body;
+    assert_eq!(again["replace_original"], true, "{again}");
+    assert!(again["blocks"].to_string().contains("送信済み"), "{again}");
     assert!(
         requests_for(&shared3, "chat.postMessage").is_empty(),
         "no double send across restarts"
@@ -1045,54 +1009,13 @@ async fn stale_press_in_the_dm_also_notices_the_pressed_surface() {
 }
 
 #[tokio::test]
-async fn press_from_the_self_dm_record_skips_the_redundant_update() {
+async fn a_press_replaces_the_ephemeral_rather_than_erasing_it() {
     let (listener, url) = ws_listener().await;
     let shared = Shared::default();
     canned_web_api(&shared, &url);
-    shared.push_for(
-        "chat.postMessage",
-        Canned::Data(json!({ "ok": true, "ts": "555.1" })),
-    );
-    shared.push_for(
-        "chat.postMessage",
-        Canned::Data(json!({ "ok": true, "ts": "777.7" })),
-    );
-    let (_srv, mut ws) = publish_draft_flow(&shared, &listener).await;
-    let (draft_id, ..) = draft_buttons(&shared);
-
-    // Approve from the self-DM record: its response_url rewrite already
-    // covers the record, so no chat.update on top.
-    send_and_await_ack(
-        &mut ws,
-        block_actions_envelope("e2", "approve_reply", &draft_id, "D_SELF"),
-    )
-    .await;
-    wait_until("the final view rewrite", || {
-        !shared.posted_urls().is_empty()
-    })
-    .await;
-
-    assert_eq!(requests_for(&shared, "chat.postMessage").len(), 2);
-    let posted = shared.posted_urls();
-    assert_eq!(posted[0].body["replace_original"], true);
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    assert!(
-        requests_for(&shared, "chat.update").is_empty(),
-        "the DM press must not also chat.update the same message"
-    );
-}
-
-#[tokio::test]
-async fn press_replaces_the_ephemeral_when_no_dm_record_exists() {
-    let (listener, url) = ws_listener().await;
-    let shared = Shared::default();
-    canned_web_api(&shared, &url);
-    // The self-DM record fails to post → the in-thread ephemeral is the ONLY
-    // surface carrying the outcome, so a press must not erase it.
-    shared.push_for(
-        "chat.postMessage",
-        Canned::Data(json!({ "ok": false, "error": "channel_not_found" })),
-    );
+    // The ephemeral is the only surface carrying the outcome, so a press
+    // must not erase it (#107 retired the self-DM record that used to make
+    // deletion safe).
     let (_srv, mut ws) = publish_draft_flow(&shared, &listener).await;
     let (draft_id, ..) = draft_buttons(&shared);
 
@@ -1106,40 +1029,33 @@ async fn press_replaces_the_ephemeral_when_no_dm_record_exists() {
     })
     .await;
 
-    // With no durable record, the ephemeral is replaced in place (❌ visible),
-    // not deleted — otherwise the rejection would leave no trace anywhere.
+    // Replaced in place (❌ visible), never deleted — otherwise the rejection
+    // would leave no trace anywhere.
     let posted = shared.posted_urls();
     assert_eq!(posted[0].body["replace_original"], true);
     assert!(posted[0].body.get("delete_original").is_none());
     assert!(posted[0].body["blocks"].to_string().contains("却下済み"));
-    // No self-DM record existed, so nothing was chat.update'd.
     assert!(requests_for(&shared, "chat.update").is_empty());
 }
 
 #[tokio::test]
-async fn one_failed_presentation_surface_is_tolerated() {
+async fn a_failed_ephemeral_is_logged_and_sends_no_nudge() {
     let (listener, url) = ws_listener().await;
     let shared = Shared::default();
-    // The thread ephemeral fails; the self-DM record must still go out and
-    // result/publish must still succeed.
+    // The one surface fails. `result/publish` must still succeed — completing
+    // the flow below IS that assertion — and **no nudge goes out**: pointing
+    // the operator at buttons that were never posted is worse than silence.
+    // The reply text goes to the log instead, which is the only way back.
     canned_web_api_without_ephemeral(&shared, &url);
     shared.push_for(
         "chat.postEphemeral",
         Canned::Data(json!({ "ok": false, "error": "channel_not_found" })),
     );
-    shared.push_for(
-        "chat.postMessage",
-        Canned::Data(json!({ "ok": true, "ts": "555.1" })),
-    );
     let (_srv, _ws) = publish_draft_flow(&shared, &listener).await;
 
-    let messages = requests_for(&shared, "chat.postMessage");
-    assert_eq!(messages.len(), 1);
-    let body = messages[0].body.as_ref().unwrap();
-    assert_eq!(body["channel"], "D_SELF");
     assert!(
-        body["blocks"].to_string().contains("approve_reply"),
-        "the record still carries the buttons"
+        requests_for(&shared, "chat.postMessage").is_empty(),
+        "a draft with nowhere to be pressed must not be announced"
     );
 }
 

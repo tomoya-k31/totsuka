@@ -3,7 +3,7 @@ type: Decision
 title: ADR-0003 Slack メンション代理返信アシスタントの設計
 description: task-source-slack をコア無変更のプラグイン内完結で実装する決定。リポジトリ解決はプラグイン内 3 段階、イベントはバッファ + 短周期 tasks/fetch、トークンはユーザートークン（xoxp）のみで本人名義返信 + 承認フロー必須。
 tags: [slack, plugin, task-source, socket-mode, token, architecture]
-generated: { by: human:tomoya-k31, at: 2026-07-28T00:00:00Z }
+generated: { by: human:tomoya-k31, at: 2026-09-15T02:37:34+09:00 }
 status: stable
 sources:
   - id: ref-1
@@ -50,7 +50,7 @@ Socket Mode で受けたメンションはプラグイン内バッファに正�
 Slack アプリは Bot ユーザーを持たず、User OAuth Token（`xoxp-`）と Socket Mode 用 App-Level Token（`xapp-`）だけを発行する（[manifest 雛形](https://github.com/tomoya-k31/totsuka/blob/main/plugins/task-source-slack/manifest.yml)）。返信は常に本人名義になるため、防波堤を 2 つ重ねる:
 
 - **TokenGuard**（`initialize`）: `auth.test` の identity が `target_user_id` と一致しないトークンを拒否（他人のトークンでのなりすまし防止）し、`apps.connections.open` で `xapp-` トークンも起動時に検証する（`totsuka doctor` のプローブで両トークンの失効が見える）。
-- **承認フロー**: エージェントの返信案は勝手に送信されず、スレッド内エフェメラル + self-DM 記録の 2 面に提示され、承認ボタン（confirm ダイアログ付き）押下時のみ送信される（[エフェメラル承認フロー](/glossary/ephemeral-approval.md)）。
+- **承認フロー**: エージェントの返信案は勝手に送信されず、**スレッド内エフェメラル**に提示され、承認ボタン（confirm ダイアログ付き）押下時のみ送信される（[エフェメラル承認フロー](/glossary/ephemeral-approval.md)）。**当初は self-DM 記録との 2 面だったが、[ADR-0074](/decisions/adr-0074-single-draft-surface.md) で 1 面に減らした** —— ボタンのある面が 2 つあると押下後の後始末が片方だけ成功しうるためで、承認フローそのもの（勝手に送信しない）は不変である。
 
 トークンローテーションは無効（長命トークン）とし、保管は macOS Keychain に限定する（[運用ポリシー](/security/slack-user-token.md)）。
 
@@ -58,6 +58,6 @@ Slack アプリは Bot ユーザーを持たず、User OAuth Token（`xoxp-`）�
 
 - スコープ変更時はアプリの再インストールが必要で、`xoxp-` トークンが再発行される（Keychain 更新 → `totsuka doctor` で検証）。手順は [Slack セットアップ Runbook](/operations/slack-quickstart.md)。
 - プラグイン内 LLM 設定（`plugins/slack.toml` の `[llm]`）はコアの `[llm]` と独立している。リポジトリ候補が 1 件だけなら LLM 不要。（その後 #119 で default + override に発展: プラグインの `[llm]` 省略時はコアの `[llm]` が initialize で供給され default になる。明示時はプラグイン側が優先。`confidence_threshold` はフォールバック体験＝エフェメラル選択に紐づくためプラグイン側の意味論のまま）
-- 再起動で pending index は消える（in-memory。受信バッファ自体は [ADR-0008](/decisions/adr-0008-task-submit-push-ingestion.md) の push 化で廃止）。下書きストアも当初は in-memory だったが、#122 で `${XDG_STATE_HOME:-~/.local/state}/totsuka/plugins/{source_name}/drafts.json` へのプラグインローカル永続化（mutation 毎の全量 atomic 書き出し・0600、`initialize` でロード + TTL prune）に変更され、承認/却下ボタンと二重押下ガード（Sent/Rejected 保持）は再起動を跨いで有効。下書きテキストは self-DM 記録にも平文で残る。
+- 再起動で pending index は消える（in-memory。受信バッファ自体は [ADR-0008](/decisions/adr-0008-task-submit-push-ingestion.md) の push 化で廃止）。下書きストアも当初は in-memory だったが、#122 で `${XDG_STATE_HOME:-~/.local/state}/totsuka/plugins/{source_name}/drafts.json` へのプラグインローカル永続化（mutation 毎の全量 atomic 書き出し・0600、`initialize` でロード + TTL prune）に変更され、承認/却下ボタンと二重押下ガード（Sent/Rejected 保持）は再起動を跨いで有効。**下書きテキストが self-DM 記録にも平文で残る、というのは [ADR-0074](/decisions/adr-0074-single-draft-surface.md) 以前の話である** —— その記録面は廃止した。いまテキストが残るのは `drafts.json` と、`bot_token` を設定していれば通知 DM のログだけである。
 - 全ループ（メンション → `tasks/fetch` → dispatch → `result/publish` → 承認 → 本人名義返信）はモック Slack + 実バイナリの E2E（`orchestrator-cli/tests/slack_e2e.rs`）で CI 検証される。この E2E が、Slack のタスク ID（`{channel}:{ts}`）が git ブランチ名として不正（`:`）という組み合わせバグを露見させ、コアの `render_branch` にサニタイズを追加した（ソース非依存の堅牢性修正としてのコア変更）。
 - 「コア無変更」は #103〜#108 のエピック本体に対する判断であり、恒久の禁止ではない。設定重複（`[[repos]]` と `[[repositories]]`）の解消は、当初から任意 issue #109 として切り出したプロトコル拡張（`InitializeParams.repositories`、protocol 0.1.1 の追加的変更）で実施した。`[llm]` の重複（base_url / model）も同型の #119（`InitializeParams.llm`、protocol 0.1.2、default + override）で解消した。

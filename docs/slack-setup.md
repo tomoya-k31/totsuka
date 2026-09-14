@@ -1,12 +1,12 @@
 > 🌐 **English** · [日本語](slack-setup.ja.md)
 
-<!-- generated-from: ai-docs/operations/slack-quickstart.md sha256:fc41354fbb26bfdc31522429d6cdb5d3c0ef3e24a65f339f0c3c06acb71d14bc -->
+<!-- generated-from: ai-docs/operations/slack-quickstart.md sha256:9ad561cb8af413c03eea39b6255ab6e72124fb5bbcade5524a49dd772b8d6dd5 -->
 
 # Setting up the Slack source
 
 About 15 minutes. At the end, mentions of you in Slack become totsuka tasks, and when you approve an agent's draft it is posted as a thread reply **under your own name**.
 
-Everything that appears in a conversation is posted with your user token. The app's bot user exists only to send you a notification DM, because ephemeral messages and self-DMs generate no Slack notification of their own.
+Everything that appears in a conversation is posted with your user token. The app's bot user exists only to send you a notification DM, because an ephemeral message generates no Slack notification of its own.
 
 > **Read your workspace's rules first if this is a work account.** A user token acts as you: anything it posts is indistinguishable from you typing it. Some organizations restrict or prohibit user-token apps.
 
@@ -221,7 +221,7 @@ With the gateway, run `gcloud auth application-default login` once on this
 machine. totsuka reads **your own** queues with **your own** Google account;
 no service-account key is handed out.
 
-To try it end to end, have someone mention you. After the agent finishes, a draft arrives as an ephemeral message in the thread and as a self-DM (plus a bot DM if you configured `bot_token`). **Approve** posts it as a thread reply under your name; **reject** discards it.
+To try it end to end, have someone mention you. After the agent finishes, a draft arrives as an ephemeral message in the thread — the only place the buttons appear — plus a bot DM if you configured `bot_token`. **Approve** posts it as a thread reply under your name; **reject** discards it. Either way the message is rewritten in place to show ✅ or ❌, so the decision stays visible.
 
 ## Troubleshooting
 
@@ -232,7 +232,7 @@ To try it end to end, have someone mention you. After the agent finishes, a draf
 | Mentions do not become tasks | Check that the mention is `@you` (only channels you are in are visible), that `run --watch` is running, and that the message is a plain post — edits and bot posts are ignored |
 | Reacting does not create a task | Check that a workflow has `trigger = { reaction = "…" }` (**order in the file does not matter** — mentions and reactions arrive on separate event paths, so a reaction workflow written after the catch-all is not hidden by it), that the emoji name matches (👀 is `eyes`, 👁 is `eye`; a custom emoji arrives under the name actually clicked, so list aliases too), that **you** were the one who reacted, that the app was reinstalled with a manifest containing `reactions:read` — without that scope the event never arrives **and nothing reports an error** — and that the message was not **already handled as a mention**: both paths share one set of processed messages, so reacting to a message that already became a task does nothing |
 | Re-adding a reaction does not re-run it | Intended. A message that was handled successfully is not handled again, so removing and re-adding a reaction cannot start a second agent. A message whose fetch **failed** can be retried this way |
-| The draft arrives but the buttons no longer work | They expire after 24 hours, or were evicted once more than 1024 drafts accumulated. Reply by hand from the self-DM copy, or mention again. Drafts survive a restart |
+| The draft arrives but the buttons no longer work | They expire after 24 hours, or were evicted once more than 1024 drafts accumulated. If you configured `bot_token`, the notification DM still holds a copy of the reply text — reply by hand from that, or mention again. Drafts survive a restart |
 | A group mention (`@team-name`) does not create a task | Check that the app was reinstalled with a manifest containing `usergroups:read`. **Without that scope the startup lookup of your groups fails, your group set stays empty, and no group mention becomes a task** — personal mentions keep working, so it looks like "only part of it is broken". totsuka logs one warning at startup; look there. Your groups are resolved **once, at startup**, so restart after being added to a group. `@here`, `@channel` and `@everyone` are **out of scope by design**: they name no one |
 | **Gateway**: not a single mention arrives | Check that `gcloud auth application-default login` has been run (the startup check reports it), that Slack accepted the Request URL when you saved it (it verifies the URL on save, so saving fails if the gateway is not running), and that `[slack.gateway]` matches what the deployment produced |
 | **Gateway**: mentions work but no approval button arrives | The **Interactivity & Shortcuts** Request URL is not set. It is a separate setting from Event Subscriptions, and easy to miss because Socket Mode delivered both down one connection |

@@ -7,8 +7,8 @@
 //!    bot posts)
 //! 2. sender is the operator → ignore (self posts; breaks the loop after an
 //!    approved auto-reply)
-//! 3. the self-DM record channel → ignore (defense in depth against
-//!    re-detecting our own records)
+//! 3. the operator's own DM channel → ignore (defense in depth; since
+//!    ADR-0074 nothing is posted there, and row 2 already covers it)
 //! 4. the text names neither the operator (`<@target_user_id>`) nor a user
 //!    group they belong to (`<!subteam^S…>`) → ignore
 //! 5. no workflow answers mentions → ignore, **without spending the dedup
@@ -199,6 +199,11 @@ impl MentionFilter {
 
     /// Filter row 3, exposed so the reaction trigger applies the same
     /// exclusion before spending an API call re-fetching the message.
+    ///
+    /// Largely belt-and-braces since ADR-0074: nothing posts into the
+    /// operator's own DM any more, and every message there is theirs, which
+    /// row 2 already excludes. Kept because dropping it would buy nothing and
+    /// cost every operator a re-install (the scope it needs is granted).
     pub(crate) fn is_self_dm_channel(&self, channel: &str) -> bool {
         self.self_dm_channel.as_deref() == Some(channel)
     }
@@ -245,7 +250,7 @@ impl MentionFilter {
         if user == self.target_user_id {
             return None;
         }
-        // 3. the self-DM record channel
+        // 3. the operator's own DM channel
         if self.self_dm_channel.as_deref() == Some(channel) {
             return None;
         }
