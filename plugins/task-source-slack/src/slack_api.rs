@@ -146,17 +146,6 @@ pub struct PostEphemeral<'a> {
 
 /// Arguments for `chat.update`.
 #[derive(Debug, Clone)]
-pub struct UpdateMessage<'a> {
-    /// Channel of the message being updated.
-    pub channel: &'a str,
-    /// Timestamp of the message being updated.
-    pub ts: &'a str,
-    /// Replacement text.
-    pub text: &'a str,
-    /// Replacement Block Kit blocks.
-    pub blocks: Option<Value>,
-}
-
 /// Slack Web API client, generic over its transport for testability.
 pub struct SlackApi<T> {
     transport: T,
@@ -651,23 +640,6 @@ impl<T: SlackTransport> SlackApi<T> {
                 "blocks": message.blocks,
             })),
             false,
-        )
-        .await?;
-        Ok(())
-    }
-
-    /// `chat.update` — rewrite an existing message (the self-DM record's
-    /// state transitions). Idempotent: re-applying the same content is safe.
-    pub async fn chat_update(&self, update: &UpdateMessage<'_>) -> Result<(), SlackError> {
-        self.call(
-            "chat.update",
-            Some(json!({
-                "channel": update.channel,
-                "ts": update.ts,
-                "text": update.text,
-                "blocks": update.blocks,
-            })),
-            true,
         )
         .await?;
         Ok(())
