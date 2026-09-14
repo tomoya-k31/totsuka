@@ -57,6 +57,21 @@ pub enum RegistryError {
     Invalid(String),
 }
 
+/// Shortest `path_token` the container will start with.
+///
+/// **Kept in step with `tofu/variables.tf`**, whose `operators` variable
+/// carries the same 32 (`openssl rand -hex 24` is what its error message tells
+/// you to generate). The number is written in two places because the two
+/// guards protect different people: the OpenTofu one stops a bad table from
+/// being built, this one stops a bad table from being *run*, and a table can
+/// reach the container without going through OpenTofu at all — `main.rs`
+/// loads it from `REGISTRATIONS_PATH` or `REGISTRATIONS`, either of which an
+/// operator can write by hand into Secret Manager.
+///
+/// Length is counted in characters, not bytes, so the two agree: HCL's
+/// `length()` on a string counts characters.
+const MIN_PATH_TOKEN_CHARS: usize = 32;
+
 impl Registry {
     /// Parse and check a table.
     pub fn parse(raw: &str) -> Result<Self, RegistryError> {
@@ -70,8 +85,9 @@ impl Registry {
     ///
     /// Every check here is something whose runtime symptom is silence rather
     /// than an error — a duplicate path routing to whichever row was read
-    /// first, an empty secret verifying nothing, a shared topic delivering one
-    /// operator's messages to another.
+    /// first, an empty secret verifying nothing, a short path token that holds
+    /// until somebody guesses it, a shared topic delivering one operator's
+    /// messages to another.
     fn validate(&self) -> Result<(), RegistryError> {
         if self.users.is_empty() {
             return Err(RegistryError::Invalid(
@@ -102,6 +118,22 @@ impl Registry {
                         "a row has an empty `{field}`"
                     )));
                 }
+            }
+            // **The path is the credential, and it faces the open internet.**
+            // Slack cannot be an IAM principal and publishes no stable source
+            // IP list, so the path, the signature and the timestamp window are
+            // the three things standing in front of this container (decision
+            // 11). A short token can be guessed, and the symptom until it is
+            // guessed is nothing at all — which is what puts this check here
+            // rather than only in the OpenTofu module.
+            if user.path_token.chars().count() < MIN_PATH_TOKEN_CHARS {
+                return Err(RegistryError::Invalid(format!(
+                    "`{}` has a `path_token` shorter than {MIN_PATH_TOKEN_CHARS} characters; it \
+                     is the routing credential on an endpoint with no IAM in front of it, and a \
+                     short one can be guessed with nothing to show for the attempts — generate \
+                     one with `openssl rand -hex 24`",
+                    user.slack_user_id
+                )));
             }
             if user.topic == user.block_actions_topic {
                 return Err(RegistryError::Invalid(format!(
@@ -179,56 +211,66 @@ mod tests {
         )
     }
 
+    /// A token that passes the length check, distinguished by `seed`.
+    ///
+    /// Every row in these tests goes through here. A fixture short enough to
+    /// be refused on length would make each assertion below pass for a reason
+    /// it does not name — "empty signing secret" would be proving the length
+    /// check instead.
+    fn tok(seed: &str) -> String {
+        let pad = MIN_PATH_TOKEN_CHARS.saturating_sub(seed.chars().count());
+        format!("{seed}{}", "0".repeat(pad))
+    }
+
     #[test]
     fn a_registered_path_resolves_to_its_row() {
-        let registry = Registry::parse(&table(&format!(
-            "{},{}",
-            row("tok-a", "U_A"),
-            row("tok-b", "U_B")
-        )))
-        .expect("parses");
-        assert_eq!(registry.lookup("tok-b").unwrap().slack_user_id, "U_B");
-        assert!(registry.lookup("tok-c").is_none());
-        // A prefix of a real token is not a match.
-        assert!(registry.lookup("tok-").is_none());
-        assert!(registry.lookup("tok-aa").is_none());
+        let (a, b) = (tok("tok-a"), tok("tok-b"));
+        let registry = Registry::parse(&table(&format!("{},{}", row(&a, "U_A"), row(&b, "U_B"))))
+            .expect("parses");
+        assert_eq!(registry.lookup(&b).unwrap().slack_user_id, "U_B");
+        assert!(registry.lookup(&tok("tok-c")).is_none());
+        // A prefix of a real token is not a match, and neither is an extension.
+        assert!(registry.lookup(&a[..a.len() - 1]).is_none());
+        assert!(registry.lookup(&format!("{a}0")).is_none());
     }
 
     #[test]
     fn a_table_that_would_misbehave_silently_is_refused() {
         assert!(Registry::parse(r#"{"users":[]}"#).is_err(), "empty");
+        let same = tok("same");
         assert!(
             Registry::parse(&table(&format!(
                 "{},{}",
-                row("same", "U_A"),
-                row("same", "U_B")
+                row(&same, "U_A"),
+                row(&same, "U_B")
             )))
             .is_err(),
             "duplicate path_token"
         );
+        let t = tok("t");
         assert!(
-            Registry::parse(&table(
-                r#"{"path_token":"t","slack_user_id":"U","signing_secret":"",
-                    "topic":"a","block_actions_topic":"b"}"#
-            ))
+            Registry::parse(&table(&format!(
+                r#"{{"path_token":"{t}","slack_user_id":"U","signing_secret":"",
+                    "topic":"a","block_actions_topic":"b"}}"#
+            )))
             .is_err(),
             "empty signing secret"
         );
         assert!(
-            Registry::parse(&table(
-                r#"{"path_token":"t","slack_user_id":"U","signing_secret":"s",
-                    "topic":"same","block_actions_topic":"same"}"#
-            ))
+            Registry::parse(&table(&format!(
+                r#"{{"path_token":"{t}","slack_user_id":"U","signing_secret":"s",
+                    "topic":"same","block_actions_topic":"same"}}"#
+            )))
             .is_err(),
             "one topic for both kinds"
         );
         // An unknown field is a typo in a secret nobody can diff; refuse it
         // rather than run with a key that turned out to do nothing.
         assert!(
-            Registry::parse(&table(
-                r#"{"path_token":"t","slack_user_id":"U","signing_secret":"s",
-                    "topic":"a","block_actions_topic":"b","signing_secrets":"oops"}"#
-            ))
+            Registry::parse(&table(&format!(
+                r#"{{"path_token":"{t}","slack_user_id":"U","signing_secret":"s",
+                    "topic":"a","block_actions_topic":"b","signing_secrets":"oops"}}"#
+            )))
             .is_err(),
             "unknown field"
         );
@@ -249,11 +291,16 @@ mod tests {
     /// days — the premise decision 5 splits the topics to hold.
     #[test]
     fn two_rows_sharing_a_topic_are_refused() {
+        // Through `tok()`, like every other fixture here: `validate` checks
+        // the path-token floor **before** it looks at topics, so a short
+        // `tok-a` would fail each case below on length and prove nothing about
+        // the collision it is named for.
+        let (a, b) = (tok("tok-a"), tok("tok-b"));
         let shared = |a_events, a_presses, b_events, b_presses| {
             table(&format!(
-                r#"{{"path_token":"tok-a","slack_user_id":"U_A","signing_secret":"s",
+                r#"{{"path_token":"{a}","slack_user_id":"U_A","signing_secret":"s",
                      "topic":"{a_events}","block_actions_topic":"{a_presses}"}},
-                   {{"path_token":"tok-b","slack_user_id":"U_B","signing_secret":"s",
+                   {{"path_token":"{b}","slack_user_id":"U_B","signing_secret":"s",
                      "topic":"{b_events}","block_actions_topic":"{b_presses}"}}"#
             ))
         };
@@ -332,11 +379,34 @@ mod tests {
 
         // Distinct topics across the board still parse — the check must not
         // refuse the arrangement the OpenTofu module produces.
-        Registry::parse(&table(&format!(
-            "{},{}",
-            row("tok-a", "U_A"),
-            row("tok-b", "U_B")
-        )))
-        .expect("two fully separated operators");
+        Registry::parse(&table(&format!("{},{}", row(&a, "U_A"), row(&b, "U_B"))))
+            .expect("two fully separated operators");
+    }
+
+    /// **The 32-character floor holds in the container, not just in OpenTofu.**
+    ///
+    /// `tofu/variables.tf` refuses a short `path_token`, but the table does not
+    /// have to come through OpenTofu: `load_registrations()` reads it from
+    /// `REGISTRATIONS_PATH` or `REGISTRATIONS`, and an operator can write
+    /// either by hand. On that route nobody was checking, and the path *is*
+    /// the routing credential on an endpoint with no IAM in front of it —
+    /// short enough to guess, with no symptom until somebody does.
+    ///
+    /// Asserted on the boundary in both directions, because an off-by-one here
+    /// is invisible: it neither fails to start nor logs anything.
+    #[test]
+    fn a_short_path_token_is_refused_at_the_documented_floor() {
+        let one_short = "a".repeat(MIN_PATH_TOKEN_CHARS - 1);
+        let err = Registry::parse(&table(&row(&one_short, "U_A")))
+            .expect_err("31 characters is below the floor");
+        let text = err.to_string();
+        // Name the row and say how to fix it: the table is a secret nobody
+        // diffs in review, so "a row is too short" leaves the reader guessing.
+        assert!(text.contains("U_A"), "{text}");
+        assert!(text.contains("openssl rand -hex 24"), "{text}");
+
+        let exactly = "a".repeat(MIN_PATH_TOKEN_CHARS);
+        Registry::parse(&table(&row(&exactly, "U_A")))
+            .expect("32 characters is the floor, not one over");
     }
 }

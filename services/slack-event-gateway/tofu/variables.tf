@@ -176,6 +176,11 @@ variable "operators" {
   }
 
   validation {
+    # The same 32 lives in `src/registry.rs` (`MIN_PATH_TOKEN_CHARS`), because
+    # this check only protects whoever built the deployment from here. A table
+    # can reach the container without OpenTofu ever seeing it — `main.rs` reads
+    # it from `REGISTRATIONS_PATH` or `REGISTRATIONS`, either of which an
+    # operator can write by hand into Secret Manager. Change one, change both.
     condition     = alltrue([for o in var.operators : length(o.path_token) >= 32])
     error_message = "A path_token must be at least 32 characters. It is the routing credential on an endpoint with no IAM in front of it; generate one with `openssl rand -hex 24`."
   }

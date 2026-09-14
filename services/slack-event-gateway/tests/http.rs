@@ -20,7 +20,10 @@ use slack_event_gateway::registry::Registry;
 use slack_event_gateway::signature::sign;
 
 const SECRET: &str = "8f742231b10e8888abcd99yyyzzz85a5";
-const TOKEN: &str = "tok-conformance";
+/// 32 characters, the floor `Registry::validate` enforces — a shorter
+/// fixture would be refused by the table itself and every case here would
+/// fail on construction rather than on what it is about.
+const TOKEN: &str = "tok-conformance-0000000000000000";
 const NOW_SECS: u64 = 1_757_640_000;
 
 /// Records what was published, and can be told to fail.

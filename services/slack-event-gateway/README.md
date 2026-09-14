@@ -83,6 +83,12 @@ The registration table, one row per operator:
 }
 ```
 
+A `path_token` must be **at least 32 characters** — `openssl rand -hex 24`
+generates one. It is the routing credential on an endpoint with no IAM in
+front of it, so a short one can be guessed, and nothing happens until somebody
+does. The container refuses a table that carries one, whether the table came
+from the OpenTofu module or was written by hand into Secret Manager.
+
 The two topics are separate because their retentions differ: presses have to
 outlive `response_url`'s roughly 30-minute life but not much more, while
 messages are kept for days. A table naming one topic for both is refused at
