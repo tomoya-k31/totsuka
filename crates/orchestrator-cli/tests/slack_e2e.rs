@@ -573,19 +573,22 @@ fn e2e_slack_mention_to_approved_reply_and_doctor() {
     rt.block_on(send_and_await_ack(&mut ws, mention_envelope()));
 
     // watch: submit → dispatch → done → result/publish → the draft shows up
-    // as a thread ephemeral (and a self-DM record).
+    // as a thread ephemeral, and **only** as that: the self-DM record that
+    // used to accompany it (#107) was retired, so the ephemeral is the one
+    // surface carrying the buttons.
     let ephemeral = wait_for("the draft ephemeral", Duration::from_secs(90), || {
         mock.find("/chat.postEphemeral", |_| true)
     });
     assert_eq!(ephemeral.form["channel"], "C1");
     assert_eq!(ephemeral.form["thread_ts"], "100.0");
     assert_eq!(ephemeral.form["user"], "U_ME");
-    let dm_record = wait_for("the self-DM record", Duration::from_secs(30), || {
+    assert!(
         mock.find("/chat.postMessage", |c| {
             c.form.get("channel").map(String::as_str) == Some("D_SELF")
         })
-    });
-    assert!(dm_record.form.contains_key("blocks"));
+        .is_none(),
+        "nothing is posted to the operator's own DM any more"
+    );
 
     // Approve. The draft id rides in the button's `value`.
     let draft_id = draft_id_of(&ephemeral);
@@ -614,16 +617,16 @@ fn e2e_slack_mention_to_approved_reply_and_doctor() {
         json!([{ "type": "markdown", "text": "<@U_OTHER> compiling..." }])
     );
 
-    // Both draft surfaces were finalized: the pressed ephemeral through its
-    // response_url, the self-DM record through chat.update.
+    // The one surface is finalized through the press's own `response_url`,
+    // and **replaced rather than deleted** — with no second surface, erasing
+    // it would leave the decision with no trace anywhere.
     wait_for("the response_url rewrite", Duration::from_secs(30), || {
         mock.find("/response_url/1", |_| true)
     });
-    wait_for("the self-DM finalize", Duration::from_secs(30), || {
-        mock.find("/chat.update", |c| {
-            c.form.get("channel").map(String::as_str) == Some("D_SELF")
-        })
-    });
+    assert!(
+        mock.find("/chat.update", |_| true).is_none(),
+        "there is no second surface left to update"
+    );
 
     // #396, riding the same run: an `:eyes:` reaction on a *different*
     // message must reach the `watch` workflow, not the mention catch-all.

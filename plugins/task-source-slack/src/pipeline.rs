@@ -90,7 +90,6 @@ const SELECTION_SWEEP_INTERVAL: Duration = Duration::from_secs(60 * 60);
 pub struct SharedState {
     pending: Arc<Mutex<PendingIndex>>,
     drafts: Arc<Mutex<DraftStore>>,
-    self_dm: Arc<Mutex<Option<String>>>,
     bot_dm: Arc<Mutex<Option<String>>>,
 }
 
@@ -201,17 +200,6 @@ impl SharedState {
         }
     }
 
-    /// Record the resolved self-DM record channel (set once by the pipeline
-    /// at startup; read by the approval flow).
-    pub fn set_self_dm_channel(&self, channel: String) {
-        *self.self_dm.lock().unwrap() = Some(channel);
-    }
-
-    /// The self-DM record channel, when startup resolution succeeded.
-    pub fn self_dm_channel(&self) -> Option<String> {
-        self.self_dm.lock().unwrap().clone()
-    }
-
     /// Record the resolved bot↔operator DM channel the notification nudges
     /// go to (#305; set once by the pipeline at startup when a `bot_token`
     /// is configured).
@@ -233,11 +221,6 @@ impl SharedState {
     /// The draft behind `draft_id`, if it is still stored.
     pub fn draft(&self, draft_id: &str) -> Option<Draft> {
         self.drafts.lock().unwrap().get(draft_id).cloned()
-    }
-
-    /// Record a draft's self-DM record `ts`.
-    pub fn set_draft_dm_ts(&self, draft_id: &str, dm_ts: String) {
-        self.drafts.lock().unwrap().set_dm_ts(draft_id, dm_ts);
     }
 
     /// Move a draft to `status`.
@@ -381,9 +364,11 @@ where
         // is not fatal: row 2 (own posts) already breaks reply loops.
         match api.conversations_open_self(&config.target_user_id).await {
             Ok(channel) => {
-                filter.set_self_dm_channel(channel.clone());
-                // The approval flow posts its draft records there (#107).
-                state.set_self_dm_channel(channel);
+                // Filter row 3 only. **Nothing posts there any more** — the
+                // draft record that used to (#107) was retired, so this
+                // resolution exists purely to keep the operator's own DM out
+                // of the mention pipeline.
+                filter.set_self_dm_channel(channel);
             }
             Err(e) => {
                 tracing::warn!(error = %e, "could not resolve the self-DM channel; \

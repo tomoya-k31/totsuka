@@ -59,8 +59,6 @@ pub struct Draft {
     /// The reply text (agent-generated, prefixed with a mechanical
     /// `<@sender_id>` mention of the asker), sent verbatim on approval.
     pub text: String,
-    /// `ts` of the self-DM record, once posted (`chat.update` target).
-    pub dm_ts: Option<String>,
     /// Where the draft is in its lifecycle.
     pub status: DraftStatus,
     /// Insertion time, for the TTL sweep. Wall-clock (`SystemTime`, not
@@ -202,14 +200,6 @@ impl DraftStore {
         self.entries.get(draft_id)
     }
 
-    /// Record the self-DM record's `ts` (the later `chat.update` target).
-    pub fn set_dm_ts(&mut self, draft_id: &str, dm_ts: String) {
-        if let Some(draft) = self.entries.get_mut(draft_id) {
-            draft.dm_ts = Some(dm_ts);
-            self.save();
-        }
-    }
-
     /// Move `draft_id` to `status`.
     pub fn set_status(&mut self, draft_id: &str, status: DraftStatus) {
         if let Some(draft) = self.entries.get_mut(draft_id) {
@@ -290,7 +280,6 @@ mod tests {
             sender_name: "alice".into(),
             permalink: None,
             text: "返信案".into(),
-            dm_ts: None,
             status: DraftStatus::Pending,
             created_at,
         }
@@ -315,10 +304,8 @@ mod tests {
         assert_ne!(a, b);
         assert_eq!(store.get(&a).unwrap().task_id, "C1:100.2");
 
-        store.set_dm_ts(&a, "555.1".into());
         store.set_status(&a, DraftStatus::Sent);
         let updated = store.get(&a).unwrap();
-        assert_eq!(updated.dm_ts.as_deref(), Some("555.1"));
         assert_eq!(updated.status, DraftStatus::Sent);
         // The other draft is untouched.
         assert_eq!(store.get(&b).unwrap().status, DraftStatus::Pending);
@@ -367,15 +354,13 @@ mod tests {
         let mut store = DraftStore::load(path.clone());
         let a = store.insert(draft(start));
         let b = store.insert(draft(start));
-        store.set_dm_ts(&a, "555.1".into());
         store.set_status(&a, DraftStatus::Sent);
 
-        // A "restarted" store sees the same drafts, statuses, and dm_ts —
+        // A "restarted" store sees the same drafts and statuses —
         // including the non-Pending one (the double-send guard's memory).
         let reloaded = DraftStore::load(path);
         let restored = reloaded.get(&a).expect("draft a survives the reload");
         assert_eq!(restored.status, DraftStatus::Sent);
-        assert_eq!(restored.dm_ts.as_deref(), Some("555.1"));
         assert_eq!(reloaded.get(&b).unwrap().status, DraftStatus::Pending);
         assert_eq!(reloaded.order.len(), 2);
     }

@@ -3,7 +3,7 @@ type: Decision
 title: ADR-0003 Slack メンション代理返信アシスタントの設計
 description: task-source-slack をコア無変更のプラグイン内完結で実装する決定。リポジトリ解決はプラグイン内 3 段階、イベントはバッファ + 短周期 tasks/fetch、トークンはユーザートークン（xoxp）のみで本人名義返信 + 承認フロー必須。
 tags: [slack, plugin, task-source, socket-mode, token, architecture]
-generated: { by: human:tomoya-k31, at: 2026-07-28T00:00:00Z }
+generated: { by: human:tomoya-k31, at: 2026-09-15T02:15:22+09:00 }
 status: stable
 sources:
   - id: ref-1
@@ -50,7 +50,7 @@ Socket Mode で受けたメンションはプラグイン内バッファに正�
 Slack アプリは Bot ユーザーを持たず、User OAuth Token（`xoxp-`）と Socket Mode 用 App-Level Token（`xapp-`）だけを発行する（[manifest 雛形](https://github.com/tomoya-k31/totsuka/blob/main/plugins/task-source-slack/manifest.yml)）。返信は常に本人名義になるため、防波堤を 2 つ重ねる:
 
 - **TokenGuard**（`initialize`）: `auth.test` の identity が `target_user_id` と一致しないトークンを拒否（他人のトークンでのなりすまし防止）し、`apps.connections.open` で `xapp-` トークンも起動時に検証する（`totsuka doctor` のプローブで両トークンの失効が見える）。
-- **承認フロー**: エージェントの返信案は勝手に送信されず、スレッド内エフェメラル + self-DM 記録の 2 面に提示され、承認ボタン（confirm ダイアログ付き）押下時のみ送信される（[エフェメラル承認フロー](/glossary/ephemeral-approval.md)）。
+- **承認フロー**: エージェントの返信案は勝手に送信されず、**スレッド内エフェメラル**に提示され、承認ボタン（confirm ダイアログ付き）押下時のみ送信される（[エフェメラル承認フロー](/glossary/ephemeral-approval.md)）。**当初は self-DM 記録との 2 面だったが、[ADR-0074](/decisions/adr-0074-single-draft-surface.md) で 1 面に減らした** —— ボタンのある面が 2 つあると押下後の後始末が片方だけ成功しうるためで、承認フローそのもの（勝手に送信しない）は不変である。
 
 トークンローテーションは無効（長命トークン）とし、保管は macOS Keychain に限定する（[運用ポリシー](/security/slack-user-token.md)）。
 

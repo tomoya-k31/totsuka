@@ -3,7 +3,7 @@ type: Decision
 title: ADR-0021 Slack 返信案・ピッカーの通知は「ナッジ専用 bot」の DM で行う
 description: エフェメラルと自分名義 self-DM は Slack 通知を一切発生させず、オペレーターが返信案の到着に気づけない問題（#305）に対し、通知ナッジ専用の bot user を追加して bot→本人 DM で push 通知を出す決定。投稿主体は user token のまま不変で、ADR-0003 の「Bot なし」前提を部分改訂する。reminders.add ハックと macOS 通知強化のみの案は不採用。
 tags: [slack, plugin, task-source, notification, bot, token, approval]
-generated: { by: claude-code/fable-5, at: 2026-08-15T09:00:00+09:00 }
+generated: { by: claude-code/fable-5, at: 2026-09-15T02:15:22+09:00 }
 status: stable
 sources:
   - id: ref-1
@@ -50,7 +50,7 @@ bot DM は Slack ネイティブの push・バッジがデスクトップ+モバ
 - **transport**: `TokenKind::Bot` を追加。`bot_token` 未設定での Bot 呼び出しは `InvalidRequest`（プラグインバグ級 — 呼び出し側が設定でゲートする契約）。
 - **bot↔operator DM** は起動時に `conversations.open`（bot token）で 1 回解決し `SharedState` に保持（`self_dm` と同型）。解決失敗は warn のみの非致命（以後ナッジをスキップ、提示面は無傷）。
 - **fire-and-forget**: ナッジ送信失敗は warn で握り潰し、draft/picker フローを決してブロックしない（`notify::send_nudge`）。
-- **ナッジは approve/reject 後に更新・削除しない**: nudge の `ts` を永続化する（= `drafts.json` スキーマ bump）価値が無い。bot DM は通知フィードであり、記録・監査面は従来どおり self-DM 記録が担う。
+- **ナッジは approve/reject 後に更新・削除しない**: nudge の `ts` を永続化する（= `drafts.json` スキーマ bump）価値が無い。bot DM は通知フィードである。**追記（[ADR-0074](/decisions/adr-0074-single-draft-surface.md)）: 「記録・監査面は self-DM 記録が担う」という後半は成り立たなくなった** —— その面を廃止したためで、いまは押下後のエフェメラル自身が ✅/❌ を持つ。ナッジにボタンを付けない判断は**維持する**（付ければ面が再び 2 つになり、ADR-0074 が消した問題が戻る）。
 - **ループ安全は構造で担保**: `event_subscriptions` は変更しない（`message.im` 非購読のまま）。bot DM への投稿はそもそもパイプラインに入らない。
 
 # 不採用案
