@@ -123,7 +123,7 @@ pub struct PostMessage<'a> {
     pub text: &'a str,
     /// Reply into this thread instead of posting top-level.
     pub thread_ts: Option<&'a str>,
-    /// Disable link unfurling (the self-DM record sets `false`).
+    /// Disable link unfurling.
     pub unfurl_links: Option<bool>,
     /// Block Kit blocks.
     pub blocks: Option<Value>,
@@ -465,8 +465,9 @@ impl<T: SlackTransport> SlackApi<T> {
             .collect())
     }
 
-    /// `conversations.open` with the operator's own user id — the self-DM
-    /// channel where drafts are recorded. Idempotent by Slack semantics
+    /// `conversations.open` with the operator's own user id — their own DM
+    /// channel. **Nothing is posted there**: the id exists so the mention
+    /// filter can skip messages in it (row 3). Idempotent by Slack semantics
     /// (opening an already-open IM returns the same channel).
     pub async fn conversations_open_self(&self, user_id: &str) -> Result<String, SlackError> {
         let response = self

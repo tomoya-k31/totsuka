@@ -17,9 +17,12 @@
 //!   via an ephemeral notice, so the button can simply be pressed again;
 //! - stale buttons (restart, TTL, eviction) degrade to an "expired" notice —
 //!   posted inside the original mention thread when the button value carries
-//!   the thread coordinates (#121), at the pressed surface otherwise — and
-//!   non-`Pending` drafts to an "already handled" notice — the double-send
-//!   guard.
+//!   the thread coordinates (#121), at the pressed surface otherwise;
+//! - a press on a non-`Pending` draft is the double-send guard, and it
+//!   **repaints** the pressed surface to the final state rather than only
+//!   answering: reaching that branch is evidence the buttons are still up,
+//!   and `block_actions` arrive at-least-once through the Event Gateway, so a
+//!   redelivery lands there with nobody having pressed twice.
 
 use serde_json::{Value, json};
 
@@ -125,9 +128,9 @@ pub async fn publish_direct<T: SlackTransport>(
 }
 
 /// `result/publish`: build a draft from the agent's `content`, store it, and
-/// present it (thread ephemeral + self-DM record). `Err` is reserved for
+/// present it (the thread ephemeral — the one surface). `Err` is reserved for
 /// requests that cannot become a draft at all (unknown task, empty reply);
-/// presentation failures are logged, not returned.
+/// a presentation failure is logged, not returned.
 pub async fn publish_draft<T: SlackTransport>(
     api: &SlackApi<T>,
     config: &SlackConfig,
@@ -266,9 +269,11 @@ pub async fn handle_approval_action<T: SlackTransport>(
             // Old-format value (no coordinates) or the thread post failed.
             notice(api, response_url, text).await;
         } else if press_channel(payload) != coords.as_ref().map(|(c, _)| c.as_str()) {
-            // Pressed away from the thread (the self-DM record): without this
-            // the press would look dead there, since the ephemeral above is
-            // only visible inside the thread.
+            // Pressed from somewhere other than the mention's thread — a
+            // button that outlived a surface this build no longer creates,
+            // or one carried into another channel. Without this the press
+            // would look dead there, since the ephemeral above is only
+            // visible inside the thread.
             notice(
                 api,
                 response_url,

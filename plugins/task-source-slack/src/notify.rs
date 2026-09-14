@@ -1,10 +1,9 @@
 //! The bot-DM notification nudge (#305).
 //!
-//! Both presentation surfaces the plugin uses — the in-thread ephemeral and
-//! the self-DM record — generate **no** Slack notification: ephemerals never
-//! notify, and a self-DM posted under the operator's own name is their own
-//! message. So the operator misses drafts and pickers unless they happen to
-//! be looking. When a `bot_token` is configured, a short bot→operator DM
+//! The plugin's one presentation surface — the in-thread ephemeral —
+//! generates **no** Slack notification; ephemerals never do. So the operator
+//! misses drafts and pickers unless they happen to be looking. When a
+//! `bot_token` is configured, a short bot→operator DM
 //! carries the native push/badge instead (desktop and mobile), while every
 //! real post stays on the user token.
 //!
@@ -12,8 +11,10 @@
 //! the ephemeral is transient, so without a copy here the bot DM only ever
 //! says a draft *existed* — once the ephemeral is gone, nothing in the feed
 //! answers "what was it about to send?". The copy is a log, not a surface:
-//! no buttons, and never rewritten on approve/reject (the self-DM record
-//! stays the one finalized ✅/❌ audit trail, per ADR-0021).
+//! no buttons, and never rewritten on approve/reject — the bot DM stays a
+//! notification feed (ADR-0021). Since ADR-0074 retired the self-DM record
+//! this log is the only durable trace of the text, which raises its value:
+//! what it still does not carry is *which way the operator decided*.
 
 use serde_json::{Value, json};
 

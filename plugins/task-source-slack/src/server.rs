@@ -571,8 +571,9 @@ where
 
     /// `result/publish`: the agent's reply arrives here. By default — and for
     /// every Orchestrator that predates protocol 0.5.2 — it becomes a stored
-    /// [`Draft`](crate::draft::Draft) presented as an in-thread ephemeral + a
-    /// self-DM record, both carrying approve/reject buttons (#107). With
+    /// [`Draft`](crate::draft::Draft) presented as an in-thread ephemeral
+    /// carrying approve/reject buttons (#107; ADR-0074 retired the second
+    /// surface that used to accompany it). With
     /// `delivery = "direct"` (#548) it is posted into the thread immediately
     /// instead, still under the operator's name.
     ///
