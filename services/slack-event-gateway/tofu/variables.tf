@@ -56,7 +56,7 @@ variable "image" {
     substitutes only the numeric span and leaves the leading `v` alone.
   EOT
   type        = string
-  default     = "ghcr.io/tomoya-k31/totsuka/slack-event-gateway:v0.7.7" # x-release-please-version
+  default     = "ghcr.io/tomoya-k31/totsuka/slack-event-gateway:v0.7.8" # x-release-please-version
 }
 
 variable "max_instances" {
