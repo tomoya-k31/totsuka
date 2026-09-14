@@ -1652,16 +1652,27 @@ mod tests {
     /// cache rather than another API call.
     struct ScriptedTransport {
         responses: Mutex<VecDeque<Result<Value, SlackError>>>,
+        calls: Recorded,
     }
+
+    /// Every `(method, body)` the transport was asked for, in order.
+    ///
+    /// The script answers **positionally**, so it proves how many calls were
+    /// made and nothing about what they asked. A test whose subject is *which*
+    /// message was looked up — two `chat.getPermalink` calls differing only in
+    /// `message_ts` — reads this instead, or it passes just as happily on an
+    /// implementation that asked about the wrong message.
+    type Recorded = Arc<Mutex<Vec<(String, Option<Value>)>>>;
 
     impl SlackTransport for ScriptedTransport {
         async fn call(
             &self,
             _token: TokenKind,
-            _method: &str,
-            _body: Option<Value>,
+            method: &str,
+            body: Option<Value>,
             _idempotent: bool,
         ) -> Result<Value, SlackError> {
+            self.calls.lock().unwrap().push((method.to_string(), body));
             self.responses
                 .lock()
                 .unwrap()
@@ -1675,9 +1686,30 @@ mod tests {
     }
 
     fn scripted(responses: Vec<Result<Value, SlackError>>) -> SlackApi<ScriptedTransport> {
-        SlackApi::new(ScriptedTransport {
+        recording(responses).0
+    }
+
+    /// `scripted`, plus the handle on what was actually asked.
+    fn recording(
+        responses: Vec<Result<Value, SlackError>>,
+    ) -> (SlackApi<ScriptedTransport>, Recorded) {
+        let calls: Recorded = Arc::default();
+        let api = SlackApi::new(ScriptedTransport {
             responses: Mutex::new(responses.into()),
-        })
+            calls: Arc::clone(&calls),
+        });
+        (api, calls)
+    }
+
+    /// The request bodies recorded for one Web API method, in call order.
+    fn calls_to(calls: &Recorded, method: &str) -> Vec<Value> {
+        calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(m, _)| m == method)
+            .filter_map(|(_, body)| body.clone())
+            .collect()
     }
 
     /// A thread of `count` replies, plus one user-name lookup per speaker.
@@ -1736,12 +1768,14 @@ mod tests {
 
     /// **`enrich` resolves the thread root's permalink for a reply (#683).**
     ///
-    /// Two `chat.getPermalink` calls, and the second one's `message_ts` is the
-    /// thread root — asserted by the script order, since `ScriptedTransport`
-    /// hands out responses in sequence.
+    /// Two `chat.getPermalink` calls, and the second one names the **thread
+    /// root**. Asserted on the recorded request bodies rather than on the two
+    /// links that come back: the script answers positionally, so an
+    /// implementation that looked the mention up twice — the very bug this
+    /// change is about — would return the same pair and pass.
     #[tokio::test]
     async fn enrich_resolves_the_thread_root_permalink_for_a_reply() {
-        let api = scripted(vec![
+        let (api, calls) = recording(vec![
             // users.info (sender), conversations.info (channel)
             Ok(
                 json!({"ok": true, "user": {"name": "alice", "profile": {"display_name": "アリス"}}}),
@@ -1771,6 +1805,12 @@ mod tests {
             enriched.thread_permalink.as_deref(),
             Some("https://example.slack.com/archives/C1/p0")
         );
+        let permalinks = calls_to(&calls, "chat.getPermalink");
+        assert_eq!(permalinks.len(), 2, "one call per message: {permalinks:?}");
+        assert_eq!(permalinks[0]["channel"], "C1");
+        assert_eq!(permalinks[0]["message_ts"], "1.0", "the mention itself");
+        assert_eq!(permalinks[1]["channel"], "C1");
+        assert_eq!(permalinks[1]["message_ts"], "0.0", "the thread root");
     }
 
     /// **A top-level mention spends no second call.** Its `reply_ts` *is* its
@@ -1780,7 +1820,7 @@ mod tests {
     /// doubling the API traffic silently.
     #[tokio::test]
     async fn enrich_makes_no_extra_permalink_call_for_a_top_level_mention() {
-        let api = scripted(vec![
+        let (api, calls) = recording(vec![
             Ok(
                 json!({"ok": true, "user": {"name": "alice", "profile": {"display_name": "アリス"}}}),
             ),
@@ -1800,6 +1840,9 @@ mod tests {
             Some("https://example.slack.com/archives/C1/p1")
         );
         assert_eq!(enriched.thread_permalink, None);
+        let permalinks = calls_to(&calls, "chat.getPermalink");
+        assert_eq!(permalinks.len(), 1, "no second call: {permalinks:?}");
+        assert_eq!(permalinks[0]["message_ts"], "1.0");
         // No thread, so no `conversations.replies` either — the empty context
         // is the "not in a thread" answer, not a failed lookup.
         assert_eq!(enriched.context_lines, Some(Vec::new()));
