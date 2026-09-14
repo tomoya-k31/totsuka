@@ -408,5 +408,26 @@ mod tests {
         let exactly = "a".repeat(MIN_PATH_TOKEN_CHARS);
         Registry::parse(&table(&row(&exactly, "U_A")))
             .expect("32 characters is the floor, not one over");
+
+        // **Characters, not bytes.** The whole reason this constant matches
+        // `variables.tf` is that HCL's `length()` counts characters, so a
+        // table OpenTofu accepts has to start. Counting bytes instead would
+        // still pass every case above — every one of them is ASCII — and then
+        // refuse a multibyte token that was built to spec. 32 characters, 96
+        // bytes.
+        let multibyte = "あ".repeat(MIN_PATH_TOKEN_CHARS);
+        assert_eq!(
+            multibyte.len(),
+            MIN_PATH_TOKEN_CHARS * 3,
+            "the fixture is multibyte"
+        );
+        Registry::parse(&table(&row(&multibyte, "U_A")))
+            .expect("32 characters is 32 characters, whatever they weigh");
+
+        // …and one character short of it is still refused, so the boundary is
+        // the same on this side too rather than merely permissive.
+        let multibyte_short = "あ".repeat(MIN_PATH_TOKEN_CHARS - 1);
+        Registry::parse(&table(&row(&multibyte_short, "U_A")))
+            .expect_err("31 characters is below the floor however they are encoded");
     }
 }
