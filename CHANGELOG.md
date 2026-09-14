@@ -11,6 +11,13 @@ Note: the plugin protocol is versioned independently of the application (see
 `crates/plugin-protocol`); a totsuka release does not imply a protocol-version
 change.
 
+## [0.7.7](https://github.com/tomoya-k31/totsuka/compare/v0.7.6...v0.7.7) (2026-09-13)
+
+
+### Documentation
+
+* **release:** ghcr の初回可視性についての断定を実測に置き換える ([#681](https://github.com/tomoya-k31/totsuka/issues/681)) ([4ce61e3](https://github.com/tomoya-k31/totsuka/commit/4ce61e30bc2e3e518fb52960337af8012e408f3a))
+
 ## [0.7.6](https://github.com/tomoya-k31/totsuka/compare/v0.7.5...v0.7.6) (2026-09-13)
 
 
