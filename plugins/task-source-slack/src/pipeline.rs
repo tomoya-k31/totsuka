@@ -1150,10 +1150,20 @@ async fn enrich<T: SlackTransport>(
             None
         }
     };
-    // The thread root's own link, and only when it is a different message:
-    // a top-level mention's `reply_ts` **is** its `ts`, so resolving it would
-    // spend an API call to learn the permalink already in hand.
-    let thread_permalink = if mention.reply_ts() == mention.ts {
+    // The thread root's own link, under the **same scope rule as the thread
+    // context below it** — the two are one statement about the conversation,
+    // and handing over an entrance to a thread whose transcript was withheld
+    // gives back exactly what withholding it decided not to give.
+    //
+    // Skipped in two cases:
+    //
+    // - `reply_ts == ts` — a top-level mention **is** the root, so resolving
+    //   it would spend an API call to learn the permalink already in hand.
+    // - a prefixed task reacting to one **reply** (#393 D6, #397). That means
+    //   "implement this message", and `thread_context` returns no lines for it
+    //   on purpose: the thread is a conversation the agent was not pointed at.
+    let scoped_out = mention.task_id_prefix.is_some() && !mention.is_thread_root();
+    let thread_permalink = if mention.reply_ts() == mention.ts || scoped_out {
         None
     } else {
         match api
@@ -1848,6 +1858,49 @@ mod tests {
         assert_eq!(enriched.context_lines, Some(Vec::new()));
     }
 
+    /// **A prefixed task on a reply gets no thread entrance either (#393 D6).**
+    ///
+    /// Reacting to one reply means "implement this message", and
+    /// `thread_context` withholds the thread on purpose — it is a conversation
+    /// the agent was not pointed at. Handing over the *link* to that same
+    /// thread gives back what withholding the transcript decided not to give,
+    /// and the section's text would invite the agent to go read it.
+    ///
+    /// The empty script is the assertion: any API call at all errors, so a
+    /// version that resolves the root here fails rather than quietly widening
+    /// the scope.
+    #[tokio::test]
+    async fn a_prefixed_task_on_a_reply_gets_no_parent_thread_url() {
+        let (api, calls) = recording(vec![
+            Ok(
+                json!({"ok": true, "user": {"name": "alice", "profile": {"display_name": "アリス"}}}),
+            ),
+            Ok(json!({"ok": true, "channel": {"name": "general"}})),
+            Ok(json!({"ok": true, "permalink": "https://example.slack.com/archives/C1/p5"})),
+        ]);
+        let mut mention = mention_at("5.0", Some("0.0"));
+        mention.task_id_prefix = Some("impl".into());
+        mention.reaction = Some("hammer".into());
+        assert!(!mention.is_thread_root(), "the subject is a reply");
+
+        let enriched = enrich(
+            &api,
+            &small_limit_config(),
+            &mut NameCache::default(),
+            mention,
+        )
+        .await;
+
+        assert_eq!(enriched.thread_permalink, None);
+        let permalinks = calls_to(&calls, "chat.getPermalink");
+        assert_eq!(permalinks.len(), 1, "the mention only: {permalinks:?}");
+        // The same decision on both halves: no transcript, no entrance.
+        assert_eq!(enriched.context_lines, Some(Vec::new()));
+        let (task, _pending) = build_task(&small_limit_config(), &enriched, None);
+        let body = task.body.expect("body is set");
+        assert!(!body.contains("## 親スレッド"), "body: {body}");
+    }
+
     /// A failed thread-root lookup degrades the body, never the task: the
     /// mention is still worth working on without the way back into the thread.
     #[tokio::test]
@@ -2084,7 +2137,7 @@ mod tests {
             "body: {body}"
         );
         assert!(
-            body.contains("only the most recent part of it"),
+            body.contains("only its most recent part"),
             "the agent has to be told the context is a window: {body}"
         );
         // `url` still names the mention: the thread link is enrichment, not a
