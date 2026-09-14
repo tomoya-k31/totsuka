@@ -85,7 +85,10 @@ impl Registry {
         // (decision 5): presses need their own topic precisely because its
         // retention has to clear a `response_url`'s ~30-minute life while the
         // other's is measured in days.
-        let mut topics: HashMap<&str, &str> = HashMap::new();
+        // Value: `(owner, which column they used)` — in a cross-column
+        // collision the two sides are different fields, and naming only the
+        // current row's leaves the reader to work out where the other half is.
+        let mut topics: HashMap<&str, (&str, &str)> = HashMap::new();
         for user in &self.users {
             for (field, value) in [
                 ("path_token", &user.path_token),
@@ -123,10 +126,13 @@ impl Registry {
                 ("topic", &user.topic),
                 ("block_actions_topic", &user.block_actions_topic),
             ] {
-                if let Some(owner) = topics.insert(topic.as_str(), user.slack_user_id.as_str()) {
+                if let Some((owner, owner_field)) =
+                    topics.insert(topic.as_str(), (user.slack_user_id.as_str(), field))
+                {
                     return Err(RegistryError::Invalid(format!(
-                        "`{}` and `{owner}` both publish to `{topic}` (`{field}`); one \
-                         operator's deliveries would land in the other's subscription",
+                        "`{}` (`{field}`) and `{owner}` (`{owner_field}`) both publish to \
+                         `{topic}`; one operator's deliveries would land in the other's \
+                         subscription",
                         user.slack_user_id
                     )));
                 }
@@ -216,6 +222,16 @@ mod tests {
             .is_err(),
             "one topic for both kinds"
         );
+        // An unknown field is a typo in a secret nobody can diff; refuse it
+        // rather than run with a key that turned out to do nothing.
+        assert!(
+            Registry::parse(&table(
+                r#"{"path_token":"t","slack_user_id":"U","signing_secret":"s",
+                    "topic":"a","block_actions_topic":"b","signing_secrets":"oops"}"#
+            ))
+            .is_err(),
+            "unknown field"
+        );
     }
 
     /// **Two operators pointed at one topic is refused, across all four
@@ -242,9 +258,15 @@ mod tests {
             ))
         };
         let t = "projects/p/topics";
-        for (case, raw) in [
+        // Both column names travel with the case. The message says which
+        // column each side used, and a regression that dropped or swapped
+        // them would leave all four cases green on the ids and the topic
+        // alone — which is exactly what the cross-column rows are here for.
+        for (case, field, owner_field, raw) in [
             (
                 "topic == topic",
+                "topic",
+                "topic",
                 shared(
                     &format!("{t}/shared"),
                     &format!("{t}/a-a"),
@@ -254,6 +276,8 @@ mod tests {
             ),
             (
                 "block_actions_topic == block_actions_topic",
+                "block_actions_topic",
+                "block_actions_topic",
                 shared(
                     &format!("{t}/a-e"),
                     &format!("{t}/shared"),
@@ -263,6 +287,8 @@ mod tests {
             ),
             (
                 "A's topic == B's block_actions_topic",
+                "block_actions_topic",
+                "topic",
                 shared(
                     &format!("{t}/shared"),
                     &format!("{t}/a-a"),
@@ -272,6 +298,8 @@ mod tests {
             ),
             (
                 "A's block_actions_topic == B's topic",
+                "topic",
+                "block_actions_topic",
                 shared(
                     &format!("{t}/a-e"),
                     &format!("{t}/shared"),
@@ -288,6 +316,18 @@ mod tests {
             for needle in ["U_A", "U_B", "shared"] {
                 assert!(text.contains(needle), "{case}: `{needle}` missing: {text}");
             }
+            // Matched as the rendered `id (column)` pairs, not as bare
+            // substrings: `block_actions_topic` *contains* `topic`, so a plain
+            // `contains("topic")` passes on a message naming the other column
+            // and the cross-column cases would prove nothing.
+            assert!(
+                text.contains(&format!("`U_B` (`{field}`)")),
+                "{case}: the second row's column must be named: {text}"
+            );
+            assert!(
+                text.contains(&format!("`U_A` (`{owner_field}`)")),
+                "{case}: the first row's column must be named too: {text}"
+            );
         }
 
         // Distinct topics across the board still parse — the check must not
@@ -298,15 +338,5 @@ mod tests {
             row("tok-b", "U_B")
         )))
         .expect("two fully separated operators");
-        // An unknown field is a typo in a secret nobody can diff; refuse it
-        // rather than run with a key that turned out to do nothing.
-        assert!(
-            Registry::parse(&table(
-                r#"{"path_token":"t","slack_user_id":"U","signing_secret":"s",
-                    "topic":"a","block_actions_topic":"b","signing_secrets":"oops"}"#
-            ))
-            .is_err(),
-            "unknown field"
-        );
     }
 }

@@ -84,7 +84,7 @@ JSON として読むと全押下がパースエラーになる（症状は「ボ
 
 | モジュール | 責務 |
 |---|---|
-| `registry` | 登録表（`path_token` → signing secret / slack user id / トピック 2 本）。**リポジトリには入らない** —— 利用者の Secret Manager にあり、マウントファイルか環境変数で届く。起動時に、空の表・`path_token` 重複・空フィールド・トピック 2 本が同名・**トピックの行またぎ重複**（#678）、を拒否する（どれも実行時の症状が「無言で動かない」もの）。行またぎの重複検査は `topic` と `block_actions_topic` を **1 つの集合**に入れる —— 列ごとに分けると「A の `topic` が B の `block_actions_topic` と同じ」が素通りし、押下が保持期間 日オーダーのトピックに入って決定 5 の前提が崩れる。**OpenTofu 経由では踏まない**（`tofu/main.tf` がトピック名を `key` から導出する）ので、対象は登録表を手で書いた場合であり、コンテナが最後の防壁になる |
+| `registry` | 登録表（`path_token` → signing secret / slack user id / トピック 2 本）。**リポジトリには入らない** —— 利用者の Secret Manager にあり、マウントファイルか環境変数で届く。起動時に、空の表・`path_token` 重複・空フィールド・トピック 2 本が同名・**トピックの行またぎ重複**（#678）、を拒否する（どれも実行時の症状が「無言で動かない」もの）。行またぎの重複検査は `topic` と `block_actions_topic` を **1 つの集合**に入れる —— 列ごとに分けると「A の `topic` が B の `block_actions_topic` と同じ」が素通りし、押下が保持期間の日オーダーなトピックに入って決定 5 の前提が崩れる。**OpenTofu 経由では踏まない**（`tofu/main.tf` がトピック名を `key` から導出する）ので、対象は登録表を手で書いた場合であり、コンテナが最後の防壁になる |
 | `signature` | Slack の署名方式（`v0:{ts}:{body}` の HMAC-SHA256）と 5 分の窓。`verify` が定数時間比較を使っていることはテストがソースに対して固定する |
 | `project` | 生の配信 → publish されるレコード。**totsuka 側の `gateway_contract::project` と独立した実装**で、両者を突き合わせるのが適合スイート。`mentions_user` / `extract_subteam_ids` / `delivery_id` / `decode_interactivity_payload` を持つ |
 | `publish` | Pub/Sub REST への publish と、メタデータサーバからのトークン取得。**サービスアカウントキーは存在しない**（Cloud Run のリビジョンの SA でトークンが降ってくる）。base64 エンコードは自前 |
