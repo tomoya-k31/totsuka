@@ -1,16 +1,18 @@
 //! The approval flow (#107): `result/publish` turns an agent-generated reply
 //! (mechanically prefixed with a `<@sender_id>` mention of the asker) into a
-//! [`Draft`] presented twice — an ephemeral inside the mention's thread and a
-//! persistent self-DM record — and the approve/reject `block_actions` finish
-//! it. In the draft flow only an approval posts to the thread; a
+//! [`Draft`] presented **once** — an ephemeral inside the mention's thread —
+//! and the approve/reject `block_actions` finish it. It used to be two
+//! surfaces (the thread plus a self-DM record); [ADR-0074] retired the second
+//! because two button surfaces had to be kept in step and drifted in practice.
+//! In the draft flow only an approval posts to the thread; a
 //! `result/publish` carrying `delivery = direct` (#548, ADR-0057) skips the
 //! draft and posts immediately. Either way the post is under the operator's
 //! own name (user token).
 //!
 //! Failure posture:
-//! - one presentation surface failing to post is logged and tolerated (the
-//!   other still carries the buttons); both failing keeps the draft text in
-//!   the error log, so the reply is never silently lost;
+//! - the one surface failing to post keeps the draft text in the error log
+//!   (the only way back) and **sends no nudge** — pointing the operator at
+//!   buttons that were never posted is worse than silence;
 //! - a failed approval send keeps the draft `Pending` and tells the operator
 //!   via an ephemeral notice, so the button can simply be pressed again;
 //! - stale buttons (restart, TTL, eviction) degrade to an "expired" notice —
@@ -285,15 +287,22 @@ pub async fn handle_approval_action<T: SlackTransport>(
         // Gateway, so a redelivery lands here with nobody having pressed
         // anything a second time.
         tracing::info!(draft_id, action_id, ?draft.status, "draft already handled");
-        if let Some(url) = response_url {
-            let body = json!({
-                "replace_original": true,
-                "text": final_fallback(draft.status),
-                "blocks": draft_blocks(&draft, draft_id, &config.source_name),
-            });
-            if let Err(e) = api.post_response_url(url, body).await {
-                tracing::warn!(draft_id, error = %e, "could not repaint an already-handled draft");
+        match response_url {
+            Some(url) => {
+                let body = json!({
+                    "replace_original": true,
+                    "text": final_fallback(draft.status),
+                    "blocks": draft_blocks(&draft, draft_id, &config.source_name),
+                });
+                if let Err(e) = api.post_response_url(url, body).await {
+                    tracing::warn!(draft_id, error = %e, "could not repaint an already-handled draft");
+                }
             }
+            None => tracing::warn!(
+                draft_id,
+                "an already-handled draft was pressed with no response_url; \
+                 its buttons stay up"
+            ),
         }
         return;
     }
@@ -345,15 +354,31 @@ pub async fn handle_approval_action<T: SlackTransport>(
     // with no trace anywhere. What stays behind is the same block set with the
     // buttons swapped for the final state.
     let finalized = Draft { status, ..draft };
-    if let Some(url) = response_url {
-        let body = json!({
-            "replace_original": true,
-            "text": final_fallback(status),
-            "blocks": draft_blocks(&finalized, draft_id, &config.source_name),
-        });
-        if let Err(e) = api.post_response_url(url, body).await {
-            tracing::warn!(draft_id, error = %e, "could not finalize the pressed draft view");
+    // **`response_url` is the only way back to the surface now.** The record
+    // type makes it optional (`GatewayRecord.response_url`), so a delivery
+    // without one is contractually legal even though Slack always sends it
+    // for a message button. Acting anyway is still right — the operator
+    // decided, and refusing would drop a decision that was already made
+    // (for an approval the reply is posted by this point) — but it must not
+    // pass for success: the buttons stay live and nothing else can clear
+    // them. The double-press guard keeps a second press from re-sending.
+    match response_url {
+        Some(url) => {
+            let body = json!({
+                "replace_original": true,
+                "text": final_fallback(status),
+                "blocks": draft_blocks(&finalized, draft_id, &config.source_name),
+            });
+            if let Err(e) = api.post_response_url(url, body).await {
+                tracing::warn!(draft_id, error = %e, "could not finalize the pressed draft view");
+            }
         }
+        None => tracing::warn!(
+            draft_id,
+            ?status,
+            "the press carried no response_url, so the draft was decided but its \
+             buttons could not be cleared; a second press is refused as handled"
+        ),
     }
 }
 
