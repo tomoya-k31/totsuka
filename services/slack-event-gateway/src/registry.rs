@@ -68,8 +68,16 @@ pub enum RegistryError {
 /// loads it from `REGISTRATIONS_PATH` or `REGISTRATIONS`, either of which an
 /// operator can write by hand into Secret Manager.
 ///
-/// Length is counted in characters, not bytes, so the two agree: HCL's
-/// `length()` on a string counts characters.
+/// Counted in characters rather than bytes, which is what makes the two
+/// numbers comparable at all: `length()` in HCL counts characters too.
+///
+/// The counts are not *identical* in the general case — HCL counts grapheme
+/// clusters (UAX #29) while `chars()` counts Unicode scalar values, so
+/// `length("👾🕹️")` is 2 where `chars().count()` is 4. They agree on
+/// everything a `path_token` is meant to be: `openssl rand -hex 24` gives 48
+/// ASCII characters, where cluster, scalar and byte are one number. And the
+/// direction of the disagreement is the harmless one — this side never counts
+/// *fewer* than HCL does, so a table OpenTofu accepted cannot be refused here.
 const MIN_PATH_TOKEN_CHARS: usize = 32;
 
 impl Registry {
@@ -410,7 +418,7 @@ mod tests {
             .expect("32 characters is the floor, not one over");
 
         // **Characters, not bytes.** The whole reason this constant matches
-        // `variables.tf` is that HCL's `length()` counts characters, so a
+        // `variables.tf` is that HCL's `length()` counts characters too, so a
         // table OpenTofu accepts has to start. Counting bytes instead would
         // still pass every case above — every one of them is ASCII — and then
         // refuse a multibyte token that was built to spec. 32 characters, 96
