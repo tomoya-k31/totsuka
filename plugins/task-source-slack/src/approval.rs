@@ -455,10 +455,13 @@ async fn notice<T: SlackTransport>(api: &SlackApi<T>, response_url: Option<&str>
 ///
 /// **`response_url` refuses the `markdown` block.** It answers HTTP 500 with
 /// an **empty body** — no `ok: false`, no error code, nothing to branch on.
-/// Measured live on 2026-09-15 by posting the same draft's blocks twice: with
-/// the `markdown` block, 638 bytes, refused; with that one block swapped for a
-/// `section`, 662 bytes, accepted. The accepted payload is the **larger** of
-/// the two, so this is the block type and not a size limit.
+/// Measured live on 2026-09-15 by posting a draft's blocks twice, once each
+/// way, on three separate drafts: replies of 33 / 308 / 1426 characters sent
+/// 638 / 1445 / 3487 bytes with the `markdown` block (all refused) and
+/// 662 / 1469 / 3511 bytes with that one block swapped for a `section` (all
+/// accepted). **Every accepted payload is the larger of its pair**, and the
+/// outcome does not move while the payload grows 5.5x, so this is the block
+/// type and not a size limit.
 ///
 /// `chat.postMessage` and `chat.postEphemeral` take it fine (#454, verified
 /// live 2026-08-14), which is why the difference belongs to the surface rather
@@ -819,10 +822,13 @@ mod tests {
     /// the press repainted the ephemeral instead of deleting it, which sent
     /// `blocks` down a path that had only ever carried `delete_original`.
     ///
-    /// Measured live 2026-09-15 by posting one draft's blocks twice: with the
-    /// `markdown` block, 638 bytes, refused; with that block swapped for a
-    /// `section`, 662 bytes, accepted. The accepted payload is **larger**, so
-    /// it is the block type and not a size limit.
+    /// Measured live 2026-09-15 on three drafts, both ways each: replies of
+    /// 33 / 308 / 1426 characters were refused at 638 / 1445 / 3487 bytes with
+    /// the `markdown` block and accepted at 662 / 1469 / 3511 bytes with a
+    /// `section` in its place. **Every accepted payload is the larger of its
+    /// pair**, across a 5.5x range, so it is the block type and not a size
+    /// limit. Both the deciding press and the already-handled repaint behave
+    /// the same way.
     ///
     /// **This test is the only thing that catches a regression here.** The
     /// transport is faked everywhere else, so a `markdown` block reaching a
