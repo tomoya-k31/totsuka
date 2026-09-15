@@ -222,7 +222,11 @@ pub async fn publish_draft<T: SlackTransport>(
             &format!("{} さんへの返信案が届きました", draft.sender_name),
             draft.permalink.as_deref(),
             // The nudge is a `chat.postMessage` DM, so the rich block is fine.
-            Some(vec![reply_preview_block(&draft.text, Surface::Message)]),
+            Some(vec![reply_preview_block(
+                &draft.text,
+                Surface::Message,
+                draft.status,
+            )]),
         )
         .await;
     }
@@ -497,7 +501,7 @@ fn reply_markdown_block(text: &str) -> Option<Value> {
 /// preference: a `markdown` block sent to a `response_url` fails the whole
 /// write (see [`Surface`]), which on the draft surface means the buttons never
 /// clear.
-fn reply_preview_block(text: &str, surface: Surface) -> Value {
+fn reply_preview_block(text: &str, surface: Surface, status: DraftStatus) -> Value {
     let markdown = match surface {
         Surface::Message => reply_markdown_block(text),
         Surface::ResponseUrl => None,
@@ -505,7 +509,7 @@ fn reply_preview_block(text: &str, surface: Surface) -> Value {
     markdown.unwrap_or_else(|| {
         json!({
             "type": "section",
-            "text": { "type": "mrkdwn", "text": clipped(text) },
+            "text": { "type": "mrkdwn", "text": clipped(text, status) },
         })
     })
 }
@@ -535,17 +539,27 @@ fn draft_blocks(draft: &Draft, draft_id: &str, source_name: &str, surface: Surfa
     // section when the approve path will fall back to a plain-`text` post.
     //
     // The `response_url` rendering cannot match it, because that surface
-    // refuses the block outright. That costs the *finalized* view its rich
-    // rendering and nothing else — by the time this surface is rewritten the
-    // decision is made, and an approved reply is already in the thread as a
-    // real `markdown` block. A record that reads slightly plainer is a fair
-    // price for one that appears at all.
+    // refuses the block outright. What the finalized view loses is its rich
+    // rendering — and, **for a long enough reply, some of the text**: the
+    // section falls back through `clipped`, which stops at
+    // `BLOCK_TEXT_LIMIT` **characters**, while the `markdown` block it
+    // replaces allows `MARKDOWN_BLOCK_LIMIT` **bytes**. A reply between the
+    // two (over ~2,900 characters, under 12,000 bytes — so roughly 2,900 to
+    // 4,000 characters of Japanese) shows in full on the message surface and
+    // clipped here.
+    //
+    // That is still the right trade, but it is a real cost and not just a
+    // cosmetic one. It buys a surface that appears at all: before this, the
+    // whole write failed and the buttons stayed up. And nothing is lost that
+    // the operator cannot reach — an approved reply is already in the thread
+    // in full, as a real `markdown` block, and a rejected one was never going
+    // anywhere. The note `clipped` appends says which of those happened.
     let mut blocks = vec![
         json!({
             "type": "section",
             "text": { "type": "mrkdwn", "text": header },
         }),
-        reply_preview_block(&draft.text, surface),
+        reply_preview_block(&draft.text, surface, draft.status),
     ];
     match draft.status {
         DraftStatus::Pending => blocks.push(json!({
@@ -601,14 +615,26 @@ fn draft_blocks(draft: &Draft, draft_id: &str, source_name: &str, surface: Surfa
     Value::Array(blocks)
 }
 
-/// Clip `text` to Slack's section-block limit, noting that approval still
-/// sends the full text.
-fn clipped(text: &str) -> String {
+/// Clip `text` to Slack's section-block limit, with a note that says what
+/// became of the rest — which depends on what was decided.
+///
+/// The old note said "承認時は全文が送信されます" unconditionally. On a
+/// **rejected** surface that is simply false (nothing was sent, and nothing
+/// will be), and on a sent one it is in the wrong tense. A truncation note is
+/// the one place a reader looks to find out whether they are missing
+/// something, so it must not answer a question the surface has already
+/// settled.
+fn clipped(text: &str, status: DraftStatus) -> String {
     if text.chars().count() <= BLOCK_TEXT_LIMIT {
         return text.to_string();
     }
     let head: String = text.chars().take(BLOCK_TEXT_LIMIT).collect();
-    format!("{head}\n…（表示上省略。承認時は全文が送信されます）")
+    let note = match status {
+        DraftStatus::Pending => "表示上省略。承認時は全文が送信されます",
+        DraftStatus::Sent => "表示上省略。スレッドに送信された返信は全文です",
+        DraftStatus::Rejected => "表示上省略。返信は送信されていません",
+    };
+    format!("{head}\n…（{note}）")
 }
 
 /// The reply text to post: log noise trimmed off the edges, then the mention
@@ -1002,11 +1028,39 @@ DEBUG: shutting down
     #[test]
     fn clipped_notes_the_truncation() {
         let short = "短い返信";
-        assert_eq!(clipped(short), short);
+        assert_eq!(clipped(short, DraftStatus::Pending), short);
         let long = "あ".repeat(BLOCK_TEXT_LIMIT + 1);
-        let clip = clipped(&long);
+        let clip = clipped(&long, DraftStatus::Pending);
         assert!(clip.contains("省略"), "{clip}");
         assert!(clip.chars().count() < long.chars().count() + 40);
+        assert_eq!(
+            clipped(short, DraftStatus::Rejected),
+            short,
+            "short text keeps no note"
+        );
+    }
+
+    /// **The truncation note must not answer a question the surface already
+    /// settled.** It said "承認時は全文が送信されます" on every surface,
+    /// including a rejected one where nothing was sent and nothing will be —
+    /// and the note is the one place a reader looks to find out whether they
+    /// are missing something.
+    #[test]
+    fn the_truncation_note_says_what_became_of_the_rest() {
+        let long = "あ".repeat(BLOCK_TEXT_LIMIT + 1);
+        assert!(
+            clipped(&long, DraftStatus::Pending).contains("承認時は全文が送信されます"),
+            "a pending draft is still a proposal"
+        );
+        let rejected = clipped(&long, DraftStatus::Rejected);
+        assert!(rejected.contains("送信されていません"), "{rejected}");
+        assert!(
+            !rejected.contains("承認時"),
+            "nothing is going to be approved any more: {rejected}"
+        );
+        let sent = clipped(&long, DraftStatus::Sent);
+        assert!(sent.contains("送信された返信は全文です"), "{sent}");
+        assert!(!sent.contains("承認時"), "it already went out: {sent}");
     }
 
     #[test]
