@@ -917,11 +917,18 @@ impl<T: HerdrTransport> HerdrAgent<T> {
     /// twice, so the question "did it land?" is answered by `agent.wait`, which
     /// asks herdr the same thing with a window we choose.
     ///
-    /// **A pane that vanished keeps its own error.** `agent.wait` answering
-    /// `agent_not_found` means the CLI died, and on a resumed dispatch that has
-    /// to reach the Orchestrator as `SESSION_UNRESUMABLE` (#261) — reporting
-    /// the stall instead would bury it. Any other failure reports the stall,
-    /// because "the agent never reacted" is the symptom worth showing.
+    /// **An agent that is gone keeps its own error.** `agent.wait` answering
+    /// `agent_not_found` has to reach the Orchestrator as
+    /// `SESSION_UNRESUMABLE` on a resumed dispatch (#261) — reporting the stall
+    /// instead would bury it. Any other failure reports the stall, because "the
+    /// agent never reacted" is the symptom worth showing.
+    ///
+    /// **Nothing from here is retried** (#685). Elsewhere `agent_not_found`
+    /// means the CLI never started and a re-issue clears it; here the prompt has
+    /// already been typed and submitted, so a re-issue would deliver the task
+    /// twice. That is why the caller wraps every outcome of this method in
+    /// [`PromptFailure::Final`]. (It used to be read as "the CLI died" — see
+    /// [`prompt_means_the_cli_never_started`] for why that reading was dropped.)
     async fn confirm_submission(&self, pane_id: &str, stall: HerdrError) -> Result<(), HerdrError> {
         tracing::warn!(
             pane_id,

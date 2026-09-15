@@ -2078,13 +2078,14 @@ async fn a_prompt_that_never_lands_still_fails_the_dispatch() {
 /// dispatch still reaches the Orchestrator as `SESSION_UNRESUMABLE` (#261)
 /// instead of being buried under the stall.
 #[tokio::test]
-async fn a_pane_that_dies_during_confirmation_stays_unresumable() {
+async fn an_agent_that_goes_missing_during_confirmation_stays_unresumable() {
     let fake = FakeHerdr {
         wait_error: Some("agent_not_found"),
         ..FakeHerdr::default()
     };
     *fake.stalled_prompts.lock().unwrap() = 1;
-    let (socket, _) = fake.spawn();
+    let cli = fake.cli.clone();
+    let (socket, requests) = fake.spawn();
 
     let mut d = Driver::new();
     d.init(&socket).await;
@@ -2102,7 +2103,21 @@ async fn a_pane_that_dies_during_confirmation_stays_unresumable() {
         .await;
     assert_eq!(
         disp["error"]["code"], -32006,
-        "a vanished pane must not be masked by the stall: {disp}"
+        "a missing agent must not be masked by the stall: {disp}"
+    );
+    // The point of `PromptFailure::Final` (#685): past the confirmation step the
+    // prompt may already be in the agent, so the dispatch must not go round
+    // again. Asserting the error code alone does not say that — these two do.
+    assert_eq!(
+        cli.lock().unwrap().prompts,
+        1,
+        "the task must never be delivered twice (#380)"
+    );
+    let log = requests.lock().unwrap();
+    assert_eq!(
+        calls(&log, "agent.start").len(),
+        1,
+        "a confirmation failure is final; there is no re-issue: {log:?}"
     );
 }
 
