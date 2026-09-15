@@ -43,8 +43,9 @@ pub enum HerdrError {
          resolution failure — check `[tools]` / `default_tool`."
     )]
     MissingToolLaunch,
-    /// A dispatch that asked to resume a session died with its pane, so the
-    /// session could not be resumed (protocol `SESSION_UNRESUMABLE`, #242).
+    /// A dispatch that asked to resume a session could not be given an
+    /// addressable agent, even after re-issuing `agent.start`, so the session
+    /// could not be resumed (protocol `SESSION_UNRESUMABLE`, #242).
     /// Carries the herdr error underneath, which is what a human debugging it
     /// needs.
     #[error("the agent session could not be resumed: {0}")]
@@ -121,11 +122,13 @@ impl HerdrError {
     /// "the agent can take a prompt". Measured live: the start succeeded at
     /// t=1.0s and `agent.prompt` answered `agent_not_ready` until t=5.0s.
     ///
-    /// Deliberately **not** `agent_not_found`. That one is
-    /// [`is_missing`](Self::is_missing) — the shape a pane that died takes —
-    /// and on a resumed dispatch it means the session is unresumable (#261).
-    /// Retrying it would delay a real failure and, worse, keep a
-    /// `SESSION_UNRESUMABLE` from being reported as one.
+    /// Distinct from `agent_not_found`, which is
+    /// [`is_agent_missing`](Self::is_agent_missing): that one says herdr has no
+    /// agent registered at the target at all. Both are retried by re-issuing
+    /// `agent.start`, but they are kept apart because only the latter is also
+    /// [`is_missing`](Self::is_missing) — the input to the
+    /// `SESSION_UNRESUMABLE` mapping that reports a resumed dispatch as
+    /// unresumable once those restarts are spent (#261, #685).
     pub fn is_agent_not_ready(&self) -> bool {
         matches!(self, HerdrError::Protocol { code, .. } if code == "agent_not_ready")
     }

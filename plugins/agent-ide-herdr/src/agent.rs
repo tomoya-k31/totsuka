@@ -317,10 +317,8 @@ impl<T: HerdrTransport> HerdrAgent<T> {
                 // registers no agent for a start that detected none, so the
                 // task's name is still free (verified live — the same name
                 // succeeded on re-issue).
-                Err(e)
-                    if restarts < MAX_AGENT_RESTARTS
-                        && tokio::time::Instant::now() < deadline
-                        && prompt_means_the_cli_never_started(params, &e) =>
+                Err(PromptFailure::NeverStarted(e))
+                    if restarts < MAX_AGENT_RESTARTS && tokio::time::Instant::now() < deadline =>
                 {
                     restarts += 1;
                     tracing::warn!(
@@ -329,7 +327,12 @@ impl<T: HerdrTransport> HerdrAgent<T> {
                          than prompting a CLI that did not start"
                     );
                 }
-                Err(e) => return Err(resume_failure(params, e)),
+                // Out of restarts, out of budget, or a failure a re-issue must
+                // not touch. `resume_failure` has the last word on whether the
+                // Orchestrator hears "unresumable".
+                Err(PromptFailure::NeverStarted(e) | PromptFailure::Final(e)) => {
+                    return Err(resume_failure(params, e));
+                }
             }
         }
 
@@ -826,9 +829,10 @@ impl<T: HerdrTransport> HerdrAgent<T> {
     /// long as it was asked). Spending the entire budget here served the first
     /// case and failed the second; returning the refusal lets
     /// [`start_agent`](Self::start_agent) re-issue `agent.start`, which is what
-    /// actually clears it. `agent_not_found` is **not** retried: it is a pane
-    /// that died, and on a resumed dispatch it has to surface as
-    /// `SESSION_UNRESUMABLE`.
+    /// actually clears it. `agent_not_found` is treated the same way (#685):
+    /// it means herdr has no agent registered at that target, which a re-issue
+    /// clears — on a resumed dispatch too, where it still surfaces as
+    /// `SESSION_UNRESUMABLE` if the restarts run out.
     ///
     /// **The contract is unchanged**: a prompt that cannot be confirmed as
     /// submitted fails the dispatch rather than leaving a pane that sits idle
@@ -838,7 +842,7 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         pane_id: &str,
         prompt: &str,
         deadline: tokio::time::Instant,
-    ) -> Result<(), HerdrError> {
+    ) -> Result<(), PromptFailure> {
         let params = to_params(
             "agent.prompt",
             &request::AgentPromptParams {
@@ -849,7 +853,8 @@ impl<T: HerdrTransport> HerdrAgent<T> {
                     timeout_ms: Some(PROMPT_WAIT_MS),
                 }),
             },
-        )?;
+        )
+        .map_err(PromptFailure::Final)?;
         // Whichever comes first: this attempt's own patience, or the dispatch's
         // overall budget. Past the former the answer is "re-start the agent",
         // past the latter it is "give up" — and `start_agent` tells them apart
@@ -860,7 +865,7 @@ impl<T: HerdrTransport> HerdrAgent<T> {
                 Ok(_) => return Ok(()),
                 Err(e) if e.is_agent_not_ready() => {
                     if tokio::time::Instant::now() >= ready_deadline {
-                        return Err(e);
+                        return Err(PromptFailure::NeverStarted(e));
                     }
                     tracing::debug!(
                         pane_id,
@@ -869,11 +874,22 @@ impl<T: HerdrTransport> HerdrAgent<T> {
                     tokio::time::sleep(STARTUP_RETRY_POLL).await;
                 }
                 // Submitted, but herdr saw no reaction inside its 5s floor.
-                // Confirm — never re-send (#380).
+                // Confirm — never re-send (#380). **Whatever comes back is
+                // `Final`**: from here on the prompt may already be in the
+                // agent, so re-issuing `agent.start` would deliver the task a
+                // second time. That holds even when the confirmation answers
+                // `agent_not_found`, which everywhere else means a re-issue is
+                // the right move.
                 Err(e) if e.is_prompt_stalled() => {
-                    return self.confirm_submission(pane_id, e).await;
+                    return self
+                        .confirm_submission(pane_id, e)
+                        .await
+                        .map_err(PromptFailure::Final);
                 }
-                Err(e) => return Err(e),
+                Err(e) if prompt_means_the_cli_never_started(&e) => {
+                    return Err(PromptFailure::NeverStarted(e));
+                }
+                Err(e) => return Err(PromptFailure::Final(e)),
             }
         }
     }
@@ -2093,42 +2109,78 @@ fn resolve_launch(
 ///
 /// - Only *after* `agent.start` succeeded. A pane that never existed cannot
 ///   have died of the resume; that is a herdr problem and keeps its own error.
-/// - Only when the pane is *gone* ([`HerdrError::is_missing`]) — the shape the
-///   real bug had, where `claude --resume <id>` found no such conversation,
-///   exited, and took its pane with it. A pane that is alive but slow keeps
-///   its own error: the retry drops the session, and with it the conversation
-///   the resume existed to preserve, so widening this trades a real cost for a
-///   guess.
+/// - Only when the target is *gone* ([`HerdrError::is_missing`]). A target that
+///   is alive but failing keeps its own error: the retry drops the session, and
+///   with it the conversation the resume existed to preserve, so widening this
+///   trades a real cost for a guess.
+/// - Only once [`prompt_means_the_cli_never_started`] has spent its restarts on
+///   the same error (#685). This is the **last** word on a resumed dispatch,
+///   not the first: the conversation is given up only after re-issuing
+///   `agent.start` still produced no addressable agent.
 ///
 /// A false positive still costs only one extra launch, so the narrowness is
 /// about **not** losing context, not about avoiding wasted work.
-/// Whether a failed `agent.prompt` means the CLI never started — so the answer
-/// is to re-issue `agent.start`, not to keep asking.
-///
-/// Two herdr codes carry that meaning, and one of them only conditionally:
-///
-/// - `agent_not_ready`: the start was accepted but the agent never became
-///   addressable (#387). Always this.
-/// - `agent_not_found`: no such agent. On a **resumed** dispatch that is a pane
-///   that died with its session and has to surface as `SESSION_UNRESUMABLE`
-///   (#261) — see [`resume_failure`]. On a **fresh** dispatch there is no
-///   session that could have died: the only way to reach it is `agent.start`
-///   having registered nothing, which is the same shell-readiness race (#391).
-///   Measured live on 2026-08-07: two consecutive fresh dispatches failed this
-///   way and a plain `tt task retry` cleared both.
-///
-/// Deliberately not `is_missing()`, which also covers `pane_not_found`. A pane
-/// that is gone cannot be started into, so re-issuing would only fail again —
-/// slower, and with the second error replacing the informative first one.
-fn prompt_means_the_cli_never_started(params: &TaskDispatchParams, error: &HerdrError) -> bool {
-    error.is_agent_not_ready() || (error.is_agent_missing() && params.resume_session_id.is_none())
-}
-
 fn resume_failure(params: &TaskDispatchParams, error: HerdrError) -> HerdrError {
     if params.resume_session_id.is_some() && error.is_missing() {
         return HerdrError::SessionUnresumable(error.to_string());
     }
     error
+}
+
+/// Why [`HerdrAgent::submit_prompt`] gave up, and whether re-issuing
+/// `agent.start` is safe afterwards.
+///
+/// The distinction is not about the error code — it is about **whether the
+/// prompt may already be in the agent**. `agent.prompt` refusing outright typed
+/// nothing, so a re-issue costs one launch. Past the confirmation step (#380)
+/// herdr has already typed and submitted the text, so a re-issue would deliver
+/// the task twice. Keeping that in the type stops the two from being told apart
+/// by an error code that cannot carry the difference.
+enum PromptFailure {
+    /// Nothing was typed: the agent was never addressable. Safe to re-issue.
+    NeverStarted(HerdrError),
+    /// The prompt may have landed, or the failure is not one a re-issue fixes.
+    /// This is the dispatch's answer.
+    Final(HerdrError),
+}
+
+/// Whether a failed `agent.prompt` means the CLI never started — so the answer
+/// is to re-issue `agent.start`, not to keep asking.
+///
+/// Two herdr codes carry that meaning:
+///
+/// - `agent_not_ready`: the start was accepted but the agent never became
+///   addressable (#387).
+/// - `agent_not_found`: herdr has no agent registered at that target. That is
+///   the same shell-readiness race (#391), and a re-issue clears it — measured
+///   live on 2026-08-07, where two consecutive fresh dispatches failed this way
+///   and a plain `tt task retry` cleared both.
+///
+/// **A resumed dispatch is no longer excluded from the second one** (#685). It
+/// was, on the reading that `agent_not_found` there meant `claude --resume <id>`
+/// had found no such conversation and taken its pane down with it. Measured on
+/// 2026-09-15, both halves of that are wrong:
+///
+/// - a *failed* resume does not take the pane with it. `claude --resume
+///   <unknown id>` prints `No conversation found with session ID: …`, exits in
+///   about a second, and the pane's shell prompt comes back.
+/// - a *valid* resume does not fail. A real 378 KB session reloaded its whole
+///   conversation and was accepting input inside 5s — while herdr, live, had
+///   given up after 18s.
+///
+/// The exclusion fired on 7 of 7 re-dispatches (tasks 6, 7 and 10), so every
+/// follow-up message started an agent that knew nothing of its own thread.
+///
+/// **`SESSION_UNRESUMABLE` is still reported** — by [`resume_failure`], once the
+/// restarts are exhausted — so the Orchestrator's one retry without the session
+/// is unchanged. It simply stops being the *first* answer to a refusal that
+/// clears on a re-issue.
+///
+/// Deliberately not `is_missing()`, which also covers `pane_not_found`. A pane
+/// that is gone cannot be started into, so re-issuing would only fail again —
+/// slower, and with the second error replacing the informative first one.
+fn prompt_means_the_cli_never_started(error: &HerdrError) -> bool {
+    error.is_agent_not_ready() || error.is_agent_missing()
 }
 
 /// Treat a "missing pane" error as success (for idempotent teardown).

@@ -23,6 +23,8 @@ Accepted — 2026-07-26（[#242](https://github.com/tomoya-k31/totsuka/issues/24
 
 #140（エピック #131 の設計判断 D-10）の「追いメンションは新タスク + `thread_key` 相関」を **supersede** する。同方式は protocol 0.1.3〜0.2.4 に存在し、0.3.0（#264）で撤去した。
 
+**注記（2026-09-15、[ADR-0075](/decisions/adr-0075-resume-agent-not-found-restart.md)）**: 本 ADR の決定はすべて有効である。ただし下の Context にある「`--resume` に失敗した pane は即死し」は**実測で否定された推論**である —— 失敗した `claude --resume` は約 1 秒で終了するがシェルのプロンプトを残す。診断（cwd 単位のセッション保存と 1 タスク = 1 worktree の衝突）と決定 5 の `SESSION_UNRESUMABLE` 写像は影響を受けないが、その前提から派生した「resume 付き dispatch では `agent_not_found` を再送しない」（#261）は ADR-0075 で撤回した。
+
 # Context
 
 PR #240 後の実機検証で、**Slack スレッドへの 2 通目以降が必ず失敗する**ことが判明した。
