@@ -217,6 +217,134 @@ fn recreates_a_cleaned_up_worktree_at_the_same_path() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// A stray directory sitting where a removed worktree used to be is "nothing
+/// to clean up", not a failed cleanup (#694).
+///
+/// The task row keeps `worktree_path` after a successful removal, so the sweep
+/// revisits the path forever; anything that recreates it — an agent's
+/// leftovers, a `mkdir` by hand — used to make `git status` report `fatal: not
+/// a git repository` and the orchestrator warn about it once per sweep, for
+/// the life of the process, about a task that finished cleanly.
+#[test]
+fn a_stray_directory_at_a_removed_worktree_path_is_gone_not_an_error() {
+    let base = scratch("stray-dir-cleanup");
+    let clone = setup(&base);
+    let state = base.join("state");
+    let env = env(&state);
+    let mgr = WorktreeManager::new(SystemGitRunner);
+
+    let wt = mgr.create(&request(&clone, "44", &env)).unwrap();
+    let branch = agent_branches(&wt.path, "chore/tidy");
+    mgr.remove(&clone, &wt.path, Some(&branch), Some(&wt.base_commit))
+        .unwrap();
+    assert!(!wt.path.exists());
+
+    // Something unrelated takes the name back.
+    std::fs::create_dir_all(&wt.path).unwrap();
+
+    let request = CleanupRequest {
+        repo_path: &clone,
+        worktree_path: &wt.path,
+        branch: Some(&branch),
+        base_commit: Some(&wt.base_commit),
+        policy: CleanupPolicy::Immediate,
+        finished_at: None,
+        now: "2026-07-12T00:00:00Z",
+    };
+    assert_eq!(
+        mgr.decide_cleanup(
+            request.repo_path,
+            request.worktree_path,
+            request.base_commit,
+            request.policy,
+            request.finished_at,
+            request.now,
+        )
+        .unwrap(),
+        CleanupDecision::Gone
+    );
+    assert_eq!(mgr.cleanup(&request).unwrap(), CleanupOutcome::Gone);
+    // Left where it was: `git worktree remove` could not have removed it
+    // either, so cleanup does not reach for a directory it cannot account for.
+    assert!(wt.path.is_dir());
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// The same, for a stray directory that sits *inside* a repository — where an
+/// operator who points `[worktree].location` into the repo would leave one.
+///
+/// The question the cleanup asks has to be identity ("is this path a worktree
+/// root"), not containment ("is this path inside some worktree"): containment
+/// answers yes here, and everything after it would then be about the
+/// **enclosing** repo — `git status` reporting its tree as the data-loss
+/// guard, and `git worktree remove` failing on a path git does not list.
+#[test]
+fn a_stray_directory_inside_the_repo_is_gone_too() {
+    let base = scratch("stray-dir-nested");
+    let clone = setup(&base);
+    let mgr = WorktreeManager::new(SystemGitRunner);
+
+    let stray = clone.join(".worktrees/44-was-here");
+    std::fs::create_dir_all(&stray).unwrap();
+    // Dirty the repo it sits in: were the decision made about the enclosing
+    // tree, this would read as `Dirty` rather than `Gone`.
+    std::fs::write(clone.join("uncommitted.txt"), "x").unwrap();
+
+    assert_eq!(
+        mgr.decide_cleanup(
+            &clone,
+            &stray,
+            None,
+            CleanupPolicy::Immediate,
+            None,
+            "2026-07-12T00:00:00Z",
+        )
+        .unwrap(),
+        CleanupDecision::Gone
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// And for a stray that is a repository in its own right.
+///
+/// "Is this path a repo root" is the other cheap question that gets this
+/// wrong: a `git init` at the old name answers yes and is clean, so the
+/// decision would be `Remove` — and `git worktree remove` then fails against
+/// the repo that does not list it, which is the warning loop again. The
+/// question has to be membership in **this repo's** registry.
+#[test]
+fn a_stray_repository_at_a_removed_worktree_path_is_gone_too() {
+    let base = scratch("stray-repo");
+    let clone = setup(&base);
+    let state = base.join("state");
+    let env = env(&state);
+    let mgr = WorktreeManager::new(SystemGitRunner);
+
+    let wt = mgr.create(&request(&clone, "45", &env)).unwrap();
+    mgr.remove(&clone, &wt.path, None, Some(&wt.base_commit))
+        .unwrap();
+    std::fs::create_dir_all(&wt.path).unwrap();
+    git(&wt.path, &["init"]);
+    assert!(wt.path.join(".git").is_dir(), "a repository of its own");
+
+    assert_eq!(
+        mgr.decide_cleanup(
+            &clone,
+            &wt.path,
+            Some(&wt.base_commit),
+            CleanupPolicy::Immediate,
+            None,
+            "2026-07-12T00:00:00Z",
+        )
+        .unwrap(),
+        CleanupDecision::Gone
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// The branch routinely outlives its directory: `remove` deletes it only
 /// best-effort, and `branch -d` refuses a branch with unmerged commits — which
 /// is precisely the branch worth keeping. Re-creation must check that branch
@@ -716,6 +844,7 @@ fn a_detached_worktree_with_commits_is_kept() {
 
     assert_eq!(
         mgr.decide_cleanup(
+            &clone,
             &wt.path,
             Some(&wt.base_commit),
             CleanupPolicy::Immediate,
