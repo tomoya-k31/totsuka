@@ -989,7 +989,7 @@ impl<G: GitRunner> WorktreeManager<G> {
         Ok(out.success())
     }
 
-    /// Whether `worktree_path` is a git worktree at all.
+    /// Whether `worktree_path` is the root of a git worktree.
     ///
     /// The cleanup's first question, and the one that separates "already done"
     /// from "broken" (#694). `worktree_path` comes from the task row, which
@@ -1008,6 +1008,17 @@ impl<G: GitRunner> WorktreeManager<G> {
     /// regression: `git worktree remove` could never have removed it either,
     /// so the warning it replaces named no action anyone could take.
     ///
+    /// The question is **identity, not containment**: is this path the root of
+    /// a worktree, rather than merely somewhere inside one. `--is-inside-work-tree`
+    /// would answer "yes" for a stray directory that happens to sit under a
+    /// repository — which is exactly where an operator who points
+    /// `[worktree].location` inside the repo would put it. The decision would
+    /// then fall through to the checks below, where `git status` answers about
+    /// the **enclosing** repo (so the data-loss guard would be reading the
+    /// wrong tree), removal would be attempted, and `git worktree remove`
+    /// would fail on a path git does not list: the same warning loop, one step
+    /// further along.
+    ///
     /// An I/O failure is **not** an answer of "no" and propagates: staying
     /// loud about a broken toolchain is the whole point of distinguishing the
     /// two. It deliberately does not special-case a missing directory, because
@@ -1018,8 +1029,13 @@ impl<G: GitRunner> WorktreeManager<G> {
     fn is_worktree(&self, worktree_path: &Path) -> Result<bool, WorktreeError> {
         let out = self
             .git
-            .run(worktree_path, &["rev-parse", "--is-inside-work-tree"])?;
-        Ok(out.success() && out.stdout.trim() == "true")
+            .run(worktree_path, &["rev-parse", "--show-toplevel"])?;
+        if !out.success() {
+            return Ok(false);
+        }
+        // git prints a symlink-resolved absolute path, so both sides are
+        // canonicalized before comparison (as in `detect_orphans`).
+        Ok(canonical(Path::new(out.stdout.trim())) == canonical(worktree_path))
     }
 
     /// Whether a worktree has uncommitted (staged/unstaged/untracked) changes.
@@ -1631,7 +1647,7 @@ mod tests {
         descends_from_base: std::cell::RefCell<bool>,
         /// Whether `rev-parse --abbrev-ref HEAD` fails outright.
         head_fails: std::cell::RefCell<bool>,
-        /// Whether the path is a git worktree at all (#694). `false` makes
+        /// Whether the path is a git worktree root (#694). `false` makes
         /// every git question fail the way a stray directory does.
         inside_worktree: std::cell::RefCell<bool>,
     }
@@ -1652,8 +1668,8 @@ mod tests {
             }
         }
 
-        /// The path is not a git worktree: `rev-parse --is-inside-work-tree`
-        /// fails the way it does in a directory git knows nothing about.
+        /// The path is not a git worktree: `rev-parse --show-toplevel` fails
+        /// the way it does in a directory git knows nothing about.
         fn not_a_worktree(self) -> Self {
             *self.inside_worktree.borrow_mut() = false;
             self
@@ -1698,10 +1714,10 @@ mod tests {
     }
 
     impl GitRunner for &ScriptedGit {
-        fn run(&self, _cwd: &Path, args: &[&str]) -> std::io::Result<crate::ports::git::GitOutput> {
+        fn run(&self, cwd: &Path, args: &[&str]) -> std::io::Result<crate::ports::git::GitOutput> {
             self.commands.borrow_mut().push(args.join(" "));
             let mut status = Some(0);
-            let stdout = if args == ["rev-parse", "--is-inside-work-tree"] {
+            let stdout = if args == ["rev-parse", "--show-toplevel"] {
                 if !*self.inside_worktree.borrow() {
                     return Ok(crate::ports::git::GitOutput {
                         status: Some(128),
@@ -1711,7 +1727,9 @@ mod tests {
                             .to_string(),
                     });
                 }
-                "true".to_string()
+                // The path *is* the worktree root: `is_worktree` compares this
+                // against the path it asked about.
+                cwd.display().to_string()
             } else if args.first() == Some(&"status") {
                 self.statuses
                     .borrow_mut()

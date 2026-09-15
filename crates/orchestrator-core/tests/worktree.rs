@@ -270,6 +270,41 @@ fn a_stray_directory_at_a_removed_worktree_path_is_gone_not_an_error() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// The same, for a stray directory that sits *inside* a repository — where an
+/// operator who points `[worktree].location` into the repo would leave one.
+///
+/// The question the cleanup asks has to be identity ("is this path a worktree
+/// root"), not containment ("is this path inside some worktree"): containment
+/// answers yes here, and everything after it would then be about the
+/// **enclosing** repo — `git status` reporting its tree as the data-loss
+/// guard, and `git worktree remove` failing on a path git does not list.
+#[test]
+fn a_stray_directory_inside_the_repo_is_gone_too() {
+    let base = scratch("stray-dir-nested");
+    let clone = setup(&base);
+    let mgr = WorktreeManager::new(SystemGitRunner);
+
+    let stray = clone.join(".worktrees/44-was-here");
+    std::fs::create_dir_all(&stray).unwrap();
+    // Dirty the repo it sits in: were the decision made about the enclosing
+    // tree, this would read as `Dirty` rather than `Gone`.
+    std::fs::write(clone.join("uncommitted.txt"), "x").unwrap();
+
+    assert_eq!(
+        mgr.decide_cleanup(
+            &stray,
+            None,
+            CleanupPolicy::Immediate,
+            None,
+            "2026-07-12T00:00:00Z",
+        )
+        .unwrap(),
+        CleanupDecision::Gone
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// The branch routinely outlives its directory: `remove` deletes it only
 /// best-effort, and `branch -d` refuses a branch with unmerged commits — which
 /// is precisely the branch worth keeping. Re-creation must check that branch
