@@ -163,6 +163,8 @@ pub enum CleanupOutcome {
     Retained,
     /// Skipped because it had uncommitted changes (data-loss guard).
     DirtySkipped,
+    /// Nothing to remove: the path is not a git worktree (#694).
+    Gone,
 }
 
 /// The decision phase of a cleanup (#210): computed before any side effect so
@@ -176,6 +178,8 @@ pub enum CleanupDecision {
     Retain,
     /// Uncommitted changes present (data-loss guard, F-23).
     Dirty,
+    /// The path is not a git worktree, so there is nothing to remove (#694).
+    Gone,
 }
 
 /// What `git worktree add` should put the new worktree on. See
@@ -700,6 +704,7 @@ impl<G: GitRunner> WorktreeManager<G> {
         )? {
             CleanupDecision::Dirty => Ok(CleanupOutcome::DirtySkipped),
             CleanupDecision::Retain => Ok(CleanupOutcome::Retained),
+            CleanupDecision::Gone => Ok(CleanupOutcome::Gone),
             CleanupDecision::Remove => self.remove(
                 req.repo_path,
                 req.worktree_path,
@@ -709,9 +714,9 @@ impl<G: GitRunner> WorktreeManager<G> {
         }
     }
 
-    /// Decide what a cleanup would do, without doing it: the two data-loss
-    /// checks (I/O) first (F-23), then the pure policy judgment
-    /// ([`policy_allows_removal`]).
+    /// Decide what a cleanup would do, without doing it: "is there anything
+    /// there at all" (`is_worktree`), then the two data-loss checks (I/O)
+    /// (F-23), then the pure policy judgment ([`policy_allows_removal`]).
     pub fn decide_cleanup(
         &self,
         worktree_path: &Path,
@@ -720,6 +725,9 @@ impl<G: GitRunner> WorktreeManager<G> {
         finished_at: Option<&str>,
         now: &str,
     ) -> Result<CleanupDecision, WorktreeError> {
+        if !self.is_worktree(worktree_path)? {
+            return Ok(CleanupDecision::Gone);
+        }
         if self.has_uncommitted_changes(worktree_path)? {
             return Ok(CleanupDecision::Dirty);
         }
@@ -979,6 +987,39 @@ impl<G: GitRunner> WorktreeManager<G> {
             .git
             .run(repo_path, &["merge-base", "--is-ancestor", base, branch])?;
         Ok(out.success())
+    }
+
+    /// Whether `worktree_path` is a git worktree at all.
+    ///
+    /// The cleanup's first question, and the one that separates "already done"
+    /// from "broken" (#694). `worktree_path` comes from the task row, which
+    /// **keeps it after a successful removal** — so a directory can reappear
+    /// at that name long after the worktree it described was removed: an
+    /// agent's leftovers, a `mkdir` by hand, a probe. The caller's cheap
+    /// `Path::exists` gate passes on it, and then every git question asked of
+    /// it fails: [`has_uncommitted_changes`](Self::has_uncommitted_changes)
+    /// reports `fatal: not a git repository`, which the caller can only read
+    /// as a failed cleanup and warn about — once per sweep, for the life of
+    /// the process, about a task that finished cleanly.
+    ///
+    /// Asked first, the same situation is [`CleanupDecision::Gone`]: there is
+    /// no worktree here to remove. Note what that gives up — a directory git
+    /// does not recognise is **left on disk**, silently. That is not a
+    /// regression: `git worktree remove` could never have removed it either,
+    /// so the warning it replaces named no action anyone could take.
+    ///
+    /// An I/O failure is **not** an answer of "no" and propagates: staying
+    /// loud about a broken toolchain is the whole point of distinguishing the
+    /// two. It deliberately does not special-case a missing directory, because
+    /// `std::process` reports "no `git` on `PATH`" and "no such `cwd`" as the
+    /// same [`NotFound`](std::io::ErrorKind::NotFound). The caller's
+    /// `Path::exists` gate is what keeps the ordinary already-removed case
+    /// from reaching here.
+    fn is_worktree(&self, worktree_path: &Path) -> Result<bool, WorktreeError> {
+        let out = self
+            .git
+            .run(worktree_path, &["rev-parse", "--is-inside-work-tree"])?;
+        Ok(out.success() && out.stdout.trim() == "true")
     }
 
     /// Whether a worktree has uncommitted (staged/unstaged/untracked) changes.
@@ -1590,6 +1631,9 @@ mod tests {
         descends_from_base: std::cell::RefCell<bool>,
         /// Whether `rev-parse --abbrev-ref HEAD` fails outright.
         head_fails: std::cell::RefCell<bool>,
+        /// Whether the path is a git worktree at all (#694). `false` makes
+        /// every git question fail the way a stray directory does.
+        inside_worktree: std::cell::RefCell<bool>,
     }
 
     impl ScriptedGit {
@@ -1604,7 +1648,15 @@ mod tests {
                 ahead_of_base: std::cell::RefCell::new("0"),
                 descends_from_base: std::cell::RefCell::new(true),
                 head_fails: std::cell::RefCell::new(false),
+                inside_worktree: std::cell::RefCell::new(true),
             }
+        }
+
+        /// The path is not a git worktree: `rev-parse --is-inside-work-tree`
+        /// fails the way it does in a directory git knows nothing about.
+        fn not_a_worktree(self) -> Self {
+            *self.inside_worktree.borrow_mut() = false;
+            self
         }
 
         /// The branch has `count` commits that are not on origin.
@@ -1649,7 +1701,18 @@ mod tests {
         fn run(&self, _cwd: &Path, args: &[&str]) -> std::io::Result<crate::ports::git::GitOutput> {
             self.commands.borrow_mut().push(args.join(" "));
             let mut status = Some(0);
-            let stdout = if args.first() == Some(&"status") {
+            let stdout = if args == ["rev-parse", "--is-inside-work-tree"] {
+                if !*self.inside_worktree.borrow() {
+                    return Ok(crate::ports::git::GitOutput {
+                        status: Some(128),
+                        stdout: String::new(),
+                        stderr: "fatal: not a git repository (or any of the \
+                                 parent directories): .git\n"
+                            .to_string(),
+                    });
+                }
+                "true".to_string()
+            } else if args.first() == Some(&"status") {
                 self.statuses
                     .borrow_mut()
                     .pop()
@@ -1717,6 +1780,32 @@ mod tests {
                 .unwrap();
             assert_eq!(decision, *expected, "policy {policy:?}, status {status:?}");
         }
+    }
+
+    #[test]
+    fn decide_cleanup_reports_gone_for_a_path_that_is_not_a_worktree() {
+        // #694: the task row keeps `worktree_path` after a successful removal,
+        // so a directory can reappear at that name. It is not a failure — and
+        // crucially it is decided *before* `git status`, whose "not a git
+        // repository" is what used to surface as a warning once per sweep,
+        // forever, for a task that finished cleanly.
+        let git = ScriptedGit::new(&[]).not_a_worktree();
+        let mgr = WorktreeManager::new(&git);
+        assert_eq!(
+            mgr.decide_cleanup(
+                Path::new("/wt"),
+                Some("base"),
+                CleanupPolicy::Immediate,
+                None,
+                "2026-07-12T00:00:00Z",
+            )
+            .unwrap(),
+            CleanupDecision::Gone
+        );
+        assert!(
+            !git.ran("status"),
+            "the dirtiness probe must not run on a path git does not recognise"
+        );
     }
 
     #[test]

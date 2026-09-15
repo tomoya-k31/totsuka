@@ -290,6 +290,9 @@ impl<G: GitRunner, L: LlmRouter + 'static> Engine<G, L> {
         let base_commit = record.base_commit.as_deref();
         // Already removed (earlier run / manual cleanup): nothing to do. The
         // task will never be swept again, so drop its release memos too.
+        // The path having *something* at it is not the same as the worktree
+        // still being there — `CleanupDecision::Gone` below is the other half
+        // of this check (#694).
         if !Path::new(path).exists() {
             self.forget_release_memos(task_id);
             return Ok(());
@@ -362,6 +365,19 @@ impl<G: GitRunner, L: LlmRouter + 'static> Engine<G, L> {
                     outcome = ?CleanupOutcome::DirtySkipped,
                     "worktree cleanup"
                 );
+                return Ok(());
+            }
+            CleanupDecision::Gone => {
+                // The directory is not a worktree, so the removal already
+                // happened (or never had to). Quiet, and treated exactly like
+                // the missing-path case above — including dropping the release
+                // memos, since nothing about this task will change from here.
+                tracing::debug!(
+                    task_id,
+                    worktree = %path,
+                    "worktree already gone; nothing to clean up"
+                );
+                self.forget_release_memos(task_id);
                 return Ok(());
             }
             CleanupDecision::Remove => {}
