@@ -11,6 +11,19 @@ Note: the plugin protocol is versioned independently of the application (see
 `crates/plugin-protocol`); a totsuka release does not imply a protocol-version
 change.
 
+## [0.7.9](https://github.com/tomoya-k31/totsuka/compare/v0.7.8...v0.7.9) (2026-09-15)
+
+
+### Features
+
+* **task-source-slack:** エージェントに親スレッドの URL も渡す ([#688](https://github.com/tomoya-k31/totsuka/issues/688)) ([f0605ee](https://github.com/tomoya-k31/totsuka/commit/f0605ee89873617f29d36fa059661fbfab5aeac0))
+
+
+### Bug Fixes
+
+* **slack-event-gateway:** 登録表の `path_token` 最小長をコンテナ側でも強制する ([#690](https://github.com/tomoya-k31/totsuka/issues/690)) ([ae8fa70](https://github.com/tomoya-k31/totsuka/commit/ae8fa70b434ce0fb920675650eb12a7d50993456))
+* **slack-event-gateway:** 登録表の `topic` が行をまたいで重複するのを弾く ([#689](https://github.com/tomoya-k31/totsuka/issues/689)) ([eec0e36](https://github.com/tomoya-k31/totsuka/commit/eec0e36703defca9df0cf96df511c2e137fccf14))
+
 ## [0.7.8](https://github.com/tomoya-k31/totsuka/compare/v0.7.7...v0.7.8) (2026-09-14)
 
 
