@@ -88,6 +88,14 @@ outlive `response_url`'s roughly 30-minute life but not much more, while
 messages are kept for days. A table naming one topic for both is refused at
 startup.
 
+**No topic may appear twice in the table**, in either column or across them.
+Two operators pointed at one topic would start without a word, and then one
+person's deliveries — their channel ids, their `ts`, their reactions — would
+arrive in the other's subscription. The two columns are checked together, so
+one operator's `topic` cannot be another's `block_actions_topic` either: that
+pairing would put presses in a subscription whose retention is measured in
+days.
+
 ## Two Request URLs, not one
 
 Slack has **two** settings, and you need both pointed here:
