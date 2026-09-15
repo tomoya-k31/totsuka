@@ -184,6 +184,7 @@ struct EmbeddedPrompts {
     body_template: String,
     body_attachment_header: String,
     body_attachment_line: String,
+    body_thread_permalink: String,
     body_thread_header: String,
     body_thread_line: String,
     body_thread_unavailable: String,
@@ -233,6 +234,10 @@ pub struct SlackPrompts {
     /// permalink, already composed).
     #[serde(default = "default_body_attachment_line")]
     pub body_attachment_line: String,
+    /// The parent thread's permalink section, emitted only when the mention
+    /// is a reply inside a thread (#683). Placeholder: `{url}`.
+    #[serde(default = "default_body_thread_permalink")]
+    pub body_thread_permalink: String,
     /// Thread-context section header. Placeholder: `{count}`.
     #[serde(default = "default_body_thread_header")]
     pub body_thread_header: String,
@@ -264,6 +269,7 @@ impl Default for SlackPrompts {
             body_template: DEFAULTS.body_template.clone(),
             body_attachment_header: DEFAULTS.body_attachment_header.clone(),
             body_attachment_line: DEFAULTS.body_attachment_line.clone(),
+            body_thread_permalink: DEFAULTS.body_thread_permalink.clone(),
             body_thread_header: DEFAULTS.body_thread_header.clone(),
             body_thread_line: DEFAULTS.body_thread_line.clone(),
             body_thread_unavailable: DEFAULTS.body_thread_unavailable.clone(),
@@ -289,6 +295,7 @@ impl SlackPrompts {
         // One placeholder, carrying the whole composed line — same shape as
         // `body_thread_line`, for the same reason (optional fields).
         ("body_attachment_line", &["file"]),
+        ("body_thread_permalink", &["url"]),
         ("body_thread_header", &["count"]),
         ("body_thread_line", &["line"]),
         ("body_thread_unavailable", &[]),
@@ -319,6 +326,7 @@ impl SlackPrompts {
             ("body_template", &self.body_template),
             ("body_attachment_header", &self.body_attachment_header),
             ("body_attachment_line", &self.body_attachment_line),
+            ("body_thread_permalink", &self.body_thread_permalink),
             ("body_thread_header", &self.body_thread_header),
             ("body_thread_line", &self.body_thread_line),
             ("body_thread_unavailable", &self.body_thread_unavailable),
@@ -368,6 +376,9 @@ fn default_body_attachment_header() -> String {
 }
 fn default_body_attachment_line() -> String {
     DEFAULTS.body_attachment_line.clone()
+}
+fn default_body_thread_permalink() -> String {
+    DEFAULTS.body_thread_permalink.clone()
 }
 fn default_body_thread_header() -> String {
     DEFAULTS.body_thread_header.clone()

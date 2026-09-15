@@ -178,6 +178,36 @@ body_attachment_line = """
 - {file}
 """
 
+# The parent thread's permalink, emitted only when the mention is a reply
+# inside a thread (#683). A top-level mention is the thread root, so its own
+# permalink — already the task's `url` — says the same thing, and the section
+# is omitted rather than repeating it.
+#
+# Placeholders: {url}
+#
+# **Split by language like `body_attachment_header`** (ADR-0054): the heading
+# is a label a human reads in the pane, the parenthetical addresses the agent.
+#
+# The parenthetical is the whole point of the key. The link alone reads as
+# decoration next to the thread context below it; what the agent needs to know
+# is that the context is a *window* — the most recent N messages — and that
+# this link is the way to what falls outside it. Without that, an agent handed
+# a truncated conversation answers from the truncation.
+#
+# It says "any thread context below" rather than naming it outright, because
+# the section underneath is not always a transcript: a failed
+# `conversations.replies` replaces it with `body_thread_unavailable`, and
+# there the link is worth more, not less.
+body_thread_permalink = """
+
+## 親スレッド
+
+{url}
+
+(The mention is a reply inside this thread. Any thread context below is only its most recent part — open this link yourself if you need what falls outside that window and have a way to do so.)
+
+"""
+
 # Header for the thread-context section, emitted only when context lines were
 # fetched.
 #

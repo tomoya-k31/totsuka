@@ -4,7 +4,7 @@ title: 設定リファレンス（config.toml）
 description: "config.toml の全キー・デフォルト値・意味の一覧。設定ファイルは 1 本で、プラグイン個別設定もトップレベルの [<name>] テーブルに入る。シークレット参照、設定スキーマのバージョニング方針、[[projects]] の domain 宣言とワークフローからの参照、プラグインが定義する追加プロパティ、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-github の [github]、task-source-notion の [notion]、task-source-slack の [slack]、agent-ide-herdr の [herdr] を含む。"
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
 tags: [config, reference, toml, secrets, workflow, worktree, github, notion, slack, hooks, versioning]
-generated: { by: claude-code/opus-5, at: 2026-09-14T03:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-15T12:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -1042,6 +1042,7 @@ kind = "task_source"
 | `body_template` | ペインに表示されるタスク本文。メンション由来のタスクでは `{text}` は元メッセージから **自分（`target_user_id`）宛のメンションタグを除いた**もの（#632。生の `<@U…>` を見せるとエージェントが本人名義の返信に写す）。チャンネル監視のタスクは bot 名義で答えるので、運用者宛のタグも内容として残る | `{sender}` `{channel}` `{text}` |
 | `body_attachment_header` | 添付ファイルセクションの見出し。メッセージが添付を持つときだけ出る。**既定文は 2 つのことを言っており、どちらも振る舞いである**: ①「the content was not handed over」—— このプラグインは `files:read` を持たないので中身をダウンロードしない。言わないとエージェントが内容を推測して返信する（実機で踏んだ: 「md ファイルにしました」というメンションが本文だけのタスクになった）。**文中で指してよいのは、そのプロンプトに実際に書かれているものだけである** —— エージェントが読むのは指示文と本文だけで、`totsuka` というシステムも「タスク」という作業単位も、そこからは見えない。初期の 2 案（「totsuka は中身を取得していません」「このタスクに含まれていません」）はどちらもこれを踏み、読み手が識別できないものを主語にしていた。他のプロンプト既定値はどれもこの規律を守っている。②「where a line carries a link, fetch the file from it yourself」—— **エージェント自身の Slack ツール（MCP 等）は permalink から file id を切り出して中身を読める**（これも実機で確認。`answer` profile の deny セットと plan モードの下でも通った）。**条件形なのは `permalink` が `Option` だから** —— Slack が返さない添付では行にリンクが出ないので、無条件に「リンクから取れ」と書くと存在しない handle を指すことになる。①だけを書いていた頃の文面は、唯一動く経路からエージェントを遠ざけていた。上書きするなら**両方**残すこと。既定文がツール名を出さないのは意図的で、名指しすると持っていないエージェントに存在しない道具を探させる。**このキーだけ見出しと括弧内で言語が違う**のも意図的で、見出しはペインを見る人間が読むラベル（利用者の言語）、括弧内はエージェントへの指示（英語）である —— 分類の根拠はキー名ではなく「その文が誰に話しかけているか」（[ADR-0054](/decisions/adr-0054-prompt-language-policy.md) の Amendment） | `{count}` |
 | `body_attachment_line` | 添付 1 行ぶん。`{file}` は名前・MIME・サイズ・permalink を**組み立て済み**で渡る（`mimetype` / `size` / `permalink` はどれも欠けうるので、4 つのプレースホルダにすると空の `（・）` が残る。`body_thread_line` と同じ作法） | `{file}` |
+| `body_thread_permalink` | **親スレッドの permalink セクション**（#683）。メンションがスレッド内の返信だったときだけ出る。トップレベルのメンションはスレッドの根そのものなので、その permalink は `Task.url` が既に持っており、セクションは出さない（同じ URL を 2 箇所に書かない）。**接頭辞つきタスクが root でない返信に付いた場合も出さない**（#393 D6 / #397）—— そこでは `thread_context` が「指されていない会話だから渡さない」と決めてスレッド文脈を空にしており、入口だけ渡せば withhold した判断を裏口から戻すことになる。スレッド文脈と本キーは会話についての 1 つの言明であって、別々に判断しない。**括弧内の文が本体である** —— `Task.url` はメンション自身を指すので、スレッドの 2 通目以降でメンションされたエージェントは会話の入口を知らない。本文に入るスレッド文脈は直近 `thread_context_limit` 件の**窓**であって、その外側へ辿る手段ではない。既定文は「文脈は窓である／この URL がその外側への入口である」と明言する — 落とすと、切り取られた会話をそのまま全体だと思って答えるエージェントに戻る。「any thread context below」と条件形で書いてあるのは、下のセクションが常に本文とは限らないため（`conversations.replies` が失敗すると `body_thread_unavailable` に差し替わる。そこではこのリンクの価値はむしろ上がる）。`body_attachment_header` と同じく**見出しは利用者の言語・括弧内は英語**（[ADR-0054](/decisions/adr-0054-prompt-language-policy.md) の Amendment） | `{url}` |
 | `body_thread_header` | スレッド文脈セクションの見出し | `{count}` |
 | `body_thread_line` | スレッド文脈 1 行ぶん | `{line}` |
 | `body_thread_unavailable` | 文脈取得に失敗したときにセクションごと差し替わる文 | — |
