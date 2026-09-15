@@ -873,11 +873,20 @@ mod tests {
         let message = draft_blocks(&draft, "d1", "slack", Surface::Message);
         let response_url = draft_blocks(&draft, "d1", "slack", Surface::ResponseUrl);
 
-        let (m, r) = (block_types(&message), block_types(&response_url));
+        // Compared as whole blocks, not as type names: `section` vs `section`
+        // says nothing about whether the ❌ context still carries the ❌, and
+        // that context is what ADR-0074 kept the surface *for*.
+        let (m, r) = (
+            message.as_array().expect("blocks"),
+            response_url.as_array().expect("blocks"),
+        );
         assert_eq!(m.len(), r.len(), "{message}\n{response_url}");
         assert_eq!(m[0], r[0], "header");
         assert_eq!(&m[2..], &r[2..], "final state and footer");
         assert_ne!(m[1], r[1], "only the reply block differs");
+        // …and the one that differs differs in the way this change is about.
+        assert_eq!(m[1]["type"], "markdown");
+        assert_eq!(r[1]["type"], "section");
     }
 
     /// #632: the operator's own tag goes wherever it sits, with one adjacent
