@@ -181,7 +181,7 @@ pub async fn publish_draft<T: SlackTransport>(
         created_at: std::time::SystemTime::now(),
     };
     let draft_id = state.insert_draft(draft.clone());
-    let blocks = draft_blocks(&draft, &draft_id, &config.source_name);
+    let blocks = draft_blocks(&draft, &draft_id, &config.source_name, Surface::Message);
 
     // **The only surface.** The self-DM record used to carry a second copy of
     // these buttons (#107); it was retired because two button surfaces had to
@@ -221,7 +221,8 @@ pub async fn publish_draft<T: SlackTransport>(
             state,
             &format!("{} さんへの返信案が届きました", draft.sender_name),
             draft.permalink.as_deref(),
-            Some(vec![reply_preview_block(&draft.text)]),
+            // The nudge is a `chat.postMessage` DM, so the rich block is fine.
+            Some(vec![reply_preview_block(&draft.text, Surface::Message)]),
         )
         .await;
     }
@@ -297,7 +298,12 @@ pub async fn handle_approval_action<T: SlackTransport>(
                 let body = json!({
                     "replace_original": true,
                     "text": final_fallback(draft.status),
-                    "blocks": draft_blocks(&draft, draft_id, &config.source_name),
+                    "blocks": draft_blocks(
+                        &draft,
+                        draft_id,
+                        &config.source_name,
+                        Surface::ResponseUrl,
+                    ),
                 });
                 if let Err(e) = api.post_response_url(url, body).await {
                     tracing::warn!(draft_id, error = %e, "could not repaint an already-handled draft");
@@ -372,7 +378,12 @@ pub async fn handle_approval_action<T: SlackTransport>(
             let body = json!({
                 "replace_original": true,
                 "text": final_fallback(status),
-                "blocks": draft_blocks(&finalized, draft_id, &config.source_name),
+                "blocks": draft_blocks(
+                    &finalized,
+                    draft_id,
+                    &config.source_name,
+                    Surface::ResponseUrl,
+                ),
             });
             if let Err(e) = api.post_response_url(url, body).await {
                 tracing::warn!(draft_id, error = %e, "could not finalize the pressed draft view");
@@ -439,6 +450,27 @@ async fn notice<T: SlackTransport>(api: &SlackApi<T>, response_url: Option<&str>
     }
 }
 
+/// Where a block set is headed, because the two surfaces do not accept the
+/// same blocks.
+///
+/// **`response_url` refuses the `markdown` block.** It answers HTTP 500 with
+/// an **empty body** — no `ok: false`, no error code, nothing to branch on.
+/// Measured live on 2026-09-15 by posting the same draft's blocks twice: with
+/// the `markdown` block, 638 bytes, refused; with that one block swapped for a
+/// `section`, 662 bytes, accepted. The accepted payload is the **larger** of
+/// the two, so this is the block type and not a size limit.
+///
+/// `chat.postMessage` and `chat.postEphemeral` take it fine (#454, verified
+/// live 2026-08-14), which is why the difference belongs to the surface rather
+/// than to the draft.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Surface {
+    /// `chat.postEphemeral` / `chat.postMessage` — the `markdown` block works.
+    Message,
+    /// A `response_url` write — it does not.
+    ResponseUrl,
+}
+
 /// The reply as a Block Kit `markdown` block (#454). The agent writes
 /// GitHub-flavored Markdown; posted as bare `text` Slack reads it as mrkdwn —
 /// a different dialect — so `**bold**`, fence language tags, `[t](url)` links,
@@ -453,12 +485,21 @@ fn reply_markdown_block(text: &str) -> Option<Value> {
     (text.len() <= MARKDOWN_BLOCK_LIMIT).then(|| json!({ "type": "markdown", "text": text }))
 }
 
-/// The reply text as a display block: the `markdown` block when it fits, the
-/// clipped mrkdwn section when the post path will fall back to plain `text`.
+/// The reply text as a display block: the `markdown` block when it fits **and
+/// the surface accepts it**, the clipped mrkdwn section otherwise.
+///
 /// Shared by the draft preview surfaces and the bot-DM log (#456) so every
-/// rendering of the reply makes the same markdown-vs-fallback decision.
-fn reply_preview_block(text: &str) -> Value {
-    reply_markdown_block(text).unwrap_or_else(|| {
+/// rendering of the reply makes the same markdown-vs-fallback decision. The
+/// `Surface` argument is the second reason to fall back and it is not a
+/// preference: a `markdown` block sent to a `response_url` fails the whole
+/// write (see [`Surface`]), which on the draft surface means the buttons never
+/// clear.
+fn reply_preview_block(text: &str, surface: Surface) -> Value {
+    let markdown = match surface {
+        Surface::Message => reply_markdown_block(text),
+        Surface::ResponseUrl => None,
+    };
+    markdown.unwrap_or_else(|| {
         json!({
             "type": "section",
             "text": { "type": "mrkdwn", "text": clipped(text) },
@@ -477,7 +518,7 @@ fn final_fallback(status: DraftStatus) -> &'static str {
 /// The Block Kit rendering of a draft: detection header, reply text,
 /// then — depending on status — the approve/reject buttons or the final
 /// ✅/❌ state, plus a context footer (draft id / source).
-fn draft_blocks(draft: &Draft, draft_id: &str, source_name: &str) -> Value {
+fn draft_blocks(draft: &Draft, draft_id: &str, source_name: &str, surface: Surface) -> Value {
     let mut header = format!(
         "📝 *{}* さんからのメンションへの返信案です。",
         draft.sender_name
@@ -486,15 +527,22 @@ fn draft_blocks(draft: &Draft, draft_id: &str, source_name: &str) -> Value {
         header.push_str(&format!(" <{link}|元メッセージを開く>"));
     }
 
-    // The preview must show what approval will send: the same `markdown`
-    // block when the text fits, the same clipped mrkdwn section when the
-    // approve path will fall back to a plain-`text` post.
+    // On the message surface the preview must show what approval will send:
+    // the same `markdown` block when the text fits, the same clipped mrkdwn
+    // section when the approve path will fall back to a plain-`text` post.
+    //
+    // The `response_url` rendering cannot match it, because that surface
+    // refuses the block outright. That costs the *finalized* view its rich
+    // rendering and nothing else — by the time this surface is rewritten the
+    // decision is made, and an approved reply is already in the thread as a
+    // real `markdown` block. A record that reads slightly plainer is a fair
+    // price for one that appears at all.
     let mut blocks = vec![
         json!({
             "type": "section",
             "text": { "type": "mrkdwn", "text": header },
         }),
-        reply_preview_block(&draft.text),
+        reply_preview_block(&draft.text, surface),
     ];
     match draft.status {
         DraftStatus::Pending => blocks.push(json!({
@@ -737,6 +785,94 @@ fn starts_with_iso_date(text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn draft_of(text: &str, status: DraftStatus) -> Draft {
+        Draft {
+            task_id: "slack:C1:100.0".into(),
+            channel: "C1".into(),
+            reply_ts: "100.0".into(),
+            mention_ts: "100.1".into(),
+            sender_name: "アリス".into(),
+            permalink: None,
+            text: text.into(),
+            status,
+            created_at: std::time::SystemTime::now(),
+        }
+    }
+
+    /// Every block type present in `blocks`, in order.
+    fn block_types(blocks: &Value) -> Vec<&str> {
+        blocks
+            .as_array()
+            .expect("blocks is an array")
+            .iter()
+            .filter_map(|b| b.get("type").and_then(Value::as_str))
+            .collect()
+    }
+
+    /// **Nothing headed for a `response_url` may carry a `markdown` block.**
+    ///
+    /// Slack refuses it there with HTTP 500 and an **empty body** — no
+    /// `ok: false`, no error code — so the failure arrives as an opaque
+    /// status, and on the draft surface it means the whole rewrite is lost and
+    /// the approve/reject buttons never clear. That is what shipped in #684:
+    /// the press repainted the ephemeral instead of deleting it, which sent
+    /// `blocks` down a path that had only ever carried `delete_original`.
+    ///
+    /// Measured live 2026-09-15 by posting one draft's blocks twice: with the
+    /// `markdown` block, 638 bytes, refused; with that block swapped for a
+    /// `section`, 662 bytes, accepted. The accepted payload is **larger**, so
+    /// it is the block type and not a size limit.
+    ///
+    /// **This test is the only thing that catches a regression here.** The
+    /// transport is faked everywhere else, so a `markdown` block reaching a
+    /// `response_url` passes every other test in this repo and then fails in
+    /// production, silently, on a surface nobody is watching.
+    #[test]
+    fn response_url_payloads_never_carry_a_markdown_block() {
+        for status in [
+            DraftStatus::Pending,
+            DraftStatus::Sent,
+            DraftStatus::Rejected,
+        ] {
+            let draft = draft_of("**太字** と `コード`", status);
+            let blocks = draft_blocks(&draft, "d1", "slack", Surface::ResponseUrl);
+            assert!(
+                !block_types(&blocks).contains(&"markdown"),
+                "{status:?}: a markdown block would fail the whole write: {blocks}"
+            );
+        }
+    }
+
+    /// …and the message surface keeps it, because that is where the preview
+    /// has to show what approval will actually send (#454). Dropping it
+    /// everywhere would have "fixed" the 500 by regressing the preview.
+    #[test]
+    fn the_message_surface_still_previews_with_a_markdown_block() {
+        let draft = draft_of("**太字** と `コード`", DraftStatus::Pending);
+        let blocks = draft_blocks(&draft, "d1", "slack", Surface::Message);
+        assert!(
+            block_types(&blocks).contains(&"markdown"),
+            "the preview must render what will be posted: {blocks}"
+        );
+    }
+
+    /// The two surfaces otherwise agree: same header, same footer, same
+    /// buttons-or-final-state. Only the reply block differs, so a future
+    /// change that drops the ✅/❌ context from the `response_url` rendering —
+    /// the trace ADR-0074 kept the surface *for* — fails here.
+    #[test]
+    fn the_surfaces_differ_only_in_how_the_reply_is_rendered() {
+        let draft = draft_of("やっておきます", DraftStatus::Rejected);
+        let message = draft_blocks(&draft, "d1", "slack", Surface::Message);
+        let response_url = draft_blocks(&draft, "d1", "slack", Surface::ResponseUrl);
+
+        let (m, r) = (block_types(&message), block_types(&response_url));
+        assert_eq!(m.len(), r.len(), "{message}\n{response_url}");
+        assert_eq!(m[0], r[0], "header");
+        assert_eq!(&m[2..], &r[2..], "final state and footer");
+        assert_ne!(m[1], r[1], "only the reply block differs");
+    }
 
     /// #632: the operator's own tag goes wherever it sits, with one adjacent
     /// space, and a third party's stays.
