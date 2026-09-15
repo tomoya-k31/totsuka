@@ -155,6 +155,16 @@ impl<G: GitRunner, L: LlmRouter + 'static> Engine<G, L> {
         else {
             return Ok(());
         };
+        // A directory at the recorded path is not proof that the worktree is
+        // still there (#694) — and here the consequence is worse than a stray
+        // warning. `head_branch` asks git from inside that directory, so a
+        // stray directory *under* a repository answers with the **enclosing**
+        // repo's branch, and this would write `main` into the task as "the
+        // branch the agent named". Cleanup deletes a task's branch once it is
+        // fully published, which `main` always is.
+        if !self.worktree_still_registered(&record) {
+            return Ok(());
+        }
         // Detached is left unrecorded rather than cleared: the agent may simply
         // not have branched yet, and this runs repeatedly.
         let Some(head) = self.worktrees.head_branch(Path::new(path)) else {
@@ -169,6 +179,39 @@ impl<G: GitRunner, L: LlmRouter + 'static> Engine<G, L> {
         }
         self.db.set_branch(task_id, &head)?;
         Ok(())
+    }
+
+    /// Whether the task's recorded worktree path is still one of its repo's
+    /// registered worktrees (#694).
+    ///
+    /// **Only a positive "no" from git stops the caller.** Not knowing — no
+    /// repo recorded, the repo gone from the config, `git worktree list`
+    /// itself failing — answers "yes" and leaves behavior as it was: this
+    /// guard exists to catch a directory git has never heard of, and a probe
+    /// that could not run is not evidence of one.
+    fn worktree_still_registered(&self, record: &TaskRecord) -> bool {
+        let (Some(path), Some(repo_name)) = (&record.worktree_path, &record.repo) else {
+            return true;
+        };
+        let Some(repo_path) = self
+            .settings
+            .repos
+            .iter()
+            .find(|r| &r.name == repo_name)
+            .map(|r| r.path.clone())
+        else {
+            return true;
+        };
+        match self.worktrees.is_worktree_of(&repo_path, Path::new(path)) {
+            Ok(registered) => registered,
+            Err(e) => {
+                tracing::debug!(
+                    task_id = record.id,
+                    "could not confirm the worktree is still registered: {e}"
+                );
+                true
+            }
+        }
     }
 
     /// Re-apply the cleanup policy to finished tasks whose worktree still

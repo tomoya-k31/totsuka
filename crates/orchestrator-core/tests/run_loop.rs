@@ -2004,6 +2004,103 @@ fn manual_clock() -> Arc<ManualClock> {
     Arc::new(ManualClock::new(t0))
 }
 
+/// A stray directory at a removed worktree's path must not have its `HEAD`
+/// read as "the branch the agent named" (#694).
+///
+/// The sweep revisits a finished task for as long as its row carries a
+/// `worktree_path`, and `cleanup_worktree` calls `sync_branch` first.
+/// `head_branch` asks git from *inside* the recorded path, so a stray
+/// directory under the repository answers with the **enclosing** repo's
+/// branch — here `main`. Recording that is not a cosmetic mistake: cleanup
+/// deletes a task's branch once every commit on it is on `origin`, which is
+/// exactly what `main` is.
+#[tokio::test]
+async fn a_stray_directory_does_not_get_its_branch_recorded_on_the_task() {
+    let base = scratch("stray_branch_sync");
+    let repo = setup_repo(&base);
+    let source_log = base.join("source.ndjson");
+    let notify_log = base.join("notify.ndjson");
+    let db_path = base.join("state.db");
+
+    let plugins = plugin_set(
+        json!([mock_task("1")]),
+        json!({"stream_states": ["running", "done"]}),
+        &source_log,
+        &notify_log,
+    )
+    .await;
+    let mut settings = engine_settings(&repo);
+    // Worktrees *inside* the repo — where a stray directory has an enclosing
+    // repository to answer for it. The default template puts them beside it.
+    settings.location_template = "{repo}/wt/{worktree_name}".to_string();
+    let mut engine = Engine::new(
+        StateDb::open(&db_path).unwrap(),
+        settings,
+        plugins,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+    let db_probe = db_path.clone();
+    run_watch_until(&mut engine, move || {
+        StateDb::open(&db_probe)
+            .unwrap()
+            .find_by_source("mock_src", "1")
+            .unwrap()
+            .is_some_and(|t| t.state == TaskState::Done)
+    })
+    .await;
+    engine.shutdown(Duration::from_secs(5)).await;
+
+    let db = StateDb::open(&db_path).unwrap();
+    let task = db.find_by_source("mock_src", "1").unwrap().unwrap();
+    let worktree = PathBuf::from(task.worktree_path.clone().unwrap());
+    assert!(!worktree.exists(), "immediate cleanup removed the worktree");
+    assert_eq!(task.branch, None, "the mock agent never branched");
+    assert_eq!(
+        git(&repo, &["rev-parse", "--abbrev-ref", "HEAD"]).trim(),
+        "main",
+        "the enclosing repo is on the branch this test must not record"
+    );
+
+    // Something takes the name back, and the sweep comes round again.
+    std::fs::create_dir_all(&worktree).unwrap();
+    let plugins = plugin_set(
+        json!([]),
+        json!({"stream_states": ["running", "done"]}),
+        &source_log,
+        &notify_log,
+    )
+    .await;
+    let mut settings = engine_settings(&repo);
+    settings.location_template = "{repo}/wt/{worktree_name}".to_string();
+    let mut engine = Engine::new(
+        StateDb::open(&db_path).unwrap(),
+        settings,
+        plugins,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+    tokio::time::timeout(
+        Duration::from_secs(60),
+        engine.run(false, std::future::pending()),
+    )
+    .await
+    .expect("one-shot run must settle")
+    .unwrap();
+    engine.shutdown(Duration::from_secs(5)).await;
+
+    let db = StateDb::open(&db_path).unwrap();
+    let task = db.find_by_source("mock_src", "1").unwrap().unwrap();
+    assert_eq!(
+        task.branch, None,
+        "the enclosing repo's branch must not be recorded as the task's"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 #[tokio::test]
 async fn done_task_releases_its_pane_before_immediate_worktree_removal() {
     let base = scratch("release_on_done");

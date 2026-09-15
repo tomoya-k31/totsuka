@@ -253,6 +253,7 @@ fn a_stray_directory_at_a_removed_worktree_path_is_gone_not_an_error() {
     };
     assert_eq!(
         mgr.decide_cleanup(
+            request.repo_path,
             request.worktree_path,
             request.base_commit,
             request.policy,
@@ -292,8 +293,47 @@ fn a_stray_directory_inside_the_repo_is_gone_too() {
 
     assert_eq!(
         mgr.decide_cleanup(
+            &clone,
             &stray,
             None,
+            CleanupPolicy::Immediate,
+            None,
+            "2026-07-12T00:00:00Z",
+        )
+        .unwrap(),
+        CleanupDecision::Gone
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// And for a stray that is a repository in its own right.
+///
+/// "Is this path a repo root" is the other cheap question that gets this
+/// wrong: a `git init` at the old name answers yes and is clean, so the
+/// decision would be `Remove` — and `git worktree remove` then fails against
+/// the repo that does not list it, which is the warning loop again. The
+/// question has to be membership in **this repo's** registry.
+#[test]
+fn a_stray_repository_at_a_removed_worktree_path_is_gone_too() {
+    let base = scratch("stray-repo");
+    let clone = setup(&base);
+    let state = base.join("state");
+    let env = env(&state);
+    let mgr = WorktreeManager::new(SystemGitRunner);
+
+    let wt = mgr.create(&request(&clone, "45", &env)).unwrap();
+    mgr.remove(&clone, &wt.path, None, Some(&wt.base_commit))
+        .unwrap();
+    std::fs::create_dir_all(&wt.path).unwrap();
+    git(&wt.path, &["init"]);
+    assert!(wt.path.join(".git").is_dir(), "a repository of its own");
+
+    assert_eq!(
+        mgr.decide_cleanup(
+            &clone,
+            &wt.path,
+            Some(&wt.base_commit),
             CleanupPolicy::Immediate,
             None,
             "2026-07-12T00:00:00Z",
@@ -804,6 +844,7 @@ fn a_detached_worktree_with_commits_is_kept() {
 
     assert_eq!(
         mgr.decide_cleanup(
+            &clone,
             &wt.path,
             Some(&wt.base_commit),
             CleanupPolicy::Immediate,

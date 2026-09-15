@@ -1,9 +1,9 @@
 ---
 type: Decision
 title: ADR-0010 worktree 掃除の3段化（判定→pane→worktree）と session/release の追加
-description: 正常完了時に herdr pane を閉じる経路が無く pane が単調増加する問題（#210）に対し、cleanup を「判定→pane 解放→worktree 削除」の3段に分割し、protocol 0.2.1 で session/release RPC（pane_control 相乗り・expect_cwd による同一性検証・degrade-open）を追加、保持プリセット keep_7d/keep_28d と worktree sweep 間隔の分離（60s・config 非露出）を併せて導入する決定。
+description: "正常完了時に herdr pane を閉じる経路が無く pane が単調増加する問題（#210）に対し、cleanup を「判定→pane 解放→worktree 削除」の3段に分割し、protocol 0.2.1 で session/release RPC（pane_control 相乗り・expect_cwd による同一性検証・degrade-open）を追加、保持プリセット keep_7d/keep_28d と worktree sweep 間隔の分離（60s・config 非露出）を併せて導入する決定。Amendment（#694）: 判定に 4 つ目の値 `Gone` を足した —— 削除済み worktree の跡地にディレクトリがあるだけで掃除が失敗として報告され、正常終了したタスクについて 60 秒ごとに WARN が出続けていた。"
 tags: [worktree, cleanup, pane, protocol, herdr, retention, architecture]
-generated: { by: human:tomoya-k31, at: 2026-07-22T00:00:00Z }
+generated: { by: human:tomoya-k31, at: 2026-09-15T17:30:00+09:00 }
 verified:
   - { by: human:tomoya-k31, at: 2026-08-18T04:07:00Z }
   - { by: claude-code/opus-5, at: 2026-08-18T21:14:00Z }
@@ -42,10 +42,16 @@ protocol 0.2.0 の Slack 実機検証で、完了したタスクの herdr pane �
 
 ## 1. cleanup を「判定 → pane 解放 → worktree 削除」の3段に分割する
 
-`WorktreeManager::cleanup()` を `decide_cleanup()`（dirty チェック + policy 判定 → `Remove | Retain | Dirty`）と `remove()`（削除の実行）に分割し、既存 `cleanup()` は両者を呼ぶ薄いラッパとして残す。Engine の `cleanup_worktree` は判定が **`Remove` のときだけ** pane を閉じ（`session/release`）、その後 worktree を削除する。`Retain` / `Dirty` では pane を保持し、人間の導線（F-23）を守る。
+`WorktreeManager::cleanup()` を `decide_cleanup()`（dirty チェック + policy 判定 → `Remove | Retain | Dirty`。**#694 で `Gone` が加わった** —— 下記の 2026-09-15 追記）と `remove()`（削除の実行）に分割し、既存 `cleanup()` は両者を呼ぶ薄いラッパとして残す。Engine の `cleanup_worktree` は判定が **`Remove` のときだけ** pane を閉じ（`session/release`）、その後 worktree を削除する。`Retain` / `Dirty` では pane を保持し、人間の導線（F-23）を守る。
 
 - **TOCTOU 対策**: `remove()` は冒頭で dirty を**再チェック**し、判定と実行の間に dirty 化していれば削除せず `DirtySkipped` を返す。pane は既に閉じた後だが、**データ損失（不可逆）> pane 喪失（軽微）**の優先順位で削除を中止し、次の sweep が再試行する。
 - **release の一回性**: Engine が `released_panes` を持ち、release RPC が**正常応答した時点で**（`released` の真偽によらず）記録する。**キーは `sessions.id`（#486 で `task_id` から変更）** — 1 つのタスクは retry や追いメッセージで複数の pane を持ちうるので、task 単位のメモは「新しい pane ができたら手で無効化する」規約を要求し、その違反が無言（新 pane が二度と解放されない = 本 ADR が塞いだはずの漏れ）だった。セッション行は dispatch のたびに増えるので、このキーは自動的に無効化される。**一回性を適用するかは呼び出し側が `ReleaseMode` で選ぶ**: 掃除は `Once`（下記）、再 dispatch は `Always`（[#481](https://github.com/tomoya-k31/totsuka/issues/481)） — 後者はこれから新しい pane を開くための前提条件であり、`released: false` は「既に消えていた」と「同一性拒否で閉じなかった」の両方を意味するので、メモは pane が閉じた証拠にならない。削除が失敗し続ける worktree に対して sweep のたびに release を再送しない。transport エラー時は記録せず warn のみ（release 失敗は削除をブロックしない — pane 孤児化は #211 の doctor が受け持つ）。
+
+**2026-09-15 追記（[#694](https://github.com/tomoya-k31/totsuka/issues/694)）: 判定に 4 つ目の値 `Gone` を足した。** 判定の 3 値は「掃除すべき worktree がそこにある」ことを暗黙の前提にしていたが、**タスク行は削除成功後も `worktree_path` を保持する**（`set_worktree` に消す口が無い）ので sweep は終わったタスクを永久に見に来る。跡地に無関係なディレクトリが現れると（エージェントの残骸、手の `mkdir`、調査用のプローブ）呼び出し側の `Path::exists` ゲートを通り、`decide_cleanup` 冒頭の `git status --porcelain` が `fatal: not a git repository` で落ちる。これは判定の 3 値のどれでもないので失敗として報告され、**正常終了したタスクについてプロセスが生きている限り 60 秒ごとに WARN が出続けていた**（決定 5 の間引きが効いてなお 60 秒に 1 本）。
+
+判定の先頭で `is_worktree_of`（`repo_path` に対する `worktree list --porcelain` に当該パスが載っているか）を訊き、載っていなければ `Gone` を返して静かに抜ける。**訊くのは「このリポジトリの registry に属するか」であって「git リポジトリか」ではない**: `rev-parse --is-inside-work-tree` は**包含**を訊くので、リポジトリの中に置かれた跡地（`[worktree].location` をリポジトリ内へ向けた運用）が素通りし、以降の `git status` が**外側の作業ツリー**を答えてデータ損失ガードが別の worktree を見ることになる。`rev-parse --show-toplevel` とパス自身の照合も、跡地で `git init` された場合に素通りし、`worktree remove` が列挙しないパスに対して失敗する —— どちらも同じ WARN ループが 1 歩先で再現するだけである。**問い合わせ先が `repo_path` である点も意図的**で、疑わしいパスの側で git を動かすと、そこが本物の worktree であっても起きうる失敗（dubious ownership 等）が「リポジトリではない」と区別できず、黙って `Gone` に落ちる。
+
+**git が認識しないディレクトリはディスクに残す。** `worktree remove` でも消せなかったものであり、置き換えた WARN は誰にも取れる行動を指していなかった。同じ理由で `cleanup_worktree` が先に呼ぶ `sync_branch` にも同じ問い合わせを置いた —— `head_branch` は跡地の中で git を動かすので、外側のリポジトリの `main` を「エージェントが付けたブランチ」としてタスク行に書き込みうる。決定 1 の TOCTOU 対策と同じ優先順位の話で、そのブランチは publish 済みなので掃除の削除条件を満たしてしまう。
 
 ## 2. protocol 0.2.1 で `session/release` を追加し、capability は `pane_control` を再利用する
 

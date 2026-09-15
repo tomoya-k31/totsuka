@@ -338,6 +338,7 @@ impl<G: GitRunner, L: LlmRouter + 'static> Engine<G, L> {
         };
         let now = self.clock.now_rfc3339();
         let decision = match self.worktrees.decide_cleanup(
+            &repo_path,
             Path::new(path),
             base_commit,
             policy,

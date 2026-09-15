@@ -696,6 +696,7 @@ impl<G: GitRunner> WorktreeManager<G> {
     /// callers with nothing to do between the two.
     pub fn cleanup(&self, req: &CleanupRequest<'_>) -> Result<CleanupOutcome, WorktreeError> {
         match self.decide_cleanup(
+            req.repo_path,
             req.worktree_path,
             req.base_commit,
             req.policy,
@@ -715,17 +716,19 @@ impl<G: GitRunner> WorktreeManager<G> {
     }
 
     /// Decide what a cleanup would do, without doing it: "is there anything
-    /// there at all" (`is_worktree`), then the two data-loss checks (I/O)
-    /// (F-23), then the pure policy judgment ([`policy_allows_removal`]).
+    /// here for this repo to remove" (`is_worktree_of`), then the two
+    /// data-loss checks (I/O) (F-23), then the pure policy judgment
+    /// ([`policy_allows_removal`]).
     pub fn decide_cleanup(
         &self,
+        repo_path: &Path,
         worktree_path: &Path,
         base_commit: Option<&str>,
         policy: CleanupPolicy,
         finished_at: Option<&str>,
         now: &str,
     ) -> Result<CleanupDecision, WorktreeError> {
-        if !self.is_worktree(worktree_path)? {
+        if !self.is_worktree_of(repo_path, worktree_path)? {
             return Ok(CleanupDecision::Gone);
         }
         if self.has_uncommitted_changes(worktree_path)? {
@@ -989,7 +992,27 @@ impl<G: GitRunner> WorktreeManager<G> {
         Ok(out.success())
     }
 
-    /// Whether `worktree_path` is the root of a git worktree.
+    /// Every worktree `repo_path` has registered, as git reports them — the
+    /// main working tree included, symlink-resolved and absolute.
+    fn registered_worktrees(&self, repo_path: &Path) -> Result<Vec<PathBuf>, WorktreeError> {
+        let out = self
+            .git
+            .run(repo_path, &["worktree", "list", "--porcelain"])?;
+        if !out.success() {
+            return Err(WorktreeError::Git {
+                command: "worktree list".to_string(),
+                stderr: out.stderr,
+            });
+        }
+        Ok(out
+            .stdout
+            .lines()
+            .filter_map(|line| line.strip_prefix("worktree "))
+            .map(|raw| PathBuf::from(raw.trim()))
+            .collect())
+    }
+
+    /// Whether `worktree_path` is one of `repo_path`'s registered worktrees.
     ///
     /// The cleanup's first question, and the one that separates "already done"
     /// from "broken" (#694). `worktree_path` comes from the task row, which
@@ -997,7 +1020,7 @@ impl<G: GitRunner> WorktreeManager<G> {
     /// at that name long after the worktree it described was removed: an
     /// agent's leftovers, a `mkdir` by hand, a probe. The caller's cheap
     /// `Path::exists` gate passes on it, and then every git question asked of
-    /// it fails: [`has_uncommitted_changes`](Self::has_uncommitted_changes)
+    /// it fails: `has_uncommitted_changes`
     /// reports `fatal: not a git repository`, which the caller can only read
     /// as a failed cleanup and warn about — once per sweep, for the life of
     /// the process, about a task that finished cleanly.
@@ -1008,34 +1031,42 @@ impl<G: GitRunner> WorktreeManager<G> {
     /// regression: `git worktree remove` could never have removed it either,
     /// so the warning it replaces named no action anyone could take.
     ///
-    /// The question is **identity, not containment**: is this path the root of
-    /// a worktree, rather than merely somewhere inside one. `--is-inside-work-tree`
-    /// would answer "yes" for a stray directory that happens to sit under a
-    /// repository — which is exactly where an operator who points
-    /// `[worktree].location` inside the repo would put it. The decision would
-    /// then fall through to the checks below, where `git status` answers about
-    /// the **enclosing** repo (so the data-loss guard would be reading the
-    /// wrong tree), removal would be attempted, and `git worktree remove`
-    /// would fail on a path git does not list: the same warning loop, one step
-    /// further along.
+    /// **Membership in this repo's registry, not "is it a repo".** Two cheaper
+    /// questions both answer "yes" where this one answers "no", and both put
+    /// the warning loop back one step further along:
     ///
-    /// An I/O failure is **not** an answer of "no" and propagates: staying
-    /// loud about a broken toolchain is the whole point of distinguishing the
-    /// two. It deliberately does not special-case a missing directory, because
-    /// `std::process` reports "no `git` on `PATH`" and "no such `cwd`" as the
-    /// same [`NotFound`](std::io::ErrorKind::NotFound). The caller's
-    /// `Path::exists` gate is what keeps the ordinary already-removed case
-    /// from reaching here.
-    fn is_worktree(&self, worktree_path: &Path) -> Result<bool, WorktreeError> {
-        let out = self
-            .git
-            .run(worktree_path, &["rev-parse", "--show-toplevel"])?;
-        if !out.success() {
-            return Ok(false);
-        }
-        // git prints a symlink-resolved absolute path, so both sides are
+    /// - `rev-parse --is-inside-work-tree` asks **containment**, so a stray
+    ///   directory *under* a repository passes — which is exactly where an
+    ///   operator who points `[worktree].location` into the repo leaves one.
+    ///   `git status` would then answer about the **enclosing** tree, so the
+    ///   data-loss guard reads the wrong worktree entirely.
+    /// - `rev-parse --show-toplevel` compared against the path itself asks
+    ///   whether this is *some* repository's root, so a `git init` at the old
+    ///   name passes. It is clean, so the decision is `Remove`, and
+    ///   `git worktree remove` then fails against `repo_path`, which does not
+    ///   list it.
+    ///
+    /// The registry answers the question actually being asked — is there
+    /// something here that **this** repo's `git worktree remove` can remove.
+    ///
+    /// **Asked of `repo_path`, never of the suspect path**, which also keeps a
+    /// broken repository loud: every failure mode of `git` in a directory that
+    /// *is* a worktree (dubious ownership, unreadable metadata) would look
+    /// exactly like "not a repository" if the question were asked there, and
+    /// would silently become `Gone`. Here such a failure propagates as
+    /// [`WorktreeError::Git`] and the caller still warns.
+    pub fn is_worktree_of(
+        &self,
+        repo_path: &Path,
+        worktree_path: &Path,
+    ) -> Result<bool, WorktreeError> {
+        // git emits symlink-resolved absolute paths, so both sides are
         // canonicalized before comparison (as in `detect_orphans`).
-        Ok(canonical(Path::new(out.stdout.trim())) == canonical(worktree_path))
+        let target = canonical(worktree_path);
+        Ok(self
+            .registered_worktrees(repo_path)?
+            .iter()
+            .any(|registered| canonical(registered) == target))
     }
 
     /// Whether a worktree has uncommitted (staged/unstaged/untracked) changes.
@@ -1059,31 +1090,19 @@ impl<G: GitRunner> WorktreeManager<G> {
         repo_path: &Path,
         known: &HashSet<PathBuf>,
     ) -> Result<Vec<PathBuf>, WorktreeError> {
-        let out = self
-            .git
-            .run(repo_path, &["worktree", "list", "--porcelain"])?;
-        if !out.success() {
-            return Err(WorktreeError::Git {
-                command: "worktree list".to_string(),
-                stderr: out.stderr,
-            });
-        }
         let main = canonical(repo_path);
         // git emits symlink-resolved absolute paths; compare against a
         // canonicalized copy of `known` so callers can pass the (possibly
         // non-canonical) path returned by `create()` without false orphans.
         let known_canonical: HashSet<PathBuf> = known.iter().map(|p| canonical(p)).collect();
         let mut orphans = Vec::new();
-        for line in out.stdout.lines() {
-            if let Some(raw) = line.strip_prefix("worktree ") {
-                let path = PathBuf::from(raw.trim());
-                let canonical_path = canonical(&path);
-                if canonical_path == main {
-                    continue; // never the main working tree
-                }
-                if !known_canonical.contains(&canonical_path) {
-                    orphans.push(path);
-                }
+        for path in self.registered_worktrees(repo_path)? {
+            let canonical_path = canonical(&path);
+            if canonical_path == main {
+                continue; // never the main working tree
+            }
+            if !known_canonical.contains(&canonical_path) {
+                orphans.push(path);
             }
         }
         Ok(orphans)
@@ -1647,9 +1666,9 @@ mod tests {
         descends_from_base: std::cell::RefCell<bool>,
         /// Whether `rev-parse --abbrev-ref HEAD` fails outright.
         head_fails: std::cell::RefCell<bool>,
-        /// Whether the path is a git worktree root (#694). `false` makes
-        /// every git question fail the way a stray directory does.
-        inside_worktree: std::cell::RefCell<bool>,
+        /// Whether `/wt` appears in the repo's `worktree list` (#694).
+        /// `false` makes it a stray directory git has never heard of.
+        registered: std::cell::RefCell<bool>,
     }
 
     impl ScriptedGit {
@@ -1664,14 +1683,14 @@ mod tests {
                 ahead_of_base: std::cell::RefCell::new("0"),
                 descends_from_base: std::cell::RefCell::new(true),
                 head_fails: std::cell::RefCell::new(false),
-                inside_worktree: std::cell::RefCell::new(true),
+                registered: std::cell::RefCell::new(true),
             }
         }
 
-        /// The path is not a git worktree: `rev-parse --show-toplevel` fails
-        /// the way it does in a directory git knows nothing about.
+        /// The path is not one of the repo's worktrees: `worktree list` comes
+        /// back without it, the way it does for a stray directory.
         fn not_a_worktree(self) -> Self {
-            *self.inside_worktree.borrow_mut() = false;
+            *self.registered.borrow_mut() = false;
             self
         }
 
@@ -1717,19 +1736,14 @@ mod tests {
         fn run(&self, cwd: &Path, args: &[&str]) -> std::io::Result<crate::ports::git::GitOutput> {
             self.commands.borrow_mut().push(args.join(" "));
             let mut status = Some(0);
-            let stdout = if args == ["rev-parse", "--show-toplevel"] {
-                if !*self.inside_worktree.borrow() {
-                    return Ok(crate::ports::git::GitOutput {
-                        status: Some(128),
-                        stdout: String::new(),
-                        stderr: "fatal: not a git repository (or any of the \
-                                 parent directories): .git\n"
-                            .to_string(),
-                    });
+            let stdout = if args == ["worktree", "list", "--porcelain"] {
+                // `cwd` is the repo; `/wt` is the worktree every case here
+                // asks about, listed unless the test says it is a stray.
+                let mut listed = format!("worktree {}\n", cwd.display());
+                if *self.registered.borrow() {
+                    listed.push_str("worktree /wt\n");
                 }
-                // The path *is* the worktree root: `is_worktree` compares this
-                // against the path it asked about.
-                cwd.display().to_string()
+                listed
             } else if args.first() == Some(&"status") {
                 self.statuses
                     .borrow_mut()
@@ -1794,7 +1808,14 @@ mod tests {
             let git = ScriptedGit::new(&[status]);
             let mgr = WorktreeManager::new(&git);
             let decision = mgr
-                .decide_cleanup(Path::new("/wt"), Some("base"), *policy, finished, now)
+                .decide_cleanup(
+                    Path::new("/repo"),
+                    Path::new("/wt"),
+                    Some("base"),
+                    *policy,
+                    finished,
+                    now,
+                )
                 .unwrap();
             assert_eq!(decision, *expected, "policy {policy:?}, status {status:?}");
         }
@@ -1811,6 +1832,7 @@ mod tests {
         let mgr = WorktreeManager::new(&git);
         assert_eq!(
             mgr.decide_cleanup(
+                Path::new("/repo"),
                 Path::new("/wt"),
                 Some("base"),
                 CleanupPolicy::Immediate,
@@ -1835,6 +1857,7 @@ mod tests {
         let mgr = WorktreeManager::new(&git);
         assert_eq!(
             mgr.decide_cleanup(
+                Path::new("/repo"),
                 Path::new("/wt"),
                 Some("base"),
                 CleanupPolicy::Immediate,
@@ -1885,6 +1908,7 @@ mod tests {
         let mgr = WorktreeManager::new(&git);
         assert_eq!(
             mgr.decide_cleanup(
+                Path::new("/repo"),
                 Path::new("/wt"),
                 Some("base"),
                 CleanupPolicy::Immediate,
@@ -1906,6 +1930,7 @@ mod tests {
         let mgr = WorktreeManager::new(&git);
         assert_eq!(
             mgr.decide_cleanup(
+                Path::new("/repo"),
                 Path::new("/wt"),
                 Some("base"),
                 CleanupPolicy::Immediate,
@@ -1927,6 +1952,7 @@ mod tests {
         let mgr = WorktreeManager::new(&git);
         assert!(
             mgr.decide_cleanup(
+                Path::new("/repo"),
                 Path::new("/wt"),
                 Some("base"),
                 CleanupPolicy::Immediate,
