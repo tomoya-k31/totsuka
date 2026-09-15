@@ -632,6 +632,35 @@ async fn approve_posts_the_reply_and_finalizes_the_one_view() {
         1,
         "no double send"
     );
+    assert_no_markdown_in_response_urls(&shared, "the approve flow, both presses");
+}
+
+/// **Nothing written to a `response_url` may carry a `markdown` block.**
+///
+/// Slack refuses it there with HTTP 500 and an empty body, losing the whole
+/// write — so the approve/reject buttons never clear, and the operator presses
+/// again straight into the same failure.
+///
+/// Checked over **every** POST the run recorded, and from the payload the
+/// plugin actually sent. The unit test beside `draft_blocks` proves that
+/// function behaves; it cannot see a call site switched back to
+/// `Surface::Message`, and each branch that writes here — the deciding press,
+/// the already-handled repaint — composes its own payload. Writes with no
+/// blocks at all (the plain-text notices) are simply not in scope.
+fn assert_no_markdown_in_response_urls(shared: &Shared, what: &str) {
+    for (i, posted) in shared.posted_urls().iter().enumerate() {
+        let carries_markdown = posted.body["blocks"].as_array().is_some_and(|blocks| {
+            blocks
+                .iter()
+                .any(|b| b.get("type").and_then(Value::as_str) == Some("markdown"))
+        });
+        assert!(
+            !carries_markdown,
+            "{what}: response_url write #{i} carries a markdown block, which makes \
+             Slack refuse the whole write (HTTP 500, empty body): {}",
+            posted.body
+        );
+    }
 }
 
 /// A reply over the `markdown` block's 12,000-character cumulative cap keeps
@@ -725,6 +754,7 @@ async fn reject_finalizes_without_sending() {
         requests_for(&shared, "chat.update").is_empty(),
         "there is no second surface to update"
     );
+    assert_no_markdown_in_response_urls(&shared, "the reject flow");
 }
 
 #[tokio::test]
@@ -1035,6 +1065,7 @@ async fn a_press_replaces_the_ephemeral_rather_than_erasing_it() {
     assert_eq!(posted[0].body["replace_original"], true);
     assert!(posted[0].body.get("delete_original").is_none());
     assert!(posted[0].body["blocks"].to_string().contains("却下済み"));
+    assert_no_markdown_in_response_urls(&shared, "a press that replaces rather than erases");
     assert!(requests_for(&shared, "chat.update").is_empty());
 }
 
