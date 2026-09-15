@@ -11,6 +11,15 @@ Note: the plugin protocol is versioned independently of the application (see
 `crates/plugin-protocol`); a totsuka release does not imply a protocol-version
 change.
 
+## [0.7.10](https://github.com/tomoya-k31/totsuka/compare/v0.7.9...v0.7.10) (2026-09-15)
+
+
+### Bug Fixes
+
+* **agent-ide-herdr:** resume 付き dispatch でも agent_not_found で agent.start を再発行する ([#695](https://github.com/tomoya-k31/totsuka/issues/695)) ([700d800](https://github.com/tomoya-k31/totsuka/commit/700d800823a356c50fe483a0b27ae15fc4a645a8)), closes [#685](https://github.com/tomoya-k31/totsuka/issues/685)
+* **core:** 削除済み worktree の跡地にディレクトリがあるだけで掃除ループが WARN を出し続けるのを直す ([#696](https://github.com/tomoya-k31/totsuka/issues/696)) ([3a179b4](https://github.com/tomoya-k31/totsuka/commit/3a179b48ad3bb40711ec7edb4d06d6b42da25d18))
+* **slack:** 承認・却下ボタンが消えないのを直す（response_url は markdown ブロックを拒否する） ([#692](https://github.com/tomoya-k31/totsuka/issues/692)) ([215a2e0](https://github.com/tomoya-k31/totsuka/commit/215a2e0dab7b1111188d61603c9d5ec4a8c6798e))
+
 ## [0.7.9](https://github.com/tomoya-k31/totsuka/compare/v0.7.8...v0.7.9) (2026-09-15)
 
 
