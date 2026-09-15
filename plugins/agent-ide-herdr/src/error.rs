@@ -44,8 +44,11 @@ pub enum HerdrError {
     )]
     MissingToolLaunch,
     /// A dispatch that asked to resume a session could not be given an
-    /// addressable agent, even after re-issuing `agent.start`, so the session
-    /// could not be resumed (protocol `SESSION_UNRESUMABLE`, #242).
+    /// addressable agent, so the session could not be resumed (protocol
+    /// `SESSION_UNRESUMABLE`, #242). Usually that verdict is reached only after
+    /// re-issuing `agent.start` (#685) — but not always: a failure past the
+    /// prompt-confirmation step is final on the spot, because re-issuing there
+    /// would deliver the task twice.
     /// Carries the herdr error underneath, which is what a human debugging it
     /// needs.
     #[error("the agent session could not be resumed: {0}")]

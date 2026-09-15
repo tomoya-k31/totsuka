@@ -302,9 +302,23 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         let deadline = tokio::time::Instant::now() + STARTUP_RETRY_BUDGET;
         let mut restarts = 0;
         loop {
-            let started = self
+            let started = match self
                 .start_when_pane_is_ready(&pane_id, start_params.clone(), deadline)
-                .await?;
+                .await
+            {
+                Ok(started) => started,
+                // A **re-issue** failing is downstream of a prompt that already
+                // refused, so a resumed dispatch must still hear
+                // `SESSION_UNRESUMABLE` rather than the raw herdr error. This
+                // arm only became reachable when resuming in #685: before it,
+                // a resumed dispatch never looped.
+                Err(e) if restarts > 0 => return Err(resume_failure(params, e)),
+                // The **first** start is deliberately not mapped: a pane that
+                // never came up cannot have died of the resume, and that is a
+                // herdr problem which keeps its own error (see
+                // [`resume_failure`]).
+                Err(e) => return Err(e),
+            };
             // herdr echoes the pane it was given; trusting our own value keeps
             // the handle well-defined even if a future response drops the field.
             debug_assert_eq!(started.agent.pane_id, pane_id);
@@ -2113,10 +2127,12 @@ fn resolve_launch(
 ///   is alive but failing keeps its own error: the retry drops the session, and
 ///   with it the conversation the resume existed to preserve, so widening this
 ///   trades a real cost for a guess.
-/// - Only once [`prompt_means_the_cli_never_started`] has spent its restarts on
-///   the same error (#685). This is the **last** word on a resumed dispatch,
-///   not the first: the conversation is given up only after re-issuing
-///   `agent.start` still produced no addressable agent.
+/// - On the [`PromptFailure::NeverStarted`] path, only once the restarts are
+///   spent (#685). There it is the **last** word, not the first: the
+///   conversation is given up only after re-issuing `agent.start` still
+///   produced no addressable agent. The [`PromptFailure::Final`] path reaches
+///   here immediately and deliberately — past the confirmation step the prompt
+///   may already be in the agent, so there is no re-issue to wait for.
 ///
 /// A false positive still costs only one extra launch, so the narrowness is
 /// about **not** losing context, not about avoiding wasted work.

@@ -135,6 +135,11 @@ struct FakeHerdr {
     /// *other* shape of that same pane (#387): herdr took the pane, typed into
     /// it, and never saw the CLI, because the shell was not reading yet.
     timeout_starts: Arc<Mutex<usize>>,
+    /// When set, `agent.start` fails with this code from the **second** call
+    /// on: the first start is accepted, the re-issue is not. Models a pane that
+    /// disappeared between a prompt refusal and the restart, which only became
+    /// reachable when resuming in #685.
+    start_error_after_first: Option<&'static str>,
     /// When set, `agent.prompt` answers `agent_not_ready` until `agent.start`
     /// has been called again — a CLI whose launch keystrokes were swallowed, so
     /// the agent is not addressable and never becomes so on its own (#387).
@@ -231,6 +236,7 @@ impl Default for FakeHerdr {
             events_on_subscribe: Arc::default(),
             version: VERSION,
             start_error: None,
+            start_error_after_first: None,
             busy_starts: Arc::default(),
             timeout_starts: Arc::default(),
             not_ready_until_restart: false,
@@ -382,6 +388,19 @@ impl FakeHerdr {
                     &id,
                     "timeout",
                     "timed out waiting for agent startup",
+                )
+                .await
+            }
+            "agent.start"
+                if self.start_error_after_first.is_some()
+                    && *self.starts_seen.lock().unwrap() >= 1 =>
+            {
+                let code = self.start_error_after_first.unwrap();
+                reply_error(
+                    &mut write_half,
+                    &id,
+                    code,
+                    &format!("agent target pane {PANE} not found"),
                 )
                 .await
             }
@@ -3656,6 +3675,52 @@ async fn a_resumed_dispatch_re_issues_agent_start_when_the_agent_is_not_found() 
         calls(&log, "agent.start").len(),
         2,
         "the start that registered nothing, then the one that took: {log:?}"
+    );
+}
+
+/// A re-issued `agent.start` that fails must still reach `resume_failure`.
+///
+/// Found in the #685 review. The retry arm loops back to
+/// `start_when_pane_is_ready`, and its error used to be propagated with `?` —
+/// past the `SESSION_UNRESUMABLE` mapping. That was harmless while only fresh
+/// dispatches looped (the mapping is a no-op without a session to resume);
+/// letting resumed dispatches loop made it a way to return `-32603` where the
+/// Orchestrator's recovery contract promises `-32006`.
+///
+/// The **first** start keeps its own error — a pane that never came up cannot
+/// have died of the resume — which is why this fixture accepts the first one.
+#[tokio::test]
+async fn a_resumed_dispatch_maps_a_failed_re_issue_to_session_unresumable() {
+    let (socket, requests) = FakeHerdr {
+        not_found_until_restart: true,
+        start_error_after_first: Some("pane_not_found"),
+        ..FakeHerdr::default()
+    }
+    .spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let disp = d
+        .dispatch_with(
+            "TR",
+            "Continue the thread",
+            "implement",
+            json!({
+                "resume_session_id": "claude-sess-abc",
+                "tool_launch": { "program": "claude", "args": ["--resume", "claude-sess-abc"], "env": {} },
+            }),
+        )
+        .await;
+
+    assert_eq!(
+        disp["error"]["code"], -32006,
+        "a re-issue that cannot start must not escape the mapping: {disp}"
+    );
+    let log = requests.lock().unwrap();
+    assert_eq!(
+        calls(&log, "agent.start").len(),
+        2,
+        "the accepted first start, then the re-issue that failed: {log:?}"
     );
 }
 
