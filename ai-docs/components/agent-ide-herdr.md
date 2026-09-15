@@ -4,7 +4,7 @@ title: agent-ide-herdr プラグイン
 description: herdr を Agent IDE として接続する公式 agent_ide プラグイン（v1 参照実装）。Orchestrator の JSON-RPC ↔ herdr Socket API（NDJSON）のアダプタで、dispatch/セッション管理/状態ストリーム/plan モード/pane レイアウトを担う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/agent-ide-herdr
 tags: [rust, crate, plugin, agent-ide, herdr, socket-api, streaming, hook, deadman, layout]
-generated: { by: claude-code/opus-5, at: 2026-09-12T21:30:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-15T16:10:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -148,11 +148,15 @@ pane はずっと空だった。**同じ pane への `agent.start` 再送は 3 �
 超えたら `agent.prompt` を撃ち続けず **`agent.start` の再送に戻る**。検出に失敗した start は
 herdr にエージェントを登録しないので、**同名での再送は安全**である。
 
-**`agent_not_found` は初回 dispatch のときだけ再送する**（#391）。resume 付き dispatch では
-pane がセッションごと死んだ形なので `SESSION_UNRESUMABLE` として上げねばならない（#261）が、
-**初回 dispatch には死ぬべきセッションが存在しない** — そこで届く `agent_not_found` は
-「`agent.start` が何も登録しなかった」以外に読みようがなく、同じレースである。
-実機 2026-08-07 に連続 2 回踏み、いずれも単純な retry で解消した。
+**`agent_not_found` は resume 付き dispatch でも再送する**（#391、#685、[ADR-0075](/decisions/adr-0075-resume-agent-not-found-restart.md)）。
+これは「`agent.start` が何も登録しなかった」以外に読みようがなく、`agent_not_ready` と同じレースである。
+実機 2026-08-07 に初回 dispatch で連続 2 回踏み、いずれも単純な retry で解消した。
+**resume 付きはかつて除外されていた**（`pane がセッションごと死んだ形` という読み、#261）が、
+2026-09-15 の実測でその読みの両半分が否定された —— 無効な id の `claude --resume` は
+`No conversation found with session ID: …` を出して約 1 秒で終了し **pane は生き残る**し、
+有効な id なら 378 KB の実セッションが 5 秒以内に入力可能になる（herdr が諦めたのは 18 秒後）。
+除外は再 dispatch 7 件中 7 件で発火し、**追いメンションのたびに会話が捨てられていた**。
+`SESSION_UNRESUMABLE` は消さず、再送を使い切った後の最終手段へ後退させている。
 
 **再送は回数で上限を切る**（`MAX_AGENT_RESTARTS = 3`）。`agent_not_ready` は
 15 秒窓を挟むので時間で頭打ちになるが、`agent_not_found` は即座に返るため、時間だけで
@@ -171,6 +175,11 @@ herdr の 5 秒下限（設定不可）に Claude Code が間に合わないと�
 `agent.wait` で確認する。**本文の再送は禁止**（入力欄の既存文字列に追記されてタスクが壊れる）。
 `working` / `done` / `blocked` のペインには Enter を送らない。到達しなければ**元の stall を**報告する
 （`agent.wait` が `agent_not_found` を返したときだけそちらを通す — `SESSION_UNRESUMABLE` を埋もれさせないため）。
+**この経路の失敗は `agent.start` を再送しない**（#685）。本文は既に typed・submit 済みなので、
+ここから起動し直すとタスクが二重に届く。同じ `agent_not_found` でも、`agent.prompt` から来たなら
+「何もタイプされていない」、`agent.wait` から来たなら「もう入っているかもしれない」を意味する ——
+エラーコードでは表せないので、`submit_prompt` が `PromptFailure::NeverStarted` / `Final` の
+どちらで返すかとして型に持たせている。`confirm_submission` が返すものは常に `Final`。
 
 ## `program` → `kind` の写像
 
@@ -320,9 +329,11 @@ herdr 固有のエラー語彙を**プロトコルの語彙へ翻訳するのは
 判定条件は**意図的に狭い**（`resume_failure`）:
 
 - `agent.start` が成功した**後**の失敗に限る。そもそも起動していない pane が resume のせいで死ぬことはなく、それは herdr 側の問題として自分のエラーコードのまま返す
-- pane が**消えた**場合に限る（`is_missing()` = `pane_not_found` / `agent_not_found` / `not_found`）。これは実機で観測したバグそのものの形で、`claude --resume <消えた id>` が「該当セッション無し」で即終了し pane ごと落ちた結果 herdr が `agent_not_found` を返していた
+- ターゲットが**消えた**場合に限る（`is_missing()` = `pane_not_found` / `agent_not_found` / `not_found`）
+- `PromptFailure::NeverStarted` の経路では**再送を使い切った後に限る**（#685）。最初の拒否では発火せず、`agent.start` を計 4 回撃ってもエージェントが addressable にならなかったときだけである。「pane ごと落ちた」という当初の読みは 2026-09-15 の実測で否定された（失敗した resume はシェルのプロンプトを残す）ので、この条件は「死んだ証拠」ではなく「手を尽くした証拠」として読む。**`Final` の経路は即座に発火する** —— 確認ステップの先では本文が既に届いている可能性があり、待つべき再送が存在しないため
+- **再送そのものが起動に失敗した場合も写像を通す**（#685 のレビュー指摘）。retry 分岐は `start_when_pane_is_ready` へ戻るが、その失敗は `?` で素通しされており `-32603` が返っていた。初回 dispatch しかループしなかった間は無害（resume が無いので写像は恒等）だったが、resume 付きをループさせたことで**契約が約束する `-32006` の抜け道**になった。**初回の start は従来どおり自分のエラーのまま**返す（起動しなかった pane が resume のせいで死ぬことはない）
 
-厳密にはヒューリスティック（即死の原因が resume だと断定はできない）だが、**誤検知の代償は resume なしの起動 1 回**に限られる。逆に条件を広げる（例: pane は生きているがプロンプトが着弾しない `gave_up` 系も含める）と、単に遅いだけの CLI に対して resume を捨てることになり、**resume が守るはずだった会話文脈を落とす**——狭さはこの損失を避けるためであって、無駄な起動を惜しんでいるのではない。
+厳密にはヒューリスティック（addressable にならない原因が resume だと断定はできない）だが、**誤検知の代償は resume なしの起動 1 回**に限られる。逆に条件を広げる（例: pane は生きているがプロンプトが着弾しない `gave_up` 系も含める）と、単に遅いだけの CLI に対して resume を捨てることになり、**resume が守るはずだった会話文脈を落とす**——狭さはこの損失を避けるためであって、無駄な起動を惜しんでいるのではない。
 
 なお `SESSION_UNRESUMABLE` を返す側は「再送が成功しうる状態」を残す義務がある（プロトコルの契約）。dispatch 失敗時に `abandon` が workspace を畳んでいるため、この条件は既に満たされている。
 
@@ -341,7 +352,7 @@ manifest（`plugins/agent-ide-herdr/plugin.toml`）と `initialize` 応答で `k
 - 状態写像・復帰ハンドル・exit 分類・**`resolve_kind` の写像**は純関数として単体テスト。**エージェント名は 0.7.1 (#645) で `plugin_protocol::identifier` へ移った**ので、ここで固定するのは `AgentName` が**宣言する制約が herdr のものであること**（32 文字・小文字・`[-_]`・prefix が英字始まり）と、dispatch が実際にその名前を `agent.start` へ渡すこと（task 番号あり = `t-<n>-`、`None` なら source id へフォールバック）だけである。「任意の入力に対して制約を満たす」という性質は protocol 側の性質テストが持ち、ここでは繰り返さない（[ADR-0071](/decisions/adr-0071-task-identifier-naming.md) D-5）。
 - **実 Unix ソケットの fake herdr サーバ**に対する結合テスト（`tests/integration.rs`）。fake は **herdr 0.7.5 (protocol 17)** を模す: **応答後に接続を閉じる**接続モデル、`{event, data}` 封筒（**ドット/アンダースコア混在**の実イベント名）、`ping` が返す `protocol`、`agent.start {name, kind, pane_id}`、そして入力と送信を 1 回で行う `agent.prompt`。0.7.4 までモデルしていた「入力に反応できるまで `agent.send` / Enter を落とす CLI」は `agent.send` ごと消え、herdr 側の `agent_prompt_stalled` に置き換わった。
 - **protocol 17 の固定**（[ADR-0032](/decisions/adr-0032-herdr-protocol-17.md)）: `initialize` が protocol 16 を**バージョン名指しで拒否**し以後の dispatch も受け付けないこと／`protocol` フィールドの無い `ping` は**通す**こと（未知の形に対して落とさない）／`agent.start` に `argv`/`cwd`/`env` を**送らない**こと・`pane_id` が root pane であること・`kind` が `program` のファイル名から解決されること（絶対パスでも）・`name` が herdr の識別子規則を満たすこと／`agent.prompt` の `wait.until` が `working` だけでなく `blocked`/`done` も含むこと（短いターンの取り逃し防止）／**`agent_name_taken` を別名で回避せず失敗させ、workspace を畳むこと**／`root_pane` の無い応答が **dispatch を失敗させ**、`agent.start` をどこにも撃たないこと。
-- 従来からの検証は維持: 始動しない CLI（`agent_prompt_stalled`）で**エラーで失敗する**こと・**フック env が `workspace.create` に乗り `agent.start` には乗らないこと**・`--settings`/`--resume` が `args` に入ること・**`pane.agent_status_changed` を送っても通知が出ないこと（縮退の固定化）**・`pane.exited` 非 0/コード無し→`Failed`・clean exit（0）は通知なし・`diagnostics/snapshot` の正常/pane 消失（`text: null`）両応答・**`session/focus` のフォーカスチェーン**と pane 消失・**`session/release` の各分岐**・他 pane の replay と close 通知を無視すること・`id:""` エラーの即時相関・session/attach の成功と pane 消失・`config/validate` の疎通（ping）。**#261 の `SESSION_UNRESUMABLE` 写像 3 分岐**も維持（resume 指定 + pane 消失 → `-32006`／resume なし + pane 消失 → `-32603`／resume 指定 + pane 生存の別エラー → `-32603`）。
+- 従来からの検証は維持: 始動しない CLI（`agent_prompt_stalled`）で**エラーで失敗する**こと・**フック env が `workspace.create` に乗り `agent.start` には乗らないこと**・`--settings`/`--resume` が `args` に入ること・**`pane.agent_status_changed` を送っても通知が出ないこと（縮退の固定化）**・`pane.exited` 非 0/コード無し→`Failed`・clean exit（0）は通知なし・`diagnostics/snapshot` の正常/pane 消失（`text: null`）両応答・**`session/focus` のフォーカスチェーン**と pane 消失・**`session/release` の各分岐**・他 pane の replay と close 通知を無視すること・`id:""` エラーの即時相関・session/attach の成功と pane 消失・`config/validate` の疎通（ping）。**#261 の `SESSION_UNRESUMABLE` 写像 3 分岐**も維持（resume 指定 + ターゲット消失 → `-32006`／resume なし + ターゲット消失 → `-32603`／resume 指定 + ターゲット生存の別エラー → `-32603`）。#685 で 4 本足した: **resume 付きでも `agent_not_found` で `agent.start` を再送すること**（2 回で成功）・**解消しない場合は再送を使い切ってから `-32006`**（`agent.start` は計 4 回）・**`confirm_submission` 経由の `agent_not_found` は再送せず `-32006` のまま**（本文が二重に届かないこと）・**再送した `agent.start` 自体が失敗しても `-32006`**（`?` による素通しの再発防止）。
 - **`[layout]`（#356）の固定**: 既定（`pane.split` の `direction`/`ratio`/`cwd`/`focus`・**`pane.close` が 1 度も呼ばれないこと**・`pane.split`→`agent.start`→`agent.prompt` の順序）／`shell = false` で split ゼロ／`direction = "right"` と任意 `ratio` がそのまま届くこと／**split 失敗でも dispatch は成功しプロンプトも投入されること**／**`pane.split` に `env` が付かないこと**（フック env は root pane 経由でエージェント側にだけ乗る）。
 - **実機手動チェック**（受け入れ #2）: 実 herdr + 実 Claude Code で `--settings` 付き pane 起動 → フック発火 → env（`TOTSUKA_JOB_ID`）がフックスクリプトから見えること（#123 検収環境）は issue #139 のコメントにチェックリストとして整理。
 

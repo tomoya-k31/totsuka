@@ -135,6 +135,11 @@ struct FakeHerdr {
     /// *other* shape of that same pane (#387): herdr took the pane, typed into
     /// it, and never saw the CLI, because the shell was not reading yet.
     timeout_starts: Arc<Mutex<usize>>,
+    /// When set, `agent.start` fails with this code from the **second** call
+    /// on: the first start is accepted, the re-issue is not. Models a pane that
+    /// disappeared between a prompt refusal and the restart, which only became
+    /// reachable when resuming in #685.
+    start_error_after_first: Option<&'static str>,
     /// When set, `agent.prompt` answers `agent_not_ready` until `agent.start`
     /// has been called again — a CLI whose launch keystrokes were swallowed, so
     /// the agent is not addressable and never becomes so on its own (#387).
@@ -231,6 +236,7 @@ impl Default for FakeHerdr {
             events_on_subscribe: Arc::default(),
             version: VERSION,
             start_error: None,
+            start_error_after_first: None,
             busy_starts: Arc::default(),
             timeout_starts: Arc::default(),
             not_ready_until_restart: false,
@@ -382,6 +388,19 @@ impl FakeHerdr {
                     &id,
                     "timeout",
                     "timed out waiting for agent startup",
+                )
+                .await
+            }
+            "agent.start"
+                if self.start_error_after_first.is_some()
+                    && *self.starts_seen.lock().unwrap() >= 1 =>
+            {
+                let code = self.start_error_after_first.unwrap();
+                reply_error(
+                    &mut write_half,
+                    &id,
+                    code,
+                    &format!("agent target pane {PANE} not found"),
                 )
                 .await
             }
@@ -2059,13 +2078,14 @@ async fn a_prompt_that_never_lands_still_fails_the_dispatch() {
 /// dispatch still reaches the Orchestrator as `SESSION_UNRESUMABLE` (#261)
 /// instead of being buried under the stall.
 #[tokio::test]
-async fn a_pane_that_dies_during_confirmation_stays_unresumable() {
+async fn an_agent_that_goes_missing_during_confirmation_stays_unresumable() {
     let fake = FakeHerdr {
         wait_error: Some("agent_not_found"),
         ..FakeHerdr::default()
     };
     *fake.stalled_prompts.lock().unwrap() = 1;
-    let (socket, _) = fake.spawn();
+    let cli = fake.cli.clone();
+    let (socket, requests) = fake.spawn();
 
     let mut d = Driver::new();
     d.init(&socket).await;
@@ -2083,7 +2103,21 @@ async fn a_pane_that_dies_during_confirmation_stays_unresumable() {
         .await;
     assert_eq!(
         disp["error"]["code"], -32006,
-        "a vanished pane must not be masked by the stall: {disp}"
+        "a missing agent must not be masked by the stall: {disp}"
+    );
+    // The point of `PromptFailure::Final` (#685): past the confirmation step the
+    // prompt may already be in the agent, so the dispatch must not go round
+    // again. Asserting the error code alone does not say that — these two do.
+    assert_eq!(
+        cli.lock().unwrap().prompts,
+        1,
+        "the task must never be delivered twice (#380)"
+    );
+    let log = requests.lock().unwrap();
+    assert_eq!(
+        calls(&log, "agent.start").len(),
+        1,
+        "a confirmation failure is final; there is no re-issue: {log:?}"
     );
 }
 
@@ -2097,8 +2131,9 @@ async fn a_pane_that_dies_during_confirmation_stays_unresumable() {
 /// refusal comes back instantly and a purely time-bounded loop would re-launch
 /// the CLI for the whole 180s budget.
 ///
-/// The un-retried case is the resumed one, pinned by
-/// `a_resumed_dispatch_is_never_restarted_on_agent_not_found`.
+/// There is no longer an un-retried case (#685): the resumed dispatch used to
+/// be one, and `a_resumed_dispatch_reports_session_unresumable_only_after_the_restarts_are_spent`
+/// pins what it does instead.
 #[tokio::test]
 async fn an_agent_not_found_that_never_clears_is_bounded() {
     let (socket, requests) = FakeHerdr {
@@ -3543,16 +3578,21 @@ async fn dispatch_resuming_against(code: &'static str) -> Value {
 }
 
 #[tokio::test]
-async fn a_resumed_dispatch_whose_pane_vanished_is_session_unresumable() {
-    // #261: `claude --resume <id>` finding no such conversation exits at once
-    // and takes its pane with it — herdr then answers `agent_not_found` to
-    // everything the prompt submission tries. The plugin translates its own
-    // backend's vocabulary into the protocol's: the Orchestrator retries once
-    // without the session (#242) instead of failing the task.
+async fn a_resumed_dispatch_with_no_addressable_agent_is_session_unresumable() {
+    // #261: herdr answers `agent_not_found` to everything the prompt submission
+    // tries, and it never clears. The plugin translates its own backend's
+    // vocabulary into the protocol's: the Orchestrator retries once without the
+    // session (#242) instead of failing the task.
+    //
+    // The *premise* changed in #685 while the verdict did not. This used to be
+    // read as "`claude --resume <id>` found no such conversation, exited, and
+    // took its pane with it"; measured 2026-09-15, a failed resume leaves the
+    // pane's shell prompt behind. So this is now the answer only once the
+    // restarts are spent — see the `…only_after_the_restarts_are_spent` test.
     let disp = dispatch_resuming_against("agent_not_found").await;
     assert_eq!(
         disp["error"]["code"], -32006,
-        "a vanished pane on a resumed dispatch is SESSION_UNRESUMABLE: {disp}"
+        "an unaddressable agent on a resumed dispatch is SESSION_UNRESUMABLE: {disp}"
     );
     let message = disp["error"]["message"].as_str().unwrap_or_default();
     assert!(
@@ -3603,27 +3643,84 @@ async fn a_fresh_dispatch_re_issues_agent_start_when_the_agent_is_not_found() {
     );
 }
 
-/// The #261 half of the same code path, pinned so #391's retry cannot swallow
-/// it: a **resumed** dispatch answering `agent_not_found` means the pane died
-/// with its session, and the Orchestrator needs `SESSION_UNRESUMABLE` to retry
-/// once *without* the session. Re-issuing `agent.start` here would bury that.
+/// #685: a **resumed** dispatch gets the same re-issue as a fresh one.
+///
+/// It used to be excluded, on the reading that `agent_not_found` there meant
+/// the pane had died with its session. Measured 2026-09-15, both halves of that
+/// are wrong: `claude --resume <unknown id>` prints `No conversation found with
+/// session ID: …` and leaves the pane's shell prompt behind, and a valid resume
+/// of a real 378 KB session was accepting input inside 5s — while herdr, live,
+/// gave up after 18s. The exclusion fired on 7 of 7 re-dispatches, so every
+/// follow-up message started an agent that knew nothing of its own thread.
 #[tokio::test]
-async fn a_resumed_dispatch_is_never_restarted_on_agent_not_found() {
+async fn a_resumed_dispatch_re_issues_agent_start_when_the_agent_is_not_found() {
     let fake = FakeHerdr {
         not_found_until_restart: true,
         ..FakeHerdr::default()
     };
+    let cli = fake.cli.clone();
     let (socket, requests) = fake.spawn();
 
     let mut d = Driver::new();
     d.init(&socket).await;
     let disp = d
-        .call(
-            "task/dispatch",
+        .dispatch_with(
+            "TR",
+            "Continue the thread",
+            "implement",
             json!({
-                "task": { "id": "TR", "source": "slack", "title": "Continue the thread" },
-                "worktree_path": "/wt/agent-1",
-                "mode": "implement",
+                "resume_session_id": "claude-sess-abc",
+                "tool_launch": { "program": "claude", "args": ["--resume", "claude-sess-abc"], "env": {} },
+            }),
+        )
+        .await;
+
+    assert!(
+        disp["error"].is_null(),
+        "a start that registered nothing must be re-issued, not reported as an \
+         unresumable session: {disp}"
+    );
+    assert_eq!(
+        cli.lock().unwrap().prompts,
+        1,
+        "the refusals never reached a CLI, so the task lands exactly once"
+    );
+    let log = requests.lock().unwrap();
+    assert_eq!(
+        calls(&log, "agent.start").len(),
+        2,
+        "the start that registered nothing, then the one that took: {log:?}"
+    );
+}
+
+/// A re-issued `agent.start` that fails must still reach `resume_failure`.
+///
+/// Found in the #685 review. The retry arm loops back to
+/// `start_when_pane_is_ready`, and its error used to be propagated with `?` —
+/// past the `SESSION_UNRESUMABLE` mapping. That was harmless while only fresh
+/// dispatches looped (the mapping is a no-op without a session to resume);
+/// letting resumed dispatches loop made it a way to return `-32603` where the
+/// Orchestrator's recovery contract promises `-32006`.
+///
+/// The **first** start keeps its own error — a pane that never came up cannot
+/// have died of the resume — which is why this fixture accepts the first one.
+#[tokio::test]
+async fn a_resumed_dispatch_maps_a_failed_re_issue_to_session_unresumable() {
+    let (socket, requests) = FakeHerdr {
+        not_found_until_restart: true,
+        start_error_after_first: Some("pane_not_found"),
+        ..FakeHerdr::default()
+    }
+    .spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let disp = d
+        .dispatch_with(
+            "TR",
+            "Continue the thread",
+            "implement",
+            json!({
                 "resume_session_id": "claude-sess-abc",
                 "tool_launch": { "program": "claude", "args": ["--resume", "claude-sess-abc"], "env": {} },
             }),
@@ -3632,13 +3729,54 @@ async fn a_resumed_dispatch_is_never_restarted_on_agent_not_found() {
 
     assert_eq!(
         disp["error"]["code"], -32006,
-        "a resumed dispatch keeps SESSION_UNRESUMABLE: {disp}"
+        "a re-issue that cannot start must not escape the mapping: {disp}"
     );
     let log = requests.lock().unwrap();
     assert_eq!(
         calls(&log, "agent.start").len(),
-        1,
-        "no re-issue — the session is what died, and restarting hides it: {log:?}"
+        2,
+        "the accepted first start, then the re-issue that failed: {log:?}"
+    );
+}
+
+/// The #261 safety net survives #685: giving up is deferred, not deleted.
+///
+/// An `agent_not_found` that never clears still reaches the Orchestrator as
+/// `SESSION_UNRESUMABLE`, so its one retry without the session is unchanged —
+/// but only after the restarts are spent, rather than on the first refusal.
+#[tokio::test]
+async fn a_resumed_dispatch_reports_session_unresumable_only_after_the_restarts_are_spent() {
+    let (socket, requests) = FakeHerdr {
+        prompt_error: Some("agent_not_found"),
+        ..FakeHerdr::default()
+    }
+    .spawn();
+
+    let mut d = Driver::new();
+    d.init(&socket).await;
+    let disp = d
+        .dispatch_with(
+            "TR",
+            "Continue the thread",
+            "implement",
+            json!({
+                "resume_session_id": "claude-sess-abc",
+                "tool_launch": { "program": "claude", "args": ["--resume", "claude-sess-abc"], "env": {} },
+            }),
+        )
+        .await;
+
+    assert_eq!(
+        disp["error"]["code"], -32006,
+        "the session is still reported unresumable once nothing clears: {disp}"
+    );
+    let log = requests.lock().unwrap();
+    // 1 first attempt + MAX_AGENT_RESTARTS re-issues, the same budget a fresh
+    // dispatch gets.
+    assert_eq!(
+        calls(&log, "agent.start").len(),
+        4,
+        "the restarts are spent before the session is given up: {log:?}"
     );
 }
 
