@@ -14,10 +14,15 @@
 # ---------------------------------------------------------------------------
 # なぜ Rust のテストではなく bash なのか
 #
-# 雛形は orchestrator-cli が持つが、キーの過半は plugins/* の config struct が
-# 決める。`scripts/arch-lint.sh` の境界により orchestrator-cli は plugins/* に
-# 依存できないので、Rust 側のテストからは plugins/*/src/config.rs が原理的に
-# 見えない。クレート境界の外から両方を読める場所は、ここしか無い。
+# **Rust には struct のフィールドを列挙する手段が無い**。リフレクションが無く、
+# 導出マクロを新設しない限り、テストは「このキーの一覧」を手で書き写すことに
+# なる —— 写した一覧こそが次にズレるものなので、検査の意味が消える。
+# ソースをテキストとして読めば、その一覧は書き写さずに得られる。
+#
+# 副次的な理由として、キーの過半は plugins/* の config struct が決めるが、
+# orchestrator-cli がそれらに張っている依存は github / slack の 2 本だけで、
+# しかも dev-dependency である（`ai-docs/architecture/workspace-dependency-rules.md`）。
+# 検査のために 7 本ぶん張ると、CLI の dev ビルドに全プラグインが入る。
 #
 # フィールド名 ≒ TOML キー名であることに寄りかかっている。config の struct は
 # フィールドに serde(rename) をほぼ使っていない（rename_all は enum の変種名向け）
@@ -39,10 +44,12 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 TEMPLATE_EXEMPT=""
 
-command -v awk >/dev/null 2>&1 || {
-  echo "config-template-lint: awk が必要です" >&2
-  exit 2
-}
+for tool in awk grep; do
+  command -v "$tool" >/dev/null 2>&1 || {
+    echo "config-template-lint: ${tool} が必要です" >&2
+    exit 2
+  }
+done
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TEMPLATE="$ROOT/crates/orchestrator-cli/templates/config.toml"
@@ -55,9 +62,9 @@ TEMPLATE="$ROOT/crates/orchestrator-cli/templates/config.toml"
 # 走査対象の config struct。core の schema.rs と、各プラグインの config.rs。
 # プラグインはパスのグロブで拾うので、新プラグイン追加時にこのファイルの更新は
 # 要らない（arch-lint が plugins/ 配下をパスで判定しているのと同じ方針）。
-SOURCES="$ROOT/crates/orchestrator-core/src/config/schema.rs"
+SOURCES=("$ROOT/crates/orchestrator-core/src/config/schema.rs")
 for f in "$ROOT"/plugins/*/src/config.rs; do
-  [ -f "$f" ] && SOURCES="$SOURCES $f"
+  [ -f "$f" ] && SOURCES+=("$f")
 done
 
 # ---------- 1) コード側のキー ----------
@@ -68,19 +75,32 @@ done
 extract_code_keys() {
   # shellcheck disable=SC2086
   awk '
-    FNR == 1 { in_test = 0; item = ""; rename = ""; drop = 0; derives = 0 }
+    FNR == 1 { in_test = 0; item = ""; rename = ""; drop = 0; derives = 0; in_derive = 0 }
     in_test { next }
     /^#\[cfg\(test\)\]/ { in_test = 1; next }
 
     # Deserialize を導出する型だけが TOML のキーを決める。これを見ないと
     # `ConfigError::EnvOverride { var, reason }` のようなエラー enum の
     # フィールドまで設定キーとして数えてしまう。
-    /^#\[derive\(/ { derives = ($0 ~ /Deserialize/); next }
+    #
+    # rustfmt が折り返した derive を 1 行しか見ないと、trait が 1 つ増えた
+    # 瞬間にその型のフィールドが丸ごと検査から消える（fail-open）。
+    # `)]` が来るまで読み続ける。
+    /^#\[derive\(/ { derives = ($0 ~ /Deserialize/); in_derive = ($0 !~ /\)\]/); next }
+    in_derive {
+      if ($0 ~ /Deserialize/) derives = 1
+      if ($0 ~ /\)\]/) in_derive = 0
+      next
+    }
 
     # struct / enum の本体だけを読む。impl ブロックや自由関数の中の
     # `Foo { bar: 1 }` を誤ってフィールドとして拾わないための境界である。
-    /^pub (struct|enum) [A-Za-z0-9_]+.*\{/ {
-      item = (derives ? "on" : ""); derives = 0; rename = ""; drop = 0; next
+    /^(pub )?(struct|enum) [A-Za-z0-9_]+/ {
+      # 非 pub の型にも derive は付く。ここで消さないと、その derive が
+      # 次に来る pub 型へ持ち越され、Deserialize しない型のフィールドが
+      # 設定キーとして数えられる。
+      item = (derives && /^pub (struct|enum) [A-Za-z0-9_]+.*\{/) ? "on" : ""
+      derives = 0; rename = ""; drop = 0; next
     }
     /^\}/ { item = ""; rename = ""; drop = 0; next }
     item == "" { next }
@@ -115,7 +135,7 @@ extract_code_keys() {
     # 属性でもフィールドでもない行は、直前の属性の効力を打ち切る
     /^[[:space:]]*(\/\/|$)/ { next }
     { rename = ""; drop = 0 }
-  ' $SOURCES | sort -u
+  ' "${SOURCES[@]}" | sort -u
 }
 
 # ---------- 2) 雛形側のキー ----------
@@ -203,7 +223,7 @@ done <<<"$TEMPLATE_ASSIGNED"
 # ---------- サマリ ----------
 N_CODE="$(printf '%s\n' "$CODE_KEYS" | grep -c . || true)"
 N_TMPL="$(printf '%s\n' "$TEMPLATE_KEYS" | grep -c . || true)"
-N_SRC="$(printf '%s\n' $SOURCES | grep -c . || true)"
+N_SRC="${#SOURCES[@]}"
 echo ""
 echo "config-template-lint: ${ERRORS} error(s)（config struct ${N_SRC} ファイル / コード側のキー ${N_CODE} 個 / 雛形のキー ${N_TMPL} 個を照合）"
 [ "$ERRORS" -eq 0 ] || exit 1

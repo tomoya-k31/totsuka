@@ -4,7 +4,7 @@ title: config.toml 雛形とその網羅性検査
 description: "totsuka が書き出す config.toml 雛形の置き場（crates/orchestrator-cli/templates/config.toml）と、そこに全設定キーが載っていることを機械検証する scripts/config-template-lint.sh の仕組み・キーを増減したときの手順。Rust の文字列リテラルではなく実ファイルに置く理由（クレート境界を跨いで検査できる唯一の場所）も含む。"
 resource: https://github.com/tomoya-k31/totsuka/blob/main/scripts/config-template-lint.sh
 tags: [config, toml, template, lint, fitness-function, ci]
-generated: { by: claude-code/opus-5, at: 2026-09-17T12:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-17T18:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -20,16 +20,20 @@ owner: tomoya-k31
 
 ## なぜ Rust の文字列リテラルではないのか
 
-クレート境界を跨いで網羅を検査できる場所が、**ファイルしか無いため**である。
+網羅を機械検証できる場所が、**ファイルしか無いため**である。
 
-雛形は `orchestrator-cli` が持つが、そこに載るべきキーの過半は `plugins/*` の config struct が決める
-（`[github]` / `[slack]` / `[notion]` / `[herdr]` …）。一方
-[ワークスペース依存境界ルール](/architecture/workspace-dependency-rules.md) により
-`orchestrator-cli` は `plugins/*` に依存できない。したがって **Rust 側のテストからは
-`plugins/*/src/config.rs` が原理的に見えず**、雛形を文字列リテラルに置く限り、プラグインのキーが
-載っているかを機械検証する手段が存在しない。
+**Rust には struct のフィールドを列挙する手段が無い。** リフレクションが無く、導出マクロを新設しない
+限り、テストは「このキーの一覧」を手で書き写すことになる —— 写した一覧こそが次にズレるものなので、
+検査の意味が消える。ソースをテキストとして読めば、その一覧は書き写さずに得られる。
 
-雛形をファイルにすると、両方をテキストとして読める場所（シェルスクリプト）から照合できる。
+副次的な理由として、雛形に載るべきキーの過半は `plugins/*` の config struct が決めるが
+（`[github]` / `[slack]` / `[notion]` / `[herdr]` …）、`orchestrator-cli` がそれらに張っている依存は
+github / slack の 2 本だけで、しかも dev-dependency である
+（[ワークスペース依存境界ルール](/architecture/workspace-dependency-rules.md)）。検査のために 7 本ぶん
+張ると、CLI の dev ビルドに全プラグインが入る。
+
+雛形をファイルにすると、どちらの問題も踏まずに、両方をテキストとして読める場所（シェルスクリプト）から
+照合できる。
 
 # 網羅性検査（`scripts/config-template-lint.sh`）
 
@@ -52,7 +56,11 @@ owner: tomoya-k31
   - `Deserialize` を導出する `pub struct` / `pub enum` の本体だけを読む。これを見ないと
     `ConfigError::EnvOverride { var, reason }` のようなエラー enum のフィールドまで設定キーとして数える
   - `pub x: T` に加えて、enum の struct variant の中の `x: T` も拾う。後者は
-    `cleanup = { retention_days = 5 }` のように TOML のキーとして書かれるが `pub` が付かない
+    `cleanup = { retention_days = 5 }` のように TOML のキーとして書かれるが `pub` が付かない。
+    **行単位で読むので、1 行に畳まれた variant（`Retention { retention_days: u32 }`）は拾えない** ——
+    rustfmt がフィールド付き variant を展開する前提に乗っている
+  - `#[derive(…)]` は `)]` が来るまで読む。1 行しか見ないと、rustfmt が折り返した瞬間にその型の
+    フィールドが丸ごと検査から消える（fail-open）。非 pub の型に付いた derive は次の型へ持ち越さない
   - `#[serde(flatten)]` は除外し（`plugin_settings` / `options` はキーではなく容れ物）、
     `#[serde(rename = "…")]` は差し替える
   - `#[cfg(test)]` 以降は読まない

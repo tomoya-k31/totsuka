@@ -11,11 +11,12 @@ use crate::common::{CliError, Cx};
 ///
 /// Held as a file rather than a string literal so that
 /// `scripts/config-template-lint.sh` can diff its keys against the config
-/// structs in `orchestrator-core` and in every plugin crate. A literal would
-/// put those keys behind Rust's string syntax, and the lint has to reach them
-/// from outside the crate graph: `orchestrator-cli` cannot depend on a plugin
-/// (`scripts/arch-lint.sh`), so a Rust-side check could never see
-/// `plugins/*/src/config.rs` at all.
+/// structs in `orchestrator-core` and in every plugin crate.
+///
+/// A Rust-side check cannot do that job: **Rust has no way to enumerate a
+/// struct's fields**, so short of a new derive macro the test would have to
+/// carry a hand-written list of the keys — and that list is precisely the
+/// thing that drifts next. Reading the sources as text needs no such list.
 ///
 /// The same trick `orchestrator_core::hooks` uses for its seven shell scripts.
 const CONFIG_TEMPLATE: &str = include_str!("../templates/config.toml");
