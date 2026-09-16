@@ -63,7 +63,7 @@ const CONFIG_TEMPLATE: &str = r#"# totsuka configuration (https://github.com/tom
 # [llm]
 # base_url = "https://openrouter.ai/api/v1"
 # model = "anthropic/claude-haiku-4-5"
-# api_key_ref = "keychain:totsuka/openrouter"   # or 1Password: "op://Dev/Openrouter/api_key"
+# api_key_ref = "keychain:totsuka/openrouter"   # or "op://Dev/Openrouter/api_key" / "bw:totsuka-openrouter/password"
 
 # [[workflows]]
 # name = "implement"

@@ -5,6 +5,7 @@
 use std::collections::{HashMap, HashSet};
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
+use std::process::Output;
 use std::time::Duration;
 
 use orchestrator_core::adapters::StateError;
@@ -163,6 +164,11 @@ enum SecretScheme {
     /// `cmd:` — resolving runs an arbitrary command. There is nothing to
     /// measure (`cmd:op read …` is a real spelling), so it is never resolved.
     Command,
+    /// `bw:` — resolving prompts for the master password on **stdin** unless
+    /// the vault is unlocked, which [`check_bitwarden`] measures. The stdin
+    /// prompt is why this must be gated rather than merely reported: it hangs
+    /// an unattended run silently instead of failing.
+    Bitwarden,
 }
 
 impl SecretScheme {
@@ -178,6 +184,7 @@ impl SecretScheme {
             Ok(SecretRef::Keychain { .. }) => Self::Silent,
             Ok(SecretRef::OnePassword { .. }) => Self::OnePassword,
             Ok(SecretRef::Command { .. }) => Self::Command,
+            Ok(SecretRef::Bitwarden { .. }) => Self::Bitwarden,
         }
     }
 
@@ -188,6 +195,7 @@ impl SecretScheme {
             Self::Silent => None,
             Self::OnePassword => Some(SecretSkip::ONEPASSWORD),
             Self::Command => Some(SecretSkip::COMMAND),
+            Self::Bitwarden => Some(SecretSkip::BITWARDEN),
         }
     }
 }
@@ -211,6 +219,9 @@ struct SecretSkip {
     /// The parenthetical of the "left unresolved here" note, for checks that
     /// report on a reference rather than probing with it.
     note: &'static str,
+    /// The same parenthetical when the backend *is* ready — `None` for a
+    /// scheme that is never ready, because there is nothing to measure.
+    note_ready: Option<&'static str>,
 }
 
 impl SecretSkip {
@@ -222,6 +233,7 @@ impl SecretSkip {
         summary: "its op:// reference would prompt",
         action: "run `op signin`, then re-run `totsuka doctor` to probe {target}",
         note: "doctor stays non-interactive; see the 1password checks above",
+        note_ready: Some("a 1Password session is active, so `totsuka run` will resolve it"),
     };
 
     /// `cmd:` — unconditional, because there is no session to measure (#444).
@@ -234,6 +246,20 @@ impl SecretSkip {
                  test {target} by hand if unsure",
         note: "doctor stays non-interactive; the command runs when `totsuka run` \
                resolves the config",
+        // A command has no session, so it is never "ready".
+        note_ready: None,
+    };
+
+    /// `bw:` — gated on the vault state `check_bitwarden` measured.
+    const BITWARDEN: Self = Self {
+        label: "a bw: reference",
+        detail: "resolving its bw: reference would prompt for the Bitwarden master \
+                 password on stdin (doctor stays non-interactive)",
+        summary: "its bw: reference would prompt",
+        action: "run `bw unlock` and export BW_SESSION, then re-run `totsuka doctor` \
+                 to probe {target}",
+        note: "doctor stays non-interactive; see the bitwarden checks above",
+        note_ready: Some("the Bitwarden vault is unlocked, so `totsuka run` will resolve it"),
     };
 
     /// The next action, naming what would have been probed.
@@ -252,15 +278,31 @@ impl SecretSkip {
 struct SecretReadiness {
     /// The `op://` backend's session state.
     onepassword: BackendReadiness,
+    /// The `bw:` backend's vault state.
+    bitwarden: BackendReadiness,
 }
 
 impl SecretReadiness {
+    /// What was measured for `scheme`.
+    ///
+    /// `Silent` is `NotUsed` (nothing to gate) and `Command` is permanently
+    /// `WouldPrompt` (nothing to measure); the rest report their backend.
+    fn readiness_of(self, scheme: SecretScheme) -> BackendReadiness {
+        match scheme {
+            SecretScheme::Silent => BackendReadiness::NotUsed,
+            SecretScheme::OnePassword => self.onepassword,
+            SecretScheme::Bitwarden => self.bitwarden,
+            SecretScheme::Command => BackendReadiness::WouldPrompt,
+        }
+    }
+
     /// The skip for `reference`, or `None` when doctor may resolve it.
     fn skip_for(self, reference: &str) -> Option<SecretSkip> {
-        match SecretScheme::of(reference) {
-            SecretScheme::OnePassword if self.onepassword.may_resolve() => None,
-            scheme => scheme.skip(),
+        let scheme = SecretScheme::of(reference);
+        if self.readiness_of(scheme).may_resolve() {
+            return None;
         }
+        scheme.skip()
     }
 
     /// The skip for the first blocked string leaf under `value`, if any.
@@ -286,16 +328,14 @@ impl SecretReadiness {
     /// prompting on stdin with nobody watching.
     fn deferred_note(self, reference: &str, subject: &str) -> Option<String> {
         let scheme = SecretScheme::of(reference);
-        if scheme == SecretScheme::OnePassword && self.onepassword == BackendReadiness::Ready {
-            return Some(format!(
-                "{subject} is an op:// reference, left unresolved here \
-                 (a 1Password session is active, so `totsuka run` will resolve it)"
-            ));
-        }
         let skip = scheme.skip()?;
+        let note = match (self.readiness_of(scheme), skip.note_ready) {
+            (BackendReadiness::Ready, Some(ready)) => ready,
+            _ => skip.note,
+        };
         Some(format!(
-            "{subject} is {}, left unresolved here ({})",
-            skip.label, skip.note
+            "{subject} is {}, left unresolved here ({note})",
+            skip.label
         ))
     }
 }
@@ -455,14 +495,15 @@ pub fn run(cx: &Cx, args: DoctorArgs) -> Result<(), CliError> {
     };
 
     if let Some(cfg) = &cfg {
-        // 1Password goes **first** (#289). Several checks below resolve
-        // secrets, and `op read` prompts (or hangs unattended) without a
-        // session — so the answer to "may we resolve?" has to exist before
-        // anything acts on it. Running this last, as it used to, meant
+        // The backend probes go **first** (#289). Several checks below resolve
+        // secrets, and `op read` / `bw get` prompt (or hang unattended)
+        // without a session — so the answer to "may we resolve?" has to exist
+        // before anything acts on it. Running this last, as it used to, meant
         // `check_plugins` had already resolved the very references the `llm`
         // and `hook-token` checks claimed the probes would cover.
         let secrets = SecretReadiness {
             onepassword: check_onepassword(cx, cfg, &env, &mut checks),
+            bitwarden: check_bitwarden(cx, cfg, &env, &mut checks),
         };
         check_worktree_location(cfg, &env, &mut checks);
         check_hooks(cx, cfg, config_ok, &env, secrets, args, &mut checks);
@@ -544,9 +585,18 @@ enum CliProbe {
 /// then `session_args` for the session.
 ///
 /// `session_args` must name a query that never prompts on its own — `op
-/// whoami` does not, unlike `op read`. Getting that wrong reopens exactly the
-/// unattended hang the gate exists to prevent.
-fn probe_cli(binary: &str, session_args: &[&str], env: &HashMap<String, String>) -> CliProbe {
+/// whoami` and `bw status` do not, unlike `op read` and `bw get`. Getting that
+/// wrong reopens exactly the unattended hang the gate exists to prevent.
+///
+/// `session_ok` reads the verdict out of the query's output, because the exit
+/// code is not always the answer: `bw status` succeeds in every state and
+/// reports the state in its JSON.
+fn probe_cli(
+    binary: &str,
+    session_args: &[&str],
+    session_ok: fn(&Output) -> bool,
+    env: &HashMap<String, String>,
+) -> CliProbe {
     let Some(path) = which(binary, env) else {
         return CliProbe::Missing;
     };
@@ -556,7 +606,7 @@ fn probe_cli(binary: &str, session_args: &[&str], env: &HashMap<String, String>)
             session: std::process::Command::new(&path)
                 .args(session_args)
                 .output()
-                .is_ok_and(|out| out.status.success()),
+                .is_ok_and(|out| session_ok(&out)),
         },
         Ok(out) => CliProbe::VersionFailed {
             code: out.status.code().unwrap_or(-1),
@@ -567,74 +617,210 @@ fn probe_cli(binary: &str, session_args: &[&str], env: &HashMap<String, String>)
     }
 }
 
-/// 1Password backend probes (#156), fired **only when** `config.toml`
-/// actually contains an `op://` reference: `op --version`
-/// (CLI present) and `op whoami` (session established — unlike `op read`, it
-/// never triggers a biometric prompt). No `op://` in config ⇒ no checks.
-/// Returns whether the rest of `doctor` may resolve `op://` references
-/// without prompting (#289).
+/// Everything that differs between one shell-out secret backend's probes and
+/// another's.
+///
+/// A table rather than a function per backend: the two must stay symmetric —
+/// a backend that is measured less precisely than its neighbour silently gets
+/// a worse `doctor`, which is the failure this whole gate exists to avoid.
+struct BackendProbe {
+    /// Check name; the session check appends `-session`.
+    name: &'static str,
+    /// The binary as spelled on PATH.
+    binary: &'static str,
+    /// The scheme as written in config (`op://`, `bw:`).
+    scheme: &'static str,
+    /// Product name for prose (`1Password CLI (op)`).
+    product: &'static str,
+    /// Next action when the binary is absent or unrunnable.
+    install: &'static str,
+    /// Next action when `--version` misbehaves.
+    reinstall: &'static str,
+    /// The session query's argv. Must never prompt.
+    session_args: &'static [&'static str],
+    /// Reads the session verdict out of that query's output.
+    session_ok: fn(&Output) -> bool,
+    /// How a usable session reads.
+    session_live: &'static str,
+    /// How an unusable session reads.
+    session_dead: &'static str,
+    /// Next action for an unusable session.
+    session_action: &'static str,
+}
+
+/// 1Password (#156): `op --version` + `op whoami` (which, unlike `op read`,
+/// never triggers a biometric prompt).
+const ONEPASSWORD_PROBE: BackendProbe = BackendProbe {
+    name: "1password",
+    binary: "op",
+    scheme: "op://",
+    product: "1Password CLI (op)",
+    install: "install it (macOS: `brew install 1password-cli`, other platforms: \
+              https://developer.1password.com/docs/cli) or switch the references to \
+              `keychain:` / `${ENV}`",
+    reinstall: "reinstall the 1Password CLI (macOS: `brew reinstall 1password-cli`)",
+    session_args: &["whoami"],
+    session_ok: |out| out.status.success(),
+    session_live: "op session is active",
+    session_dead: "no active 1Password session — probes that need an op:// secret are skipped",
+    session_action: "run `op signin`, then re-run `totsuka doctor` for the full picture",
+};
+
+/// Bitwarden (#699): `bw --version` + `bw status`.
+///
+/// `bw status` is the counterpart of `op whoami` — it reports the vault state
+/// and never prompts. It **exits 0 in every state**, so the verdict is the
+/// `status` field of its JSON; reading the exit code instead would call a
+/// locked vault ready and send the gated probes straight into the stdin
+/// prompt.
+const BITWARDEN_PROBE: BackendProbe = BackendProbe {
+    name: "bitwarden",
+    binary: "bw",
+    scheme: "bw:",
+    product: "Bitwarden CLI (bw)",
+    install: "install it (macOS: `brew install bitwarden-cli`, other platforms: \
+              https://bitwarden.com/help/cli/) or switch the references to \
+              `keychain:` / `${ENV}`",
+    reinstall: "reinstall the Bitwarden CLI (macOS: `brew reinstall bitwarden-cli`)",
+    session_args: &["status", "--nointeraction"],
+    session_ok: bw_vault_unlocked,
+    session_live: "bw vault is unlocked",
+    session_dead: "the Bitwarden vault is locked or BW_SESSION is not exported — probes \
+                   that need a bw: secret are skipped",
+    session_action: "run `bw unlock`, export the BW_SESSION it prints, then re-run \
+                     `totsuka doctor` from that shell for the full picture",
+};
+
+/// Whether `bw status` reported an unlocked vault.
+///
+/// Anything unparseable counts as **locked**: skipping a probe costs a line of
+/// output, while guessing "unlocked" costs an unattended run hanging on the
+/// master-password prompt.
+fn bw_vault_unlocked(out: &Output) -> bool {
+    out.status.success()
+        && serde_json::from_slice::<serde_json::Value>(&out.stdout)
+            .ok()
+            .and_then(|v| v.get("status")?.as_str().map(str::to_string))
+            .is_some_and(|status| status == "unlocked")
+}
+
+/// 1Password backend probes (#156), fired **only when** `config.toml` actually
+/// contains an `op://` reference. No `op://` in config ⇒ no checks. Returns
+/// whether the rest of `doctor` may resolve `op://` references without
+/// prompting (#289).
 fn check_onepassword(
     cx: &Cx,
     cfg: &RootConfig,
     env: &HashMap<String, String>,
     checks: &mut Vec<Check>,
 ) -> BackendReadiness {
-    if !scheme_in_use(cx, cfg, SecretScheme::OnePassword) {
-        return BackendReadiness::NotUsed;
-    }
-    onepassword_checks(probe_cli("op", &["whoami"], env), checks)
+    check_backend(
+        &ONEPASSWORD_PROBE,
+        SecretScheme::OnePassword,
+        cx,
+        cfg,
+        env,
+        checks,
+    )
 }
 
-/// Turn a 1Password [`CliProbe`] into checks and a [`BackendReadiness`].
+/// Bitwarden backend probes (#699), the exact counterpart of
+/// [`check_onepassword`], fired only when `config.toml` contains a `bw:`
+/// reference.
+fn check_bitwarden(
+    cx: &Cx,
+    cfg: &RootConfig,
+    env: &HashMap<String, String>,
+    checks: &mut Vec<Check>,
+) -> BackendReadiness {
+    check_backend(
+        &BITWARDEN_PROBE,
+        SecretScheme::Bitwarden,
+        cx,
+        cfg,
+        env,
+        checks,
+    )
+}
+
+/// Probe one backend's CLI, if its scheme reaches doctor at all.
+fn check_backend(
+    spec: &BackendProbe,
+    scheme: SecretScheme,
+    cx: &Cx,
+    cfg: &RootConfig,
+    env: &HashMap<String, String>,
+    checks: &mut Vec<Check>,
+) -> BackendReadiness {
+    if !scheme_in_use(cx, cfg, scheme) {
+        return BackendReadiness::NotUsed;
+    }
+    backend_checks(
+        spec,
+        probe_cli(spec.binary, spec.session_args, spec.session_ok, env),
+        checks,
+    )
+}
+
+/// Turn a [`CliProbe`] into checks and a [`BackendReadiness`].
 ///
-/// Pure, so every branch is reachable from a test without the real `op` (CI
-/// has none, and the real one would prompt for biometrics).
-fn onepassword_checks(probe: CliProbe, checks: &mut Vec<Check>) -> BackendReadiness {
+/// Pure, so every branch is reachable from a test without the real binaries
+/// (CI has neither `op` nor `bw`, and the real ones need an account).
+fn backend_checks(
+    spec: &BackendProbe,
+    probe: CliProbe,
+    checks: &mut Vec<Check>,
+) -> BackendReadiness {
     let (version, session) = match probe {
         CliProbe::Missing => {
             checks.push(Check::fail(
-                "1password",
-                "config references op:// secrets but the 1Password CLI (op) is not on PATH",
-                "install it (macOS: `brew install 1password-cli`, other platforms: \
-                 https://developer.1password.com/docs/cli) or switch the references to \
-                 `keychain:` / `${ENV}`",
+                spec.name,
+                format!(
+                    "config references {} secrets but the {} is not on PATH",
+                    spec.scheme, spec.product
+                ),
+                spec.install,
             ));
-            // No `op` binary: every resolution would fail anyway, and the
-            // probes that need one must not pretend otherwise.
+            // No binary: every resolution would fail anyway, and the probes
+            // that need one must not pretend otherwise.
             return BackendReadiness::WouldPrompt;
         }
         CliProbe::VersionFailed { code } => {
             checks.push(Check::fail(
-                "1password",
-                format!("`op --version` exited with {code}"),
-                "reinstall the 1Password CLI (macOS: `brew reinstall 1password-cli`)",
+                spec.name,
+                format!("`{} --version` exited with {code}", spec.binary),
+                spec.reinstall,
             ));
             return BackendReadiness::WouldPrompt;
         }
         CliProbe::Unrunnable { error } => {
             checks.push(Check::fail(
-                "1password",
-                format!("cannot run `op`: {error}"),
-                "install the 1Password CLI (macOS: `brew install 1password-cli`, \
-                 other platforms: https://developer.1password.com/docs/cli)",
+                spec.name,
+                format!("cannot run `{}`: {error}", spec.binary),
+                spec.install,
             ));
             return BackendReadiness::WouldPrompt;
         }
         CliProbe::Probed { version, session } => (version, session),
     };
-    checks.push(Check::ok("1password", format!("op {version} on PATH")));
+    checks.push(Check::ok(
+        spec.name,
+        format!("{} {version} on PATH", spec.binary),
+    ));
     // The session check is also the answer to "may the checks below resolve?"
-    // — `op read` prompts only when there is no session, so asking `whoami`
-    // measures the real condition instead of approximating it with a TTY test
-    // (#289).
+    // — resolution prompts only when there is no session, so asking measures
+    // the real condition instead of approximating it with a TTY test (#289).
     if session {
-        checks.push(Check::ok("1password-session", "op session is active"));
+        checks.push(Check::ok(
+            format!("{}-session", spec.name).as_str(),
+            spec.session_live,
+        ));
         BackendReadiness::Ready
     } else {
         checks.push(Check::warn(
-            "1password-session",
-            "no active 1Password session — probes that need an op:// secret are skipped",
-            "run `op signin`, then re-run `totsuka doctor` for the full picture",
+            format!("{}-session", spec.name).as_str(),
+            spec.session_dead,
+            spec.session_action,
         ));
         BackendReadiness::WouldPrompt
     }
@@ -2920,6 +3106,24 @@ location = "${MY_ROOT}/wt/{worktree_name}"
         );
     }
 
+    /// A fake process result, for the pure probe helpers.
+    fn output(code: i32, stdout: &[u8], stderr: &[u8]) -> Output {
+        use std::os::unix::process::ExitStatusExt;
+        Output {
+            status: std::process::ExitStatus::from_raw(code << 8),
+            stdout: stdout.to_vec(),
+            stderr: stderr.to_vec(),
+        }
+    }
+
+    /// A readiness where every measured backend reports `state`.
+    fn readiness(state: BackendReadiness) -> SecretReadiness {
+        SecretReadiness {
+            onepassword: state,
+            bitwarden: state,
+        }
+    }
+
     #[test]
     fn readiness_only_blocks_when_a_prompt_is_possible() {
         assert!(BackendReadiness::NotUsed.may_resolve());
@@ -2936,6 +3140,10 @@ location = "${MY_ROOT}/wt/{worktree_name}"
         assert_eq!(SecretScheme::of("op://Dev/X/y"), SecretScheme::OnePassword);
         assert_eq!(SecretScheme::of("cmd:gh auth token"), SecretScheme::Command);
         assert_eq!(
+            SecretScheme::of("bw:totsuka-slack/password"),
+            SecretScheme::Bitwarden
+        );
+        assert_eq!(
             SecretScheme::of("keychain:totsuka/token"),
             SecretScheme::Silent
         );
@@ -2950,12 +3158,8 @@ location = "${MY_ROOT}/wt/{worktree_name}"
     /// measure and is therefore unconditional (#444).
     #[test]
     fn the_op_gate_follows_the_session_and_the_cmd_gate_never_opens() {
-        let ready = SecretReadiness {
-            onepassword: BackendReadiness::Ready,
-        };
-        let blocked = SecretReadiness {
-            onepassword: BackendReadiness::WouldPrompt,
-        };
+        let ready = readiness(BackendReadiness::Ready);
+        let blocked = readiness(BackendReadiness::WouldPrompt);
 
         assert!(ready.skip_for("op://Dev/X/y").is_none());
         assert_eq!(
@@ -2977,9 +3181,7 @@ location = "${MY_ROOT}/wt/{worktree_name}"
     /// `plugin_init_config` resolves every string leaf.
     #[test]
     fn the_plugin_gate_finds_a_reference_at_any_depth() {
-        let blocked = SecretReadiness {
-            onepassword: BackendReadiness::WouldPrompt,
-        };
+        let blocked = readiness(BackendReadiness::WouldPrompt);
         let nested = toml::Value::Table(
             "[a.b]\nk = [\"plain\", \"op://v/i/f\"]\n"
                 .parse::<toml::Table>()
@@ -3000,12 +3202,8 @@ location = "${MY_ROOT}/wt/{worktree_name}"
     /// `resolve()`, which spawns the backend and can prompt on stdin.
     #[test]
     fn deferred_notes_cover_exactly_the_schemes_that_must_not_resolve() {
-        let ready = SecretReadiness {
-            onepassword: BackendReadiness::Ready,
-        };
-        let blocked = SecretReadiness {
-            onepassword: BackendReadiness::WouldPrompt,
-        };
+        let ready = readiness(BackendReadiness::Ready);
+        let blocked = readiness(BackendReadiness::WouldPrompt);
 
         let note = ready
             .deferred_note("op://Dev/X/y", "api_key_ref")
@@ -3090,7 +3288,7 @@ location = "${MY_ROOT}/wt/{worktree_name}"
         ] {
             let mut checks = Vec::new();
             assert_eq!(
-                onepassword_checks(probe.clone(), &mut checks),
+                backend_checks(&ONEPASSWORD_PROBE, probe.clone(), &mut checks),
                 expected,
                 "{probe:?}"
             );
@@ -3106,7 +3304,8 @@ location = "${MY_ROOT}/wt/{worktree_name}"
     #[test]
     fn a_dead_op_session_warns_without_failing_doctor() {
         let mut checks = Vec::new();
-        onepassword_checks(
+        backend_checks(
+            &ONEPASSWORD_PROBE,
             CliProbe::Probed {
                 version: "2.30.0".to_string(),
                 session: false,
@@ -3204,11 +3403,152 @@ auth_token_ref = "keychain:totsuka/hook-token"
         assert_eq!(action, SecretSkip::ONEPASSWORD.action("those agents"));
     }
 
+    /// The `bw:` gate follows the vault state, the same way the `op://` gate
+    /// follows the session — a Bitwarden user must not get a weaker `doctor`
+    /// than a 1Password user just because the scheme is newer.
+    #[test]
+    fn the_bw_gate_follows_the_vault_state() {
+        let unlocked = SecretReadiness {
+            onepassword: BackendReadiness::WouldPrompt,
+            bitwarden: BackendReadiness::Ready,
+        };
+        let locked = SecretReadiness {
+            onepassword: BackendReadiness::Ready,
+            bitwarden: BackendReadiness::WouldPrompt,
+        };
+        assert!(unlocked.skip_for("bw:x/password").is_none());
+        assert_eq!(
+            locked.skip_for("bw:x/password"),
+            Some(SecretSkip::BITWARDEN)
+        );
+        // Each backend is gated on its own state, not on a shared verdict.
+        assert!(locked.skip_for("op://Dev/X/y").is_none());
+        assert_eq!(
+            unlocked.skip_for("op://Dev/X/y"),
+            Some(SecretSkip::ONEPASSWORD)
+        );
+    }
+
+    /// The `bw:` skip has to name the stdin prompt: unlike 1Password's
+    /// biometric dialog, an unattended `totsuka run` that hits it just stops
+    /// with nothing on screen.
+    #[test]
+    fn the_bw_skip_names_the_stdin_prompt_and_the_recovery() {
+        assert!(
+            SecretSkip::BITWARDEN.detail.contains("stdin"),
+            "{}",
+            SecretSkip::BITWARDEN.detail
+        );
+        let action = SecretSkip::BITWARDEN.action("this plugin");
+        assert!(action.contains("bw unlock"), "{action}");
+        assert!(action.contains("BW_SESSION"), "{action}");
+        assert!(action.contains("this plugin"), "{action}");
+    }
+
+    #[test]
+    fn a_bw_reference_gets_a_deferred_note_on_both_vault_states() {
+        let unlocked = SecretReadiness {
+            onepassword: BackendReadiness::NotUsed,
+            bitwarden: BackendReadiness::Ready,
+        };
+        let locked = SecretReadiness {
+            onepassword: BackendReadiness::NotUsed,
+            bitwarden: BackendReadiness::WouldPrompt,
+        };
+        let note = unlocked
+            .deferred_note("bw:x/password", "api_key_ref")
+            .expect("a note");
+        assert!(note.contains("the Bitwarden vault is unlocked"), "{note}");
+        let note = locked
+            .deferred_note("bw:x/password", "api_key_ref")
+            .expect("a note");
+        assert!(note.contains("see the bitwarden checks above"), "{note}");
+    }
+
+    /// `bw status` exits 0 in every state, so the exit code is not the answer
+    /// — the verdict is the `status` field. Anything unreadable must count as
+    /// locked: guessing "unlocked" sends the gated probes into the prompt.
+    #[test]
+    fn only_an_unlocked_bw_status_counts_as_ready() {
+        let ok = |body: &str| bw_vault_unlocked(&output(0, body.as_bytes(), b""));
+        assert!(ok(r#"{"status":"unlocked","userEmail":"a@example.com"}"#));
+        assert!(!ok(r#"{"status":"locked"}"#));
+        assert!(!ok(r#"{"status":"unauthenticated"}"#));
+        // Unreadable shapes fail closed.
+        assert!(!ok("not json at all"));
+        assert!(!ok("{}"));
+        assert!(!ok(r#"{"status":42}"#));
+        // A non-zero exit is not ready regardless of what it printed.
+        assert!(!bw_vault_unlocked(&output(
+            1,
+            br#"{"status":"unlocked"}"#,
+            b""
+        )));
+    }
+
+    /// Each backend's probe must name **its own** CLI. The bug #699 fixed was
+    /// a shared message telling every operator to install 1Password's.
+    #[test]
+    fn each_backend_probe_names_its_own_cli() {
+        let mut checks = Vec::new();
+        backend_checks(&BITWARDEN_PROBE, CliProbe::Missing, &mut checks);
+        let check = checks.first().expect("a check");
+        assert!(!check.ok, "{check:?}");
+        assert!(check.detail.contains("bw:"), "{check:?}");
+        let action = check.action.as_deref().unwrap_or_default();
+        assert!(action.contains("brew install bitwarden-cli"), "{action}");
+        assert!(!action.contains("1password"), "{action}");
+    }
+
+    /// Both backends must report the same four outcomes, so neither gets a
+    /// quieter `doctor` than the other.
+    #[test]
+    fn both_backends_report_every_probe_outcome_symmetrically() {
+        for spec in [&ONEPASSWORD_PROBE, &BITWARDEN_PROBE] {
+            for (probe, expected) in [
+                (CliProbe::Missing, BackendReadiness::WouldPrompt),
+                (
+                    CliProbe::VersionFailed { code: 127 },
+                    BackendReadiness::WouldPrompt,
+                ),
+                (
+                    CliProbe::Unrunnable {
+                        error: "permission denied".to_string(),
+                    },
+                    BackendReadiness::WouldPrompt,
+                ),
+                (
+                    CliProbe::Probed {
+                        version: "1.2.3".to_string(),
+                        session: false,
+                    },
+                    BackendReadiness::WouldPrompt,
+                ),
+                (
+                    CliProbe::Probed {
+                        version: "1.2.3".to_string(),
+                        session: true,
+                    },
+                    BackendReadiness::Ready,
+                ),
+            ] {
+                let mut checks = Vec::new();
+                assert_eq!(
+                    backend_checks(spec, probe.clone(), &mut checks),
+                    expected,
+                    "{} {probe:?}",
+                    spec.name
+                );
+                assert!(!checks.is_empty(), "{} {probe:?}", spec.name);
+            }
+        }
+    }
+
     /// A missing binary fails with the install next-action (§7).
     #[test]
     fn a_missing_op_binary_fails_with_an_install_action() {
         let mut checks = Vec::new();
-        onepassword_checks(CliProbe::Missing, &mut checks);
+        backend_checks(&ONEPASSWORD_PROBE, CliProbe::Missing, &mut checks);
         let check = checks.first().expect("a check");
         assert!(!check.ok, "{check:?}");
         assert!(
