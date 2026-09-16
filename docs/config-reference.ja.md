@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:23677ed95b3b0d35da513d36a7c58f5408c9119fe583991f9ccd89dccf55fe4c -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:e94b0fbb5aac9a329cb75f3efcf81bb7f3a4cbc155cf101c0355a0f68dee9c51 -->
 
 # 設定リファレンス
 
@@ -16,7 +16,7 @@
 
 `plugins/{name}.toml` への分離は無くなった。残っていても読まれず、エラーにもならないので、設定を移したら消すこと。
 
-`totsuka init` が雛形を書き出す。`totsuka config validate` で検証し、`totsuka config show [--redacted]` で表示する。
+`totsuka setup` が雛形を書き出す。**このページが記述するキーはすべてその雛形にコメント付きで入っている**（1 キー 1 行の要約つき）ので、設定を探すときはこのページより先にファイルを開くほうが早いことが多い。`totsuka config validate` で検証し、`totsuka config show [--redacted]` で表示する。
 
 ## シークレット参照
 

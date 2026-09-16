@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](slack-setup.ja.md)
 
-<!-- generated-from: ai-docs/operations/slack-quickstart.md sha256:9ad561cb8af413c03eea39b6255ab6e72124fb5bbcade5524a49dd772b8d6dd5 -->
+<!-- generated-from: ai-docs/operations/slack-quickstart.md sha256:06c3fdb840962d26d8c2f84f8b60cfcdc26c29f5740812fedc28f9b59e9447c2 -->
 
 # Setting up the Slack source
 
@@ -46,7 +46,7 @@ Split it like this:
    `manifest.gateway.yml` alone.
 2. Work through [Event Gateway setup](event-gateway-setup.md).
 3. **Go back to the app** and put the Request URL it produced into both places.
-4. Do step 2 (store the tokens) and step 3 (`totsuka setup`) on this page.
+4. Do step 2 (store the tokens) and step 3 (`totsuka setup`, then edit the config) on this page.
 5. **Add `event_source` and `[slack.gateway]` to the `[slack]` table that
    `setup` wrote.**
 
@@ -115,18 +115,32 @@ security add-generic-password -U -s totsuka -a slack-bot  -w 'xoxb-…'   # opti
 ## 3. Create the configuration
 
 ```bash
-totsuka setup
+totsuka setup --plugins slack,herdr
 ```
 
-Pick the **"Slack — reply as yourself"** recipe. It asks for your repositories, the member id from step 1, and the LLM used to decide which repository a mention is about. It writes the `[slack]` table, installs and enables the plugin, and runs `doctor` — all from this one command. **It never asks for a token value.**
+The only question is which plugins you will use (omit `--plugins` and you pick them from a checkbox list). **It never asks for a token value.** It writes a `config.toml` with **every setting totsuka understands in it, commented out**, and prints where that file is.
 
-If you have not stored the tokens yet, `setup` prints a checklist of the exact commands to run.
+Open the file and uncomment at least the following. The `[slack]` section is easy to find, and every key carries a one-line summary.
 
-**Even with every token stored, the `state-db` check still fails and `doctor` exits 3.** That only means the state database does not exist yet, and the only thing that creates it is `totsuka run`. It goes green after the first run.
+1. `[[repositories]]` — your repository paths and names
+2. `[plugins.slack] enabled = true` and `[plugins.herdr] enabled = true`
+3. `[slack]`'s `app_token`, `user_token`, `bot_token` and `target_user_id` (the member id from step 1)
+4. the slack entry under `[[projects]]`, and `[[workflows]]` — the quickest route is to uncomment **"Slack — reply as yourself" in the recipe section at the end of the file**
+
+If you have not stored the tokens yet, `setup` has already printed the exact commands to run.
+
+Then check it:
+
+```bash
+totsuka config validate
+totsuka doctor
+```
+
+**The `state-db` check still fails and `doctor` exits 3.** That only means the state database does not exist yet, and the only thing that creates it is `totsuka run`. It goes green after the first run.
 
 ### Writing the configuration by hand
 
-`setup` **never overwrites an existing file**, so add Slack by hand if you already have a configuration, or if you want a shape the recipe does not express.
+`setup` **never rewrites a line in an existing file** (it only appends sections you do not have yet), so you can ignore the generated skeleton and write your own. Install the plugin and write the configuration yourself:
 
 ```bash
 totsuka plugin install --bundled slack --enable

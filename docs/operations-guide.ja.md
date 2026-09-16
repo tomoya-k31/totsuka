@@ -1,7 +1,7 @@
 > 🌐 [English](operations-guide.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/operations-guide.md sha256:925f434b94009297fab95273824d6e347613ccff698a472cfdcdf5331caca0e0 -->
+<!-- generated-from: ai-docs/operations/operations-guide.md sha256:9269ae35253e1a69746206a7713dab84792bca9ba086b9902060b28842c26cd9 -->
 
 # 運用ガイド
 
@@ -238,7 +238,7 @@ EOF
 
 | 症状 | 対処 |
 |---|---|
-| `config not found` | `totsuka init` で雛形を作って編集する |
+| `config not found` | `totsuka setup` で雛形を作って編集する |
 | `state database not found` | 一度 `totsuka run` すると作成される |
 | プラグインが `enabled but not installed` | `totsuka plugin install <dir>` |
 | タスクが取り込まれない | `totsuka run --dry-run` でトリガーの一致・リポジトリ選択・エージェント割当を副作用ゼロで確認する。ワークフローの `projects` は `[[projects]].name` と、その `source` はプラグインのインスタンス名と一致させる |

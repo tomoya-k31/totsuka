@@ -123,7 +123,7 @@ Read-only commands like `status` start in under a second.
 
 ## What it guarantees
 
-**Errors always say what to do next**, not just what went wrong — `config not found → run 'totsuka init'`.
+**Errors always say what to do next**, not just what went wrong — `config not found → run 'totsuka setup'`.
 
 **Secrets are masked unconditionally** in the logging layer: API keys, tokens, and authorization headers. Prompt bodies are written only at debug level or above, and can be turned off entirely. Logs are structured JSON Lines, rotated daily with a configurable retention count, and the `logs` command formats them for reading.
 

@@ -1,7 +1,7 @@
 > 🌐 [English](event-gateway-setup.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/event-gateway-setup.md sha256:3fcb047d7fe3be52e320a76ca19b174be8dd21651c91fb6771f895412ccfbe83 -->
+<!-- generated-from: ai-docs/operations/event-gateway-setup.md sha256:48b2591089c7b11eb18d9b02cc6307cb2089d6775c4a5edc7a0acc93649fcefc -->
 
 # Event Gateway 構築手順
 
@@ -173,7 +173,7 @@ tofu output -json totsuka_config
 
 **これは `[slack]` テーブル全体ではなく、そこに足すキーである。**
 
-先に `totsuka setup` を通し（[Slack セットアップ](slack-setup.ja.md) の手順 3）、
+先に `totsuka setup` と config.toml の編集を通し（[Slack セットアップ](slack-setup.ja.md) の手順 3）、
 `user_token` と `target_user_id` を含む `[slack]` を書かせること。**`setup` は既に存在する
 `[slack]` テーブルには触らない**ので、このブロックだけを先に貼ると必須キーが永久に入らない。
 

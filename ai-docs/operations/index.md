@@ -6,10 +6,10 @@
      description は frontmatter から転記される（手で書かない）。
      並び順と表示タイトルは手で決めてよい — スクリプトはそれを保存する。 -->
 <!-- okf:index:begin -->
-* [セットアップ Playbook（新マシン / 開発機 / ローテーション / 復旧）](setup-playbook.md) - ゼロから totsuka が動くまでを通しで示す導入手順。新マシン（tarball 配置 → totsuka setup → シークレット登録 → doctor → run）、開発機（クローン → --from-source）、トークンローテーション、中断・失敗時の復旧を扱う。
+* [セットアップ Playbook（新マシン / 開発機 / ローテーション / 復旧）](setup-playbook.md) - ゼロから totsuka が動くまでを通しで示す導入手順。新マシン（tarball 配置 → totsuka setup でプラグイン選択と config.toml 生成 → config.toml を編集 → シークレット登録 → doctor → run）、開発機（クローン → チェックアウトからのビルド）、トークンローテーション、中断・失敗時の復旧と別マシンでの再現を扱う。
 * [運用ガイド（doctor / worktree 掃除 / FAQ）](operations-guide.md) - totsuka 日常運用の手引き。doctor の読み方、ランタイム health（縮退）の読み方と doctor との守備範囲の違い、worktree 掃除ポリシーと孤児掃除、run 停止・回復、メニューバー表示（SwiftBar）の導入と読み方、よくある問題の切り分け。
 * [リリース手順（release-please / ユニバーサルバイナリ / GitHub Releases）](release-runbook.md) - totsuka のリリース運用。release-please による Release PR、macOS ユニバーサルバイナリと同梱プラグインの自動ビルド・署名・GitHub Releases 配布、リリースごとの Homebrew tap 自動 bump と 2 本のトークン運用、Release PR の CI/ブランチ保護を通すトークン運用（GitHub App / PAT / admin）、Gatekeeper（ad-hoc 署名）の扱い。
-* [Slack セットアップ Quickstart（task-source-slack）](slack-quickstart.md) - 受信方式（Socket Mode / Event Gateway）の選択から始まり、manifest からの Slack アプリ作成 → トークン発行 → トークン保管 → totsuka setup → doctor → run --watch までの導入手順と、手で書く場合のフォールバック、トークン失効・スコープ変更時の対処。
+* [Slack セットアップ Quickstart（task-source-slack）](slack-quickstart.md) - 受信方式（Socket Mode / Event Gateway）の選択から始まり、manifest からの Slack アプリ作成 → トークン発行 → トークン保管 → totsuka setup → config.toml の編集 → doctor → run --watch までの導入手順と、手で書く場合のフォールバック、トークン失効・スコープ変更時の対処。
 * [フック完了判定のトラブルシューティング](hook-troubleshooting.md) - Claude Code フック方式の運用手引き。スプールバックログ（doctor hook-spool チェックでの検出・drain/確認・corrupt 隔離ファイル）、Escalated タスクの対応手順（pane スナップショット確認・herdr pane での解消・次 Stop での自然復帰・fail アウト）、human 検収での totsuka task verify --pass/--fail 操作を、doctor のフックプローブ参照つきで整理する。
 * [Codex ツールのセットアップと hooks trust 運用](codex-tool-setup.md) - リポジトリ/ワークフローを Codex CLI で動かすための一回きりのセットアップ手順（インストール確認・config 設定・hooks trust・対象リポジトリの trust）と、trust が壊れた場合の復旧手順。
 * [OpenCode ツールのセットアップと運用](opencode-tool-setup.md) - リポジトリ/ワークフローを OpenCode で動かすためのセットアップ（インストール確認・config 設定・アセット自動配置）と、Codex/Claude と異なる縮退（block 不可・指示が可視・llm 検収不可）の運用上の注意。

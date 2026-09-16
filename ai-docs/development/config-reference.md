@@ -4,7 +4,7 @@ title: 設定リファレンス（config.toml）
 description: "config.toml の全キー・デフォルト値・意味の一覧。設定ファイルは 1 本で、プラグイン個別設定もトップレベルの [<name>] テーブルに入る。シークレット参照、設定スキーマのバージョニング方針、[[projects]] の domain 宣言とワークフローからの参照、プラグインが定義する追加プロパティ、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-github の [github]、task-source-notion の [notion]、task-source-slack の [slack]、agent-ide-herdr の [herdr] を含む。"
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
 tags: [config, reference, toml, secrets, workflow, worktree, github, notion, slack, hooks, versioning]
-generated: { by: claude-code/opus-5, at: 2026-09-17T03:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-17T12:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -26,7 +26,7 @@ owner: tomoya-k31
 
 **残っていても読まれない。** `version` は上げず検出もしないと決めたので、旧ファイルはパースエラーにもならず、プラグインが空設定で起動する。移行時に消すこと。
 
-`totsuka init` が雛形を生成する。`totsuka config validate` で検証、`totsuka config show [--redacted]` で表示。
+`totsuka setup` が雛形を生成する。**本ドキュメントが記述するキーはすべてその雛形にコメント付きで入っており**、載っていることは `scripts/config-template-lint.sh` が機械検証する（[config.toml 雛形とその網羅性検査](/development/config-template.md)）。`totsuka config validate` で検証、`totsuka config show [--redacted]` で表示。
 
 # シークレット参照
 
@@ -1171,7 +1171,7 @@ my-claude = "claude"
 
 # 例
 
-`[Spec §4.6/§4.9](/product/orchestrator-spec.ja.md)` の例が `totsuka init` の雛形にコメントアウトで含まれる。設計→実装ハンドオフの典型:
+`[Spec §4.6/§4.9](/product/orchestrator-spec.ja.md)` の例は `totsuka setup` の雛形末尾の**レシピ集**にコメントアウトで含まれる。設計→実装ハンドオフの典型:
 
 ```toml
 [[workflows]]
