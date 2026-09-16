@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:50a4feb961e0325a4b50f6253fa019204bc9ff0157519c055eed4ddfc4d1c51b -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:23677ed95b3b0d35da513d36a7c58f5408c9119fe583991f9ccd89dccf55fe4c -->
 
 # 設定リファレンス
 
@@ -24,14 +24,25 @@
 
 | 形式 | 解決元 | 使いどころ |
 |---|---|---|
-| `op://<vault>/<item>/<field>` | 1Password | **通常はこれ。** macOS 以外で動く唯一のシークレットストア |
+| `op://<vault>/<item>/<field>` | 1Password | **通常はこれ。** macOS 以外でも動く |
+| `bw:<item>/<field>` | Bitwarden | `op://` と同じ役回りの、Bitwarden 版。`BW_SESSION` の export が要る |
 | `cmd:<command>` | コマンドの標準出力 | 別ツールが管理・ローテートする credential（例 `cmd:gh auth token`） |
 | `${ENV_VAR}` を含む文字列 | 環境変数 | すでに export してある値を使うとき |
 | `keychain:<service>/<account>` | macOS Keychain | macOS 専用 |
 
 `~` と `${ENV}` はパスでも展開される。
 
-**`op://`** は 1Password CLI を呼び出す形式で、事前に `op signin` 済みであることを前提とする。どちらの設定ファイルの**任意の文字列値**でも使え、CLI がクロスプラットフォームなので **macOS 以外で動く唯一のシークレットストア**でもある（`keychain:` が macOS 専用のほう。`${ENV_VAR}` と `cmd:` はどこでも動くが、値を持つのは環境や別ツールである）。CLI 未導入・item 不在・未サインインは、それぞれ具体的で行動につながるエラーになる。`totsuka doctor` が 1Password を検査するのは、設定に `op://` 参照が実際にあるときだけである。
+**`op://`** は 1Password CLI を呼び出す形式で、事前に `op signin` 済みであることを前提とする。どちらの設定ファイルの**任意の文字列値**でも使え、CLI がクロスプラットフォームなので macOS 以外でも動く（`keychain:` が macOS 専用のほう。`${ENV_VAR}` と `cmd:` はどこでも動くが、値を持つのは環境や別ツールである）。CLI 未導入・item 不在・未サインインは、それぞれ具体的で行動につながるエラーになる。`totsuka doctor` が 1Password を検査するのは、設定に `op://` 参照が実際にあるときだけである。
+
+**`bw:`** は Bitwarden CLI を呼び出す形式で、`bw:totsuka-slack/password` は `bw get password totsuka-slack` になる。`<field>` は `bw get` の object 名（`password` / `username` / `totp` / `uri` …）なので、**指定の仕方が CLI をそのまま叩くときと一致する**。語彙はこちらで検査しないので、`bw` が対応した object はそのまま使える。**分割は最後の `/`** で、アイテム名に `/` を含めてよい —— `bw:github.com/myorg/password` はアイテム `github.com/myorg`、フィールド `password` である。`keychain:` とは逆（あちらは**最初の** `/` 以降がすべて account）なので注意する。
+
+Bitwarden には常駐セッションが無いため、**`BW_SESSION` の export が要る**。`bw unlock` を実行し、表示されたセッションキーを export したシェルから `totsuka run` を起動する。未設定のときは `bw` を起動せずにその場でエラーになる —— `bw` はマスターパスワードを標準入力から訊くので、常駐している `totsuka run` がそのプロンプトに当たると画面に何も出ないまま止まってしまう。アイテム名が複数のエントリに一致した場合は、アイテムの id で指定するよう案内するエラーになる。`totsuka doctor` が Bitwarden を検査するのは設定に `bw:` 参照が実際にあるときだけで、`bw status` が `unlocked` を返したときにのみ使用可能とみなす。
+
+**この形式ではカスタムフィールドを扱えない**（Bitwarden CLI に 1 コマンドで取得する手段が無いため）。その場合は `cmd:` を使う:
+
+```bash
+cmd:bw get item totsuka-slack | jq -r '.fields[]|select(.name=="api_token").value'
+```
 
 **`cmd:`** はコマンドを `/bin/sh -c` で実行し、その標準出力を秘密値として使う（末尾の改行は除去される）。`token = "cmd:gh auth token"` のように、**別のツールが管理・ローテートしている credential** 向けである — 毎回その時点の値を取るので、コピーが黙って古くなることがない。非ゼロ終了や空出力は起動時エラーで、stderr の先頭行を引用する（標準出力はどこにも引用しない）。コマンドが走るのは `totsuka run` がシークレットを解決するときだけで、パースや `config show` では実行されない。
 

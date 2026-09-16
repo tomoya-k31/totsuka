@@ -18,6 +18,9 @@ const ONEPASSWORD_PREFIX: &str = "op://";
 /// Prefix identifying a command-backed secret reference (#444).
 const COMMAND_PREFIX: &str = "cmd:";
 
+/// Prefix identifying a Bitwarden secret reference (#699).
+const BITWARDEN_PREFIX: &str = "bw:";
+
 /// A secret value that never exposes itself through `Debug`/`Display`.
 ///
 /// Wrapping secrets in this newtype prevents accidental leakage into logs or
@@ -61,7 +64,7 @@ impl fmt::Display for SecretString {
 
 /// A parsed reference to an externally-held secret.
 ///
-/// Three schemes exist:
+/// Four schemes exist:
 ///
 /// - `keychain:<service>/<account>` — the OS Keychain (macOS). The
 ///   `<service>` segment runs up to the first `/`; everything after it is the
@@ -75,6 +78,14 @@ impl fmt::Display for SecretString {
 ///   (`cmd:gh auth token`): resolving re-runs the command, so no copy exists
 ///   to go stale. The `keychain:`-style prefix is deliberate — `op://`'s `//`
 ///   comes from `op`'s native URI, which has no counterpart here.
+/// - `bw:<item>/<field>` — Bitwarden, resolved by shelling out to
+///   `bw get <field> <item>` (#699). The `//` is dropped for the same reason
+///   as `cmd:`: Bitwarden has **no native `bw://` URI**, so writing one would
+///   be inventing a URI that does not exist. `<field>` is a `bw get` object
+///   name, so the reference reads the way the official CLI is invoked; the
+///   split is at the **last** `/` because an item name may contain `/`
+///   (`github.com/myorg`) while the object vocabulary never does — the
+///   opposite of `keychain:`, whose account is the part that may contain `/`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SecretRef {
     /// An OS-Keychain item (`keychain:<service>/<account>`).
@@ -93,6 +104,13 @@ pub enum SecretRef {
     Command {
         /// The command string, run via `/bin/sh -c`.
         command: String,
+    },
+    /// A Bitwarden item field (`bw:<item>/<field>`).
+    Bitwarden {
+        /// The item, as `bw get` takes it: an item id or a search string.
+        item: String,
+        /// The `bw get` object name (`password`, `username`, `totp`, …).
+        field: String,
     },
 }
 
@@ -116,10 +134,18 @@ impl SecretRef {
             command: command.into(),
         }
     }
+
+    /// Build a Bitwarden reference from its item and field.
+    pub fn bitwarden(item: impl Into<String>, field: impl Into<String>) -> Self {
+        Self::Bitwarden {
+            item: item.into(),
+            field: field.into(),
+        }
+    }
 }
 
 /// The textual form the reference was written in (`keychain:…` / `op://…` /
-/// `cmd:…`). The reference names *where* a secret lives, never the secret
+/// `cmd:…` / `bw:…`). The reference names *where* a secret lives, never the secret
 /// itself, so displaying it is safe (error messages, doctor output).
 ///
 /// For `cmd:` that safety is a rule, not a construction: the command string
@@ -135,6 +161,9 @@ impl fmt::Display for SecretRef {
             }
             Self::OnePassword { uri } => f.write_str(uri),
             Self::Command { command } => write!(f, "{COMMAND_PREFIX}{command}"),
+            Self::Bitwarden { item, field } => {
+                write!(f, "{BITWARDEN_PREFIX}{item}/{field}")
+            }
         }
     }
 }
@@ -143,42 +172,93 @@ impl FromStr for SecretRef {
     type Err = SecretError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if let Some(rest) = s.strip_prefix(KEYCHAIN_PREFIX) {
-            let (service, account) = rest
-                .split_once('/')
-                .ok_or_else(|| SecretError::InvalidReference(s.to_string()))?;
-            if service.is_empty() || account.is_empty() {
-                return Err(SecretError::InvalidReference(s.to_string()));
-            }
-            return Ok(Self::keychain(service, account));
-        }
-        if let Some(rest) = s.strip_prefix(ONEPASSWORD_PREFIX) {
-            // `op read` needs at least `vault/item/field`; deeper validation
-            // (existence, extra segments like `?attribute=…`) is `op`'s job.
-            let segments: Vec<&str> = rest.split('/').collect();
-            if segments.len() < 3 || segments.iter().take(3).any(|s| s.is_empty()) {
-                return Err(SecretError::InvalidReference(s.to_string()));
-            }
-            return Ok(Self::onepassword(s));
-        }
-        if let Some(rest) = s.strip_prefix(COMMAND_PREFIX) {
-            // Anything after the prefix is the command, verbatim. Only an
-            // empty/blank command is rejected — the command's own validity is
-            // the shell's job at resolve time.
-            if rest.trim().is_empty() {
-                return Err(SecretError::InvalidReference(s.to_string()));
-            }
-            return Ok(Self::command(rest));
-        }
-        Err(SecretError::InvalidReference(s.to_string()))
+        parse_scheme(s).unwrap_or_else(|| Err(SecretError::InvalidReference(s.to_string())))
     }
+}
+
+/// Parse `s` when it carries a known scheme prefix.
+///
+/// `None` means **no scheme matched** — the value is an `${ENV}` string or a
+/// plain one, and belongs to the resolver's other branch. `Some(Err(_))` means
+/// a scheme matched but its body was malformed, which must stay an error
+/// rather than being silently treated as a plain string.
+///
+/// This is the **only** list of scheme prefixes. The resolver used to keep its
+/// own copy of it, so adding a scheme meant updating two places and nothing
+/// caught the omission (#699); [`is_secret_reference`] now derives the answer
+/// from this function.
+fn parse_scheme(s: &str) -> Option<Result<SecretRef, SecretError>> {
+    let malformed = || Err(SecretError::InvalidReference(s.to_string()));
+    if let Some(rest) = s.strip_prefix(KEYCHAIN_PREFIX) {
+        let Some((service, account)) = rest.split_once('/') else {
+            return Some(malformed());
+        };
+        if service.is_empty() || account.is_empty() {
+            return Some(malformed());
+        }
+        return Some(Ok(SecretRef::keychain(service, account)));
+    }
+    if let Some(rest) = s.strip_prefix(ONEPASSWORD_PREFIX) {
+        // `op read` needs at least `vault/item/field`; deeper validation
+        // (existence, extra segments like `?attribute=…`) is `op`'s job.
+        let segments: Vec<&str> = rest.split('/').collect();
+        if segments.len() < 3 || segments.iter().take(3).any(|s| s.is_empty()) {
+            return Some(malformed());
+        }
+        return Some(Ok(SecretRef::onepassword(s)));
+    }
+    if let Some(rest) = s.strip_prefix(COMMAND_PREFIX) {
+        // Anything after the prefix is the command, verbatim. Only an
+        // empty/blank command is rejected — the command's own validity is
+        // the shell's job at resolve time.
+        if rest.trim().is_empty() {
+            return Some(malformed());
+        }
+        return Some(Ok(SecretRef::command(rest)));
+    }
+    if let Some(rest) = s.strip_prefix(BITWARDEN_PREFIX) {
+        // Reject a `/`-leading body *before* splitting. `bw://item/password`
+        // otherwise parses happily as item `//item`, and the operator gets a
+        // "Not found" about an item they never named instead of being told
+        // the spelling is wrong. `bw://` is the one spelling a reader is most
+        // likely to try, by analogy with `op://` — accepting it silently is
+        // the worst possible answer for the scheme this ADR deliberately did
+        // *not* give a `//`.
+        if rest.starts_with('/') {
+            return Some(malformed());
+        }
+        // Split at the **last** `/`: the item may contain one, the `bw get`
+        // object name cannot. Splitting at the first `/` instead would make
+        // `bw:github.com/myorg/password` unreachable forever.
+        let Some((item, field)) = rest.rsplit_once('/') else {
+            return Some(malformed());
+        };
+        if item.is_empty() || field.is_empty() {
+            return Some(malformed());
+        }
+        // The `bw get` object vocabulary is deliberately not validated here:
+        // hardcoding it would couple totsuka releases to Bitwarden's, and an
+        // unknown object is reported by `bw` itself (ADR-0006's "existence is
+        // the CLI's job", applied to the vocabulary).
+        return Some(Ok(SecretRef::bitwarden(item, field)));
+    }
+    None
+}
+
+/// Whether `value` is written as a store-backed secret reference.
+///
+/// Used by the resolver to tell "fetch this from a backend" from "expand
+/// `${VAR}` in this string". Derived from the same parser [`FromStr`] uses, so
+/// a scheme added to the parser is recognised here without a second edit.
+pub fn is_secret_reference(value: &str) -> bool {
+    parse_scheme(value).is_some()
 }
 
 /// Errors from resolving a secret reference.
 #[derive(Debug, thiserror::Error)]
 pub enum SecretError {
     /// The reference string was not a well-formed `keychain:<service>/<account>`,
-    /// `op://<vault>/<item>/<field>`, or `cmd:<command>`.
+    /// `op://<vault>/<item>/<field>`, `cmd:<command>`, or `bw:<item>/<field>`.
     #[error("invalid secret reference: {0}")]
     InvalidReference(String),
     /// No secret exists for the reference.
@@ -266,6 +346,81 @@ mod tests {
     }
 
     #[test]
+    fn parses_bitwarden_reference() {
+        let r: SecretRef = "bw:totsuka-slack/password".parse().unwrap();
+        assert_eq!(r, SecretRef::bitwarden("totsuka-slack", "password"));
+        assert_eq!(r.to_string(), "bw:totsuka-slack/password");
+    }
+
+    /// The split is at the **last** `/`, not the first: a Bitwarden item name
+    /// may contain `/` (`github.com/myorg`) while the `bw get` object
+    /// vocabulary never does. This is the opposite of `keychain:`, where the
+    /// *account* is the part allowed to contain `/` — splitting the same way
+    /// would make such items permanently unreachable.
+    #[test]
+    fn bitwarden_item_may_contain_slashes() {
+        let r: SecretRef = "bw:github.com/myorg/password".parse().unwrap();
+        assert_eq!(r, SecretRef::bitwarden("github.com/myorg", "password"));
+        // The reference round-trips, so error messages quote it as written.
+        assert_eq!(r.to_string(), "bw:github.com/myorg/password");
+    }
+
+    /// The `bw get` object vocabulary is not validated here: hardcoding it
+    /// would couple a totsuka release to Bitwarden's, and `bw` reports an
+    /// unknown object itself.
+    #[test]
+    fn bitwarden_field_vocabulary_is_left_to_the_cli() {
+        for field in ["password", "username", "totp", "uri", "some-future-object"] {
+            let r: SecretRef = format!("bw:item/{field}").parse().unwrap();
+            assert_eq!(r, SecretRef::bitwarden("item", field));
+        }
+    }
+
+    /// `bw://` is the spelling a reader reaches for by analogy with `op://`,
+    /// and Bitwarden has no URI form to justify it. It has to be *rejected*,
+    /// not quietly reinterpreted: `rsplit_once` alone accepted it as the item
+    /// `//item`, which would have sent `bw get password //item` and reported a
+    /// missing item the operator never named.
+    #[test]
+    fn bitwarden_rejects_the_uri_spelling_it_does_not_have() {
+        let err = "bw://item/password".parse::<SecretRef>().unwrap_err();
+        assert!(matches!(err, SecretError::InvalidReference(_)), "{err:?}");
+        // Still a *reference*, so the resolver reports it instead of silently
+        // expanding the literal text.
+        assert!(is_secret_reference("bw://item/password"));
+    }
+
+    /// `is_secret_reference` is derived from the parser, so the two cannot
+    /// disagree about what carries a scheme — the resolver used to keep its
+    /// own prefix list and would have missed `bw:` entirely (#699).
+    #[test]
+    fn every_scheme_is_recognised_as_a_reference() {
+        for reference in [
+            "keychain:totsuka/token",
+            "op://Dev/Item/field",
+            "cmd:gh auth token",
+            "bw:totsuka-slack/password",
+        ] {
+            assert!(is_secret_reference(reference), "{reference}");
+            assert!(reference.parse::<SecretRef>().is_ok(), "{reference}");
+        }
+        for plain in ["${TOTSUKA_TOKEN}", "plain-value", "https://example.com"] {
+            assert!(!is_secret_reference(plain), "{plain}");
+        }
+    }
+
+    /// A known prefix with a malformed body stays a *reference* — the
+    /// resolver must report it rather than silently expanding the config's
+    /// literal text as a plain string and handing that to an API.
+    #[test]
+    fn a_malformed_reference_is_still_a_reference() {
+        for bad in ["op://only-vault", "bw:no-field", "keychain:noslash", "cmd:"] {
+            assert!(is_secret_reference(bad), "{bad}");
+            assert!(bad.parse::<SecretRef>().is_err(), "{bad}");
+        }
+    }
+
+    #[test]
     fn rejects_malformed_references() {
         for bad in [
             "totsuka/token",
@@ -280,6 +435,17 @@ mod tests {
             // cmd: needs a non-blank command.
             "cmd:",
             "cmd:   ",
+            // bw: needs both an item and a field.
+            "bw:",
+            "bw:no-field",
+            "bw:/password",
+            "bw:item/",
+            // `bw://` is not a spelling this scheme has — Bitwarden has no
+            // URI form, which is the whole reason the prefix carries no `//`.
+            // Without the guard this parsed as the item `//item`.
+            "bw://item/password",
+            "bw://Dev/item/password",
+            "bw://",
         ] {
             assert!(
                 bad.parse::<SecretRef>().is_err(),

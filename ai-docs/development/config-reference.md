@@ -4,7 +4,7 @@ title: 設定リファレンス（config.toml）
 description: "config.toml の全キー・デフォルト値・意味の一覧。設定ファイルは 1 本で、プラグイン個別設定もトップレベルの [<name>] テーブルに入る。シークレット参照、設定スキーマのバージョニング方針、[[projects]] の domain 宣言とワークフローからの参照、プラグインが定義する追加プロパティ、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-github の [github]、task-source-notion の [notion]、task-source-slack の [slack]、agent-ide-herdr の [herdr] を含む。"
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
 tags: [config, reference, toml, secrets, workflow, worktree, github, notion, slack, hooks, versioning]
-generated: { by: claude-code/opus-5, at: 2026-09-15T12:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-17T03:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -32,12 +32,13 @@ owner: tomoya-k31
 
 文字列値は次のいずれか。**プレーンなシークレットは設定に書かない**（F-62）。
 
-**通常は `op://`（1Password）を使う。** クロスプラットフォームで動く唯一の
-シークレットストアで（`keychain:` は macOS 専用）、
+**通常は `op://`（1Password）か `bw:`（Bitwarden）を使う。** どちらも
+クロスプラットフォームで動くシークレットストアで（`keychain:` は macOS 専用）、
 `config.toml` の任意の文字列 leaf に書ける。`${ENV_VAR}` と `cmd:` は
 用途がはまるときの選択肢、`keychain:` は macOS 専用。
 
-- `op://<vault>/<item>/<field>` — 1Password から解決（#156、[ADR-0006](/decisions/adr-0006-onepassword-secret-backend.md)）。1Password CLI（`op read --no-newline`）へのシェルアウトで、事前に `op signin` 済みの対話セッションが前提。`config.toml` の**任意の文字列 leaf** で使える（例 `api_key_ref = "op://Dev/Openrouter/api_key"`、Slack の `user_token = "op://Dev/Slack/user_token"`）。`op` は cross-platform のため **非 macOS でも動く唯一のシークレットストア**（`keychain:` は macOS 専用。`${ENV_VAR}` と `cmd:` もどこでも動くが、値を持つのは環境や別ツールでありストアではない）。未導入はインストール導線（macOS は `brew install 1password-cli`、他プラットフォームは公式ドキュメント）、item 不在は not found、未サインインは「`op signin` を実行」の actionable エラーになり、`totsuka doctor` は設定に `op://` があるときのみ `op --version` / `op whoami`（非プロンプト）を検査する
+- `op://<vault>/<item>/<field>` — 1Password から解決（#156、[ADR-0006](/decisions/adr-0006-onepassword-secret-backend.md)）。1Password CLI（`op read --no-newline`）へのシェルアウトで、事前に `op signin` 済みの対話セッションが前提。`config.toml` の**任意の文字列 leaf** で使える（例 `api_key_ref = "op://Dev/Openrouter/api_key"`、Slack の `user_token = "op://Dev/Slack/user_token"`）。`op` は cross-platform のため **非 macOS でも動く**（`keychain:` は macOS 専用。`bw:` も同じく cross-platform なストア。`${ENV_VAR}` と `cmd:` もどこでも動くが、値を持つのは環境や別ツールでありストアではない）。未導入はインストール導線（macOS は `brew install 1password-cli`、他プラットフォームは公式ドキュメント）、item 不在は not found、未サインインは「`op signin` を実行」の actionable エラーになり、`totsuka doctor` は設定に `op://` があるときのみ `op --version` / `op whoami`（非プロンプト）を検査する
+- `bw:<item>/<field>` — Bitwarden から解決（#699、[ADR-0076](/decisions/adr-0076-bitwarden-secret-backend.md)）。公式 Bitwarden CLI（`bw get <field> <item> --nointeraction`）へのシェルアウト（例 `token = "bw:totsuka-slack/password"`）。**`bw://` ではない** —— `op://` は `op read` が実際に受理する本物の URI だが、Bitwarden に URI 表記は存在しないので、`//` を付けると存在しない URI を発明することになる（ADR-0044 が `cmd://` を蹴ったのと同じ理由）。`<field>` は `bw get <object>` の object 名をそのまま書く（`password` / `username` / `totp` / `uri` …）ので、**指定の仕方が公式 CLI と一致する**。語彙は totsuka 側で検証しない（Bitwarden が object を増やしたときに totsuka のリリースを待たせないため）。**分割は最後の `/`** —— アイテム名は `/` を含みうる（`bw:github.com/myorg/password` は item = `github.com/myorg`、field = `password`）一方、object 名は含まない。`keychain:` とは規則が逆なので注意する。**`BW_SESSION` が要る** —— `bw` は `op` と違い常駐セッションを持たないので、`bw unlock` が吐くセッションキーを export したシェルから `totsuka run` を起動する。未設定のときは `bw` を**起動する前に**エラーで落とす（`bw` は stdin でマスターパスワードを訊くので、常駐プロセスがそれを踏むと画面に何も出ないまま止まる）。アイテムが複数ヒットしたら item id で指定するよう案内するエラーになる。`totsuka doctor` は設定に `bw:` があるときのみ `bw --version` / `bw status`（非プロンプト）を検査する —— `bw status` は locked でも exit 0 なので、判定は JSON の `status` が `unlocked` であること。**カスタムフィールドは対象外**（公式 CLI に単一コマンドの取得手段が無い）。必要なら `cmd:bw get item x | jq …` を使う
 - `cmd:<command>` — コマンドを `/bin/sh -c` で実行し、その **stdout を秘密値**として使う（#444、[ADR-0044](/decisions/adr-0044-cmd-secret-scheme.md)）。`gh auth token` のように**別ツールが管理・ローテートする credential** 向け — 解決のたびに現在値を取るので、コピーの陳腐化が起きない（例 `token = "cmd:gh auth token"`）。末尾の改行は除去される。非ゼロ exit と空出力は起動時エラー（stderr の先頭行を引用、stdout は §5.2 により決して引用しない）。実行は `totsuka run` の解決時のみで、parse や `config show` はコマンドを実行しない。`totsuka doctor` は `op://` と同じ理由（非対話原則、#289）で `cmd:` を含むプラグインの probe を skip する。**コマンド文字列に秘密を直書きしないこと** — 参照文字列は設定の一部としてエラーメッセージに引用されうる。「設定に平文の秘密を書かない」規則はコマンド文字列にも適用され、秘密はコマンドに**取得させる**（それがこの形式の目的）
 - `${ENV_VAR}` を含む文字列 — 環境変数から展開。export 済みの値をそのまま使いたいときに
 - `keychain:<service>/<account>` — macOS Keychain から解決。**macOS でしか動かない**ので、

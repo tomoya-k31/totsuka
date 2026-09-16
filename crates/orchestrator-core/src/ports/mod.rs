@@ -18,5 +18,5 @@ pub use clock::Clock;
 pub use git::{GitOutput, GitRunner};
 pub use llm::{ChatRequest, LlmError, LlmRouter};
 pub use process::ProcessProbe;
-pub use secret::{SecretError, SecretRef, SecretStore, SecretString};
+pub use secret::{SecretError, SecretRef, SecretStore, SecretString, is_secret_reference};
 pub use signal_ingress::{FocusOutcome, FocusPort, SignalAck, SignalError, SignalPort};

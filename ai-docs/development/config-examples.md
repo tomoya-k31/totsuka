@@ -4,7 +4,7 @@ title: 設定例集（config.toml）
 description: そのまま貼って動く config.toml の完全版注釈付き例と、選択肢を持つキー（kind・mode・output・verification・cleanup・trigger・シークレット参照・並列上限）の選び分け基準、TOTSUKA_* 環境変数オーバーライドの対応表、および最小構成／GitHub Projects／Slack／設計→実装ハンドオフのシナリオ別レシピ。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-cli/src/init_cmd.rs
 tags: [config, toml, examples, recipes, workflow, secrets, slack, github, herdr, environment]
-generated: { by: claude-code/opus-5, at: 2026-09-13T00:45:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-17T03:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -289,11 +289,12 @@ initial_prompt = "/grill-me スキルを使用して、詳細設計を行って�
 
 ## シークレット参照 — 4 方式
 
-設定ファイルに生のトークンを書かない。文字列値は次の 4 形式を取れる（`config.toml` の**任意の文字列 leaf** で使える — プラグインの `[<name>]` テーブルの中も含む）。
+設定ファイルに生のトークンを書かない。文字列値は次の 5 形式を取れる（`config.toml` の**任意の文字列 leaf** で使える — プラグインの `[<name>]` テーブルの中も含む）。
 
 | 形式 | 例 | 選ぶ基準 |
 |---|---|---|
-| `op://<vault>/<item>/<field>` | `op://Dev/Openrouter/api_key` | **長命の秘密の推奨。**cross-platform で、非 macOS でも動く唯一のシークレットストア（`keychain:` は macOS 専用）。1Password CLI へのシェルアウトなので事前に `op signin` 済みであること |
+| `op://<vault>/<item>/<field>` | `op://Dev/Openrouter/api_key` | **長命の秘密の推奨。**cross-platform で、非 macOS でも動く（`keychain:` は macOS 専用）。1Password CLI へのシェルアウトなので事前に `op signin` 済みであること |
+| `bw:<item>/<field>` | `bw:totsuka-slack/password` | **Bitwarden を使っているならこれ**（#699）。cross-platform で、`op://` と並ぶもう 1 つのシークレットストア。`<field>` は `bw get <object>` の object 名そのもの。分割は**最後の** `/` なので `/` を含むアイテム名も書ける。`bw unlock` して `BW_SESSION` を export したシェルから `totsuka run` を起動すること |
 | `cmd:<command>` | `cmd:gh auth token` | **別ツールが管理・ローテートする credential の推奨**（#444）。解決のたびにコマンドを実行して stdout を使うので、コピーの陳腐化が起きない。ローテートする token を op/keychain に写すとコピーが黙って死ぬ — その罠がこの形式の起点 |
 | `keychain:<service>/<account>` | `keychain:totsuka/hook-token` | macOS 専用。1Password を使っていない環境向け。`security add-generic-password` で登録済みであること |
 | `${ENV_VAR}` を含む文字列 | `${GITHUB_TOKEN}` | CI・使い捨て環境向け。**未設定だと起動時エラー**（既定値へのフォールバックはしない）。永続運用には非推奨 |
@@ -301,7 +302,7 @@ initial_prompt = "/grill-me スキルを使用して、詳細設計を行って�
 パス値（`path`、`socket_path`、`spool_dir`、`location`）では加えて `~` が展開される。
 `totsuka config show --redacted` はキー名に `token` / `key` / `secret` / `password` / `credential` を含む値を `***redacted***` に伏せて表示する。
 
-詳細は [ADR-0006](/decisions/adr-0006-onepassword-secret-backend.md)（op://）と [ADR-0044](/decisions/adr-0044-cmd-secret-scheme.md)（cmd:）。
+詳細は [ADR-0006](/decisions/adr-0006-onepassword-secret-backend.md)（op://）、[ADR-0044](/decisions/adr-0044-cmd-secret-scheme.md)（cmd:）、[ADR-0076](/decisions/adr-0076-bitwarden-secret-backend.md)（bw:）。
 
 ## `[plugins.{name}].kind` — task_source / agent_ide / notifier
 
