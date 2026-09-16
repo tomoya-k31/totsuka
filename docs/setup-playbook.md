@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](setup-playbook.ja.md)
 
-<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:f9ade033efad7ae5c6000d3c678445ffe120734ac895b021510c532d7b6af3ab -->
+<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:b58ba0c8a6587454823e923afc9ed04f1fd443085960cdc71ae8c531fc16c19b -->
 
 # Setup playbook
 
@@ -52,7 +52,7 @@ It asks up to five kinds of question and gets the rest from the recipe you choos
 
 1. **Which recipe to start from** (minimal GitHub, design-to-implement handoff, Slack replies under your own name, human sign-off required)
 2. **Repository paths and names** (more than one is fine)
-3. **Where to keep secrets** (1Password, Keychain, or environment variables) — it never asks for the values themselves
+3. **Where to keep secrets** (1Password, Bitwarden, Keychain, or environment variables) — it never asks for the values themselves
 4. Whatever the recipe still needs (GitHub Project owner and number, your Slack member ID, the LLM model name)
 5. **The Project status column names**, if the recipe moves cards between them. The suggestions describe what each column is for (`Ready to implement`, and so on); **whatever you enter has to match an option in your board's Status field exactly.** Getting one wrong is the quiet failure here — the configuration is valid, `doctor` stays green, and `run` simply never picks anything up — which is why the plan prints each trigger with the names already filled in. An answers file that leaves these out is **refused, naming the keys to add**, rather than filled in with names you did not choose.
 
@@ -69,6 +69,8 @@ security add-generic-password -U -s totsuka -a github-token -w '<paste the value
 ```
 
 **Everything on that checklist is required.** Your configuration refers to these, so a single missing one stops that plugin from starting. Anything genuinely optional never appears on the list in the first place.
+
+If you chose Bitwarden, the command is a `bw get template item | jq … | bw encode | bw create item` pipeline (it needs `jq`), because `bw` has no single-line equivalent of `op item edit`. **That command always creates a new item** — if one with the same name already exists, edit that one instead, because a duplicate makes `bw get` fail with "more than one result" and the reference stops resolving. You get one item per account (`bw:totsuka-<name>/password`) since `bw:` references do not reach custom fields, so one item cannot hold several secrets.
 
 The Slack bot token looks optional but is not: **replies posted under your own name raise no Slack notification at all**, so the recipes are built around the bot delivering the nudge.
 
@@ -91,6 +93,7 @@ Things setup cannot do on your behalf.
 | Codex | Approve hooks trust in the TUI. **Without it, hooks are silently skipped and every task times out** |
 | OpenCode | First launch and config placement |
 | 1Password | `op signin`, if you use `op://` references |
+| Bitwarden | `bw login`, then `bw unlock`, then export the `BW_SESSION` it prints — if you use `bw:` references. **Start `totsuka run` from that same shell**: `bw` keeps no background session, and without one it asks for your master password on standard input, which leaves a long-running process stopped with nothing on screen |
 | Click-to-focus notifications | Install `terminal-notifier` and set the bundle id — see [click-to-focus setup](click-to-focus-setup.md) |
 
 ## Installing from a development checkout
