@@ -268,10 +268,16 @@ done <<<"$TEMPLATE_ASSIGNED"
 while IFS= read -r entry; do
   key="${entry%%=*}"
   [ -n "$key" ] || continue
-  contains "$CODE_KEYS" "$key" || continue
-  contains "$TEMPLATE_KEYS" "$key" && continue
-  error dead-declaration "$TEMPLATE" \
-    "TEMPLATE_EXEMPT の '$key' は雛形にも載っていないのに免除されている: 免除ごと消すこと"
+  # 生きている免除は「コードにあって雛形に無いキー」——`missing-key` を
+  # 抑えているもの。死ぬのはその逆の 2 通りで、どちらも免除が仕事をして
+  # いない。
+  if ! contains "$CODE_KEYS" "$key"; then
+    error dead-declaration "$TEMPLATE" \
+      "TEMPLATE_EXEMPT の '$key' はもう config struct に無い（削除か改名）: 免除ごと消すこと"
+  elif contains "$TEMPLATE_KEYS" "$key"; then
+    error dead-declaration "$TEMPLATE" \
+      "TEMPLATE_EXEMPT の '$key' は雛形に載っているので免除が要らない: 免除ごと消すこと"
+  fi
 done <<<"$TEMPLATE_EXEMPT"
 
 while IFS= read -r entry; do
