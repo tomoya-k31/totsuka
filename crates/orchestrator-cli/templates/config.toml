@@ -12,7 +12,8 @@
 # Each key here gets one line of summary. For what a setting means, how to
 # choose between the options, and the traps — see the reference:
 #   https://github.com/tomoya-k31/totsuka/blob/main/docs/config-reference.md
-#   https://github.com/tomoya-k31/totsuka/blob/main/docs/config-examples.md
+#
+# Combinations that work are at the end of this file, under "Recipes".
 #
 # After editing:  totsuka config validate  →  totsuka doctor  →  totsuka run --dry-run
 
@@ -204,7 +205,7 @@
 # model = "anthropic/claude-haiku-4-5"
 # max_tokens = 256                          # cap for the classification call
 # timeout_secs = 30                         # request timeout
-# Secret reference. Other forms: bw:<item>/<field> · cmd:<command> · ${ENV_VAR} · keychain:<service>/<account> (macOS only)
+# A secret reference — see "Secret references" at the top for the other four forms.
 # api_key_ref = "op://Dev/Openrouter/api_key"
 
 # ============================================================================
@@ -215,10 +216,10 @@
 # location = "~/.worktrees/{repo_name}/{worktree_name}"   # default: <state dir>/worktrees/…
 #                                           #   Placeholders: {repo} {repo_name} {worktree_name}
 #                                           #   {task_id} {source} {task_number} {hash} {handle}
-# cleanup = "manual"                        # implement mode: "immediate" / "manual" / { retention_days = 5 }
+# cleanup = { retention_days = 5 }          # implement mode. Or one of the names "immediate" /
+#                                           #   "manual" / "keep_7d" / "keep_28d" (the last two are
+#                                           #   sugar for 7 and 28 days). **One `cleanup` line only.**
 # plan_cleanup = "immediate"                # plan mode, same vocabulary
-# cleanup = { retention_days = 3 }          # an arbitrary number of days takes the explicit form
-#                                           #   (`keep_7d` / `keep_28d` are sugar for 7 and 28)
 
 # ============================================================================
 # [log]
@@ -234,7 +235,7 @@
 # ============================================================================
 
 # [hooks]
-# Secret reference. Other forms: bw:<item>/<field> · cmd:<command> · ${ENV_VAR} · keychain:<service>/<account> (macOS only)
+# A secret reference — see "Secret references" at the top for the other four forms.
 # auth_token_ref = "op://Dev/totsuka/hook-token"   # Bearer token authenticating hook POSTs.
 #                                           #   Operationally required: without it the only defence
 #                                           #   is the 0600 socket permission
@@ -247,7 +248,7 @@
 # ============================================================================
 
 # [github]
-# Secret reference. Other forms: bw:<item>/<field> · cmd:<command> · ${ENV_VAR} · keychain:<service>/<account> (macOS only)
+# A secret reference — see "Secret references" at the top for the other four forms.
 # token = "op://Dev/GitHub/token"           # `cmd:gh auth token` works well here — it never goes stale
 # github_login = "my-login"                 # your login: detects self-assigned tasks and is the
 #                                           #   self-assign target when claiming. One login per instance
@@ -270,7 +271,7 @@
 # ============================================================================
 
 # [notion]
-# Secret reference. Other forms: bw:<item>/<field> · cmd:<command> · ${ENV_VAR} · keychain:<service>/<account> (macOS only)
+# A secret reference — see "Secret references" at the top for the other four forms.
 # token = "op://Dev/Notion/token"           # integration secret, or `cmd:ntn auth token --plain`
 # notion_user_id = "00000000-0000-0000-0000-000000000000"   # your user id; `trigger.assignee = "@me"`
 #                                           #   matches against this. Omitted, `@me` matches nobody
@@ -311,12 +312,12 @@
 # ============================================================================
 
 # [slack]
-# Secret reference. Other forms: bw:<item>/<field> · cmd:<command> · ${ENV_VAR} · keychain:<service>/<account> (macOS only)
+# A secret reference — see "Secret references" at the top for the other four forms.
 # app_token = "op://Dev/Slack/app_token"    # xapp-… App-Level Token for Socket Mode.
 #                                           #   Not needed when event_source = "gateway"
-# Secret reference. Other forms: bw:<item>/<field> · cmd:<command> · ${ENV_VAR} · keychain:<service>/<account> (macOS only)
+# A secret reference — see "Secret references" at the top for the other four forms.
 # user_token = "op://Dev/Slack/user_token"  # xoxp-… reads and writes AS YOU
-# Secret reference. Other forms: bw:<item>/<field> · cmd:<command> · ${ENV_VAR} · keychain:<service>/<account> (macOS only)
+# A secret reference — see "Secret references" at the top for the other four forms.
 # bot_token = "op://Dev/Slack/bot_token"    # xoxb-… posts the notification nudge. Unset = feature off,
 #                                           #   and a reply under your own name raises NO Slack
 #                                           #   notification at all, so the nudge is what makes it
@@ -348,7 +349,7 @@
 # [slack.llm]                               # repository classification; defaults to the core [llm]
 # base_url = "https://openrouter.ai/api/v1"
 # model = "anthropic/claude-haiku-4-5"
-# Secret reference. Other forms: bw:<item>/<field> · cmd:<command> · ${ENV_VAR} · keychain:<service>/<account> (macOS only)
+# A secret reference — see "Secret references" at the top for the other four forms.
 # api_key = "op://Dev/Openrouter/api_key"
 # confidence_threshold = 0.6                # below this, selection becomes ephemeral
 
@@ -384,7 +385,7 @@
 # ============================================================================
 
 # [discord]
-# Secret reference. Other forms: bw:<item>/<field> · cmd:<command> · ${ENV_VAR} · keychain:<service>/<account> (macOS only)
+# A secret reference — see "Secret references" at the top for the other four forms.
 # bot_token = "op://Dev/Discord/bot_token"  # Bot Token. There is no user-token option — Discord
 #                                           #   forbids automating a normal account
 # operator_user_id = "000000000000000000"   # your user id (all digits, a snowflake). Only posts from
@@ -453,11 +454,23 @@
 # done = false
 
 # ============================================================================
-# Recipes — combinations that work, ready to uncomment
+# Recipes — combinations that work
 # ============================================================================
+#
+# Each recipe below is the `[[projects]]` and `[[workflows]]` half of a working
+# setup. Before uncommenting one, uncomment its prerequisites above:
+#
+#   * a `[[repositories]]` block naming the clone tasks are dispatched into
+#   * `[plugins.<name>] enabled = true` for every plugin the recipe names
+#   * that plugin's own `[<name>]` table, with its token reference
+#
+# Those live in their own sections above rather than being repeated here,
+# because a second `[plugins.github]` would be a duplicate key. Recipes 2-4
+# reuse recipe 1's `[[projects]]` block, so uncomment that one as well.
 #
 # 1) Minimal — GitHub Projects + herdr
 #    Cards in your implement column get implemented and written back.
+#    Needs: [plugins.github], [plugins.herdr], [github], [[repositories]]
 #
 # [[projects]]
 # name = "my-board"
@@ -476,6 +489,7 @@
 # 2) Design → implement handoff
 #    Two stages with a human review in between. The conversation, its worktree
 #    and its agent session carry over when a card enters the next stage's column.
+#    Needs: recipe 1's prerequisites and its [[projects]] block.
 #
 # [[workflows]]
 # name = "design"
@@ -496,6 +510,7 @@
 # 3) Slack — reply as yourself
 #    A mention drafts a reply for you to approve. The reaction workflow is a
 #    separate event path, so the order of these two does not matter.
+#    Needs: [plugins.slack], [plugins.herdr], [slack], [[repositories]]
 #
 # [[projects]]
 # name = "slack"                            # a source with no domains still needs an entry
@@ -518,6 +533,7 @@
 # 4) Migration — a long implement run you watch yourself
 #    `timeout_secs = 0` opts the workflow out of the silence sweep, and the
 #    worktree is kept for inspection. Do not do this for unattended work.
+#    Needs: recipe 1's prerequisites and its [[projects]] block.
 #
 # [[workflows]]
 # name = "migration"

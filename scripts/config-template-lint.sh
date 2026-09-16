@@ -173,9 +173,7 @@ extract_code_keys() {
 # （ロスターに無い名前のトップレベルテーブルは検証エラーになる）。
 extract_template_keys() {
   awk -v mode="${1:-all}" '
-    # `lint:raw` を含む行は読まない。第三者の DSL をそのまま渡すキー
-    # （Notion の filter など）を、totsuka の設定キーとして数えないため。
-    /lint:raw/ { next }
+    { raw = ($0 ~ /lint:raw/) }
     { line = $0; sub(/^[[:space:]]*#[[:space:]]?/, "", line) }
     line ~ /^\[\[?[a-z_][a-z0-9_.-]*\]\]?/ {
       if (mode == "assign") next
@@ -192,7 +190,12 @@ extract_template_keys() {
       # inline table の中のキーも設定キーである（`cleanup = { retention_days = 3 }`）。
       # 走査を `{` 〜 最後の `}` に閉じ込めるのは、値の後ろに続く散文の
       # 「unset = no -activate」のような字面を拾わないため。
-      if (match(line, /\{.*\}/)) {
+      #
+      # `lint:raw` はここだけを止める。**左辺のキー名は数える** ——
+      # `filter = { property = … }` の `filter` は totsuka の設定キーであり、
+      # 行ごと読み飛ばすと綴り間違いが素通りする（`fillter` と書いても
+      # 0 error になる）。止めたいのは右辺、つまり第三者の DSL の語彙だけ。
+      if (!raw && match(line, /\{.*\}/)) {
         rest = substr(line, RSTART, RLENGTH)
         while (match(rest, /[a-z_][a-z0-9_]*[[:space:]]*=/)) {
           k = substr(rest, RSTART, RLENGTH)
@@ -255,6 +258,29 @@ while IFS= read -r key; do
   error unknown-key "$TEMPLATE" \
     "雛形のキー '$key' がどの config struct にも無い: 綴りを直すか、削除済みなら雛形からも消すか、プラグインが解釈する無解釈テーブルのキーなら OPAQUE_ALLOWED に理由付きで登録すること"
 done <<<"$TEMPLATE_ASSIGNED"
+
+# ---------- 6) 死んだ宣言 ----------
+#
+# 免除・許可はどちらも「検査の穴」なので、要らなくなったら消えてほしい。
+# 消えないと、汎用的な名前（`repo` / `from` / `channel`）の素通し口が
+# 残り続け、後から入った本物のタイポをそこで受け止めてしまう。
+# arch-lint の declaration-consumed と同じ発想である。
+while IFS= read -r entry; do
+  key="${entry%%=*}"
+  [ -n "$key" ] || continue
+  contains "$CODE_KEYS" "$key" || continue
+  contains "$TEMPLATE_KEYS" "$key" && continue
+  error dead-declaration "$TEMPLATE" \
+    "TEMPLATE_EXEMPT の '$key' は雛形にも載っていないのに免除されている: 免除ごと消すこと"
+done <<<"$TEMPLATE_EXEMPT"
+
+while IFS= read -r entry; do
+  key="${entry%%=*}"
+  [ -n "$key" ] || continue
+  contains "$TEMPLATE_ASSIGNED" "$key" && continue
+  error dead-declaration "$TEMPLATE" \
+    "OPAQUE_ALLOWED の '$key' を雛形が書いていない: 使うか、宣言ごと消すこと（汎用的な名前の素通し口が残るとタイポを受け止めてしまう）"
+done <<<"$OPAQUE_ALLOWED"
 
 # ---------- サマリ ----------
 N_CODE="$(printf '%s\n' "$CODE_KEYS" | grep -c . || true)"
