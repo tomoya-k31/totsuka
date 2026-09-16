@@ -301,9 +301,12 @@ impl<T: SlackTransport> SlackApi<T> {
     /// (`latest = oldest = ts`, `inclusive`, `limit = 1`).
     ///
     /// [`conversations_replies`](Self::conversations_replies) cannot do this:
-    /// it takes a *thread* root, so it returns nothing for a message that
-    /// isn't one. A `reaction_added` event carries only `item.channel` +
-    /// `item.ts`, which is exactly what this fetches back.
+    /// it is keyed by a thread, so it returns nothing for a message that
+    /// belongs to no thread at all. A `reaction_added` event carries only
+    /// `item.channel` + `item.ts`, which is exactly what this fetches back.
+    /// (A message that *is* in a thread is a different case, and the one
+    /// [`fetch_message`](Self::fetch_message)'s fallback covers — see there
+    /// for what a reply's own `ts` measurably returns.)
     ///
     /// `Ok(None)` means "the window matched nothing", which is a **routine**
     /// answer, not a failure: `conversations.history` does not return replies
@@ -403,19 +406,41 @@ impl<T: SlackTransport> SlackApi<T> {
         if let Some(message) = self.conversations_history_one(channel, ts).await? {
             return Ok(Some(message));
         }
-        // A thread reply: `ts` is its own id, and passing it as the thread
-        // root returns the enclosing thread (Slack resolves it to the parent).
-        // `latest = None` pages from the head, so the target may sit anywhere
-        // in the page — match on `ts` rather than assuming a position.
+        // A thread reply: `ts` is its own id, and `conversations.replies`
+        // accepts a reply's own id, not only a thread root. **Measured
+        // 2026-09-16**: it answers with that one message, and does *not*
+        // resolve up to the enclosing thread. `latest = None` pages from the
+        // head, so the target may sit anywhere in whatever comes back —
+        // match on `ts` rather than assuming a position, which is right under
+        // either behaviour.
         //
         // This is the first caller to pass `latest = None`, which puts
         // `latest`/`inclusive` into the request body as JSON nulls.
         // `transport::form_fields` drops null-valued arguments before the
         // request is built (pinned by its own test), so Slack sees the
         // arguments omitted rather than set to an invalid value.
-        let thread = self
+        let thread = match self
             .conversations_replies(channel, ts, THREAD_LOOKUP_LIMIT, None)
-            .await?;
+            .await
+        {
+            Ok(thread) => thread,
+            // **"Slack has no such message" is the `None` answer, not an
+            // error.** Slack answers `thread_not_found` when `ts` names
+            // nothing in the channel — routinely because the message was
+            // deleted between the event being emitted and this lookup. That
+            // is the same verdict an empty `conversations.history` gives, and
+            // it has to read the same way to the caller: letting it escape as
+            // an error told the gateway drain "Slack is unreachable, leave
+            // the record queued", so a deleted mention was redelivered — and
+            // warned about — on every pass until `drain_max_age_hours`
+            // expired, a day later.
+            Err(SlackError::Api { error, .. })
+                if error == "thread_not_found" || error == "message_not_found" =>
+            {
+                return Ok(None);
+            }
+            Err(e) => return Err(e),
+        };
         Ok(thread.into_iter().find(|message| message.ts == ts))
     }
 

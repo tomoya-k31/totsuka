@@ -282,6 +282,46 @@ async fn fetch_message_is_none_when_neither_route_finds_it() {
     );
 }
 
+/// **A deleted message is `None`, not an error.** `conversations.history`
+/// comes back empty for a thread reply either way, so the deletion is only
+/// visible in the fallback, where Slack answers `thread_not_found`. Reporting
+/// that as an error made the gateway drain treat "the message is gone" as
+/// "Slack is unreachable": the record was left unacked, redelivered on every
+/// pass and warned about each time, until `drain_max_age_hours` dropped it a
+/// day later. Observed against a mention deleted 12 seconds after it was
+/// posted, long after the Event Gateway had queued it.
+#[tokio::test]
+async fn fetch_message_is_none_when_the_message_was_deleted() {
+    for code in ["thread_not_found", "message_not_found"] {
+        let shared = Shared::default();
+        shared.push(Canned::Data(json!({ "ok": true, "messages": [] })));
+        shared.push(Canned::Data(json!({ "ok": false, "error": code })));
+        let message = api(&shared)
+            .fetch_message("C1", "2.0")
+            .await
+            .unwrap_or_else(|e| panic!("`{code}` is a verdict, not a failure: {e}"));
+        assert!(message.is_none(), "`{code}`");
+    }
+}
+
+/// The narrowness is the point: only the two "no such message" codes are
+/// verdicts. Anything else — a missing scope above all — is a configuration
+/// fault that must stay an error, or the drain would silently ack and discard
+/// every mention it cannot read.
+#[tokio::test]
+async fn fetch_message_still_errors_on_a_scope_failure() {
+    let shared = Shared::default();
+    shared.push(Canned::Data(json!({ "ok": true, "messages": [] })));
+    shared.push(Canned::Data(
+        json!({ "ok": false, "error": "missing_scope" }),
+    ));
+    let err = api(&shared).fetch_message("C1", "2.0").await.unwrap_err();
+    assert!(
+        matches!(&err, SlackError::Api { error, .. } if error == "missing_scope"),
+        "{err}"
+    );
+}
+
 #[tokio::test]
 async fn conversations_open_self_returns_the_dm_channel() {
     let shared = Shared::default();
