@@ -1,5 +1,10 @@
 # Bundle Update Log
 
+## 2026-09-16
+
+* **Update**: 削除済みメッセージを指すキューイベントで `conversations.replies` が返す `thread_not_found` を、`fetch_message` が `Err` ではなく `Ok(None)` として扱うようにした。Err のままだと Event Gateway 取り込みの drain が「Slack に到達できない」と読んでレコードを ack せず、1 件のメンションが `drain_max_age_hours`（既定 1 日）を過ぎるまで毎パス再配送され、起動のたびに WARN を出し続けていた。[task-source-slack](/components/task-source-slack.md)
+* **Update**: 上を実機（運用者の実ワークスペース）で測って [ADR-0025](/decisions/adr-0025-reaction-task-trigger.md) の未確認項目のうち 1 件を確定させた —— `conversations.replies` は存在する返信の `ts` を渡せば親スレッドに解決せずその 1 件を返し、`thread_not_found` はその `ts` がチャンネルのどのメッセージでもないときにだけ返る。
+
 ## 2026-09-15
 
 * **Update**: [slack-event-gateway](/components/slack-event-gateway.md) — 登録表の `path_token` に 32 文字の下限をコンテナ側でも課すようにした（#677）。同じ下限は `tofu/variables.tf` が既に持っていたが、それが守るのは構築を OpenTofu で自動化した人だけである。登録表は `REGISTRATIONS_PATH` / `REGISTRATIONS` の 2 経路から来られ、運用者が Secret Manager に手で置いた表は OpenTofu を一度も通らない。`path_token` は IAM の無いエンドポイントのルーティング資格情報そのもの（ADR-0072 決定 11）で、短いトークンは総当たりできてしまい、しかも当たるまで症状が出ない。数字は 2 箇所に出るので、Rust と HCL の双方にコメントで他方を指してある。

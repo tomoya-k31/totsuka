@@ -4,7 +4,9 @@ title: ADR-0025 リアクション起点のタスク起動は「本人が付け�
 description: "本人が付けた :eyes: リアクションを mention と同じタスク起動トリガにする決定。user scope の reactions:read 1 本で足り、可視範囲は変わらない。他人のリアクションを受理するとリモート実行トリガになるため本人限定を緩和する設定は作らない。reaction_removed の購読と event_ts を dedup キーに混ぜる案は不採用。"
 resource: https://github.com/tomoya-k31/totsuka/issues/319
 tags: [decision, slack, trigger, security, reaction, adr]
-generated: { by: claude-code/opus-5, at: 2026-08-25T21:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-16T14:20:00+09:00 }
+verified:
+  - { by: claude-code/opus-5, at: 2026-09-16T14:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -147,8 +149,19 @@ Socket Mode はエンベロープを**処理前に** ack するので（Slack �
 - `reaction.rs`（新規）— 再取得の前後 2 段に分けたフィルタと `Mention` への変換
 - `pipeline.rs` — `SocketEvent::Reaction` の分岐から既存パイプラインへの合流
 
+**実機で確定した項目**（2026-09-16、運用者の実ワークスペースの `xoxp-` で測定）:
+
+- `conversations.replies` に**存在する**メッセージの `ts` を渡すと、それが親スレッドでなくても
+  `thread_not_found` にはならず、**そのメッセージ 1 件だけ**が返る。
+  親スレッドには解決されないので、`fetch_message` が結果を `ts` で突き合わせる実装で正しい
+- `conversations.replies` が `thread_not_found` を返すのは、**`ts` がそのチャンネルのどの
+  メッセージでもないとき**。日常的な原因はメッセージの削除で、`conversations.history` が
+  空を返すのと同じ「もう無い」という確定的な答えである。したがって `fetch_message` はこれを
+  `Err` ではなく `Ok(None)` に落とす — Err のままだと [Event Gateway 取り込み](/decisions/adr-0072-slack-event-gateway.md)の
+  drain が「Slack に到達できない」と読んでレコードを ack せず、削除済みメンション 1 件が
+  `drain_max_age_hours`（既定 1 日）を過ぎるまで毎パス再配送され WARN を出し続ける
+
 **実機で確認が残っている項目**:
 
-- `conversations.replies` にスレッド非所属の単発メッセージの `ts` を渡したときの挙動（1 件返るか `thread_not_found` か）
 - `latest` を渡さない `conversations.replies` の応答に目的のメッセージが実際に含まれること
 - `reaction_added` payload に `event_ts` が常に含まれるか

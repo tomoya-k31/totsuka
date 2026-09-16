@@ -403,19 +403,38 @@ impl<T: SlackTransport> SlackApi<T> {
         if let Some(message) = self.conversations_history_one(channel, ts).await? {
             return Ok(Some(message));
         }
-        // A thread reply: `ts` is its own id, and passing it as the thread
-        // root returns the enclosing thread (Slack resolves it to the parent).
-        // `latest = None` pages from the head, so the target may sit anywhere
-        // in the page — match on `ts` rather than assuming a position.
+        // A thread reply: `ts` is its own id, and `conversations.replies`
+        // accepts a reply's id as well as a thread root. `latest = None`
+        // pages from the head, so the target may sit anywhere in the page —
+        // match on `ts` rather than assuming a position.
         //
         // This is the first caller to pass `latest = None`, which puts
         // `latest`/`inclusive` into the request body as JSON nulls.
         // `transport::form_fields` drops null-valued arguments before the
         // request is built (pinned by its own test), so Slack sees the
         // arguments omitted rather than set to an invalid value.
-        let thread = self
+        let thread = match self
             .conversations_replies(channel, ts, THREAD_LOOKUP_LIMIT, None)
-            .await?;
+            .await
+        {
+            Ok(thread) => thread,
+            // **"Slack has no such message" is the `None` answer, not an
+            // error.** Slack answers `thread_not_found` when `ts` names
+            // nothing in the channel — routinely because the message was
+            // deleted between the event being emitted and this lookup. That
+            // is the same verdict an empty `conversations.history` gives, and
+            // it has to read the same way to the caller: letting it escape as
+            // an error told the gateway drain "Slack is unreachable, leave
+            // the record queued", so a deleted mention was redelivered — and
+            // warned about — on every pass until `drain_max_age_hours`
+            // expired, a day later.
+            Err(SlackError::Api { error, .. })
+                if error == "thread_not_found" || error == "message_not_found" =>
+            {
+                return Ok(None);
+            }
+            Err(e) => return Err(e),
+        };
         Ok(thread.into_iter().find(|message| message.ts == ts))
     }
 
