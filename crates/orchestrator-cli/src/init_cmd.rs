@@ -8,75 +8,18 @@ use std::process::Command;
 use crate::common::{CliError, Cx};
 
 /// The generated `config.toml` skeleton (§4.6 example, commented out).
-const CONFIG_TEMPLATE: &str = r#"# totsuka configuration (https://github.com/tomoya-k31/totsuka)
-# Uncomment and adjust. One file: `[plugins.<name>]` says which plugins run,
-# and a top-level `[<name>]` table holds that plugin's own settings.
-
-# Global maximum concurrent tasks (F-40).
-# max_concurrency = 4
-
-# [plugins.github]
-# enabled = true
-# kind = "task_source"
-
-# [plugins.herdr]
-# enabled = true
-# kind = "agent_ide"
-# max_concurrency = 3
-# timeout_secs = 120
-
-# [[repositories]]
-# name = "my-repo"
-# path = "~/Workspace/my-repo"
-# summary = "What lives in this repository (used for LLM repo selection)"
-# project = "my-board"          # where tasks for this repository are filed
-
-# The domains a source serves: a GitHub Project, a Notion database, a Slack
-# workspace. `name` and `source` are totsuka's — a repository points at one by
-# `name` to say where its tasks are filed, a workflow points at one to say
-# where it draws from, and `source` says which plugin owns it. Every other key
-# belongs to that plugin. A source with a single domain (slack, discord) still
-# needs an entry; it just has no keys of its own.
-# [[projects]]
-# name = "my-board"
-# source = "github"
-# owner = "my-org"
-# project_number = 1
-
-# [worktree]
-# Default: <state dir>/worktrees/{repo_name}/{worktree_name}, where <state dir> is
-# $XDG_STATE_HOME/totsuka (or $HOME/.local/state/totsuka when XDG_STATE_HOME is
-# unset). Set this only to override it; ${ENV} references are expanded, and an
-# unset variable is an error.
-# location = "~/.worktrees/{repo_name}/{worktree_name}"
-# cleanup = "manual"            # or "immediate" / { retention_days = 5 }
-# plan_cleanup = "immediate"
-
-# A plugin's own settings go in a top-level table named after it. The
-# Orchestrator does not interpret what is inside; the plugin validates it
-# (`totsuka config validate`). A name with no `[plugins.<name>]` entry is an
-# error, so a typo here is caught rather than read as settings nobody asked for.
-# [github]
-# token = "cmd:gh auth token"
-# poll_interval_secs = 60      # fetch cadence — the plugin's key, not the roster's
-
-# [llm]
-# base_url = "https://openrouter.ai/api/v1"
-# model = "anthropic/claude-haiku-4-5"
-# api_key_ref = "keychain:totsuka/openrouter"   # or "op://Dev/Openrouter/api_key" / "bw:totsuka-openrouter/password"
-
-# [[workflows]]
-# name = "implement"
-# projects = ["my-board"]        # which domains to watch; the source is theirs
-# trigger = { status = "Ready to implement" }
-# profile = "implement"          # resolves mode / output / verification
-# agent = "herdr"
-# on_success = { status = "In review" }
-#
-# `profile` resolves `output` for you. Do not write `output = "source"` for a
-# github or notion workflow: those plugins publish nothing (the agent writes
-# the deliverable itself), so the config would be rejected.
-"#;
+///
+/// Held as a file rather than a string literal so that
+/// `scripts/config-template-lint.sh` can diff its keys against the config
+/// structs in `orchestrator-core` and in every plugin crate.
+///
+/// A Rust-side check cannot do that job: **Rust has no way to enumerate a
+/// struct's fields**, so short of a new derive macro the test would have to
+/// carry a hand-written list of the keys — and that list is precisely the
+/// thing that drifts next. Reading the sources as text needs no such list.
+///
+/// The same trick `orchestrator_core::hooks` uses for its seven shell scripts.
+const CONFIG_TEMPLATE: &str = include_str!("../templates/config.toml");
 
 /// Create the XDG directories totsuka writes into (§5.6).
 ///

@@ -1,5 +1,10 @@
 # Bundle Update Log
 
+## 2026-09-17
+
+* **Creation**: [config.toml 雛形とその網羅性検査](/development/config-template.md) —— `totsuka` が書き出す雛形を Rust の文字列リテラルから **`crates/orchestrator-cli/templates/config.toml`** へ移し、`include_str!` で焼くようにした（#705）。**移した理由は検査可能性である**: **Rust には struct のフィールドを列挙する手段が無い**ので、Rust 側のテストは「このキーの一覧」を手で書き写すことになり、写した一覧こそが次にズレる。ソースをテキストとして読めばその一覧は書き写さずに得られる。副次的に、キーの過半を決める `plugins/*` へ `orchestrator-cli` が張っている依存は github / slack の 2 本・dev のみで、検査のために 7 本ぶん張ると CLI の dev ビルドに全プラグインが入る
+* **Creation**: `scripts/config-template-lint.sh` —— 雛形の網羅性を `arch-lint.sh` と同じ枠組みで機械検証する。`Deserialize` を導出する struct / enum のフィールドと、雛形の「`#` を外せば `key =` になる行」を**双方向**に照合し、`missing-key`（足し忘れ）と `unknown-key`（タイポ・削除残り）を出す。片方向にしないのは、削除・改名されたキーが雛形に残ると、そこからコピーした `config.toml` が `totsuka config validate` で落ちるため。**この PR の時点ではまだ CI に組み込んでいない** —— 現行の雛形（約 70 行）は設定スキーマの一部しか載せておらず、走らせると 117 件の `missing-key` を報告する。それが #705 の 2 枚目の作業リストになり、CI への組み込みも雛形が緑になるそちらで行う
+
 ## 2026-09-16
 
 * **Creation**: 秘密参照の第 5 形式 **`bw:<item>/<field>`** を追加した（#699、[ADR-0076](/decisions/adr-0076-bitwarden-secret-backend.md)）。公式 Bitwarden CLI（`bw get <field> <item> --nointeraction`）へのシェルアウトで解決する。**`bw://` は採らない** —— `op://` は `op read` が実際に受理する本物の URI だが Bitwarden に URI 表記は存在せず、`//` を付けると存在しない URI の発明になる（ADR-0044 が `cmd://` を蹴ったのと同じ理由）。`<field>` は `bw get <object>` の object 名そのもので**指定の仕方が公式 CLI と一致**し、語彙は検証しない（Bitwarden の更新に totsuka のリリースを待たせない）。**分割は最後の `/`** —— アイテム名は `/` を含みうるが object 名は含まないため、`keychain:` とは規則が逆になる。**`BW_SESSION` 未設定は spawn する前にエラー化する**: `bw` は `op` と違い常駐セッションを持たず、セッションが無いと stdin でマスターパスワードを訊くので、常駐する `totsuka run` が踏むと画面に何も出ないまま止まる。カスタムフィールドは公式 CLI に単一コマンドの取得手段が無いため射程外とし、`cmd:bw get item … | jq …` に委ねる（ADR-0044 の責務分担）[設定リファレンス](/development/config-reference.md) [設定例](/development/config-examples.md)
