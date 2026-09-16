@@ -44,6 +44,26 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 TEMPLATE_EXEMPT=""
 
+# ---------------------------------------------------------------------------
+# 雛形に書いてよい「struct を持たないキー」。
+#
+# `[[workflows]].trigger` と、プラグインが `[[workflows]]` へフラットに足す
+# 追加プロパティは、core が `toml::Table` のまま保持してプラグインへ渡す
+# （#554）。解釈するのはプラグイン側のコードで、config struct のフィールドには
+# ならないため、どれだけ正しく書いても unknown-key に見える。
+#
+# `<key>=<理由>` を 1 行で書く。これも理由なしで足さないこと —— タイポを
+# 通す穴になる。
+# ---------------------------------------------------------------------------
+OPAQUE_ALLOWED="
+reaction=[[workflows]].trigger。slack が絵文字でワークフローを選ぶ（ADR-0025）
+channel=[[workflows]].trigger。チャンネル監視トリガの宣言そのもの（ADR-0068）
+channel_name=[[workflows]].trigger。監視対象チャンネルの照合名（ADR-0068）
+repo=[[workflows]].trigger。監視トリガが固定するリポジトリ（ADR-0068）
+from=[[workflows]].trigger。監視トリガで起動を許す投稿者（ADR-0068）
+publish=[[workflows]] の追加プロパティ。slack の承認フロー切り替え（ADR-0057）
+"
+
 for tool in awk grep; do
   command -v "$tool" >/dev/null 2>&1 || {
     echo "config-template-lint: ${tool} が必要です" >&2
@@ -153,8 +173,11 @@ extract_code_keys() {
 # （ロスターに無い名前のトップレベルテーブルは検証エラーになる）。
 extract_template_keys() {
   awk -v mode="${1:-all}" '
+    # `lint:raw` を含む行は読まない。第三者の DSL をそのまま渡すキー
+    # （Notion の filter など）を、totsuka の設定キーとして数えないため。
+    /lint:raw/ { next }
     { line = $0; sub(/^[[:space:]]*#[[:space:]]?/, "", line) }
-    line ~ /^\[\[?[a-z_][a-z0-9_.]*\]\]?/ {
+    line ~ /^\[\[?[a-z_][a-z0-9_.-]*\]\]?/ {
       if (mode == "assign") next
       hdr = line
       sub(/^\[+/, "", hdr); sub(/\]+.*$/, "", hdr)
@@ -163,12 +186,20 @@ extract_template_keys() {
       next
     }
     line ~ /^[a-z_][a-z0-9_]*[[:space:]]*=/ {
-      rest = line
-      while (match(rest, /[a-z_][a-z0-9_]*[[:space:]]*=/)) {
-        k = substr(rest, RSTART, RLENGTH)
-        sub(/[[:space:]]*=$/, "", k)
-        print k
-        rest = substr(rest, RSTART + RLENGTH)
+      k = line
+      sub(/[[:space:]]*=.*$/, "", k)
+      print k
+      # inline table の中のキーも設定キーである（`cleanup = { retention_days = 3 }`）。
+      # 走査を `{` 〜 最後の `}` に閉じ込めるのは、値の後ろに続く散文の
+      # 「unset = no -activate」のような字面を拾わないため。
+      if (match(line, /\{.*\}/)) {
+        rest = substr(line, RSTART, RLENGTH)
+        while (match(rest, /[a-z_][a-z0-9_]*[[:space:]]*=/)) {
+          k = substr(rest, RSTART, RLENGTH)
+          sub(/[[:space:]]*=$/, "", k)
+          print k
+          rest = substr(rest, RSTART + RLENGTH)
+        }
       }
     }
   ' "$TEMPLATE" | sort -u
@@ -203,6 +234,10 @@ exempt_reason() {
   printf '%s\n' "$TEMPLATE_EXEMPT" | awk -F= -v k="$1" '$1 == k { sub(/^[^=]*=/, ""); print; exit }'
 }
 
+opaque_reason() {
+  printf '%s\n' "$OPAQUE_ALLOWED" | awk -F= -v k="$1" '$1 == k { sub(/^[^=]*=/, ""); print; exit }'
+}
+
 # ---------- 4) 足し忘れ（コード → 雛形）----------
 while IFS= read -r key; do
   [ -n "$key" ] || continue
@@ -216,8 +251,9 @@ done <<<"$CODE_KEYS"
 while IFS= read -r key; do
   [ -n "$key" ] || continue
   contains "$CODE_KEYS" "$key" && continue
+  [ -n "$(opaque_reason "$key")" ] && continue
   error unknown-key "$TEMPLATE" \
-    "雛形のキー '$key' がどの config struct にも無い: 綴りを直すか、削除済みなら雛形からも消すこと"
+    "雛形のキー '$key' がどの config struct にも無い: 綴りを直すか、削除済みなら雛形からも消すか、プラグインが解釈する無解釈テーブルのキーなら OPAQUE_ALLOWED に理由付きで登録すること"
 done <<<"$TEMPLATE_ASSIGNED"
 
 # ---------- サマリ ----------
