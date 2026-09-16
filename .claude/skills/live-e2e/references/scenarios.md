@@ -258,25 +258,46 @@ config で回すこと）:
 
 前提: `bw login` 済み。検証用の Bitwarden アカウントで構わない。
 
-```bash
-# 1. アイテムを 1 つ作る（登録コマンドは `tt setup` が出すものと同じ形）
-bw get template item \
-  | jq '.name="totsuka-e2e" | .login.password="bw-e2e-secret-value"' \
-  | bw encode | bw create item
+**順序が効く。** `bw create item` は**アンロック済みの vault を要求する**ので、
+アンロックとセッションの export を先に済ませる。逆順に書いた版はそのままでは
+通らなかった。
 
-# 2. アンロックしてセッションを export（このシェルが以降の全部を持つ）
+```bash
+# 1. アンロックしてセッションを export（このシェルが以降の全部を持つ）
 export BW_SESSION="$(bw unlock --raw)"
+
+# 2. 固定アイテムを作る。既にあれば作らない —— `bw create item` は常に新規作成
+#    するので、2 周目に素朴に流すと重複して「複数ヒット」で落ち、成功経路が
+#    二度と踏めなくなる（それは別の行で意図的に確かめる項目である）
+bw get item totsuka-e2e >/dev/null 2>&1 || \
+  bw get template item \
+    | jq '.name="totsuka-e2e" | .login.password="bw-e2e-secret-value"' \
+    | bw encode | bw create item
+
+# 3. `/` を含む名前のアイテムも先に作っておく（後段の lock より前に済ませる）
+bw get item 'totsuka/e2e' >/dev/null 2>&1 || \
+  bw get template item \
+    | jq '.name="totsuka/e2e" | .login.password="bw-e2e-slash-value"' \
+    | bw encode | bw create item
 ```
 
-| 検証点 | やり方 | 期待 |
-|---|---|---|
-| **解決が通る** | `token = "bw:totsuka-e2e/password"` を書いて `tt run --dry-run` | 起動し、値が `bw-e2e-secret-value` として渡る |
-| **doctor が unlocked を測る** | `tt doctor` | `bitwarden` に `bw <version> on PATH`、`bitwarden-session` に `bw vault is unlocked`。probe が skip されない |
-| **doctor が locked を測る** | `bw lock` → `tt doctor` | `bitwarden-session` が warn、`bw:` を使うプラグインの probe が `skipped`。**`tt doctor` 自体は止まらない**（これが止まるなら `bw status` の判定が exit code を見ている） |
-| **セッション無しでハングしない** | `env -u BW_SESSION tt run --dry-run` | **即エラー**で `BW_SESSION` と `bw unlock` を案内する。**プロンプトで止まったら不合格** — `bw` を spawn する前の検査が効いていない |
-| **`/` を含むアイテム名** | `totsuka/e2e` という名前でアイテムを作り `bw:totsuka/e2e/password` を参照 | 解決する（最後の `/` で割れている） |
-| **複数ヒット** | 同名アイテムを 2 つ作って参照 | 「item id を使え」と案内するエラー |
-| **未インストール** | `PATH` から `bw` を外して `tt doctor` | `brew install bitwarden-cli` を案内する（**`1password-cli` と出たら不合格**） |
+以降は**上から順に**実行する。`bw lock` の行より後は vault が施錠されている前提
+なので、そこから先で新しいアイテムを作ろうとしても通らない。
+
+| # | 検証点 | やり方 | 期待 |
+|---|---|---|---|
+| 1 | **解決が通る** | `token = "bw:totsuka-e2e/password"` を書いて `tt run --dry-run` | 起動し、値が `bw-e2e-secret-value` として渡る |
+| 2 | **`/` を含むアイテム名** | `bw:totsuka/e2e/password` を参照 | 解決する（最後の `/` で割れている） |
+| 3 | **`bw://` は拒否される** | `token = "bw://totsuka-e2e/password"` と書く | **起動時に invalid secret reference で落ちる**。「item が無い」と言われたら不合格 —— パーサが `//totsuka-e2e` を item として読んでいる |
+| 4 | **複数ヒット** | `totsuka-e2e` と同名のアイテムをもう 1 つ作って参照 | 「item id を使え」と案内するエラー。**確認後、増やしたほうを消す** |
+| 5 | **doctor が unlocked を測る** | `tt doctor` | `bitwarden` に `bw <version> on PATH`、`bitwarden-session` に `bw vault is unlocked`。probe が skip されない |
+| 6 | **セッション無しでハングしない** | `env -u BW_SESSION tt run --dry-run` | **即エラー**で `BW_SESSION` と `bw unlock` を案内する。**プロンプトで止まったら不合格** —— `bw` を spawn する前の検査が効いていない |
+| 7 | **doctor が locked を測る** | `bw lock` → `tt doctor` | `bitwarden-session` が warn、`bw:` を使うプラグインの probe が `skipped`。**`tt doctor` 自体は止まらない**（止まるなら `bw status` の判定が exit code を見ている） |
+| 8 | **未インストール** | `PATH` から `bw` を外して `tt doctor` と `tt run --dry-run` | どちらも `brew install bitwarden-cli` を案内する（**`1password-cli` と出たら不合格**）。`run` 側はセッション未設定でも**インストール導線が優先**される |
+
+**記号を含む値も 1 度通す。** 登録コマンドは値を jq の JSON 文字列に埋めるので、
+`'` `"` `\` を含むパスワードで少なくとも 1 回作ってみる（レビューで閾値未満として
+見送った懸念の実地確認）。
 
 > **`bw` のセッションはシェルに紐づく。** `export BW_SESSION` をしたのと同じ
 > ターミナルから `tt run` を起動すること。1Password と同じく、常駐プロセスを

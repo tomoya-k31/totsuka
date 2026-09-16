@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](setup-playbook.ja.md)
 
-<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:b58ba0c8a6587454823e923afc9ed04f1fd443085960cdc71ae8c531fc16c19b -->
+<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:2c1cbb8846ed7d139e08873e466d53b54c1efa1d5bd402852c515d3243353449 -->
 
 # Setup playbook
 
@@ -70,7 +70,7 @@ security add-generic-password -U -s totsuka -a github-token -w '<paste the value
 
 **Everything on that checklist is required.** Your configuration refers to these, so a single missing one stops that plugin from starting. Anything genuinely optional never appears on the list in the first place.
 
-If you chose Bitwarden, the command is a `bw get template item | jq … | bw encode | bw create item` pipeline (it needs `jq`), because `bw` has no single-line equivalent of `op item edit`. **That command always creates a new item** — if one with the same name already exists, edit that one instead, because a duplicate makes `bw get` fail with "more than one result" and the reference stops resolving. You get one item per account (`bw:totsuka-<name>/password`) since `bw:` references do not reach custom fields, so one item cannot hold several secrets.
+If you chose Bitwarden, **run `bw login`, then `bw unlock`, and export the `BW_SESSION` it prints before you start** — the registration command writes to your vault and needs an unlocked session. (The prerequisites table below says the same thing, but this step comes first, so it is repeated here.) The command is a `bw get template item | jq … | bw encode | bw create item` pipeline (it needs `jq`), because `bw` has no single-line equivalent of `op item edit`. **That command always creates a new item** — if one with the same name already exists, edit that one instead, because a duplicate makes `bw get` fail with "more than one result" and the reference stops resolving. You get one item per account (`bw:totsuka-<name>/password`). That is a convention rather than a limit — a Bitwarden item does hold a `username`, `password`, `uri` and `totp` — but `bw:` references do not reach custom fields, so an item cannot hold *arbitrarily many* secrets, and everything the wizard registers is a token, which maps to the same `password` object.
 
 The Slack bot token looks optional but is not: **replies posted under your own name raise no Slack notification at all**, so the recipes are built around the bot delivering the nudge.
 

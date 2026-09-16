@@ -52,9 +52,14 @@ pub enum SecretBackend {
     /// Bitwarden (`bw:<item>/<field>`).
     ///
     /// One item **per account**, unlike 1Password's one item with a field per
-    /// account: the `bw:` scheme reaches only `bw get`'s fixed object
-    /// vocabulary, and custom fields are deliberately out of its scope, so
-    /// there is nowhere to put a second secret on one item.
+    /// account.
+    ///
+    /// A setup convention, not a hard limit: a Bitwarden item does expose
+    /// several fixed objects (`username`, `password`, `uri`, `totp`), so it
+    /// can hold more than one value. What it cannot do is hold *n* arbitrary
+    /// secrets, because `bw:` deliberately does not reach custom fields — and
+    /// every secret the wizard registers is a token, which maps to the same
+    /// `password` object. Hence one item each.
     Bitwarden,
     /// Environment variables (`${TOTSUKA_...}`).
     Env,

@@ -4,7 +4,7 @@ title: セットアップ Playbook（新マシン / 開発機 / ローテーシ�
 description: "ゼロから totsuka が動くまでを通しで示す導入手順。新マシン（tarball 配置 → totsuka setup → シークレット登録 → doctor → run）、開発機（クローン → --from-source）、トークンローテーション、中断・失敗時の復旧を扱う。"
 resource: https://github.com/tomoya-k31/totsuka/issues/350
 tags: [setup, onboarding, runbook, playbook, secrets, doctor, rotation]
-generated: { by: claude-code/opus-5, at: 2026-09-17T00:30:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-17T03:20:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -82,7 +82,7 @@ security add-generic-password -U -s totsuka -a github-token -w '<paste the value
 
 **ここに出た参照はすべて必須**である。config が参照している以上、1 つでも欠けるとそのプラグインは起動しない。「任意の機能だから飛ばしてよい」ものは、そもそもチェックリストに出ない。
 
-Bitwarden を選んだ場合、登録コマンドは `bw get template item | jq … | bw encode | bw create item` の形になる（`jq` が要る）。`bw` に `op item edit` 相当の 1 行が無いためで、**このコマンドは常に新規作成する**。同名のアイテムが既にあるなら作らずそちらを編集すること —— 重複すると `bw get` が「複数ヒット」で失敗し、参照が解決できなくなる。アカウントごとに 1 アイテム（`bw:totsuka-<name>/password`）になるのは、`bw:` がカスタムフィールドを扱わないため 1 アイテムに複数の秘密を置けないからである。
+Bitwarden を選んだ場合、**先に `bw login` → `bw unlock` を済ませ、表示された `BW_SESSION` を export しておくこと**。登録コマンドは vault を書き換えるので、アンロック済みのセッションが無いと実行できない（下の「一回きりの対話セットアップ」に同じことが書いてあるが、ここでの手順がそれより前に来るため再掲する）。登録コマンドは `bw get template item | jq … | bw encode | bw create item` の形になる（`jq` が要る）。`bw` に `op item edit` 相当の 1 行が無いためで、**このコマンドは常に新規作成する**。同名のアイテムが既にあるなら作らずそちらを編集すること —— 重複すると `bw get` が「複数ヒット」で失敗し、参照が解決できなくなる。アカウントごとに 1 アイテム（`bw:totsuka-<name>/password`）にするのは**運用上の取り決め**であって、Bitwarden の制限ではない —— 1 アイテムは `username` / `password` / `uri` / `totp` を持てる。ただし `bw:` はカスタムフィールドに届かないので、任意個の秘密を 1 アイテムに詰めることはできず、ウィザードが登録するのはどれもトークン（= `password`）なので、結果として 1 つずつになる。
 
 > Slack の `slack-bot` は例外に見えるが必須。プラグイン単体では opt-in（無ければナッジ無し）だが、**本人名義の返信は Slack 通知を一切上げない**ため、レシピはナッジ前提で構成されている（[ADR-0021](/decisions/adr-0021-slack-bot-notification-nudge.md)）。
 

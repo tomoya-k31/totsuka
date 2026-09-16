@@ -1,7 +1,7 @@
 > 🌐 [English](setup-playbook.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:b58ba0c8a6587454823e923afc9ed04f1fd443085960cdc71ae8c531fc16c19b -->
+<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:2c1cbb8846ed7d139e08873e466d53b54c1efa1d5bd402852c515d3243353449 -->
 
 # セットアップ Playbook
 
@@ -71,7 +71,7 @@ security add-generic-password -U -s totsuka -a github-token -w '<paste the value
 
 **ここに出た参照はすべて必須**である。設定が参照している以上、1 つでも欠けるとそのプラグインは起動しない。「任意の機能だから飛ばしてよい」ものは、そもそもチェックリストに出ない。
 
-Bitwarden を選んだ場合、登録コマンドは `bw get template item | jq … | bw encode | bw create item` の形になる（`jq` が要る）。`bw` に `op item edit` 相当の 1 行が無いためである。**このコマンドは常に新規作成する** —— 同名のアイテムが既にあるなら作らずそちらを編集すること。重複すると `bw get` が「複数ヒット」で失敗し、参照が解決できなくなる。アカウントごとに 1 アイテム（`bw:totsuka-<name>/password`）になるのは、`bw:` 参照がカスタムフィールドに届かず、1 アイテムに複数の秘密を置けないためである。
+Bitwarden を選んだ場合、**先に `bw login` → `bw unlock` を済ませ、表示された `BW_SESSION` を export しておくこと**。登録コマンドは vault を書き換えるので、アンロック済みのセッションが無いと実行できない（下の前提条件の表にも同じことがあるが、この手順のほうが先に来るので再掲する）。登録コマンドは `bw get template item | jq … | bw encode | bw create item` の形になる（`jq` が要る）。`bw` に `op item edit` 相当の 1 行が無いためである。**このコマンドは常に新規作成する** —— 同名のアイテムが既にあるなら作らずそちらを編集すること。重複すると `bw get` が「複数ヒット」で失敗し、参照が解決できなくなる。アカウントごとに 1 アイテム（`bw:totsuka-<name>/password`）にするのは**取り決め**であって制限ではない —— 1 アイテムは `username` / `password` / `uri` / `totp` を持てる。ただし `bw:` はカスタムフィールドに届かないので任意個の秘密は詰められず、ウィザードが登録するのはどれもトークン（= `password`）なので、結果として 1 つずつになる。
 
 Slack の bot トークンは一見任意に見えるが必須である。**本人名義での返信は Slack の通知を一切鳴らさない**ため、レシピは bot からの通知を前提に組まれている。
 
