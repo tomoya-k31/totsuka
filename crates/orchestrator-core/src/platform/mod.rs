@@ -4,10 +4,11 @@
 //! portable. The Keychain-backed secret store is macOS-only; a fallback that
 //! reports [`SecretError::Unsupported`]
 //! keeps the crate compiling on other platforms (e.g. Linux CI) without
-//! `#[cfg]` leaking into callers. The 1Password backend
-//! ([`onepassword`]) shells out to the cross-platform `op` CLI and therefore
-//! carries no `#[cfg]` gate at all — on non-macOS it is the first *working*
-//! secret backend. Process liveness is POSIX-generic and lives in [`unix`].
+//! `#[cfg]` leaking into callers. The 1Password ([`onepassword`]) and
+//! Bitwarden ([`bitwarden`]) backends shell out to the cross-platform `op` /
+//! `bw` CLIs and therefore carry no `#[cfg]` gate at all — on non-macOS they
+//! are the only *working* secret backends. Process liveness is POSIX-generic
+//! and lives in [`unix`].
 
 use crate::ports::{SecretError, SecretRef, SecretStore, SecretString};
 
@@ -20,6 +21,7 @@ pub mod macos;
 #[cfg(not(target_os = "macos"))]
 pub mod fallback;
 
+pub mod bitwarden;
 pub mod command;
 pub mod onepassword;
 
@@ -33,13 +35,15 @@ type KeychainBackend = fallback::UnsupportedSecretStore;
 /// The [`SecretStore`] for the current platform:
 /// a composite that routes each [`SecretRef`] to its scheme's backend —
 /// `keychain:` to the OS Keychain (or the non-macOS fallback), `op://` to the
-/// 1Password CLI ([`onepassword::OnePasswordCli`], every platform), and
-/// `cmd:` to `/bin/sh -c` ([`command::CommandSecretStore`], #444).
+/// 1Password CLI ([`onepassword::OnePasswordCli`], every platform),
+/// `cmd:` to `/bin/sh -c` ([`command::CommandSecretStore`], #444), and `bw:`
+/// to the Bitwarden CLI ([`bitwarden::BitwardenCli`], #699).
 #[derive(Clone, Default)]
 pub struct PlatformSecretStore {
     keychain: KeychainBackend,
     onepassword: onepassword::OnePasswordCli,
     command: command::CommandSecretStore,
+    bitwarden: bitwarden::BitwardenCli,
 }
 
 impl SecretStore for PlatformSecretStore {
@@ -48,6 +52,7 @@ impl SecretStore for PlatformSecretStore {
             SecretRef::Keychain { .. } => self.keychain.get(reference),
             SecretRef::OnePassword { .. } => self.onepassword.get(reference),
             SecretRef::Command { .. } => self.command.get(reference),
+            SecretRef::Bitwarden { .. } => self.bitwarden.get(reference),
         }
     }
 }

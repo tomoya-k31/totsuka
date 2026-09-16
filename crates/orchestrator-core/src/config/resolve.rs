@@ -7,7 +7,9 @@
 //! - an `op://<vault>/<item>/<field>` 1Password reference, resolved via the
 //!   same store (the composite platform store routes by scheme),
 //! - a `cmd:<command>` reference whose stdout is the secret (#444), resolved
-//!   via the same store, or
+//!   via the same store,
+//! - a `bw:<item>/<field>` Bitwarden reference (#699), resolved via the same
+//!   store, or
 //! - an ordinary string containing `${VAR}` placeholders, expanded from the
 //!   environment.
 //!
@@ -16,16 +18,7 @@
 
 use std::path::PathBuf;
 
-use crate::ports::{SecretRef, SecretStore, SecretString};
-
-/// Prefix marking a Keychain-backed secret reference.
-const KEYCHAIN_PREFIX: &str = "keychain:";
-
-/// Prefix marking a 1Password secret reference (`op read` native URI).
-const ONEPASSWORD_PREFIX: &str = "op://";
-
-/// Prefix marking a command-backed secret reference (#444).
-const COMMAND_PREFIX: &str = "cmd:";
+use crate::ports::{SecretRef, SecretStore, SecretString, is_secret_reference};
 
 /// Errors from resolving/expanding a configuration value.
 #[derive(Debug, thiserror::Error)]
@@ -36,7 +29,7 @@ pub enum ResolveError {
     // until #699, which meant the one scheme that needs no prior setup was the
     // one never suggested.
     #[error(
-        "environment variable `{0}` is not set → export it, or use a `keychain:<service>/<account>` / `op://<vault>/<item>/<field>` / `cmd:<command>` reference"
+        "environment variable `{0}` is not set → export it, or use a `keychain:<service>/<account>` / `op://<vault>/<item>/<field>` / `cmd:<command>` / `bw:<item>/<field>` reference"
     )]
     EnvNotSet(String),
     /// A `${` placeholder was not closed with `}`. The offending value is
@@ -111,15 +104,19 @@ where
 
     /// Resolve one configuration value into a [`SecretString`].
     ///
-    /// A `keychain:` / `op://` / `cmd:` value is fetched from the store (which
-    /// routes by scheme); anything else has its `${VAR}` placeholders
+    /// A `keychain:` / `op://` / `cmd:` / `bw:` value is fetched from the store
+    /// (which routes by scheme); anything else has its `${VAR}` placeholders
     /// expanded. The result is wrapped so it cannot leak via `Debug`/`Display`
     /// (§5.2).
+    ///
+    /// The scheme test is [`is_secret_reference`] rather than a local list of
+    /// prefixes: this branch used to keep its own copy, so adding a scheme
+    /// meant editing two modules and nothing caught the omission (#699). A
+    /// value that carries a known prefix but a malformed body stays an error
+    /// here — silently expanding it as a plain string would hand the config's
+    /// literal text to an API.
     pub fn resolve(&self, value: &str) -> Result<SecretString, ResolveError> {
-        if value.starts_with(KEYCHAIN_PREFIX)
-            || value.starts_with(ONEPASSWORD_PREFIX)
-            || value.starts_with(COMMAND_PREFIX)
-        {
+        if is_secret_reference(value) {
             let reference: SecretRef = value.parse()?;
             Ok(self.store.get(&reference)?)
         } else {
@@ -138,7 +135,8 @@ pub fn secret_resolver(
     )
 }
 
-/// Recursively resolve `${ENV}` / `keychain:` / `op://` references in every
+/// Recursively resolve `${ENV}` / `keychain:` / `op://` / `cmd:` / `bw:`
+/// references in every
 /// string leaf. Generic over the store so tests can inject a fake.
 pub fn resolve_strings<S, E>(
     value: &mut serde_json::Value,

@@ -83,7 +83,7 @@ const OVERRIDES: &[(&str, Applier)] = &[
         Ok(())
     }),
     ("TOTSUKA_HOOKS_AUTH_TOKEN_REF", |cfg, v| {
-        // A *secret reference* (`${ENV}` / `keychain:` / `op://`), not the
+        // A *secret reference* (`${ENV}` / `keychain:` / `op://` / `cmd:` / `bw:`), not the
         // secret itself; resolution stays with SecretResolver (F-65).
         cfg.hooks.auth_token_ref = Some(v.to_string());
         Ok(())
