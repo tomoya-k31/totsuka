@@ -19,6 +19,14 @@ use std::sync::Arc;
 
 use crate::ports::{SecretError, SecretRef, SecretStore, SecretString};
 
+/// Display name of the backend, used in [`SecretError::BackendUnavailable`].
+pub(crate) const BACKEND_NAME: &str = "1Password CLI (op)";
+
+/// What to do when `op` is missing (§7 wants a next action, and the backend is
+/// the only place that knows its own install steps).
+pub(crate) const INSTALL_HINT: &str = "install it (macOS: `brew install 1password-cli`, \
+     other platforms: https://developer.1password.com/docs/cli)";
+
 /// How `op` is invoked — a seam so tests cover every outcome without the real
 /// binary (CI has no `op`, and the real one would prompt for biometrics).
 type OpRunner = dyn Fn(&str, &[&str]) -> io::Result<Output> + Send + Sync;
@@ -64,7 +72,8 @@ impl SecretStore for OnePasswordCli {
         let output = (self.runner)(&self.binary, &["read", "--no-newline", uri]).map_err(|e| {
             match e.kind() {
                 io::ErrorKind::NotFound => SecretError::BackendUnavailable {
-                    backend: "1Password CLI (op)".to_string(),
+                    backend: BACKEND_NAME.to_string(),
+                    install_hint: INSTALL_HINT.to_string(),
                 },
                 _ => SecretError::Backend(format!("could not run `op`: {e}")),
             }

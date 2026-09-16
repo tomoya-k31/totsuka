@@ -5,7 +5,9 @@
 //! - a `keychain:<service>/<account>` reference, resolved via the
 //!   [`SecretStore`],
 //! - an `op://<vault>/<item>/<field>` 1Password reference, resolved via the
-//!   same store (the composite platform store routes by scheme), or
+//!   same store (the composite platform store routes by scheme),
+//! - a `cmd:<command>` reference whose stdout is the secret (#444), resolved
+//!   via the same store, or
 //! - an ordinary string containing `${VAR}` placeholders, expanded from the
 //!   environment.
 //!
@@ -29,8 +31,12 @@ const COMMAND_PREFIX: &str = "cmd:";
 #[derive(Debug, thiserror::Error)]
 pub enum ResolveError {
     /// A `${VAR}` referenced an unset environment variable.
+    // The listed schemes are the alternatives a reader can act on, so the
+    // list has to stay complete: `cmd:` shipped in #444 and was missing here
+    // until #699, which meant the one scheme that needs no prior setup was the
+    // one never suggested.
     #[error(
-        "environment variable `{0}` is not set → export it, or use a `keychain:<service>/<account>` / `op://<vault>/<item>/<field>` reference"
+        "environment variable `{0}` is not set → export it, or use a `keychain:<service>/<account>` / `op://<vault>/<item>/<field>` / `cmd:<command>` reference"
     )]
     EnvNotSet(String),
     /// A `${` placeholder was not closed with `}`. The offending value is

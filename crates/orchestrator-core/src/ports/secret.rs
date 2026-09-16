@@ -188,10 +188,18 @@ pub enum SecretError {
     #[error("secret backend error: {0}")]
     Backend(String),
     /// The backend tool for this reference scheme is not installed.
-    #[error(
-        "secret backend `{backend}` is not available → install it (macOS: `brew install 1password-cli`, other platforms: https://developer.1password.com/docs/cli)"
-    )]
-    BackendUnavailable { backend: String },
+    ///
+    /// `install_hint` comes from the backend rather than being baked in here:
+    /// §7 wants a next action, and only the backend knows its own. The hint
+    /// used to be hardcoded to 1Password's, which reads as an outright wrong
+    /// instruction the moment a second shell-out backend exists.
+    #[error("secret backend `{backend}` is not available → {install_hint}")]
+    BackendUnavailable {
+        /// Display name of the missing tool (e.g. `1Password CLI (op)`).
+        backend: String,
+        /// How to install it, phrased as an imperative next action.
+        install_hint: String,
+    },
     /// This platform has no supported secret store.
     #[error("secret store is not supported on this platform")]
     Unsupported,
