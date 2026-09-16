@@ -49,6 +49,13 @@ pub enum SecretBackend {
     Keychain,
     /// 1Password (`op://<vault>/<item>/<field>`).
     OnePassword,
+    /// Bitwarden (`bw:<item>/<field>`).
+    ///
+    /// One item **per account**, unlike 1Password's one item with a field per
+    /// account: the `bw:` scheme reaches only `bw get`'s fixed object
+    /// vocabulary, and custom fields are deliberately out of its scope, so
+    /// there is nowhere to put a second secret on one item.
+    Bitwarden,
     /// Environment variables (`${TOTSUKA_...}`).
     Env,
 }
@@ -63,6 +70,7 @@ impl SecretBackend {
         match self {
             SecretBackend::Keychain => format!("keychain:totsuka/{account}"),
             SecretBackend::OnePassword => format!("op://Dev/totsuka/{account}"),
+            SecretBackend::Bitwarden => format!("bw:totsuka-{account}/password"),
             SecretBackend::Env => {
                 format!("${{TOTSUKA_{}}}", account.to_uppercase().replace('-', "_"))
             }
@@ -78,6 +86,17 @@ impl SecretBackend {
             )),
             SecretBackend::OnePassword => Some(format!(
                 "op item edit totsuka {account}='<paste the value>'   # or create the item first"
+            )),
+            // No `op item edit` counterpart exists: `bw` only creates and
+            // edits items from encoded JSON, so the one-liner needs `jq`.
+            // It always *creates*, which is why the caveat is not optional —
+            // a duplicate item makes `bw get` fail with "more than one
+            // result", i.e. the command would walk the operator straight into
+            // our own error path.
+            SecretBackend::Bitwarden => Some(format!(
+                "bw get template item | jq '.name=\"totsuka-{account}\" | \
+                 .login.password=\"<paste the value>\"' | bw encode | bw create item   \
+                 # needs jq; creates a NEW item — edit the existing one instead if it is there"
             )),
             SecretBackend::Env => None,
         }
@@ -714,6 +733,19 @@ implement_status = "Ready"
             SecretBackend::OnePassword.reference(account),
             "op://Dev/totsuka/slack-user"
         );
+
+        // Bitwarden gets one item per account (custom fields are out of the
+        // `bw:` scheme's scope), so the item name carries the account and the
+        // field is always `password`.
+        assert_eq!(
+            SecretBackend::Bitwarden.reference(account),
+            "bw:totsuka-slack-user/password"
+        );
+        let command = SecretBackend::Bitwarden.register_command(account).unwrap();
+        assert!(command.contains("totsuka-slack-user"), "{command}");
+        // The command creates rather than edits, and `bw get` fails on a
+        // duplicate — so saying so is part of the command, not a nicety.
+        assert!(command.contains("creates a NEW item"), "{command}");
         // Env has no register step; it must not pretend otherwise.
         assert_eq!(
             SecretBackend::Env.reference("hook-token"),

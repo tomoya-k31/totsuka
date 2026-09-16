@@ -199,6 +199,7 @@ fn interview(prompt: &mut Prompt) -> Result<Answers, CliError> {
         &[
             ("macOS Keychain", "keychain:totsuka/<name>"),
             ("1Password", "op://Dev/totsuka/<name>"),
+            ("Bitwarden", "bw:totsuka-<name>/password"),
             ("Environment variables", "${TOTSUKA_<NAME>}"),
         ],
         0,
@@ -206,6 +207,7 @@ fn interview(prompt: &mut Prompt) -> Result<Answers, CliError> {
     let secret_backend = match backend_index {
         0 => SecretBackend::Keychain,
         1 => SecretBackend::OnePassword,
+        2 => SecretBackend::Bitwarden,
         _ => SecretBackend::Env,
     };
 
