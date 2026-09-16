@@ -1,68 +1,533 @@
-# totsuka configuration (https://github.com/tomoya-k31/totsuka)
-# Uncomment and adjust. One file: `[plugins.<name>]` says which plugins run,
-# and a top-level `[<name>]` table holds that plugin's own settings.
+# totsuka configuration — https://github.com/tomoya-k31/totsuka
+#
+# EVERY setting totsuka understands is listed below, commented out. Uncomment
+# the lines you need and adjust them; leave the rest as documentation.
+#
+# One file, two layers. The keys totsuka itself interprets are the named
+# tables below; a top-level table named after a plugin (`[github]`, `[herdr]`,
+# …) holds that plugin's own settings, which totsuka passes through without
+# reading. A plugin table is only valid when `[plugins.<name>]` lists it, so a
+# typo is rejected rather than read as settings nobody asked for.
+#
+# Each key here gets one line of summary. For what a setting means, how to
+# choose between the options, and the traps — see the reference:
+#   https://github.com/tomoya-k31/totsuka/blob/main/docs/config-reference.md
+#   https://github.com/tomoya-k31/totsuka/blob/main/docs/config-examples.md
+#
+# After editing:  totsuka config validate  →  totsuka doctor  →  totsuka run --dry-run
 
-# Global maximum concurrent tasks (F-40).
+# ============================================================================
+# Secret references
+# ============================================================================
+#
+# NEVER write a plaintext secret here. Any string value may instead be a
+# reference that totsuka resolves when it launches a plugin:
+#
+#   op://<vault>/<item>/<field>   1Password CLI. Needs an `op signin` session.
+#   bw:<item>/<field>             Bitwarden CLI. Needs BW_SESSION exported.
+#                                 Note `bw:`, not `bw://` — Bitwarden has no
+#                                 URI form. Split is at the LAST `/`.
+#   cmd:<command>                 Run it, use stdout. For credentials another
+#                                 tool owns and rotates (`cmd:gh auth token`).
+#   ${ENV_VAR}                    Expand from the environment.
+#   keychain:<service>/<account>  macOS Keychain. macOS ONLY — do not use in a
+#                                 config you carry to another platform.
+#
+# `~` and `${ENV}` are expanded in path values too.
+
+# ============================================================================
+# Top level
+# ============================================================================
+
+# Config schema version. A mismatch is a startup error; totsuka never rewrites
+# your config, and there is no `config migrate`.
+# version = 1
+
+# Global cap on concurrently running tasks.
 # max_concurrency = 4
 
+# AI tool used when neither the workflow nor the repository pins one.
+# default_tool = "claude"
+
+# ============================================================================
+# [[repositories]] — the local clones tasks are dispatched into
+# ============================================================================
+
+# [[repositories]]
+# name = "my-repo"                          # stable id used in branch names and logs
+# path = "~/Workspace/my-repo"              # local clone (`~` / `${ENV}` expanded)
+# summary = "What lives in this repo"       # material for LLM repository selection
+# tool = "claude"                           # default AI tool for this repo; a workflow pin wins
+# max_concurrency = 2                       # per-repository cap
+# worktree_location = "~/.worktrees/{repo_name}/{worktree_name}"   # overrides [worktree].location
+# project = "my-board"                      # where tasks for this repo are FILED ([[projects]].name), at most one
+
+# ============================================================================
+# [[projects]] — the named domains a task source serves
+# ============================================================================
+#
+# A GitHub Project board, a Notion database, a Slack workspace, a Discord
+# guild: one addressable unit each. Pointed at from two directions —
+# `[[workflows]].projects` says where tasks are DRAWN FROM, and
+# `[[repositories]].project` says where they are FILED.
+#
+# `name` and `source` are totsuka's; every other key belongs to the plugin
+# named by `source`. A source with a single domain (slack, discord) still
+# needs an entry — workflows name a domain, not a plugin.
+
+# [[projects]]
+# name = "my-board"                         # stable id the references above point at
+# source = "github"                         # the task_source plugin that owns this domain
+# owner = "my-org"                          # ← github: the Project's owner login
+# owner_type = "organization"               # ← github: "user" (default) or "organization"
+# project_number = 1                        # ← github: the ProjectsV2 number under that owner
+# triage_status = "Inbox"                   # ← github/notion: Status set on tasks filed by triage;
+#                                           #   omitted means "no status", which keeps a human gate
+
+# [[projects]]
+# name = "design-db"
+# source = "notion"
+# database_id = "00000000000000000000000000000000"   # ← notion: the database this domain is
+
+# ============================================================================
+# [plugins.<name>] — the roster: which plugins run
+# ============================================================================
+#
+# This is the roster, not the settings. A plugin's own settings go in the
+# top-level `[<name>]` table further down, and are only accepted for a name
+# listed here.
+#
+# `<name>` may not collide with a core top-level key (version, max_concurrency,
+# repositories, projects, plugins, default_tool, tools, workflows, llm,
+# worktree, log, hooks, prompts).
+
 # [plugins.github]
+# enabled = true                            # F-56; `totsuka plugin enable/disable` also flips this
+# kind = "task_source"                      # "task_source" / "agent_ide" / "notifier"
+# max_concurrency = 3                       # per-plugin cap (agent plugins)
+# timeout_secs = 120                        # RPC timeout
+# log_level = "info"                        # this plugin's log level
+# restart = true                            # restart on crash: 5 tries / 5 min sliding window,
+#                                           #   exponential backoff. `false` still detects and
+#                                           #   escalates; only the restart stops
+
+# [plugins.notion]
+# enabled = true
+# kind = "task_source"
+
+# [plugins.slack]
+# enabled = true
+# kind = "task_source"
+
+# [plugins.discord]
 # enabled = true
 # kind = "task_source"
 
 # [plugins.herdr]
 # enabled = true
 # kind = "agent_ide"
-# max_concurrency = 3
-# timeout_secs = 120
 
-# [[repositories]]
-# name = "my-repo"
-# path = "~/Workspace/my-repo"
-# summary = "What lives in this repository (used for LLM repo selection)"
-# project = "my-board"          # where tasks for this repository are filed
+# [plugins.orca]
+# enabled = true
+# kind = "agent_ide"
 
-# The domains a source serves: a GitHub Project, a Notion database, a Slack
-# workspace. `name` and `source` are totsuka's — a repository points at one by
-# `name` to say where its tasks are filed, a workflow points at one to say
-# where it draws from, and `source` says which plugin owns it. Every other key
-# belongs to that plugin. A source with a single domain (slack, discord) still
-# needs an entry; it just has no keys of its own.
+# [plugins.macos]
+# enabled = true
+# kind = "notifier"
+
+# ============================================================================
+# [[workflows]] — what to watch, and what to do about it
+# ============================================================================
+#
+# Matched in definition order, first match wins. The source plugin runs that
+# match, not totsuka.
+
+# [[workflows]]
+# name = "implement"                        # workflow name
+# projects = ["my-board"]                   # which domains to draw from; the source is theirs.
+#                                           #   Empty is an error; mixing sources is an error
+# agent = "herdr"                           # the agent_ide instance that runs it
+# profile = "implement"                     # "answer" / "triage" / "design" / "implement".
+#                                           #   Resolves mode + output + verification at once
+# mode = "implement"                        # "plan" / "implement". Required when profile is absent;
+#                                           #   cannot be written alongside profile
+# output = "none"                           # "source" / "none". Required when profile is absent.
+#                                           #   (`pull_request` was removed — the agent pushes and
+#                                           #   opens the PR itself)
+# verification = "llm"                      # "llm" / "human" / "none". Cannot be written with profile
+# trigger = { status = "Ready to implement" }   # what to pick up. The PLUGIN interprets this table;
+#                                           #   an unknown key here is a hard startup failure
+# on_start = { status = "In progress" }     # write the source status back just before dispatch
+# on_success = { status = "In review" }     # …on success
+# on_failure = { status = "Needs attention" }   # …on failure. Set this whenever on_start is set,
+#                                           #   or a failed task leaves the board saying "running"
+# timeout_secs = 1800                       # silence limit since the last hook signal, then escalate.
+#                                           #   `0` opts this workflow out of the sweep entirely
+# rubric = "Tests pass and the diff is scoped to the issue"   # llm-verification criteria; the one
+#                                           #   prompt knob there is
+# tool = "claude"                           # pin the AI tool (workflow > repository > default_tool)
+# initial_prompt = "Use the design skill first"   # visible preamble, before the task body, on NEW
+#                                           #   conversations only
+# cleanup = "manual"                        # overrides [worktree] for this workflow's worktrees
+# publish = "direct"                        # ← slack: "draft" (approval flow, default) / "direct"
+
+# Trigger shapes other than `status`:
+#
+# trigger = {}                                     # catch-all (slack: the mention workflow)
+# trigger = { reaction = "hammer" }                # slack: you react with :hammer:
+# trigger = { assignee = ["@me", "@none"] }        # the ingest assignee gate; this is the default
+# trigger = { filter = { property = "Sprint", status = { equals = "Active" } } }   # notion: a raw Notion filter, passed through untouched   lint:raw
+# trigger = { channel = true, channel_name = "team-support", repo = "my-repo", from = ["U0000000000"] }
+
+# ============================================================================
+# [tools.<name>] — the AI tool registry
+# ============================================================================
+#
+# Overrides and extends the built-in `claude`.
+
+# [tools.claude]
+# kind = "claude"                           # adapter: "claude" / "codex" / "opencode".
+#                                           #   Decides argv assembly and completion detection
+# command = "claude --model sonnet"         # whitespace-split command line; first word is the program
+# mode_args = ["--verbose"]                 # extra args in implement mode
+# plan_args = ["--permission-mode", "plan"] # extra args in plan mode
+
+# ============================================================================
+# [llm] — the AI Gateway used for repository selection
+# ============================================================================
+#
+# Without this table, repository selection that needs an LLM falls back to
+# `pending`.
+
+# [llm]
+# base_url = "https://openrouter.ai/api/v1"
+# model = "anthropic/claude-haiku-4-5"
+# max_tokens = 256                          # cap for the classification call
+# timeout_secs = 30                         # request timeout
+# Secret reference. Other forms: bw:<item>/<field> · cmd:<command> · ${ENV_VAR} · keychain:<service>/<account> (macOS only)
+# api_key_ref = "op://Dev/Openrouter/api_key"
+
+# ============================================================================
+# [worktree] — where task worktrees go, and when they are removed
+# ============================================================================
+
+# [worktree]
+# location = "~/.worktrees/{repo_name}/{worktree_name}"   # default: <state dir>/worktrees/…
+#                                           #   Placeholders: {repo} {repo_name} {worktree_name}
+#                                           #   {task_id} {source} {task_number} {hash} {handle}
+# cleanup = "manual"                        # implement mode: "immediate" / "manual" / { retention_days = 5 }
+# plan_cleanup = "immediate"                # plan mode, same vocabulary
+# cleanup = { retention_days = 3 }          # an arbitrary number of days takes the explicit form
+#                                           #   (`keep_7d` / `keep_28d` are sugar for 7 and 28)
+
+# ============================================================================
+# [log]
+# ============================================================================
+
+# [log]
+# level = "info"                            # error / warn / info / debug / trace (`--debug` raises it)
+# log_prompts = true                        # record prompts and payloads (only emitted at debug+)
+# max_files = 7                             # daily log files to keep
+
+# ============================================================================
+# [hooks] — receiving agent-CLI hook events
+# ============================================================================
+
+# [hooks]
+# Secret reference. Other forms: bw:<item>/<field> · cmd:<command> · ${ENV_VAR} · keychain:<service>/<account> (macOS only)
+# auth_token_ref = "op://Dev/totsuka/hook-token"   # Bearer token authenticating hook POSTs.
+#                                           #   Operationally required: without it the only defence
+#                                           #   is the 0600 socket permission
+# socket_path = "${XDG_RUNTIME_DIR}/totsuka/agent-events.sock"   # receiving UDS
+# spool_dir = "${XDG_STATE_HOME}/totsuka/hooks/spool"            # where events go when a POST fails
+# block_retry_limit = 3                     # consecutive Stop-hook block re-asks before escalating
+
+# ============================================================================
+# [github] — task-source-github
+# ============================================================================
+
+# [github]
+# Secret reference. Other forms: bw:<item>/<field> · cmd:<command> · ${ENV_VAR} · keychain:<service>/<account> (macOS only)
+# token = "op://Dev/GitHub/token"           # `cmd:gh auth token` works well here — it never goes stale
+# github_login = "my-login"                 # your login: detects self-assigned tasks and is the
+#                                           #   self-assign target when claiming. One login per instance
+# status_field = "Status"                   # the SingleSelect field holding the status column
+# in_progress_statuses = ["In progress"]    # statuses treated as "running" and excluded from ingest
+# poll_interval_secs = 60                   # fetch cadence. `0` does NOT stop polling — it warns and
+#                                           #   falls back to 60. To stop, disable the plugin
+# max_retries = 3                           # retries for retryable API failures (90s total sleep budget)
+# claim_verify_delay_ms = 750               # wait between the claim write and reading it back
+# api_url = "https://api.github.com/graphql"   # GraphQL endpoint (GitHub Enterprise / tests)
+# source_name = "github"                    # stamped into `Task.source`
+
+# [github.prompts]
+# triage_instructions = "..."               # sent when the workflow's profile is `triage`
+# design_instructions = "..."               # …`design`
+# implement_instructions = "..."            # …`implement`
+
+# ============================================================================
+# [notion] — task-source-notion
+# ============================================================================
+
+# [notion]
+# Secret reference. Other forms: bw:<item>/<field> · cmd:<command> · ${ENV_VAR} · keychain:<service>/<account> (macOS only)
+# token = "op://Dev/Notion/token"           # integration secret, or `cmd:ntn auth token --plain`
+# notion_user_id = "00000000-0000-0000-0000-000000000000"   # your user id; `trigger.assignee = "@me"`
+#                                           #   matches against this. Omitted, `@me` matches nobody
+# body_source = "page"                      # where the task body comes from: "none" / "property" / "page"
+# in_progress_statuses = ["In progress"]    # excluded from ingest
+# poll_interval_secs = 60                   # fetch cadence (same `0` behaviour as github)
+# rate_limit_rps = 3                        # client-side request cap; Notion's public limit is ~3 rps
+# max_retries = 3
+# api_url = "https://api.notion.com/v1"
+# api_version = "2022-06-28"                # sent as the `Notion-Version` header
+# source_name = "notion"
+
+# [notion.property_map]
+# title = "Name"                            # the title property (Notion's own default is `Name`)
+# status = "Status"                         # read by trigger.status and written by on_*.status
+# status_kind = "status"                    # "status" (Notion's own type) / "select"
+# assignee = "Assignee"                     # a `people` property. REQUIRED if you write trigger.assignee
+# priority = "Priority"                     # a number / select / status property
+# repo_hint = "Repository"                  # rich_text / select / status / multi_select / url / title
+# body = "Body"                             # the rich_text property read when body_source = "property"
+
+# [notion.priority_map]                     # option name → number; larger runs first
+# High = 3
+# Medium = 2
+# Low = 1
+
+# [notion.dynamic.current-sprint]           # referenced as `@current-sprint` inside trigger.filter
+# database_id = "00000000000000000000000000000000"   # need not be in [[projects]]
+# filter = { property = "Active", checkbox = { equals = true } }   # a raw Notion filter that must select exactly ONE page   lint:raw
+
+# [notion.prompts]
+# triage_instructions = "..."
+# design_instructions = "..."
+# implement_instructions = "..."
+
+# ============================================================================
+# [slack] — task-source-slack
+# ============================================================================
+
+# [slack]
+# Secret reference. Other forms: bw:<item>/<field> · cmd:<command> · ${ENV_VAR} · keychain:<service>/<account> (macOS only)
+# app_token = "op://Dev/Slack/app_token"    # xapp-… App-Level Token for Socket Mode.
+#                                           #   Not needed when event_source = "gateway"
+# Secret reference. Other forms: bw:<item>/<field> · cmd:<command> · ${ENV_VAR} · keychain:<service>/<account> (macOS only)
+# user_token = "op://Dev/Slack/user_token"  # xoxp-… reads and writes AS YOU
+# Secret reference. Other forms: bw:<item>/<field> · cmd:<command> · ${ENV_VAR} · keychain:<service>/<account> (macOS only)
+# bot_token = "op://Dev/Slack/bot_token"    # xoxb-… posts the notification nudge. Unset = feature off,
+#                                           #   and a reply under your own name raises NO Slack
+#                                           #   notification at all, so the nudge is what makes it
+#                                           #   noticeable
+# target_user_id = "U0000000000"            # your Slack user id; mentions of it become tasks
+# thread_context_limit = 6                  # recent thread messages included in the task body
+# reply_style = "Concise, plain, no honorifics"   # tone instruction injected into the task body
+# event_source = "socket"                   # "socket" (this process holds the WebSocket) / "gateway"
+# drain_max_age_hours = 24                  # gateway: how far back queued events are still filed
+# drain_limit = 100                         # gateway: events filed per drain. `0` is rejected
+# watch_poll_interval_secs = 60             # gateway: channel-watch polling interval
+# watch_backfill_limit = 100                # channel watch: messages re-read per channel at startup.
+#                                           #   `0` is rejected
+# watch_backfill_max_age_hours = 24         # …and how far back that backfill reaches
+# fallback_repo = "my-repo"                 # where a channel no [[slack.channel_groups]] matched goes.
+#                                           #   One candidate means no LLM classification at all
+# max_retries = 3
+# api_url = "https://slack.com/api"
+# state_dir = "~/.local/state/totsuka"      # root of the persisted draft store (test override)
+# source_name = "slack"
+
+# [slack.gateway]                           # only read when event_source = "gateway"
+# project = "my-gcp-project"                # Pub/Sub project
+# subscription = "totsuka-events"           # messages and reactions
+# block_actions_subscription = "totsuka-actions"   # button presses
+# pubsub_url = "https://pubsub.googleapis.com"     # API base (tests)
+# pull_max_messages = 100                   # messages pulled per request
+
+# [slack.llm]                               # repository classification; defaults to the core [llm]
+# base_url = "https://openrouter.ai/api/v1"
+# model = "anthropic/claude-haiku-4-5"
+# Secret reference. Other forms: bw:<item>/<field> · cmd:<command> · ${ENV_VAR} · keychain:<service>/<account> (macOS only)
+# api_key = "op://Dev/Openrouter/api_key"
+# confidence_threshold = 0.6                # below this, selection becomes ephemeral
+
+# [[slack.repos]]                           # candidate repositories; omitted, [[repositories]] is used
+# name = "my-repo"                          # must match a [[repositories]].name
+# summary = "What lives in this repo"       # material for classification
+# path = "~/Workspace/my-repo"              # adds the README's opening to the classification material
+
+# [[slack.channel_groups]]                  # channel-name prefix → candidate repos, first match wins
+# prefix = "proj-"                          # PREFIX MATCH ONLY: `*` is a literal, no globs or regex.
+#                                           #   A string or a list of strings
+# repos = ["my-repo"]                       # names that exist in [[slack.repos]]
+
+# [slack.prompts]
+# reply_instructions = "..."                # default for `answer`, and the fallback for any kind
+#                                           #   this plugin has no instructions for
+# implement_instructions = "..."            # default for `implement`
+# triage_instructions = "..."               # default for `triage`
+# reply_style_suffix = "Tone: {style}"      # appended to reply_instructions when reply_style is set
+# body_template = "..."                     # the task body shown in the pane. {sender} {text} …
+# body_attachment_header = "..."            # attachment section heading; only when there are files
+# body_attachment_line = "{file}"           # one attachment; {file} arrives pre-assembled
+# body_thread_permalink = "..."             # the parent thread's permalink; only for in-thread mentions
+# body_thread_header = "..."                # thread context heading. {count}
+# body_thread_line = "{line}"               # one thread message
+# body_thread_unavailable = "..."           # replaces the whole section when the fetch failed
+# classifier_system = "..."                 # repository-classification system prompt. {repo_names}
+# classifier_user = "..."                   # …user message. {mention_text} {thread_context} {catalog}
+# classifier_correction = "..."             # the retry turn when the reply was not valid JSON
+
+# ============================================================================
+# [discord] — task-source-discord
+# ============================================================================
+
+# [discord]
+# Secret reference. Other forms: bw:<item>/<field> · cmd:<command> · ${ENV_VAR} · keychain:<service>/<account> (macOS only)
+# bot_token = "op://Dev/Discord/bot_token"  # Bot Token. There is no user-token option — Discord
+#                                           #   forbids automating a normal account
+# operator_user_id = "000000000000000000"   # your user id (all digits, a snowflake). Only posts from
+#                                           #   this id raise tasks by default. A username is rejected
+# watch_backfill_limit = 100                # per channel at startup. Discord's own cap is 100, and a
+#                                           #   larger value is rejected rather than 400-ing every time
+# watch_backfill_max_age_hours = 24         # how far back that backfill reaches. `0` is rejected
+# max_retries = 3
+# api_url = "https://discord.com/api/v10"
+# source_name = "discord"
+
+# ============================================================================
+# [herdr] — agent-ide-herdr
+# ============================================================================
+
+# [herdr]
+# socket_path = "~/.config/herdr/herdr.sock"   # explicit socket path; highest precedence
+# session = "work"                          # named session → ~/.config/herdr/sessions/work/herdr.sock
+# request_timeout_secs = 30                 # per socket call
+
+# [herdr.layout]
+# shell = true                              # show a companion shell pane. `false` makes the agent
+#                                           #   full-screen and ignores direction / ratio
+# direction = "down"                        # "down" / "right" — herdr's SplitDirection. Nothing else
+# ratio = 0.8                               # the AGENT's share. Not range-checked; passed through
+
+# [herdr.identity]
+# enabled = true                            # report repo / task / mode to herdr's sidebar
+
+# [herdr.kind_map]                          # executable name → herdr `kind`
+# claude-code = "claude"
+
+# ============================================================================
+# [orca] — agent-ide-orca
+# ============================================================================
+
+# [orca]
+# orca_bin = "orca"                         # the orca executable (PATH name or absolute path)
+# agent = "claude"                          # the agent orca launches in the worktree terminal
+# setup = "run"                             # `worktree create --setup`: "run" / "skip" / "inherit"
+# repo_selector = "path:/abs/path"          # explicit `--repo`; unset uses the dispatch worktree path
+# plan_prompt_prefix = "Plan only. "        # prepended in plan mode — orca has no structured plan API
+# poll_interval_ms = 500                    # state-loop poll when there is no handle to block on
+
+# ============================================================================
+# [macos] — notifier-macos
+# ============================================================================
+
+# [macos]
+# backend = "terminal_notifier"             # "osascript" (default, always available, but a click opens
+#                                           #   Script Editor) / "terminal_notifier" (clickable)
+# osascript_bin = "osascript"
+# terminal_notifier_bin = "terminal-notifier"
+# activate_bundle_id = "org.alacritty"      # GUI app a click brings to the front; unset = no -activate
+# click_command = "totsuka focus {task_id}" # shell command a click runs. {task_id} is shell-quoted
+
+# [macos.filter.events]                     # global per-event toggles; unset everywhere = deliver
+# waiting_input = true
+# done = true
+# failed = true
+# pending = true
+# escalated = true
+# verification_pending = true
+
+# [macos.filter.workflows.my-workflow]      # per-workflow overrides; the most specific toggle wins
+# done = false
+
+# ============================================================================
+# Recipes — combinations that work, ready to uncomment
+# ============================================================================
+#
+# 1) Minimal — GitHub Projects + herdr
+#    Cards in your implement column get implemented and written back.
+#
 # [[projects]]
 # name = "my-board"
 # source = "github"
 # owner = "my-org"
 # project_number = 1
-
-# [worktree]
-# Default: <state dir>/worktrees/{repo_name}/{worktree_name}, where <state dir> is
-# $XDG_STATE_HOME/totsuka (or $HOME/.local/state/totsuka when XDG_STATE_HOME is
-# unset). Set this only to override it; ${ENV} references are expanded, and an
-# unset variable is an error.
-# location = "~/.worktrees/{repo_name}/{worktree_name}"
-# cleanup = "manual"            # or "immediate" / { retention_days = 5 }
-# plan_cleanup = "immediate"
-
-# A plugin's own settings go in a top-level table named after it. The
-# Orchestrator does not interpret what is inside; the plugin validates it
-# (`totsuka config validate`). A name with no `[plugins.<name>]` entry is an
-# error, so a typo here is caught rather than read as settings nobody asked for.
-# [github]
-# token = "cmd:gh auth token"
-# poll_interval_secs = 60      # fetch cadence — the plugin's key, not the roster's
-
-# [llm]
-# base_url = "https://openrouter.ai/api/v1"
-# model = "anthropic/claude-haiku-4-5"
-# api_key_ref = "keychain:totsuka/openrouter"   # or "op://Dev/Openrouter/api_key" / "bw:totsuka-openrouter/password"
-
+#
 # [[workflows]]
 # name = "implement"
-# projects = ["my-board"]        # which domains to watch; the source is theirs
+# projects = ["my-board"]
 # trigger = { status = "Ready to implement" }
-# profile = "implement"          # resolves mode / output / verification
+# profile = "implement"
 # agent = "herdr"
 # on_success = { status = "In review" }
 #
-# `profile` resolves `output` for you. Do not write `output = "source"` for a
-# github or notion workflow: those plugins publish nothing (the agent writes
-# the deliverable itself), so the config would be rejected.
+# 2) Design → implement handoff
+#    Two stages with a human review in between. The conversation, its worktree
+#    and its agent session carry over when a card enters the next stage's column.
+#
+# [[workflows]]
+# name = "design"
+# projects = ["my-board"]
+# trigger = { status = "Ready to design" }
+# profile = "design"
+# agent = "herdr"
+# on_success = { status = "Design review" }
+#
+# [[workflows]]
+# name = "implement"
+# projects = ["my-board"]
+# trigger = { status = "Ready to implement" }
+# profile = "implement"
+# agent = "herdr"
+# on_success = { status = "In review" }
+#
+# 3) Slack — reply as yourself
+#    A mention drafts a reply for you to approve. The reaction workflow is a
+#    separate event path, so the order of these two does not matter.
+#
+# [[projects]]
+# name = "slack"                            # a source with no domains still needs an entry
+# source = "slack"
+#
+# [[workflows]]
+# name = "slack-reply"
+# projects = ["slack"]
+# trigger = {}                              # catch-all: any mention
+# profile = "answer"
+# agent = "herdr"
+#
+# [[workflows]]
+# name = "slack-implement"
+# projects = ["slack"]
+# trigger = { reaction = "hammer" }         # you react with :hammer:
+# profile = "implement"
+# agent = "herdr"
+#
+# 4) Migration — a long implement run you watch yourself
+#    `timeout_secs = 0` opts the workflow out of the silence sweep, and the
+#    worktree is kept for inspection. Do not do this for unattended work.
+#
+# [[workflows]]
+# name = "migration"
+# projects = ["my-board"]
+# trigger = { status = "Migration" }
+# profile = "implement"
+# agent = "herdr"
+# timeout_secs = 0
+# cleanup = "manual"
+#
+# Note on `output`: `profile` resolves it for you. Do not write
+# `output = "source"` for a github or notion workflow — those plugins publish
+# nothing (the agent writes the deliverable itself), and the config is rejected.

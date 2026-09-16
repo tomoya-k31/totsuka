@@ -82,3 +82,34 @@ pub fn git_version() -> Option<String> {
             .to_string(),
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::CONFIG_TEMPLATE;
+
+    /// Every line of the skeleton is a comment.
+    ///
+    /// The file's whole contract is that generating it configures *nothing* —
+    /// so a fresh `config.toml` loads, and everything in it is there as
+    /// documentation until a human uncomments it. An active line slipped in
+    /// while editing 400 lines of commented examples would turn that on its
+    /// head silently: the key would take effect for every operator who ran
+    /// `init` after that release. Parsing the file is the cheapest statement of
+    /// the invariant — an empty table means no line survived the comment
+    /// stripping.
+    ///
+    /// `scripts/config-template-lint.sh` is the other half (that every key is
+    /// *present*); it reads the file as text and cannot tell a commented key
+    /// from an active one.
+    #[test]
+    fn the_skeleton_activates_nothing() {
+        let parsed: toml::Table = CONFIG_TEMPLATE
+            .parse()
+            .expect("the skeleton must be valid TOML");
+        assert!(
+            parsed.is_empty(),
+            "the skeleton must be entirely commented out, but it sets: {:?}",
+            parsed.keys().collect::<Vec<_>>()
+        );
+    }
+}
