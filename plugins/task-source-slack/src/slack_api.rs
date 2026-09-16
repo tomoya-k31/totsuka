@@ -301,9 +301,12 @@ impl<T: SlackTransport> SlackApi<T> {
     /// (`latest = oldest = ts`, `inclusive`, `limit = 1`).
     ///
     /// [`conversations_replies`](Self::conversations_replies) cannot do this:
-    /// it takes a *thread* root, so it returns nothing for a message that
-    /// isn't one. A `reaction_added` event carries only `item.channel` +
-    /// `item.ts`, which is exactly what this fetches back.
+    /// it is keyed by a thread, so it returns nothing for a message that
+    /// belongs to no thread at all. A `reaction_added` event carries only
+    /// `item.channel` + `item.ts`, which is exactly what this fetches back.
+    /// (A message that *is* in a thread is a different case, and the one
+    /// [`fetch_message`](Self::fetch_message)'s fallback covers — see there
+    /// for what a reply's own `ts` measurably returns.)
     ///
     /// `Ok(None)` means "the window matched nothing", which is a **routine**
     /// answer, not a failure: `conversations.history` does not return replies
@@ -404,9 +407,12 @@ impl<T: SlackTransport> SlackApi<T> {
             return Ok(Some(message));
         }
         // A thread reply: `ts` is its own id, and `conversations.replies`
-        // accepts a reply's id as well as a thread root. `latest = None`
-        // pages from the head, so the target may sit anywhere in the page —
-        // match on `ts` rather than assuming a position.
+        // accepts a reply's own id, not only a thread root. **Measured
+        // 2026-09-16**: it answers with that one message, and does *not*
+        // resolve up to the enclosing thread. `latest = None` pages from the
+        // head, so the target may sit anywhere in whatever comes back —
+        // match on `ts` rather than assuming a position, which is right under
+        // either behaviour.
         //
         // This is the first caller to pass `latest = None`, which puts
         // `latest`/`inclusive` into the request body as JSON nulls.

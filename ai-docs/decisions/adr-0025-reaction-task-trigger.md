@@ -149,11 +149,13 @@ Socket Mode はエンベロープを**処理前に** ack するので（Slack �
 - `reaction.rs`（新規）— 再取得の前後 2 段に分けたフィルタと `Mention` への変換
 - `pipeline.rs` — `SocketEvent::Reaction` の分岐から既存パイプラインへの合流
 
-**実機で確定した項目**（2026-09-16、運用者の実ワークスペースの `xoxp-` で測定）:
+**実機で確定した項目**（2026-09-16、運用者の実ワークスペースの `xoxp-` で測定。
+いずれも `latest` を渡さない形の `conversations.replies` で観測している）:
 
-- `conversations.replies` に**存在する**メッセージの `ts` を渡すと、それが親スレッドでなくても
-  `thread_not_found` にはならず、**そのメッセージ 1 件だけ**が返る。
-  親スレッドには解決されないので、`fetch_message` が結果を `ts` で突き合わせる実装で正しい
+- **存在するスレッド返信**自身の `ts` を渡すと、それが親スレッドでなくても
+  `thread_not_found` にはならず、**そのメッセージ 1 件だけ**が返る。親スレッドには
+  解決されない。`fetch_message` が結果を `ts` で突き合わせる実装は、解決される場合も
+  されない場合も正しく動く
 - `conversations.replies` が `thread_not_found` を返すのは、**`ts` がそのチャンネルのどの
   メッセージでもないとき**。日常的な原因はメッセージの削除で、`conversations.history` が
   空を返すのと同じ「もう無い」という確定的な答えである。したがって `fetch_message` はこれを
@@ -163,5 +165,11 @@ Socket Mode はエンベロープを**処理前に** ack するので（Slack �
 
 **実機で確認が残っている項目**:
 
-- `latest` を渡さない `conversations.replies` の応答に目的のメッセージが実際に含まれること
+- `conversations.replies` に**スレッドに属さない単発メッセージ**の `ts` を渡したときの挙動
+  （1 件返るか `thread_not_found` か）。上で測ったのはスレッド**返信**の `ts` であって、
+  この場合ではない。`conversations_history_one` の doc コメントは「スレッドに属さない
+  メッセージには効かない」を前提に書かれており、その前提自体はまだ測っていない
+- `latest` を渡さない `conversations.replies` の応答に目的のメッセージが実際に含まれること。
+  上の測定は `latest` を渡さない経路で行ったが、MCP ラッパ越しなので Slack に送出された
+  リクエストの生の形までは確認していない
 - `reaction_added` payload に `event_ts` が常に含まれるか
