@@ -97,6 +97,29 @@ pub fn secret_accounts(selected: &BTreeSet<String>) -> Vec<String> {
     accounts
 }
 
+/// The secret accounts a stretch of *rendered* text references.
+///
+/// Read off the rendered form rather than the directives, because what the
+/// checklist has to describe is the text that was actually written — on an
+/// append that is a subset of what the selection would have produced, and the
+/// lines already in the file keep whatever backend wrote them.
+pub fn accounts_mentioned_in(rendered: &str) -> Vec<String> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut accounts = Vec::new();
+    for line in rendered.lines() {
+        let Some(rest) = line.trim().strip_prefix("# Secret reference for `") else {
+            continue;
+        };
+        let Some(account) = rest.split('`').next() else {
+            continue;
+        };
+        if seen.insert(account.to_string()) {
+            accounts.push(account.to_string());
+        }
+    }
+    accounts
+}
+
 /// Walk the skeleton, yielding `(secret account, line)` for the lines that
 /// survive `selected`. The account is attached to the line whose value it
 /// rewrites, not to the directive.
@@ -268,6 +291,24 @@ mod tests {
         assert!(
             rendered.contains("Other forms: op://"),
             "the alternatives are named next to the line: {rendered}"
+        );
+    }
+
+    /// **What the checklist names is what was written.** On an append the
+    /// existing reference lines are left alone, so listing every account the
+    /// selection *could* reference would print, say, `keychain:` commands over
+    /// a file that still says `op://`.
+    #[test]
+    fn accounts_are_read_back_out_of_the_rendered_text() {
+        let rendered = render(&selected(&["github"]), SecretBackend::Keychain);
+        assert_eq!(
+            accounts_mentioned_in(&rendered),
+            secret_accounts(&selected(&["github"])),
+            "a full render mentions exactly the accounts the selection implies"
+        );
+        assert!(
+            accounts_mentioned_in("# nothing here\n# token = \"op://x/y/z\"\n").is_empty(),
+            "text with no reference marker names no account"
         );
     }
 

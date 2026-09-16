@@ -106,6 +106,17 @@ pub fn run(cx: &Cx, args: &SetupArgs) -> Result<(), CliError> {
         }
     }
 
+    // The checklist names the accounts the *write* introduced, not every
+    // account the selection could reference. A rerun with a different backend
+    // would otherwise print `keychain:` commands over a file that still says
+    // `op://` — sending the operator to register a secret nothing reads, since
+    // the append deliberately leaves existing reference lines alone.
+    let introduced = match &plan.write {
+        ConfigWrite::Fresh(_) => template::secret_accounts(&selected),
+        ConfigWrite::Append(text) => template::accounts_mentioned_in(text),
+        ConfigWrite::Unchanged => Vec::new(),
+    };
+
     install_plugins(cx, &selected, &source)?;
 
     // The check `init` used to carry. Nothing else in this command needs git,
@@ -117,7 +128,7 @@ pub fn run(cx: &Cx, args: &SetupArgs) -> Result<(), CliError> {
         None => println!("warning: git not found on PATH → install git (worktrees require it)"),
     }
 
-    print_next_steps(cx, &selected, args.secret_backend);
+    print_next_steps(cx, &selected, &introduced, args.secret_backend);
     Ok(())
 }
 
@@ -561,11 +572,23 @@ fn install_plugins(
         }
     }
 
-    for name in selected {
+    // `--from-source` builds every package it is given in one `cargo` call, so
+    // handing it one plugin at a time would run N builds where one would do.
+    // It only takes a name or `--all`, never a subset, so this shortcut is
+    // available exactly when the selection is everything — which is the
+    // documented dev-machine flow, `totsuka setup --plugins all`.
+    let build_all_at_once = matches!(source, PluginSource::Checkout(_))
+        && selected.len() == template::known_plugins().len();
+    for name in if build_all_at_once {
+        vec![None]
+    } else {
+        selected.iter().map(|n| Some(n.clone())).collect()
+    } {
         plugin_cmd::run(
             cx,
             plugin_cmd::PluginCommand::Install {
-                source: Some(name.clone()),
+                all: name.is_none(),
+                source: name,
                 bundled: matches!(source, PluginSource::Bundled(_)),
                 from_source: matches!(source, PluginSource::Checkout(_)),
                 repo: match source {
@@ -576,7 +599,6 @@ fn install_plugins(
                     PluginSource::Bundled(root) => Some(root.clone()),
                     _ => None,
                 },
-                all: false,
                 // Deliberately not enabled: `config validate` launches every
                 // enabled plugin, and the settings it needs are still
                 // commented out. See the module docs.
@@ -594,7 +616,12 @@ fn install_plugins(
 // What to do next
 // ---------------------------------------------------------------------------
 
-fn print_next_steps(cx: &Cx, selected: &BTreeSet<String>, backend: SecretBackend) {
+fn print_next_steps(
+    cx: &Cx,
+    selected: &BTreeSet<String>,
+    accounts: &[String],
+    backend: SecretBackend,
+) {
     let path = cx.config_path.display();
     println!();
     println!("Your configuration is at:");
@@ -619,7 +646,6 @@ fn print_next_steps(cx: &Cx, selected: &BTreeSet<String>, backend: SecretBackend
         println!("     at the end of the file has combinations that work, ready to uncomment");
     }
 
-    let accounts = template::secret_accounts(selected);
     if !accounts.is_empty() {
         println!();
         println!(
@@ -627,7 +653,7 @@ fn print_next_steps(cx: &Cx, selected: &BTreeSet<String>, backend: SecretBackend
              the references:"
         );
         println!();
-        for account in &accounts {
+        for account in accounts {
             println!(
                 "  {}  — {}",
                 backend.reference(account),

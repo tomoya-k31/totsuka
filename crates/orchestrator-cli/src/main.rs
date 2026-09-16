@@ -1,8 +1,8 @@
 //! totsuka CLI entrypoint (§5.1 command tree).
 //!
-//! `run` (#63) plus the full command surface (#64): init / status / task /
-//! plugin / config / logs / doctor / completion, with the shared flags
-//! `--config` (highest config layer, F-66) and `--debug`.
+//! `run` (#63) plus the full command surface (#64, #705): setup / status /
+//! menu / task / focus / plugin / config / logs / doctor / completion, with
+//! the shared flags `--config` (highest config layer, F-66) and `--debug`.
 
 mod bundled;
 mod common;
