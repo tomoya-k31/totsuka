@@ -107,6 +107,16 @@ pub fn run(cx: &Cx, args: &SetupArgs) -> Result<(), CliError> {
     }
 
     install_plugins(cx, &selected, &source)?;
+
+    // The check `init` used to carry. Nothing else in this command needs git,
+    // but everything downstream does — a worktree cannot be created without
+    // it — and with `doctor` no longer run here, this is the only place a
+    // fresh machine hears about it.
+    match crate::common::git_version() {
+        Some(version) => println!("ok: git {version}"),
+        None => println!("warning: git not found on PATH → install git (worktrees require it)"),
+    }
+
     print_next_steps(cx, &selected, args.secret_backend);
     Ok(())
 }
@@ -156,6 +166,16 @@ fn parse_plugins(
     }
     if spec == "none" {
         return Ok(BTreeSet::new());
+    }
+    // An empty list is the state the TTY gate and `--plugins` exist to rule
+    // out: a run that installs nothing and reports success. `none` is how you
+    // say it on purpose.
+    if spec.split(',').all(|s| s.trim().is_empty()) {
+        return Err(ExitWith::new(
+            EXIT_USAGE,
+            "`--plugins` names no plugin → list them, or say `--plugins none` if that is what you meant",
+        )
+        .into());
     }
     let mut selected = BTreeSet::new();
     for name in spec.split(',').map(str::trim).filter(|s| !s.is_empty()) {
@@ -231,7 +251,7 @@ struct Plan<'a> {
     config_path: PathBuf,
     selected: &'a BTreeSet<String>,
     write: ConfigWrite,
-    /// Section titles the append is made of, for the printed plan.
+    /// Table paths the append is made of, for the printed plan.
     added: Vec<String>,
     source: &'a PluginSource,
 }
@@ -247,20 +267,28 @@ impl<'a> Plan<'a> {
         let (write, added) = match existing {
             None => (ConfigWrite::Fresh(rendered.to_string()), Vec::new()),
             Some(existing) => {
-                let missing: Vec<Section> = sections(rendered)
+                let missing: Vec<Block> = blocks(rendered)
                     .into_iter()
-                    .filter(|s| !s.title.is_empty() && !s.is_present_in(existing))
+                    .filter(|b| !b.is_present_in(existing))
                     .collect();
                 if missing.is_empty() {
                     (ConfigWrite::Unchanged, Vec::new())
                 } else {
-                    let titles = missing.iter().map(|s| s.title.clone()).collect();
+                    // Several commented examples can document the same table
+                    // (`[[projects]]` appears once per source and again in the
+                    // recipes); the plan names each table once.
+                    let mut paths: Vec<String> = Vec::new();
+                    for block in &missing {
+                        if !paths.contains(&block.path) {
+                            paths.push(block.path.clone());
+                        }
+                    }
                     let text = missing
                         .iter()
-                        .map(|s| s.text.as_str())
+                        .map(|b| b.text.as_str())
                         .collect::<Vec<_>>()
-                        .join("\n");
-                    (ConfigWrite::Append(text), titles)
+                        .join("");
+                    (ConfigWrite::Append(text), paths)
                 }
             }
         };
@@ -281,11 +309,11 @@ impl<'a> Plan<'a> {
                 "           write it, with every setting commented out\n".into()
             }
             ConfigWrite::Append(_) => format!(
-                "           append {} section(s) it does not have yet:\n{}",
+                "           append the {} table(s) it does not document yet:\n{}",
                 self.added.len(),
                 self.added
                     .iter()
-                    .map(|t| format!("             {t}\n"))
+                    .map(|t| format!("             [{t}]\n"))
                     .collect::<String>()
             ),
             ConfigWrite::Unchanged => "           leave it alone; nothing to add\n".into(),
@@ -309,35 +337,54 @@ impl<'a> Plan<'a> {
     }
 }
 
-/// One `# ===` banner block of the rendered skeleton.
-struct Section {
-    /// The banner's title line, which identifies the section.
-    title: String,
-    /// The block itself, banner included.
+/// One documented table of the rendered skeleton, with the prose above it.
+///
+/// **The append unit is a table, not a banner section.** Two things follow from
+/// that, and both are the reason it is not a section:
+///
+/// * Content that is *not* under a table — the file's preamble, and the
+///   top-level keys — is never appended. Appending it would drop root-level
+///   keys at the end of a file that ends inside a table, where TOML reads them
+///   as that table's keys: the one live line in the skeleton, `version = 1`,
+///   lands inside the last `[[workflows]]` and `deny_unknown_fields` rejects
+///   it. (Appending a *second* root `version` is the other half of the same
+///   bug, and equally unwanted.)
+/// * A plugin picked on a later run gets its roster entry. All seven
+///   `[plugins.<name>]` entries share one banner, so a section-sized unit is
+///   "already there" the moment any of them is — and the flagship case of
+///   [`ADR-0077`] decision 6, adding `notion` months later, would append
+///   `[notion]` with no `[plugins.notion]` to enable it by.
+///
+/// [`ADR-0077`]: https://github.com/tomoya-k31/totsuka/blob/main/ai-docs/decisions/adr-0077-setup-writes-the-whole-surface.md
+struct Block {
+    /// The dotted path of the table this block documents (`plugins.notion`,
+    /// `notion.property_map`, `projects`).
+    path: String,
+    /// The block, including the banner and prose that introduce it.
     text: String,
-    /// Table paths the block documents (`github`, `plugins.github`, …).
-    tables: Vec<String>,
 }
 
-impl Section {
-    /// Whether `existing` already has this section — either verbatim, or as
-    /// tables the operator wrote themselves.
+impl Block {
+    /// Whether `existing` already documents or defines this table.
     ///
-    /// Both halves matter. The title catches a config this command wrote
-    /// before; the tables catch a hand-written one, where appending a
-    /// commented block about `[github]` under a live `[github]` would read as
-    /// a second, contradictory definition.
+    /// Both halves matter, and for different callers. The **active** form
+    /// catches a hand-written config: appending a commented block about
+    /// `[github]` below a live `[github]` would read as a second,
+    /// contradictory definition. The **commented** form catches a config this
+    /// command wrote before — where nothing is active yet, so without it every
+    /// re-run would append the whole file again.
     fn is_present_in(&self, existing: &str) -> bool {
-        if existing.lines().any(|l| l.trim_end() == self.title) {
-            return true;
-        }
-        self.tables.iter().any(|path| {
-            existing.lines().any(|line| {
-                let line = line.trim();
-                !line.starts_with('#')
-                    && (line.starts_with(&format!("[{path}]"))
-                        || line.starts_with(&format!("[[{path}]]")))
-            })
+        let active = [format!("[{}]", self.path), format!("[[{}]]", self.path)];
+        let documented = [format!("# [{}]", self.path), format!("# [[{}]]", self.path)];
+        // A header may carry a trailing comment (`# [herdr.kind_map]   # …`),
+        // so this is a prefix test. The closing bracket makes it exact enough:
+        // `# [github.prompts]` does not start with `# [github]`.
+        existing.lines().any(|line| {
+            let line = line.trim();
+            active
+                .iter()
+                .chain(documented.iter())
+                .any(|f| line.starts_with(f.as_str()))
         })
     }
 }
@@ -347,49 +394,72 @@ fn banner_prefix() -> &'static str {
     "# ========"
 }
 
-/// Split rendered text into banner-delimited sections.
+/// Split rendered text into table blocks.
 ///
-/// The first one is the preamble above the first banner; it has no title and
-/// is never appended to an existing file.
-fn sections(rendered: &str) -> Vec<Section> {
-    let mut sections: Vec<Section> = Vec::new();
-    let mut current = Section {
-        title: String::new(),
-        text: String::new(),
-        tables: Vec::new(),
-    };
-    let mut lines = rendered.lines().peekable();
-    while let Some(line) = lines.next() {
-        if line.starts_with(banner_prefix()) && !current.text.is_empty() {
-            // A banner opens a section only when it is the *first* of the pair
-            // wrapping a title; the closing one is part of the same block.
-            if current.text.lines().next_back().map(str::trim) != Some("")
-                && !current.title.is_empty()
-            {
-                current.text.push_str(line);
-                current.text.push('\n');
-                continue;
+/// Lines between blocks attach to the block that *follows* them, so an
+/// appended block carries the banner and the explanation that introduce it and
+/// reads exactly as it does in a fresh file. Whatever trails the last block is
+/// prose, and is dropped.
+fn blocks(rendered: &str) -> Vec<Block> {
+    let mut blocks: Vec<Block> = Vec::new();
+    let mut pending = String::new();
+    let mut current: Option<Block> = None;
+    // Distance from the last banner line, to tell a banner that opens a new
+    // section from the one that closes the same section's title.
+    let mut since_banner = usize::MAX;
+
+    for line in rendered.lines() {
+        if line.starts_with(banner_prefix()) {
+            if let Some(block) = current.take() {
+                blocks.push(block);
             }
-            sections.push(std::mem::replace(
-                &mut current,
-                Section {
-                    title: lines
-                        .peek()
-                        .map(|t| t.trim_end().to_string())
-                        .unwrap_or_default(),
-                    text: String::new(),
-                    tables: Vec::new(),
-                },
-            ));
+            // A new section starts here, so whatever is still unattributed
+            // belongs to the section that just ended and is not part of any
+            // table. Dropping it is the whole point: that is where the
+            // skeleton's root-level keys live.
+            if since_banner > 2 {
+                pending.clear();
+            }
+            since_banner = 0;
+            pending.push_str(line);
+            pending.push('\n');
+            continue;
         }
-        current.text.push_str(line);
-        current.text.push('\n');
+        since_banner = since_banner.saturating_add(1);
+        // The line right after a banner is the section's title, and titles are
+        // written as `# [llm] — the AI Gateway …`. Reading that as a table
+        // header would make every section start a block of its own, on top of
+        // the one its real header starts.
+        if since_banner == 1 {
+            pending.push_str(line);
+            pending.push('\n');
+            continue;
+        }
         if let Some(path) = table_path(line) {
-            current.tables.push(path);
+            if let Some(block) = current.take() {
+                blocks.push(block);
+            }
+            let mut text = std::mem::take(&mut pending);
+            text.push_str(line);
+            text.push('\n');
+            current = Some(Block { path, text });
+            continue;
+        }
+        match &mut current {
+            Some(block) => {
+                block.text.push_str(line);
+                block.text.push('\n');
+            }
+            None => {
+                pending.push_str(line);
+                pending.push('\n');
+            }
         }
     }
-    sections.push(current);
-    sections
+    if let Some(block) = current {
+        blocks.push(block);
+    }
+    blocks
 }
 
 /// The table path a commented header line documents, if it is one.
@@ -596,6 +666,17 @@ mod tests {
         names.iter().map(|s| (*s).to_string()).collect()
     }
 
+    /// **An empty list is refused, not read as "none".** It is the same state
+    /// the TTY gate exists to rule out: a run that installs nothing and
+    /// reports success.
+    #[test]
+    fn an_empty_plugin_list_is_refused_and_points_at_none() {
+        for spec in ["", "   ", ",", " , "] {
+            let err = parse_plugins(spec, &known()).unwrap_err().to_string();
+            assert!(err.contains("--plugins none"), "for {spec:?}: {err}");
+        }
+    }
+
     #[test]
     fn plugins_all_and_none_are_the_two_bulk_answers() {
         assert_eq!(parse_plugins("all", &known()).unwrap().len(), known().len());
@@ -619,39 +700,87 @@ mod tests {
         assert!(err.contains("github"), "{err}");
     }
 
-    /// The preamble is never appended to someone's existing config: it is the
-    /// file's opening explanation, not a section.
+    /// **Root-level content is never appended.** The skeleton's one live line,
+    /// `version = 1`, sits under no table; appending it to a file that ends
+    /// inside `[[workflows]]` makes it that workflow's key, which
+    /// `deny_unknown_fields` rejects — and appending it to one that ends at
+    /// root level is a duplicate key. Neither is recoverable by the operator
+    /// without reading the diff.
     #[test]
-    fn the_preamble_has_no_title_and_the_rest_do() {
+    fn nothing_outside_a_table_is_ever_appended() {
         let rendered = template::render(&set(&["github"]), SecretBackend::OnePassword);
-        let sections = sections(&rendered);
-        assert!(sections[0].title.is_empty());
         assert!(
-            sections.iter().skip(1).all(|s| !s.title.is_empty()),
-            "every section after the preamble is titled"
+            rendered.contains("\nversion = 1"),
+            "fixture assumption: the skeleton sets version"
+        );
+        let appended: String = blocks(&rendered).iter().map(|b| b.text.clone()).collect();
+        assert!(
+            !appended.lines().any(|l| l.trim() == "version = 1"),
+            "a root-level key reached the append path"
         );
         assert!(
-            sections.iter().any(|s| s.title.contains("[github]")),
-            "titles: {:?}",
-            sections.iter().map(|s| &s.title).collect::<Vec<_>>()
+            !appended
+                .lines()
+                .any(|l| !l.trim().is_empty() && !l.trim_start().starts_with('#')),
+            "every appended line must be a comment"
         );
     }
 
-    /// **A live table stops its section from being appended.** Adding a
+    /// **A plugin picked on a later run gets its roster entry too.** All seven
+    /// `[plugins.<name>]` entries share one banner, so a section-sized append
+    /// unit would call the roster "already there" and add `[notion]` with
+    /// nothing to enable it by — the exact scenario ADR-0077 decision 6 exists
+    /// for.
+    #[test]
+    fn a_plugin_added_later_brings_its_roster_entry() {
+        let first = template::render(&set(&["github"]), SecretBackend::OnePassword);
+        let second = template::render(&set(&["notion"]), SecretBackend::OnePassword);
+        let missing: Vec<String> = blocks(&second)
+            .into_iter()
+            .filter(|b| !b.is_present_in(&first))
+            .map(|b| b.path)
+            .collect();
+        assert!(
+            missing.contains(&"plugins.notion".to_string()),
+            "the roster entry was not appended: {missing:?}"
+        );
+        assert!(
+            missing.contains(&"notion".to_string()),
+            "the settings table was not appended: {missing:?}"
+        );
+        assert!(
+            !missing.contains(&"plugins.github".to_string()),
+            "an entry the file already has must not be added twice: {missing:?}"
+        );
+    }
+
+    /// Re-running with the same selection changes nothing.
+    ///
+    /// Nothing in a generated file is active, so presence cannot be judged by
+    /// live tables alone — without the commented form counting too, every
+    /// re-run would append the whole file again.
+    #[test]
+    fn a_rerun_with_the_same_selection_appends_nothing() {
+        let rendered = template::render(&set(&["github", "herdr"]), SecretBackend::OnePassword);
+        let missing: Vec<String> = blocks(&rendered)
+            .into_iter()
+            .filter(|b| !b.is_present_in(&rendered))
+            .map(|b| b.path)
+            .collect();
+        assert!(missing.is_empty(), "would append again: {missing:?}");
+    }
+
+    /// **A live table stops its block from being appended.** Adding a
     /// commented block about `[github]` below a `[github]` the operator wrote
     /// would read as a second, contradictory definition.
     #[test]
-    fn a_section_the_config_already_has_is_not_appended() {
+    fn a_table_the_config_already_defines_is_not_appended() {
         let rendered = template::render(&set(&["github"]), SecretBackend::OnePassword);
-        let github = sections(&rendered)
+        let github = blocks(&rendered)
             .into_iter()
-            .find(|s| s.title.contains("[github] —"))
-            .expect("the github section");
+            .find(|b| b.path == "github")
+            .expect("the [github] block");
         assert!(github.is_present_in("[github]\ntoken = \"op://Dev/totsuka/github-token\"\n"));
         assert!(!github.is_present_in("[worktree]\ncleanup = \"manual\"\n"));
-        assert!(
-            !github.is_present_in("# [github]\n# token = \"…\"\n"),
-            "a commented table is documentation, not a definition"
-        );
     }
 }

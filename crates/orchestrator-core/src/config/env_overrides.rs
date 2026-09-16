@@ -33,6 +33,17 @@ use super::schema::{ConfigError, RootConfig};
 /// Prefix for environment variable overrides (F-66 layer 2).
 pub const ENV_PREFIX: &str = "TOTSUKA_";
 
+/// Prefix for environment variables holding a secret a `${...}` reference
+/// resolves (#705).
+///
+/// `totsuka setup --secret-backend env` writes references of the form
+/// `${TOTSUKA_SECRET_GITHUB_TOKEN}`, so the variables it tells the operator to
+/// export live in totsuka's own namespace rather than colliding with whatever
+/// else is in their shell. They are not config overrides, and without this
+/// exemption every command would warn about each one on every run — a warning
+/// the operator cannot act on, over a variable this tool asked them to set.
+pub const SECRET_PREFIX: &str = "TOTSUKA_SECRET_";
+
 /// Reserved *outbound* env vars the Orchestrator injects into agent/hook
 /// processes (`run::hooks`, `HookLaunchSpec`). These are never config
 /// overrides; they are excluded from unknown-key warnings because an agent
@@ -152,7 +163,7 @@ where
 
     let mut warnings = Vec::new();
     for (name, value) in vars {
-        if RESERVED.contains(&name.as_str()) {
+        if RESERVED.contains(&name.as_str()) || name.starts_with(SECRET_PREFIX) {
             continue;
         }
         let Some((_, apply)) = OVERRIDES.iter().find(|(key, _)| *key == name) else {

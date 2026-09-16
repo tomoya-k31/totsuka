@@ -375,8 +375,9 @@ pub use orchestrator_core::terminal::safe;
 /// The installed git version string, if git is on PATH.
 ///
 /// Lives here rather than next to a command because two of them want it:
-/// `doctor` reports it as a check, and `setup` warns when it is missing (a
-/// worktree cannot be created without git).
+/// `doctor` reports it as a check, and `setup` warns when it is missing — a
+/// worktree cannot be created without git, and since `setup` no longer ends by
+/// running `doctor`, that warning is the only one a fresh machine gets.
 pub fn git_version() -> Option<String> {
     let out = std::process::Command::new("git")
         .arg("--version")

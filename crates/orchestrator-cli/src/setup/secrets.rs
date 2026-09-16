@@ -35,7 +35,12 @@ pub enum SecretBackend {
     /// Another tool's CLI, run on each resolution (`cmd:<command>`).
     #[value(name = "cmd")]
     Cmd,
-    /// Environment variables (`${TOTSUKA_...}`).
+    /// Environment variables (`${TOTSUKA_SECRET_...}`).
+    ///
+    /// The `TOTSUKA_SECRET_` prefix keeps the names in totsuka's namespace
+    /// without colliding with the config overrides, which own `TOTSUKA_*` and
+    /// warn about every name they do not recognise
+    /// (`orchestrator_core::config::env_overrides::SECRET_PREFIX`).
     #[value(name = "env")]
     Env,
 }
@@ -55,9 +60,11 @@ impl SecretBackend {
                 "notion-token" => "cmd:ntn auth token --plain".to_string(),
                 _ => format!("cmd:<command that prints the {account}>"),
             },
-            SecretBackend::Env => {
-                format!("${{TOTSUKA_{}}}", account.to_uppercase().replace('-', "_"))
-            }
+            SecretBackend::Env => format!(
+                "${{{}{}}}",
+                orchestrator_core::config::env_overrides::SECRET_PREFIX,
+                account.to_uppercase().replace('-', "_")
+            ),
         }
     }
 
@@ -141,9 +148,13 @@ impl FromStr for SecretBackend {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // Kept in step with the `#[value(name = …)]` spellings above: clap
+        // parses `--secret-backend` through the derived `ValueEnum`, so an
+        // alias only this impl knew would be advertised nowhere and rejected
+        // on the command line.
         match s {
-            "op" | "1password" => Ok(SecretBackend::OnePassword),
-            "bw" | "bitwarden" => Ok(SecretBackend::Bitwarden),
+            "op" => Ok(SecretBackend::OnePassword),
+            "bw" => Ok(SecretBackend::Bitwarden),
             "keychain" => Ok(SecretBackend::Keychain),
             "cmd" => Ok(SecretBackend::Cmd),
             "env" => Ok(SecretBackend::Env),
@@ -208,6 +219,18 @@ mod tests {
                 .contains("keychain:")
         );
         assert!(SecretBackend::Keychain.other_forms("x").contains("op://"));
+    }
+
+    /// The env backend stays out of the config-override namespace, which warns
+    /// about every `TOTSUKA_*` name it does not recognise.
+    #[test]
+    fn env_references_live_under_the_reserved_secret_prefix() {
+        let reference = SecretBackend::Env.reference("github-token");
+        assert_eq!(reference, "${TOTSUKA_SECRET_GITHUB_TOKEN}");
+        assert!(
+            reference.contains(orchestrator_core::config::env_overrides::SECRET_PREFIX),
+            "the prefix must come from core, so the exemption cannot drift"
+        );
     }
 
     /// `cmd:` earns its place on the accounts where another tool really does

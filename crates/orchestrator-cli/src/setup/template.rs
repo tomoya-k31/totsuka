@@ -211,12 +211,17 @@ mod tests {
         assert!(rendered.contains("[plugins.github]"), "{rendered}");
         assert!(rendered.contains("[github]"), "{rendered}");
         for absent in ["notion", "slack", "discord", "herdr", "orca", "macos"] {
+            // Header lines only: the recipe section names plugins in prose
+            // ("Needs: [plugins.slack], …"), and that is documentation, not a
+            // roster entry.
+            let header = format!("# [plugins.{absent}]");
+            let table = format!("# [{absent}]");
             assert!(
-                !rendered.contains(&format!("[plugins.{absent}]")),
+                !rendered.lines().any(|l| l.trim_end() == header),
                 "roster entry for unselected `{absent}` survived"
             );
             assert!(
-                !rendered.contains(&format!("\n# [{absent}]")),
+                !rendered.lines().any(|l| l.trim_end() == table),
                 "settings table for unselected `{absent}` survived"
             );
         }
