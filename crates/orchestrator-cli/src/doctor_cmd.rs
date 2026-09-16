@@ -19,8 +19,8 @@ use orchestrator_core::config::{
     self, PluginKind as ConfigPluginKind, RootConfig, secret_resolver,
 };
 use orchestrator_core::plugins::claims::ClaimRegistry;
-use orchestrator_core::ports::SecretString;
 use orchestrator_core::ports::git::GitRunner;
+use orchestrator_core::ports::{SecretRef, SecretString};
 use orchestrator_core::worktree::WorktreeManager;
 use serde::Serialize;
 
@@ -111,36 +111,192 @@ impl Check {
     }
 }
 
-/// Whether resolving an `op://` reference can happen without a prompt (#289).
+/// Whether one secret backend's CLI can resolve a reference without prompting
+/// (#289).
 ///
 /// [ADR-0006](../../ai-docs/decisions/adr-0006-onepassword-secret-backend.md)
-/// requires `doctor` to stay non-interactive, but `op read` only prompts when
-/// no session is established. So rather than approximating with "is there a
-/// TTY", doctor asks the question directly — `op whoami` answers it and never
-/// prompts itself.
+/// requires `doctor` to stay non-interactive, but a shell-out backend only
+/// prompts when no session is established. So rather than approximating with
+/// "is there a TTY", doctor asks the question directly, with a query the CLI
+/// answers without prompting itself (`op whoami`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum OpReadiness {
-    /// No `op://` reference anywhere in config: nothing can prompt, so no
-    /// check needs gating.
+enum BackendReadiness {
+    /// No reference for this backend anywhere in config: nothing can prompt,
+    /// so no check needs gating.
     NotUsed,
-    /// A session is established — `op read` answers from it. Probes that need
-    /// a secret run exactly as before.
+    /// A session is established — the CLI answers from it. Probes that need a
+    /// secret run exactly as before.
     Ready,
-    /// `op` is missing, broken, or has no session. Resolving would pop a
-    /// biometric prompt, or hang forever when nobody is watching.
+    /// The CLI is missing, broken, or has no session. Resolving would pop a
+    /// prompt, or hang forever when nobody is watching.
     WouldPrompt,
 }
 
-impl OpReadiness {
-    /// Whether a probe that must resolve an `op://` reference may proceed.
+impl BackendReadiness {
+    /// Whether a probe that must resolve one of this backend's references may
+    /// proceed.
     fn may_resolve(self) -> bool {
         !matches!(self, Self::WouldPrompt)
     }
+}
 
-    /// The reason to put on a check skipped because of this state.
-    fn skip_reason(self) -> &'static str {
-        "resolving its op:// reference would prompt for 1Password unlock \
-         (doctor stays non-interactive)"
+/// A secret-reference scheme, as `doctor` needs to reason about it.
+///
+/// Every gate in doctor asks one question — "would resolving this reference
+/// prompt, hang, or run something?" — and #444 showed the cost of letting each
+/// site answer it for itself with its own `starts_with`: `cmd:` was wired into
+/// 1 of the 3 gates and the other 2 kept resolving it behind the operator's
+/// back until a follow-up fix.
+///
+/// [`SecretScheme::of`] is **exhaustive over [`SecretRef`] on purpose**. A new
+/// variant in `orchestrator-core` breaks this compile, which is the only
+/// mechanism that makes "doctor was never taught about the new scheme"
+/// impossible rather than merely unlikely.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SecretScheme {
+    /// `keychain:`, `${ENV}`, and plain values — resolving is local and
+    /// silent, so nothing needs gating.
+    Silent,
+    /// `op://` — resolving prompts unless a session is live, which
+    /// [`check_onepassword`] measures.
+    OnePassword,
+    /// `cmd:` — resolving runs an arbitrary command. There is nothing to
+    /// measure (`cmd:op read …` is a real spelling), so it is never resolved.
+    Command,
+}
+
+impl SecretScheme {
+    /// Classify a reference exactly as written in config.
+    ///
+    /// An unparseable string (`${ENV}`, a plain value, a malformed `op://…`)
+    /// is [`Silent`](Self::Silent): none of them reach a backend, so none can
+    /// prompt. A malformed reference fails in the resolver with
+    /// `InvalidReference` without ever spawning a CLI.
+    fn of(reference: &str) -> Self {
+        match reference.parse::<SecretRef>() {
+            Err(_) => Self::Silent,
+            Ok(SecretRef::Keychain { .. }) => Self::Silent,
+            Ok(SecretRef::OnePassword { .. }) => Self::OnePassword,
+            Ok(SecretRef::Command { .. }) => Self::Command,
+        }
+    }
+
+    /// The wording for skipping this scheme, ignoring session state — `None`
+    /// when resolving it is silent.
+    fn skip(self) -> Option<SecretSkip> {
+        match self {
+            Self::Silent => None,
+            Self::OnePassword => Some(SecretSkip::ONEPASSWORD),
+            Self::Command => Some(SecretSkip::COMMAND),
+        }
+    }
+}
+
+/// Why a probe that would resolve secrets is being skipped, and what to tell
+/// the operator (§7).
+///
+/// One table for every scheme, so a new scheme writes its wording once instead
+/// of once per gate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SecretSkip {
+    /// How the reference is named in prose ("an op:// reference").
+    label: &'static str,
+    /// Why resolution cannot happen; reads as the tail of "… but {detail}".
+    detail: &'static str,
+    /// Short phrase for the "not probed" roll-up in `check_plugins`.
+    summary: &'static str,
+    /// Next action. `{target}` is replaced with whatever would have been
+    /// probed ("this plugin", "the receiver").
+    action: &'static str,
+    /// The parenthetical of the "left unresolved here" note, for checks that
+    /// report on a reference rather than probing with it.
+    note: &'static str,
+}
+
+impl SecretSkip {
+    /// `op://` — gated on the session `check_onepassword` measured.
+    const ONEPASSWORD: Self = Self {
+        label: "an op:// reference",
+        detail: "resolving its op:// reference would prompt for 1Password unlock \
+                 (doctor stays non-interactive)",
+        summary: "its op:// reference would prompt",
+        action: "run `op signin`, then re-run `totsuka doctor` to probe {target}",
+        note: "doctor stays non-interactive; see the 1password checks above",
+    };
+
+    /// `cmd:` — unconditional, because there is no session to measure (#444).
+    const COMMAND: Self = Self {
+        label: "a cmd: reference",
+        detail: "resolving its cmd: reference would execute a command \
+                 (doctor stays non-interactive)",
+        summary: "its cmd: reference would run a command",
+        action: "the command runs when `totsuka run` resolves the config; \
+                 test {target} by hand if unsure",
+        note: "doctor stays non-interactive; the command runs when `totsuka run` \
+               resolves the config",
+    };
+
+    /// The next action, naming what would have been probed.
+    fn action(self, target: &str) -> String {
+        self.action.replace("{target}", target)
+    }
+}
+
+/// Whether `doctor` may resolve a reference right now.
+///
+/// Holds one [`BackendReadiness`] per *measurable* backend; a scheme with
+/// nothing to measure needs no field. Gate sites ask this type instead of
+/// testing prefixes themselves — that is what keeps a new scheme from being
+/// wired into some gates and forgotten in others.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SecretReadiness {
+    /// The `op://` backend's session state.
+    onepassword: BackendReadiness,
+}
+
+impl SecretReadiness {
+    /// The skip for `reference`, or `None` when doctor may resolve it.
+    fn skip_for(self, reference: &str) -> Option<SecretSkip> {
+        match SecretScheme::of(reference) {
+            SecretScheme::OnePassword if self.onepassword.may_resolve() => None,
+            scheme => scheme.skip(),
+        }
+    }
+
+    /// The skip for the first blocked string leaf under `value`, if any.
+    ///
+    /// Only *actual string values* count, so a commented-out example — like
+    /// the one `totsuka init` generates — never gates anything.
+    fn skip_in_toml(self, value: &toml::Value) -> Option<SecretSkip> {
+        match value {
+            toml::Value::String(s) => self.skip_for(s),
+            toml::Value::Array(items) => items.iter().find_map(|v| self.skip_in_toml(v)),
+            toml::Value::Table(table) => table.values().find_map(|v| self.skip_in_toml(v)),
+            _ => None,
+        }
+    }
+
+    /// The "left unresolved here" note for a check that *reports on* a
+    /// reference instead of probing with it, or `None` when the reference is
+    /// resolved normally.
+    ///
+    /// These sites read like pure reporting, but they are gates too: whatever
+    /// this returns `None` for falls through to a real `resolve()` call. A
+    /// scheme missing from [`SecretScheme`] would therefore be spawned here,
+    /// prompting on stdin with nobody watching.
+    fn deferred_note(self, reference: &str, subject: &str) -> Option<String> {
+        let scheme = SecretScheme::of(reference);
+        if scheme == SecretScheme::OnePassword && self.onepassword == BackendReadiness::Ready {
+            return Some(format!(
+                "{subject} is an op:// reference, left unresolved here \
+                 (a 1Password session is active, so `totsuka run` will resolve it)"
+            ));
+        }
+        let skip = scheme.skip()?;
+        Some(format!(
+            "{subject} is {}, left unresolved here ({})",
+            skip.label, skip.note
+        ))
     }
 }
 
@@ -305,13 +461,15 @@ pub fn run(cx: &Cx, args: DoctorArgs) -> Result<(), CliError> {
         // anything acts on it. Running this last, as it used to, meant
         // `check_plugins` had already resolved the very references the `llm`
         // and `hook-token` checks claimed the probes would cover.
-        let op = check_onepassword(cx, &env, &mut checks);
+        let secrets = SecretReadiness {
+            onepassword: check_onepassword(cx, cfg, &env, &mut checks),
+        };
         check_worktree_location(cfg, &env, &mut checks);
-        check_hooks(cx, cfg, config_ok, &env, op, args, &mut checks);
-        check_plugins(cx, cfg, &env, op, &mut checks);
-        check_llm_key(cfg, &env, args, op, &mut checks);
+        check_hooks(cx, cfg, config_ok, &env, secrets, args, &mut checks);
+        check_plugins(cx, cfg, &env, secrets, &mut checks);
+        check_llm_key(cfg, &env, args, secrets, &mut checks);
         check_orphans(cfg, &env, db.as_ref(), args, &mut checks)?;
-        check_orphan_panes(cx, cfg, &env, db.as_ref(), args, op, &mut checks)?;
+        check_orphan_panes(cx, cfg, &env, db.as_ref(), args, secrets, &mut checks)?;
     }
 
     if json {
@@ -352,6 +510,63 @@ pub fn run(cx: &Cx, args: DoctorArgs) -> Result<(), CliError> {
     Ok(())
 }
 
+/// The raw outcome of probing a secret-backend CLI.
+///
+/// Split from the spawning on purpose: the branching below is what decides
+/// whether doctor resolves secrets, and it had **no test at all** while the
+/// spawn was inlined. That is how the 1Password probes stayed dead code for
+/// their whole life — `config_mentions_onepassword` parsed with the wrong TOML
+/// entry point and always answered "no", and nothing noticed (#289).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CliProbe {
+    /// The binary is not on PATH.
+    Missing,
+    /// `--version` ran but exited non-zero.
+    VersionFailed {
+        /// The exit code, or `-1` when the process was signalled.
+        code: i32,
+    },
+    /// `--version` could not be spawned at all.
+    Unrunnable {
+        /// The spawn error, for the check's detail line.
+        error: String,
+    },
+    /// `--version` succeeded.
+    Probed {
+        /// Whatever `--version` printed, trimmed.
+        version: String,
+        /// Whether the session query succeeded.
+        session: bool,
+    },
+}
+
+/// Run a backend CLI's two **non-prompting** probes: `--version` for presence,
+/// then `session_args` for the session.
+///
+/// `session_args` must name a query that never prompts on its own — `op
+/// whoami` does not, unlike `op read`. Getting that wrong reopens exactly the
+/// unattended hang the gate exists to prevent.
+fn probe_cli(binary: &str, session_args: &[&str], env: &HashMap<String, String>) -> CliProbe {
+    let Some(path) = which(binary, env) else {
+        return CliProbe::Missing;
+    };
+    match std::process::Command::new(&path).arg("--version").output() {
+        Ok(out) if out.status.success() => CliProbe::Probed {
+            version: String::from_utf8_lossy(&out.stdout).trim().to_string(),
+            session: std::process::Command::new(&path)
+                .args(session_args)
+                .output()
+                .is_ok_and(|out| out.status.success()),
+        },
+        Ok(out) => CliProbe::VersionFailed {
+            code: out.status.code().unwrap_or(-1),
+        },
+        Err(e) => CliProbe::Unrunnable {
+            error: e.to_string(),
+        },
+    }
+}
+
 /// 1Password backend probes (#156), fired **only when** `config.toml`
 /// actually contains an `op://` reference: `op --version`
 /// (CLI present) and `op whoami` (session established — unlike `op read`, it
@@ -360,68 +575,93 @@ pub fn run(cx: &Cx, args: DoctorArgs) -> Result<(), CliError> {
 /// without prompting (#289).
 fn check_onepassword(
     cx: &Cx,
+    cfg: &RootConfig,
     env: &HashMap<String, String>,
     checks: &mut Vec<Check>,
-) -> OpReadiness {
-    if !config_mentions_onepassword(cx) {
-        return OpReadiness::NotUsed;
+) -> BackendReadiness {
+    if !scheme_in_use(cx, cfg, SecretScheme::OnePassword) {
+        return BackendReadiness::NotUsed;
     }
-    let Some(op) = which("op", env) else {
-        checks.push(Check::fail(
-            "1password",
-            "config references op:// secrets but the 1Password CLI (op) is not on PATH",
-            "install it (macOS: `brew install 1password-cli`, other platforms: \
-             https://developer.1password.com/docs/cli) or switch the references to \
-             `keychain:` / `${ENV}`",
-        ));
-        // No `op` binary: every resolution would fail anyway, and the probes
-        // that need one must not pretend otherwise.
-        return OpReadiness::WouldPrompt;
-    };
-    match std::process::Command::new(&op).arg("--version").output() {
-        Ok(out) if out.status.success() => {
-            let version = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            checks.push(Check::ok("1password", format!("op {version} on PATH")));
-        }
-        Ok(out) => {
+    onepassword_checks(probe_cli("op", &["whoami"], env), checks)
+}
+
+/// Turn a 1Password [`CliProbe`] into checks and a [`BackendReadiness`].
+///
+/// Pure, so every branch is reachable from a test without the real `op` (CI
+/// has none, and the real one would prompt for biometrics).
+fn onepassword_checks(probe: CliProbe, checks: &mut Vec<Check>) -> BackendReadiness {
+    let (version, session) = match probe {
+        CliProbe::Missing => {
             checks.push(Check::fail(
                 "1password",
-                format!(
-                    "`op --version` exited with {}",
-                    out.status.code().unwrap_or(-1)
-                ),
+                "config references op:// secrets but the 1Password CLI (op) is not on PATH",
+                "install it (macOS: `brew install 1password-cli`, other platforms: \
+                 https://developer.1password.com/docs/cli) or switch the references to \
+                 `keychain:` / `${ENV}`",
+            ));
+            // No `op` binary: every resolution would fail anyway, and the
+            // probes that need one must not pretend otherwise.
+            return BackendReadiness::WouldPrompt;
+        }
+        CliProbe::VersionFailed { code } => {
+            checks.push(Check::fail(
+                "1password",
+                format!("`op --version` exited with {code}"),
                 "reinstall the 1Password CLI (macOS: `brew reinstall 1password-cli`)",
             ));
-            return OpReadiness::WouldPrompt;
+            return BackendReadiness::WouldPrompt;
         }
-        Err(e) => {
+        CliProbe::Unrunnable { error } => {
             checks.push(Check::fail(
                 "1password",
-                format!("cannot run `op`: {e}"),
+                format!("cannot run `op`: {error}"),
                 "install the 1Password CLI (macOS: `brew install 1password-cli`, \
                  other platforms: https://developer.1password.com/docs/cli)",
             ));
-            return OpReadiness::WouldPrompt;
+            return BackendReadiness::WouldPrompt;
+        }
+        CliProbe::Probed { version, session } => (version, session),
+    };
+    checks.push(Check::ok("1password", format!("op {version} on PATH")));
+    // The session check is also the answer to "may the checks below resolve?"
+    // — `op read` prompts only when there is no session, so asking `whoami`
+    // measures the real condition instead of approximating it with a TTY test
+    // (#289).
+    if session {
+        checks.push(Check::ok("1password-session", "op session is active"));
+        BackendReadiness::Ready
+    } else {
+        checks.push(Check::warn(
+            "1password-session",
+            "no active 1Password session — probes that need an op:// secret are skipped",
+            "run `op signin`, then re-run `totsuka doctor` for the full picture",
+        ));
+        BackendReadiness::WouldPrompt
+    }
+}
+
+/// The next action for a set of skips: one clause per **distinct** reason.
+///
+/// Taking only the first reason would tell the operator to run `op signin`
+/// (which does not unblock a `cmd:` agent) or to test by hand (which omits the
+/// sign-in), while the detail line names every agent (Copilot review, #699).
+///
+/// Pulled out as a pure function so the mixed case has a test. The branch
+/// exists *because* a review found the single-reason version wrong, and
+/// shipping that fix untested would repeat exactly what let the probes stay
+/// dead code in the first place (#289).
+fn combined_skip_action(skips: &[SecretSkip], target: &str) -> String {
+    let mut distinct: Vec<SecretSkip> = Vec::new();
+    for skip in skips {
+        if !distinct.contains(skip) {
+            distinct.push(*skip);
         }
     }
-    // Session check: `op whoami` fails when not signed in, without prompting.
-    // This is also the answer to "may the checks below resolve?" — `op read`
-    // prompts only when there is no session, so asking `whoami` measures the
-    // real condition instead of approximating it with a TTY test (#289).
-    match std::process::Command::new(&op).arg("whoami").output() {
-        Ok(out) if out.status.success() => {
-            checks.push(Check::ok("1password-session", "op session is active"));
-            OpReadiness::Ready
-        }
-        _ => {
-            checks.push(Check::warn(
-                "1password-session",
-                "no active 1Password session — probes that need an op:// secret are skipped",
-                "run `op signin`, then re-run `totsuka doctor` for the full picture",
-            ));
-            OpReadiness::WouldPrompt
-        }
-    }
+    distinct
+        .iter()
+        .map(|skip| skip.action(target))
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 /// The false-negative note appended to every `agent-tool:*` failure.
@@ -595,30 +835,14 @@ agent = "herdr"
     }
 }
 
-/// Whether `[llm].api_key_ref` is an `op://` reference — the one secret
-/// `plugin_spec` resolves for a task-source plugin that does *not* live in
-/// that plugin's own config file.
-fn llm_key_is_onepassword(cfg: &RootConfig) -> bool {
-    cfg.llm
-        .as_ref()
-        .and_then(|llm| llm.api_key_ref.as_deref())
-        .is_some_and(|reference| reference.starts_with("op://"))
-}
-
-/// Whether the plugin's `[<name>]` table holds an `op://` reference in a real
-/// string value. Per-plugin counterpart of [`config_mentions_onepassword`], so
-/// one plugin's 1Password usage does not gate the probes of every other
-/// plugin.
-fn plugin_config_mentions_onepassword(cfg: &RootConfig, name: &str) -> bool {
-    cfg.plugin_settings(name).is_some_and(toml_has_op_reference)
-}
-
-/// Whether launching `name` would make `plugin_spec` resolve an `op://`
-/// reference (#289).
+/// The skip for launching `name`, when `plugin_spec` would resolve a reference
+/// `doctor` must not resolve (#289, #444) — `None` when it is safe to probe.
 ///
 /// Two independent doors, both inside `plugin_spec`: `plugin_init_config`
 /// resolves **every string leaf** of the plugin's `[<name>]` table, and
 /// `llm_info` resolves `[llm].api_key_ref` — but only for a task source.
+/// Decided per plugin: one plugin's gated reference must not silence the
+/// probes of plugins that need no secret at all.
 ///
 /// "Task source" is asked of **both** the manifest and the config roster, and
 /// either one saying yes is enough. `plugin_spec` itself branches on
@@ -633,7 +857,18 @@ fn plugin_config_mentions_onepassword(cfg: &RootConfig, name: &str) -> bool {
 ///
 /// An unreadable manifest needs no special case: `plugin_spec` reads it first
 /// and fails before resolving anything.
-fn plugin_needs_onepassword(cx: &Cx, cfg: &RootConfig, name: &str) -> bool {
+fn plugin_secret_skip(
+    cx: &Cx,
+    cfg: &RootConfig,
+    name: &str,
+    readiness: SecretReadiness,
+) -> Option<SecretSkip> {
+    if let Some(skip) = cfg
+        .plugin_settings(name)
+        .and_then(|settings| readiness.skip_in_toml(settings))
+    {
+        return Some(skip);
+    }
     let declared_task_source = cfg
         .plugin(name)
         .is_some_and(|p| p.kind == ConfigPluginKind::TaskSource);
@@ -643,18 +878,56 @@ fn plugin_needs_onepassword(cx: &Cx, cfg: &RootConfig, name: &str) -> bool {
         .ok()
         .flatten()
         .is_some_and(|m| m.kind == plugin_protocol::manifest::PluginKind::TaskSource);
-    let is_task_source = declared_task_source || manifest_task_source;
-    plugin_config_mentions_onepassword(cfg, name) || (is_task_source && llm_key_is_onepassword(cfg))
+    if !(declared_task_source || manifest_task_source) {
+        return None;
+    }
+    cfg.llm
+        .as_ref()
+        .and_then(|llm| llm.api_key_ref.as_deref())
+        .and_then(|reference| readiness.skip_for(reference))
 }
 
-/// Whether `config.toml` contains an `op://` secret reference in an **actual
-/// string value** (resolution stays lazy, this only gates doctor). The file is
-/// TOML-parsed and its string leaves walked, so a commented-out example — like
-/// the one `totsuka init` generates — never triggers the 1Password checks.
+/// Whether a reference of `scheme` reaches `doctor` at all.
+///
+/// Checked against **both** the file on disk and the effective config, because
+/// they are not the same document: `Cx::load_config` applies the `TOTSUKA_*`
+/// env overrides *after* parsing, and two of them
+/// (`TOTSUKA_HOOKS_AUTH_TOKEN_REF`, `TOTSUKA_LLM_API_KEY_REF`) carry secret
+/// references.
+///
+/// Scanning only the file reports `NotUsed` for an `op://` supplied that way,
+/// which opens the gate and lets `check_hook_socket` / `check_plugins` resolve
+/// it for real — exactly the unattended prompt this gate exists to prevent
+/// (Copilot review, #699).
+fn scheme_in_use(cx: &Cx, cfg: &RootConfig, scheme: SecretScheme) -> bool {
+    config_mentions_scheme(cx, scheme) || override_mentions_scheme(cfg, scheme)
+}
+
+/// The effective-config half of [`scheme_in_use`]: the two typed fields an env
+/// override can replace after the file has been parsed.
+///
+/// Deliberately not a walk of the whole `RootConfig`: the file scan already
+/// covers everything written in the document, and the override table is the
+/// only way a reference can reach `doctor` without appearing there.
+fn override_mentions_scheme(cfg: &RootConfig, scheme: SecretScheme) -> bool {
+    [
+        cfg.hooks.auth_token_ref.as_deref(),
+        cfg.llm.as_ref().and_then(|llm| llm.api_key_ref.as_deref()),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|reference| SecretScheme::of(reference) == scheme)
+}
+
+/// Whether `config.toml` holds a reference of `scheme` in an **actual string
+/// value** (resolution stays lazy, this only decides whether to probe that
+/// backend at all). The file is TOML-parsed and its string leaves walked, so a
+/// commented-out example — like the one `totsuka init` generates — never
+/// triggers the backend's checks.
 ///
 /// One file since #554: plugin settings live in the same document, so the
 /// separate `plugins/*.toml` sweep this used to do is now the same walk.
-fn config_mentions_onepassword(cx: &Cx) -> bool {
+fn config_mentions_scheme(cx: &Cx, scheme: SecretScheme) -> bool {
     std::fs::read_to_string(&cx.config_path).is_ok_and(|content| {
         // `toml::Table`, not `toml::Value`: in toml 0.9 `FromStr for Value`
         // parses a *single value*, so `"a = 1".parse::<Value>()` is an
@@ -664,58 +937,18 @@ fn config_mentions_onepassword(cx: &Cx) -> bool {
         // ran at all (#289). `Table` is the document parser.
         content
             .parse::<toml::Table>()
-            .is_ok_and(|table| table.values().any(toml_has_op_reference))
+            .is_ok_and(|table| table.values().any(|v| toml_mentions_scheme(v, scheme)))
     })
 }
 
-/// Whether any string leaf of a TOML value starts with `op://`.
-fn toml_has_op_reference(value: &toml::Value) -> bool {
+/// Whether any string leaf of a TOML value is a reference of `scheme`.
+fn toml_mentions_scheme(value: &toml::Value, scheme: SecretScheme) -> bool {
     match value {
-        toml::Value::String(s) => s.starts_with("op://"),
-        toml::Value::Array(items) => items.iter().any(toml_has_op_reference),
-        toml::Value::Table(table) => table.values().any(toml_has_op_reference),
+        toml::Value::String(s) => SecretScheme::of(s) == scheme,
+        toml::Value::Array(items) => items.iter().any(|v| toml_mentions_scheme(v, scheme)),
+        toml::Value::Table(table) => table.values().any(|v| toml_mentions_scheme(v, scheme)),
         _ => false,
     }
-}
-
-/// Whether any string leaf of a TOML value starts with `cmd:` (#444).
-fn toml_has_cmd_reference(value: &toml::Value) -> bool {
-    match value {
-        toml::Value::String(s) => s.starts_with("cmd:"),
-        toml::Value::Array(items) => items.iter().any(toml_has_cmd_reference),
-        toml::Value::Table(table) => table.values().any(toml_has_cmd_reference),
-        _ => false,
-    }
-}
-
-/// Whether launching `name` would make `plugin_spec` run a `cmd:` reference's
-/// command (#444). Same two doors as [`plugin_needs_onepassword`]: the
-/// plugin's own `[<name>]` table, and `[llm].api_key_ref` for a task source.
-///
-/// Unlike `op://` there is no session to measure — doctor cannot know whether
-/// the command is prompt-free (`cmd:op read …` is a real spelling), so a
-/// plugin that mentions one is always skipped rather than probed (#289's
-/// non-interactive principle).
-fn plugin_needs_command_exec(cx: &Cx, cfg: &RootConfig, name: &str) -> bool {
-    let declared_task_source = cfg
-        .plugin(name)
-        .is_some_and(|p| p.kind == ConfigPluginKind::TaskSource);
-    let manifest_task_source = cx
-        .store()
-        .manifest_of(name)
-        .ok()
-        .flatten()
-        .is_some_and(|m| m.kind == plugin_protocol::manifest::PluginKind::TaskSource);
-    let is_task_source = declared_task_source || manifest_task_source;
-    let llm_key_is_command = cfg
-        .llm
-        .as_ref()
-        .and_then(|llm| llm.api_key_ref.as_deref())
-        .is_some_and(|reference| reference.starts_with("cmd:"));
-    let plugin_mentions_cmd = cfg
-        .plugin_settings(name)
-        .is_some_and(toml_has_cmd_reference);
-    plugin_mentions_cmd || (is_task_source && llm_key_is_command)
 }
 
 /// All Claude Code hook-mechanism probes (#141): assets, script dependencies,
@@ -726,7 +959,7 @@ fn check_hooks(
     cfg: &RootConfig,
     config_ok: bool,
     env: &HashMap<String, String>,
-    op: OpReadiness,
+    secrets: SecretReadiness,
     args: DoctorArgs,
     checks: &mut Vec<Check>,
 ) {
@@ -754,9 +987,16 @@ fn check_hooks(
             Err(_) => unknown_workflows.push((wf.name.as_str(), wf.agent.as_str())),
         }
     }
-    check_hook_token(cfg, env, &hook_workflows, &unknown_workflows, checks);
+    check_hook_token(
+        cfg,
+        env,
+        &hook_workflows,
+        &unknown_workflows,
+        secrets,
+        checks,
+    );
     check_spool(cx, cfg, env, args, checks);
-    check_hook_socket(cx, cfg, env, op, checks);
+    check_hook_socket(cx, cfg, env, secrets, checks);
 }
 
 /// Refresh the static hook scripts + per-workflow settings (idempotent, same
@@ -1076,6 +1316,7 @@ fn check_hook_token(
     env: &HashMap<String, String>,
     hook_workflows: &[(&str, &str)],
     unknown_workflows: &[(&str, &str)],
+    secrets: SecretReadiness,
     checks: &mut Vec<Check>,
 ) {
     match &cfg.hooks.auth_token_ref {
@@ -1114,28 +1355,23 @@ fn check_hook_token(
                 "set [hooks].auth_token_ref (e.g. keychain:totsuka/hook-token) before using a hook-capable agent",
             ))
         }
-        // `op://` is deliberately not resolved here (a real `op read` can
-        // prompt for biometrics / hang unattended); the 1password probes
-        // check presence + session without prompting (ADR-0006).
-        Some(reference) if reference.starts_with("op://") => checks.push(Check::ok(
-            "hook-token",
-            "[hooks].auth_token_ref is an op:// reference, left unresolved here \
-             (doctor stays non-interactive; see the 1password checks above)",
-        )),
-        // Same for `cmd:` — resolving would execute the command (#444).
-        Some(reference) if reference.starts_with("cmd:") => checks.push(Check::ok(
-            "hook-token",
-            "[hooks].auth_token_ref is a cmd: reference, left unresolved here \
-             (doctor stays non-interactive; the command runs when `totsuka run` \
-             resolves the config)",
-        )),
-        Some(reference) => match secret_resolver(env).resolve(reference) {
-            Ok(_) => checks.push(Check::ok("hook-token", "[hooks].auth_token_ref resolves")),
-            Err(e) => checks.push(Check::fail(
-                "hook-token",
-                format!("[hooks].auth_token_ref does not resolve: {e}"),
-                "export the referenced env var, store the token in the Keychain, or use an op:// reference",
-            )),
+        // A gated scheme is deliberately not resolved here: a real `op read`
+        // can prompt for biometrics / hang unattended, and a `cmd:` reference
+        // would execute a command (ADR-0006, #444). The 1password probes check
+        // presence + session without prompting.
+        //
+        // This reads like a reporting site but it is a gate: anything
+        // `deferred_note` declines falls through to the real `resolve` below.
+        Some(reference) => match secrets.deferred_note(reference, "[hooks].auth_token_ref") {
+            Some(note) => checks.push(Check::ok("hook-token", note)),
+            None => match secret_resolver(env).resolve(reference) {
+                Ok(_) => checks.push(Check::ok("hook-token", "[hooks].auth_token_ref resolves")),
+                Err(e) => checks.push(Check::fail(
+                    "hook-token",
+                    format!("[hooks].auth_token_ref does not resolve: {e}"),
+                    "export the referenced env var, store the token in the Keychain, or use an op:// reference",
+                )),
+            },
         },
     }
 }
@@ -1324,7 +1560,7 @@ fn check_hook_socket(
     cx: &Cx,
     cfg: &RootConfig,
     env: &HashMap<String, String>,
-    op: OpReadiness,
+    secrets: SecretReadiness,
     checks: &mut Vec<Check>,
 ) {
     let socket_path = match crate::common::hook_socket_path(cx, cfg, env) {
@@ -1374,35 +1610,41 @@ fn check_hook_socket(
     // not probing: the receiver would answer 401 and the check would report a
     // token mismatch that does not exist.
     let token_ref = cfg.hooks.auth_token_ref.as_deref();
-    if !op.may_resolve() && token_ref.is_some_and(|r| r.starts_with("op://")) {
+    if let Some(skip) = token_ref.and_then(|reference| secrets.skip_for(reference)) {
         checks.push(Check::skip(
             "hook-socket",
             format!(
                 "a receiver is live at {} but {}",
                 socket_path.display(),
-                op.skip_reason()
+                skip.detail
             ),
-            "run `op signin`, then re-run `totsuka doctor` to probe the receiver",
+            skip.action("the receiver"),
         ));
         return;
     }
-    // A `cmd:` token has no session to measure — resolving would execute the
-    // command, which doctor never does (#444, #289). Unconditional, unlike
-    // the op gate above.
-    if token_ref.is_some_and(|r| r.starts_with("cmd:")) {
-        checks.push(Check::skip(
-            "hook-socket",
-            format!(
-                "a receiver is live at {} but resolving the cmd: token would \
-                 execute a command (doctor stays non-interactive)",
-                socket_path.display()
-            ),
-            "the command runs when `totsuka run` resolves the config; \
-             test the receiver by hand if unsure",
-        ));
-        return;
-    }
-    let token = token_ref.and_then(|reference| secret_resolver(env).resolve(reference).ok());
+    // Resolution failures used to be swallowed by `.ok()`, which then probed
+    // with no token at all: the receiver answered 401 and the check reported a
+    // *token mismatch* that did not exist. A reference that cannot resolve is
+    // its own finding, and saying so is strictly more informative than a 401
+    // that says nothing about the receiver (Copilot review, #699).
+    let token = match token_ref {
+        None => None,
+        Some(reference) => match secret_resolver(env).resolve(reference) {
+            Ok(token) => Some(token),
+            Err(e) => {
+                checks.push(Check::fail(
+                    "hook-socket",
+                    format!(
+                        "a receiver is live at {} but [hooks].auth_token_ref does not resolve: {e}",
+                        socket_path.display()
+                    ),
+                    "fix the reference — probing without the token would report a 401 that \
+                     says nothing about the receiver",
+                ));
+                return;
+            }
+        },
+    };
     match self_post(&socket_path, token.as_ref().map(|t| t.expose())) {
         Ok(200) => checks.push(Check::ok(
             "hook-socket",
@@ -1556,7 +1798,7 @@ fn check_plugins(
     cx: &Cx,
     cfg: &RootConfig,
     env: &HashMap<String, String>,
-    op: OpReadiness,
+    secrets: SecretReadiness,
     checks: &mut Vec<Check>,
 ) {
     let enabled: Vec<&String> = cfg
@@ -1577,34 +1819,18 @@ fn check_plugins(
     // (#542 review).
     let mut not_probed: Vec<(String, &'static str)> = Vec::new();
     for name in enabled {
-        // `plugin_spec` resolves secrets, so a plugin that needs 1Password
-        // cannot be probed while `op read` would prompt (#289). Decided per
-        // plugin: one plugin's op:// reference must not silence the probes of
-        // plugins that need no secret at all.
-        if !op.may_resolve() && plugin_needs_onepassword(cx, cfg, name) {
+        // `plugin_spec` resolves secrets, so a plugin whose references would
+        // prompt (`op://` with no session) or run something (`cmd:`) cannot be
+        // probed (#289, #444). Decided per plugin: one plugin's gated
+        // reference must not silence the probes of plugins that need no secret
+        // at all.
+        if let Some(skip) = plugin_secret_skip(cx, cfg, name, secrets) {
             checks.push(Check::skip(
                 &format!("plugin:{name}"),
-                op.skip_reason(),
-                "run `op signin`, then re-run `totsuka doctor` to probe this plugin",
+                skip.detail,
+                skip.action("this plugin"),
             ));
-            not_probed.push((name.clone(), "its op:// reference would prompt"));
-            continue;
-        }
-        // A `cmd:` reference has no session to measure: doctor cannot know
-        // the command is prompt-free (`cmd:op read …` is a real spelling), so
-        // the probe is always skipped rather than executed (#444, #289).
-        if plugin_needs_command_exec(cx, cfg, name) {
-            checks.push(Check::skip(
-                &format!("plugin:{name}"),
-                "resolving its cmd: reference would execute a command \
-                 (doctor stays non-interactive)",
-                "the command runs when `totsuka run` resolves the config; \
-                 test it by hand if unsure",
-            ));
-            not_probed.push((
-                name.clone(),
-                "resolving its cmd: reference would run a command",
-            ));
+            not_probed.push((name.clone(), skip.summary));
             continue;
         }
         match plugin_spec(&cx.store(), cfg, name, env) {
@@ -1809,7 +2035,7 @@ fn check_llm_key(
     cfg: &RootConfig,
     env: &HashMap<String, String>,
     args: DoctorArgs,
-    op: OpReadiness,
+    secrets: SecretReadiness,
     checks: &mut Vec<Check>,
 ) {
     let online = args.online;
@@ -1825,44 +2051,29 @@ fn check_llm_key(
         // An `op://` reference is NOT resolved here: `op read` may pop a
         // biometric prompt (or hang unattended), and doctor must stay
         // non-interactive (ADR-0006). `--online` is the opt-in that accepts
-        // the prompt in exchange for a real answer.
+        // the prompt in exchange for a real answer. Same for `cmd:`, which
+        // would execute a command (#444).
         //
         // The wording matters (#289). This used to claim the reference was
         // "checked by the 1password probes", which those probes never did —
         // they check that `op` exists and a session is live, not that this
         // particular item resolves. Now that they also run *first* and gate
         // the checks that do resolve, the honest statement is the narrow one.
-        Some(reference) if reference.starts_with("op://") => checks.push(Check::ok(
-            "llm",
-            match op {
-                OpReadiness::Ready => {
-                    "api_key_ref is an op:// reference, left unresolved here \
-                     (a 1Password session is active, so `totsuka run` will resolve it)"
-                }
-                _ => {
-                    "api_key_ref is an op:// reference, left unresolved here \
-                     (doctor stays non-interactive; see the 1password checks above)"
+        Some(reference) => match secrets.deferred_note(reference, "api_key_ref") {
+            Some(note) => checks.push(Check::ok("llm", note)),
+            None => match secret_resolver(env).resolve(reference) {
+                Ok(_) => checks.push(Check::ok("llm", "api_key_ref resolves")),
+                Err(e) => {
+                    checks.push(Check::fail(
+                        "llm",
+                        format!("api_key_ref does not resolve: {e}"),
+                        "export the variable, store the key in the Keychain, or use an op:// reference",
+                    ));
+                    // No key to probe with; the online check would only
+                    // restate this failure.
+                    return;
                 }
             },
-        )),
-        // Same for `cmd:` — resolving would execute the command (#444).
-        Some(reference) if reference.starts_with("cmd:") => checks.push(Check::ok(
-            "llm",
-            "api_key_ref is a cmd: reference, left unresolved here (doctor stays \
-             non-interactive; the command runs when `totsuka run` resolves the config)",
-        )),
-        Some(reference) => match secret_resolver(env).resolve(reference) {
-            Ok(_) => checks.push(Check::ok("llm", "api_key_ref resolves")),
-            Err(e) => {
-                checks.push(Check::fail(
-                    "llm",
-                    format!("api_key_ref does not resolve: {e}"),
-                    "export the variable, store the key in the Keychain, or use an op:// reference",
-                ));
-                // No key to probe with; the online check would only restate
-                // this failure.
-                return;
-            }
         },
     }
     if online {
@@ -1877,7 +2088,7 @@ fn check_llm_key(
 /// to a possible biometric prompt. That is now the *whole* of the exception:
 /// #289 closed the paths that used to resolve behind the operator's back
 /// (`check_plugins` via `plugin_spec`, `check_hook_socket`, `check_orphan_panes`),
-/// which are gated on [`OpReadiness`] and reported as skipped instead.
+/// which are gated on [`SecretReadiness`] and reported as skipped instead.
 ///
 /// Only a 401/403 fails the check: a timeout or a 5xx says the provider is
 /// unreachable or unwell, not that the key is wrong, so those stay advisory
@@ -2118,7 +2329,7 @@ fn check_orphan_panes(
     env: &HashMap<String, String>,
     db: Option<&orchestrator_core::adapters::StateDb>,
     args: DoctorArgs,
-    op: OpReadiness,
+    secrets: SecretReadiness,
     checks: &mut Vec<Check>,
 ) -> Result<(), CliError> {
     use plugin_protocol::manifest::PluginKind;
@@ -2163,16 +2374,14 @@ fn check_orphan_panes(
 
     let mut orphans: Vec<OrphanPane> = Vec::new();
     let mut probed = 0usize;
-    let mut skipped: Vec<&str> = Vec::new();
+    let mut skipped: Vec<(&str, SecretSkip)> = Vec::new();
     for name in &agents {
         // Same gate as `check_plugins` (#289, #444): launching the agent
         // resolves its secrets. Tracked separately so the check can say it
         // saw only part of the picture — silently probing fewer agents would
         // under-report orphans and read as "none found".
-        if (!op.may_resolve() && plugin_needs_onepassword(cx, cfg, name))
-            || plugin_needs_command_exec(cx, cfg, name)
-        {
-            skipped.push(name.as_str());
+        if let Some(skip) = plugin_secret_skip(cx, cfg, name, secrets) {
+            skipped.push((name.as_str(), skip));
             continue;
         }
         let spec = match plugin_spec(&store, cfg, name, env) {
@@ -2209,14 +2418,20 @@ fn check_orphan_panes(
     if !skipped.is_empty() {
         // Say so before any "no orphan panes" line below, so the two are read
         // together: the clean result only covers the agents we could reach.
+        // Each agent carries its own reason: a config can mix an `op://`
+        // plugin with a `cmd:` one, and a single blanket reason would misreport
+        // the other (#444's lesson, applied to the message rather than the
+        // gate).
+        let reasons = skipped
+            .iter()
+            .map(|(name, skip)| format!("`{name}` ({})", skip.summary))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let reasons_only: Vec<SecretSkip> = skipped.iter().map(|(_, skip)| *skip).collect();
         checks.push(Check::skip(
             "panes",
-            format!(
-                "did not list panes via {} — {}",
-                skipped.join(", "),
-                op.skip_reason()
-            ),
-            "run `op signin`, then re-run `totsuka doctor` to see orphan panes for those agents",
+            format!("did not list panes via {reasons}"),
+            combined_skip_action(&reasons_only, "those agents"),
         ));
     }
 
@@ -2644,7 +2859,11 @@ location = "${MY_ROOT}/wt/{worktree_name}"
             "if Value ever parses a document, the comments explaining Table are stale"
         );
         let table = doc.parse::<toml::Table>().expect("Table parses a document");
-        assert!(table.values().any(toml_has_op_reference));
+        assert!(
+            table
+                .values()
+                .any(|v| toml_mentions_scheme(v, SecretScheme::OnePassword))
+        );
     }
 
     /// Only a real string value counts — the commented-out example `totsuka
@@ -2654,18 +2873,30 @@ location = "${MY_ROOT}/wt/{worktree_name}"
         let commented = "# api_key_ref = \"op://Dev/Openrouter/api_key\"\n"
             .parse::<toml::Table>()
             .unwrap();
-        assert!(!commented.values().any(toml_has_op_reference));
+        assert!(
+            !commented
+                .values()
+                .any(|v| toml_mentions_scheme(v, SecretScheme::OnePassword))
+        );
 
         // Nested and inside an array, both of which `plugin_init_config`
         // would resolve.
         let nested = "[a.b]\nk = \"op://v/i/f\"\n"
             .parse::<toml::Table>()
             .unwrap();
-        assert!(nested.values().any(toml_has_op_reference));
+        assert!(
+            nested
+                .values()
+                .any(|v| toml_mentions_scheme(v, SecretScheme::OnePassword))
+        );
         let array = "k = [\"plain\", \"op://v/i/f\"]\n"
             .parse::<toml::Table>()
             .unwrap();
-        assert!(array.values().any(toml_has_op_reference));
+        assert!(
+            array
+                .values()
+                .any(|v| toml_mentions_scheme(v, SecretScheme::OnePassword))
+        );
     }
 
     /// A skip is not a pass and not a failure: it must leave `doctor` green
@@ -2691,9 +2922,303 @@ location = "${MY_ROOT}/wt/{worktree_name}"
 
     #[test]
     fn readiness_only_blocks_when_a_prompt_is_possible() {
-        assert!(OpReadiness::NotUsed.may_resolve());
-        assert!(OpReadiness::Ready.may_resolve());
-        assert!(!OpReadiness::WouldPrompt.may_resolve());
+        assert!(BackendReadiness::NotUsed.may_resolve());
+        assert!(BackendReadiness::Ready.may_resolve());
+        assert!(!BackendReadiness::WouldPrompt.may_resolve());
+    }
+
+    /// Classification goes through [`SecretRef`], so a scheme added in
+    /// `orchestrator-core` cannot be silently missing here — the `match` in
+    /// `SecretScheme::of` stops compiling instead of quietly answering
+    /// "silent", which is what let `cmd:` reach 1 gate out of 3 (#444).
+    #[test]
+    fn schemes_are_classified_from_the_reference_type() {
+        assert_eq!(SecretScheme::of("op://Dev/X/y"), SecretScheme::OnePassword);
+        assert_eq!(SecretScheme::of("cmd:gh auth token"), SecretScheme::Command);
+        assert_eq!(
+            SecretScheme::of("keychain:totsuka/token"),
+            SecretScheme::Silent
+        );
+        assert_eq!(SecretScheme::of("${TOTSUKA_TOKEN}"), SecretScheme::Silent);
+        assert_eq!(SecretScheme::of("plain-value"), SecretScheme::Silent);
+        // Malformed: the resolver rejects it before any CLI is spawned, so
+        // there is nothing to gate.
+        assert_eq!(SecretScheme::of("op://only-vault"), SecretScheme::Silent);
+    }
+
+    /// The `op://` gate follows the measured session; `cmd:` has nothing to
+    /// measure and is therefore unconditional (#444).
+    #[test]
+    fn the_op_gate_follows_the_session_and_the_cmd_gate_never_opens() {
+        let ready = SecretReadiness {
+            onepassword: BackendReadiness::Ready,
+        };
+        let blocked = SecretReadiness {
+            onepassword: BackendReadiness::WouldPrompt,
+        };
+
+        assert!(ready.skip_for("op://Dev/X/y").is_none());
+        assert_eq!(
+            blocked.skip_for("op://Dev/X/y"),
+            Some(SecretSkip::ONEPASSWORD)
+        );
+
+        for readiness in [ready, blocked] {
+            assert_eq!(
+                readiness.skip_for("cmd:gh auth token"),
+                Some(SecretSkip::COMMAND)
+            );
+            assert!(readiness.skip_for("keychain:totsuka/token").is_none());
+            assert!(readiness.skip_for("${TOTSUKA_TOKEN}").is_none());
+        }
+    }
+
+    /// The plugin gate walks **every string leaf**, because
+    /// `plugin_init_config` resolves every string leaf.
+    #[test]
+    fn the_plugin_gate_finds_a_reference_at_any_depth() {
+        let blocked = SecretReadiness {
+            onepassword: BackendReadiness::WouldPrompt,
+        };
+        let nested = toml::Value::Table(
+            "[a.b]\nk = [\"plain\", \"op://v/i/f\"]\n"
+                .parse::<toml::Table>()
+                .unwrap(),
+        );
+        assert_eq!(blocked.skip_in_toml(&nested), Some(SecretSkip::ONEPASSWORD));
+
+        let silent = toml::Value::Table(
+            "[a]\nk = \"keychain:totsuka/x\"\n"
+                .parse::<toml::Table>()
+                .unwrap(),
+        );
+        assert!(blocked.skip_in_toml(&silent).is_none());
+    }
+
+    /// The "left unresolved here" checks read like reporting, but they are
+    /// gates: whatever `deferred_note` declines falls through to a real
+    /// `resolve()`, which spawns the backend and can prompt on stdin.
+    #[test]
+    fn deferred_notes_cover_exactly_the_schemes_that_must_not_resolve() {
+        let ready = SecretReadiness {
+            onepassword: BackendReadiness::Ready,
+        };
+        let blocked = SecretReadiness {
+            onepassword: BackendReadiness::WouldPrompt,
+        };
+
+        let note = ready
+            .deferred_note("op://Dev/X/y", "api_key_ref")
+            .expect("a note");
+        assert!(note.contains("a 1Password session is active"), "{note}");
+        let note = blocked
+            .deferred_note("op://Dev/X/y", "api_key_ref")
+            .expect("a note");
+        assert!(note.contains("doctor stays non-interactive"), "{note}");
+
+        let note = ready
+            .deferred_note("cmd:gh auth token", "[hooks].auth_token_ref")
+            .expect("a note");
+        assert!(
+            note.starts_with("[hooks].auth_token_ref is a cmd: reference"),
+            "{note}"
+        );
+
+        // Silent schemes are resolved normally — no note, and no gate.
+        assert!(
+            ready
+                .deferred_note("keychain:totsuka/token", "api_key_ref")
+                .is_none()
+        );
+        assert!(
+            ready
+                .deferred_note("${TOTSUKA_TOKEN}", "api_key_ref")
+                .is_none()
+        );
+    }
+
+    /// `{target}` is what lets one wording serve gates that probe different
+    /// things (a plugin, the hook receiver, a list of agents).
+    #[test]
+    fn skip_actions_name_what_would_have_been_probed() {
+        assert_eq!(
+            SecretSkip::ONEPASSWORD.action("the receiver"),
+            "run `op signin`, then re-run `totsuka doctor` to probe the receiver"
+        );
+        assert!(
+            SecretSkip::COMMAND
+                .action("this plugin")
+                .contains("test this plugin by hand"),
+            "{}",
+            SecretSkip::COMMAND.action("this plugin")
+        );
+    }
+
+    /// Every probe outcome maps to a stated readiness and says something.
+    ///
+    /// This branching is what decides whether doctor resolves secrets at all,
+    /// and it had **no test** while it was inlined in the spawn — which is how
+    /// the 1Password probes stayed dead code for their whole life (#289).
+    #[test]
+    fn every_op_probe_outcome_maps_to_a_readiness() {
+        for (probe, expected) in [
+            (CliProbe::Missing, BackendReadiness::WouldPrompt),
+            (
+                CliProbe::VersionFailed { code: 127 },
+                BackendReadiness::WouldPrompt,
+            ),
+            (
+                CliProbe::Unrunnable {
+                    error: "permission denied".to_string(),
+                },
+                BackendReadiness::WouldPrompt,
+            ),
+            (
+                CliProbe::Probed {
+                    version: "2.30.0".to_string(),
+                    session: false,
+                },
+                BackendReadiness::WouldPrompt,
+            ),
+            (
+                CliProbe::Probed {
+                    version: "2.30.0".to_string(),
+                    session: true,
+                },
+                BackendReadiness::Ready,
+            ),
+        ] {
+            let mut checks = Vec::new();
+            assert_eq!(
+                onepassword_checks(probe.clone(), &mut checks),
+                expected,
+                "{probe:?}"
+            );
+            assert!(
+                !checks.is_empty(),
+                "every outcome must report something: {probe:?}"
+            );
+        }
+    }
+
+    /// A dead session is advisory, not a failure: doctor stays green and the
+    /// gated checks report themselves as skipped instead.
+    #[test]
+    fn a_dead_op_session_warns_without_failing_doctor() {
+        let mut checks = Vec::new();
+        onepassword_checks(
+            CliProbe::Probed {
+                version: "2.30.0".to_string(),
+                session: false,
+            },
+            &mut checks,
+        );
+        assert!(
+            checks.iter().any(|c| c.detail.contains("2.30.0")),
+            "the version is reported even when the session is dead: {checks:?}"
+        );
+        let session = checks
+            .iter()
+            .find(|c| c.name == "1password-session")
+            .expect("a session check");
+        assert!(session.warning, "{session:?}");
+        assert!(session.ok, "a dead session must not turn doctor red");
+    }
+
+    /// A reference can reach doctor without ever appearing in `config.toml`:
+    /// `Cx::load_config` applies the `TOTSUKA_*` env overrides **after**
+    /// parsing, and two of them carry secret references.
+    ///
+    /// Measuring readiness from the file alone reported `NotUsed`, which opens
+    /// the gate — and `check_hook_socket` / `check_plugins` then resolve for
+    /// real, which is the unattended prompt the gate exists to prevent.
+    #[test]
+    fn an_override_supplied_reference_counts_as_in_use() {
+        let cfg = RootConfig::from_toml_str(
+            r#"
+[hooks]
+auth_token_ref = "op://Dev/totsuka/hook-token"
+"#,
+        )
+        .unwrap();
+        assert!(override_mentions_scheme(&cfg, SecretScheme::OnePassword));
+        assert!(!override_mentions_scheme(&cfg, SecretScheme::Command));
+
+        let cfg = RootConfig::from_toml_str(
+            r#"
+[llm]
+base_url = "https://openrouter.ai/api/v1"
+model = "anthropic/claude-haiku-4-5"
+api_key_ref = "cmd:gh auth token"
+"#,
+        )
+        .unwrap();
+        assert!(override_mentions_scheme(&cfg, SecretScheme::Command));
+        assert!(!override_mentions_scheme(&cfg, SecretScheme::OnePassword));
+
+        // A config with neither field set must not switch any probe on.
+        let cfg = RootConfig::from_toml_str("").unwrap();
+        assert!(!override_mentions_scheme(&cfg, SecretScheme::OnePassword));
+        assert!(!override_mentions_scheme(&cfg, SecretScheme::Command));
+
+        // Silent schemes never gate anything, wherever they came from.
+        let cfg = RootConfig::from_toml_str(
+            r#"
+[hooks]
+auth_token_ref = "keychain:totsuka/hook-token"
+"#,
+        )
+        .unwrap();
+        assert!(!override_mentions_scheme(&cfg, SecretScheme::OnePassword));
+        assert!(!override_mentions_scheme(&cfg, SecretScheme::Command));
+    }
+
+    /// A config can mix an `op://` plugin with a `cmd:` one, and the two
+    /// recoveries do not substitute for each other: `op signin` does nothing
+    /// for a `cmd:` agent, and "test it by hand" omits the sign-in.
+    #[test]
+    fn a_mixed_skip_list_names_every_recovery() {
+        let action = combined_skip_action(
+            &[SecretSkip::ONEPASSWORD, SecretSkip::COMMAND],
+            "those agents",
+        );
+        assert!(action.contains("op signin"), "{action}");
+        assert!(
+            action.contains("`totsuka run` resolves the config"),
+            "{action}"
+        );
+        assert!(action.contains("those agents"), "{action}");
+    }
+
+    /// Repeats collapse, so five `op://` agents still read as one instruction.
+    #[test]
+    fn repeated_skip_reasons_are_stated_once() {
+        let action = combined_skip_action(
+            &[
+                SecretSkip::ONEPASSWORD,
+                SecretSkip::ONEPASSWORD,
+                SecretSkip::ONEPASSWORD,
+            ],
+            "those agents",
+        );
+        assert_eq!(action, SecretSkip::ONEPASSWORD.action("those agents"));
+    }
+
+    /// A missing binary fails with the install next-action (§7).
+    #[test]
+    fn a_missing_op_binary_fails_with_an_install_action() {
+        let mut checks = Vec::new();
+        onepassword_checks(CliProbe::Missing, &mut checks);
+        let check = checks.first().expect("a check");
+        assert!(!check.ok, "{check:?}");
+        assert!(
+            check
+                .action
+                .as_deref()
+                .unwrap_or_default()
+                .contains("brew install 1password-cli"),
+            "{check:?}"
+        );
     }
 
     #[test]
