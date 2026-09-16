@@ -1,10 +1,10 @@
 ---
 type: Playbook
 title: セットアップ Playbook（新マシン / 開発機 / ローテーション / 復旧）
-description: "ゼロから totsuka が動くまでを通しで示す導入手順。新マシン（tarball 配置 → totsuka setup → シークレット登録 → doctor → run）、開発機（クローン → --from-source）、トークンローテーション、中断・失敗時の復旧を扱う。"
+description: "ゼロから totsuka が動くまでを通しで示す導入手順。新マシン（tarball 配置 → totsuka setup でプラグイン選択と config.toml 生成 → config.toml を編集 → シークレット登録 → doctor → run）、開発機（クローン → チェックアウトからのビルド）、トークンローテーション、中断・失敗時の復旧と別マシンでの再現を扱う。"
 resource: https://github.com/tomoya-k31/totsuka/issues/350
 tags: [setup, onboarding, runbook, playbook, secrets, doctor, rotation]
-generated: { by: claude-code/opus-5, at: 2026-09-17T03:20:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-17T12:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -24,7 +24,7 @@ owner: tomoya-k31
 | doctor の読み方・worktree 掃除 | [運用ガイド](/operations/operations-guide.md) |
 | プラグインを自作する | [プラグイン開発ガイド](/development/plugin-dev-guide.md) |
 
-前提として macOS。`totsuka setup` の設計判断は [ADR-0028](/decisions/adr-0028-setup-wizard.md)。
+前提として macOS。`totsuka setup` の設計判断は [ADR-0077](/decisions/adr-0077-setup-writes-the-whole-surface.md)（[ADR-0028](/decisions/adr-0028-setup-wizard.md) を置き換えた）。
 
 # 新マシン
 
@@ -60,35 +60,76 @@ sudo xattr -dr com.apple.quarantine /usr/local/lib/totsuka
 totsuka setup
 ```
 
-聞かれるのは**最大** 5 種類で、それ以外はレシピが持つ（5 は選んだレシピが Status 列を使う場合のみ）:
+**聞かれるのは 1 問だけ** —— 使うプラグインの複数選択（矢印キーで移動、スペースで選択、Enter で確定）。
+それ以外は聞かない。`setup` は選んだプラグインを導入し、**設定面すべてをコメントで書いた `config.toml`** を
+置いて、そのパスと「編集しろ」を案内して終わる。
 
-1. **どのレシピから始めるか**（GitHub 最小構成 / 設計→実装ハンドオフ / Slack 本人名義返信 / 人間検収必須）
-2. **リポジトリのパスと名前**（複数可）
-3. **シークレットをどこに置くか**（1Password / Bitwarden / Keychain / 環境変数）— **値そのものは一切聞かれない**
-4. レシピが要求する穴だけ（GitHub Project の owner / owner_type / 番号 / 自分の login、Slack のメンバー ID、LLM の model）
-5. **Project の Status 列名**（そのレシピが列を使う場合のみ）。候補として出るのは役割を説明する英語名（`Ready to implement` など）で、**どのみちボードの Status フィールドの選択肢と完全に一致させる必要がある**。ここを間違えると config は valid で `doctor` も緑のまま、`run` が何も拾わないという無言の失敗になる —— だから計画の確認画面に置換後の trigger をそのまま出している。**`--answers` ファイルがこの列名を欠いていると、既定で埋めるのではなく足すべきキー名を名指しして拒否する**（選んでいない列名を黙って書くほうが危険なため）
+非対話で回すなら:
 
-計画が印字され、確認するとそこから先が副作用を持つ。**質問中の Ctrl-C は何も残さない。**
+```bash
+totsuka setup --plugins github,herdr,macos     # あるいは --plugins all / --plugins none
+totsuka setup --plugins all --secret-backend bw
+```
 
-`setup` は続けて プラグイン個別設定（`config.toml` の `[<name>]` テーブル）の追記 → プラグインの install + enable → `doctor` まで走る。`init` を先に打つ必要はない（ディレクトリ作成は `setup` が内包する）。
+**TTY が無く `--plugins` も無い場合はエラーで止まる。** 既定の選択を置くと選んでいないプラグインが入り、
+空にすると成功した実行と見分けがつかないため。綴り間違い（`--plugins gihub`）も黙って無視せずエラーになる。
+
+`--secret-backend` は `op`（既定）/ `bw` / `keychain` / `cmd` / `env`。**選んだ形が config.toml の参照行にも入る**
+（端末の登録コマンドだけ切り替えると、`op://` だらけのファイルの上で `security add-generic-password` を
+案内することになる）。参照行の直上には他 4 種の書式が併記されるので、後から乗り換えるのにドキュメントは要らない。
+
+生成されたファイルは **`version = 1` の 1 行以外すべてコメント**である。つまり `totsuka config validate` は
+その場で通るが、**まだ何も動かない**。最低限これだけは自分で外す:
+
+1. `[[repositories]]` —— タスクを流し込むローカルクローン
+2. 入れたプラグインの `[plugins.<name>] enabled = true`
+3. そのプラグインの `[<name>]` テーブル（トークン参照を含む）
+4. `[[projects]]` と `[[workflows]]` —— **ファイル末尾のレシピ集**に、コメントを外せばそのまま動く組み合わせが 4 つある
+
+**プラグインは導入されるが有効化されない。** `totsuka config validate` は enabled なプラグインを実際に起動するので、
+`[github].token` がまだコメントのまま `github` を有効にすると、セットアップを確認するためのコマンドが
+そのセットアップ自身で落ちる。
+
+**既に `config.toml` があれば、足りない節だけが追記される。** 既存の行は 1 バイトも変わらない。
+後から notion を使いたくなったときは `totsuka setup --plugins notion` を打てば、`[notion]` の
+コメント付き雛形がファイル末尾に足される。
 
 ## 3. シークレットを登録する
 
-`setup` の最後にチェックリストが出る。各行が「どの参照名」「何を可能にするか」「登録コマンド」を持つので、そのままコピペする:
+`setup` の最後に、**選んだプラグインが参照するシークレットの一覧**が出る。各行が「参照名」「何を可能にするか」
+「登録コマンド」を持つので、そのままコピペする:
 
 ```bash
 security add-generic-password -U -s totsuka -a github-token -w '<paste the value>'
 ```
 
-**ここに出た参照はすべて必須**である。config が参照している以上、1 つでも欠けるとそのプラグインは起動しない。「任意の機能だから飛ばしてよい」ものは、そもそもチェックリストに出ない。
+**登録するのは、実際にコメントを外した行のぶんだけでよい。** 一覧は config.toml が*言及している*参照を全部出すが、
+コメントのままの行は解決されない。逆に、コメントを外した参照が未登録ならそのプラグインは起動しない。
 
-Bitwarden を選んだ場合、**先に `bw login` → `bw unlock` を済ませ、表示された `BW_SESSION` を export しておくこと**。登録コマンドは vault を書き換えるので、アンロック済みのセッションが無いと実行できない（下の「一回きりの対話セットアップ」に同じことが書いてあるが、ここでの手順がそれより前に来るため再掲する）。登録コマンドは `bw get template item | jq … | bw encode | bw create item` の形になる（`jq` が要る）。`bw` に `op item edit` 相当の 1 行が無いためで、**このコマンドは常に新規作成する**。同名のアイテムが既にあるなら作らずそちらを編集すること —— 重複すると `bw get` が「複数ヒット」で失敗し、参照が解決できなくなる。アカウントごとに 1 アイテム（`bw:totsuka-<name>/password`）にするのは**運用上の取り決め**であって、Bitwarden の制限ではない —— 1 アイテムは `username` / `password` / `uri` / `totp` を持てる。ただし `bw:` はカスタムフィールドに届かないので、任意個の秘密を 1 アイテムに詰めることはできず、ウィザードが登録するのはどれもトークン（= `password`）なので、結果として 1 つずつになる。
+`--secret-backend cmd` と `env` には登録コマンドが無い（値は別のツールと環境が持つ）ので、代わりにその旨が出る。
 
-> Slack の `slack-bot` は例外に見えるが必須。プラグイン単体では opt-in（無ければナッジ無し）だが、**本人名義の返信は Slack 通知を一切上げない**ため、レシピはナッジ前提で構成されている（[ADR-0021](/decisions/adr-0021-slack-bot-notification-nudge.md)）。
+Bitwarden を選んだ場合、**先に `bw login` → `bw unlock` を済ませ、表示された `BW_SESSION` を export しておくこと**。
+登録コマンドは vault を書き換えるので、アンロック済みのセッションが無いと実行できない（下の「一回きりの対話セットアップ」に
+同じことが書いてあるが、ここでの手順がそれより前に来るため再掲する）。登録コマンドは
+`bw get template item | jq … | bw encode | bw create item` の形になる（`jq` が要る）。`bw` に `op item edit` 相当の
+1 行が無いためで、**このコマンドは常に新規作成する**。同名のアイテムが既にあるなら作らずそちらを編集すること ——
+重複すると `bw get` が「複数ヒット」で失敗し、参照が解決できなくなる。アカウントごとに 1 アイテム
+（`bw:totsuka-<name>/password`）にするのは**運用上の取り決め**であって、Bitwarden の制限ではない ——
+1 アイテムは `username` / `password` / `uri` / `totp` を持てる。ただし `bw:` はカスタムフィールドに届かないので、
+任意個の秘密を 1 アイテムに詰めることはできず、`setup` が案内するのはどれもトークン（= `password`）なので、
+結果として 1 つずつになる。
+
+> Slack で本人名義の返信を使うなら `slack-bot` も登録すること。プラグイン単体では opt-in（無ければナッジ無し）だが、
+> **本人名義の返信は Slack 通知を一切上げない**ので、ナッジが無いと返信案が来たことに気づけない
+> （[ADR-0021](/decisions/adr-0021-slack-bot-notification-nudge.md)）。
 
 ## 4. 検証して走らせる
 
+**config.toml を編集してから**回す。`setup` は `doctor` を自動実行しない —— 編集前の config は実質空なので、
+「まだ何も設定されていない」を報告するだけになるため。
+
 ```bash
+totsuka config validate # 設定がパースでき、辻褄が合っている
 totsuka doctor          # 未登録シークレットが残っていれば exit 3 で教える
 totsuka run --dry-run   # どのタスクがどのリポジトリのどのエージェントに行くか
 totsuka run --watch
@@ -116,11 +157,10 @@ totsuka run --watch
 git clone https://github.com/tomoya-k31/totsuka
 cd totsuka
 cargo build --release --workspace --bins
-totsuka plugin install --from-source --all --enable
-totsuka setup
+totsuka setup --plugins all
 ```
 
-`--from-source` は cwd から上へ「Cargo ワークスペースのルート**かつ** `plugins/` を持つ」ディレクトリを探す。別リポジトリの中で打っても誤検出しない。`totsuka setup` をチェックアウト内で打つと、同梱ツリーが無い場合は自動で `--from-source` を選ぶので、上の 2 コマンドは実質 1 つにまとめられる。
+`totsuka setup` をチェックアウト内で打つと、同梱ツリーが無い場合は自動でチェックアウトからのビルドを選ぶ。探索は cwd から上へ「Cargo ワークスペースのルート**かつ** `plugins/` を持つ」ディレクトリを辿るので、別リポジトリの中で打っても誤検出しない。
 
 プラグインを 1 つ直したときの再導入も同じ経路:
 
@@ -156,44 +196,46 @@ scope 自体の落とし穴として、`reactions:read` / `channels:read` / `gro
 **再実行すれば揃う。** `setup` は原子性ではなく収束性を保証しており、各ステップが冪等になっている。どこまで適用したかは印字される。
 
 ```bash
-totsuka setup
+totsuka setup --plugins <同じ選択>
 ```
 
-既存の設定ファイルはスキップされるので、2 回目は実質「プラグイン導入と doctor だけ」が走る。これが `--repair` フラグを用意していない理由（[ADR-0028](/decisions/adr-0028-setup-wizard.md)）。
+既存の `config.toml` からは足りない節だけが追記されるので、2 回目は実質「プラグイン導入だけ」が走る。
+これが `--repair` フラグを用意していない理由（[ADR-0077](/decisions/adr-0077-setup-writes-the-whole-surface.md)、
+判断自体は [ADR-0028](/decisions/adr-0028-setup-wizard.md) からの引き継ぎ）。
 
 ## 設定を作り直したい
 
-`setup` は既存ファイルを上書きしない。作り直すなら自分で退避する:
+`setup` は既存ファイルの行を書き換えない。まっさらにするなら自分で退避する:
 
 ```bash
 mv ~/.config/totsuka/config.toml{,.bak}
-mv ~/.config/totsuka/plugins ~/.config/totsuka/plugins.bak
-totsuka setup
+totsuka setup --plugins all
 ```
 
-**例外**: `totsuka init` が吐いた「全行コメント」の雛形だけは未設定として扱われ、`setup` が中身を埋める。退避は要らない。
+**節を足すだけなら退避は要らない。** 後から使いたくなったプラグインは `totsuka setup --plugins <name>` で、
+その `[<name>]` のコメント付き雛形がファイル末尾に足される。既存の行は 1 バイトも変わらない。
 
 ## 同じ設定を別マシンで再現したい
 
-回答ファイルを保存して持っていく。**`setup` は機密の値をファイルに書かない**（どのバックエンドを使うかを記録し、値の登録コマンドを印字するだけ）ので、`setup` が生成したファイルは dotfiles に置いても安全:
+**`config.toml` そのものを持っていく。** `setup` は機密の**値**を一切書かないので（書くのは
+`op://…` / `keychain:…` のような*参照*だけ）、そのファイルは dotfiles に置いても安全である。
 
 ```bash
-totsuka setup --save-answers ~/dotfiles/totsuka-answers.toml
+cp ~/.config/totsuka/config.toml ~/dotfiles/totsuka-config.toml
 ```
 
 読み込む側:
 
 ```bash
-totsuka setup --answers ~/dotfiles/totsuka-answers.toml --yes
+totsuka setup --plugins <同じ選択>     # ディレクトリ作成とプラグイン導入
+cp ~/dotfiles/totsuka-config.toml ~/.config/totsuka/config.toml
 ```
 
-シークレットの登録だけは各マシンで人間がやる。
+シークレットの登録だけは各マシンで人間がやる。リポジトリのパスがマシンごとに違うなら
+`[[repositories]].path` を直すこと。
 
-**別マシン・別バージョンで読まれる前提のファイルなので、形式は契約として扱う**（#466）:
-
-- 意味が変わる変更では `version` を上げ、**版が違うファイルは推測せず拒否する**（`→ regenerate it by running totsuka setup interactively` を案内）。版はファイルの他の部分より先に読むので、フィールドの型が変わった版でも「version が違う」と言える
-- `recipe` は**安定キー**（`recipe = "minimal-github-herdr"`）であってメニュー位置ではない。位置だと、レシピを 1 つ挿入するだけで既存ファイルが黙って隣のレシピを選ぶ — 範囲チェックは通り、`version` も動かないので誰も気づけない
-- 存在しないキーを書いたときのエラーは、実在するキーを列挙する
+> 以前あった回答ファイル（`--save-answers` / `--answers`）は #705 で無くなった。運ぶべきものが
+> 「回答」から「設定ファイルそのもの」に変わり、中間形式が要らなくなったため。
 
 ## `doctor` が赤いまま
 

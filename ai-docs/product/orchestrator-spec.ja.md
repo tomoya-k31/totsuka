@@ -3,7 +3,7 @@ type: Spec
 title: totsuka — ローカルAIエージェント Orchestrator 要件定義（v1）
 description: totsuka Orchestrator CLI の要件定義 — タスクソース/Agent IDE/Notifier プラグイン、git worktree ライフサイクル、ワークフロー、並列実行制御、v1 スコープ。
 tags: [orchestrator, requirements, plugin, worktree, cli, rust]
-generated: { by: claude-code/fable-5-1, at: 2026-09-12T02:53:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-17T19:00:00+09:00 }
 status: draft
 owner: tomoya-k31
 ---
@@ -293,8 +293,7 @@ macOS のメニューバーのように**常時視界に入る面**へ状態を�
 
 | コマンド | 用途 |
 |---|---|
-| `init` | 設定ファイルの雛形生成、環境チェック |
-| `setup` | レシピからの対話的な初期セットアップ（この表を最初に書いた後に追加された。セットアップ Playbook 参照） |
+| `setup` | 初期セットアップ: 選んだプラグインを導入し、全設定をコメントで書いた設定ファイルを生成する（この表を最初に書いた後に追加された。セットアップ Playbook 参照） |
 | `run [--watch] [--json]` | タスク取り込み（push、`task/submit`）〜ディスパッチのメインループ実行(デフォルトはワンショット、`--watch` は push を受け続けたまま shutdown まで常駐 — 未決事項 #2 は解決済み) |
 | `status [--json]` | 実行中 / キュー / 待機中タスクと worktree の一覧、および動作中の run の縮退(F-110) |
 | `menu [--json]` | メニューバー向けの表示(F-109)。既定は SwiftBar のプラグイン書式、`--json` は表示モデル。常に exit 0 |
@@ -355,7 +354,7 @@ macOS のメニューバーのように**常時視界に入る面**へ状態を�
 ## 7. UI/UX 要件
 
 - totsuka 自身は GUI を描かない。CLI の出力品質を UX と定義する。GUI ホスト(メニューバー等)へ食わせるテキスト形式も、この定義の下にある CLI 出力の一種として扱う(F-109)。
-- エラーメッセージは「原因 + 次のアクション」を必ず含む(例: `config not found → run 'app init'`)。
+- エラーメッセージは「原因 + 次のアクション」を必ず含む(例: `config not found → run 'app setup'`)。
 - `--debug` オプションで開発中に必要な情報(RPC ペイロード、状態遷移、LLM 判定根拠)を出力。機密情報は 5.2 のマスキング方針に従い出力しない。
 - 出力は NO_COLOR 環境変数と非 TTY を尊重。
 
@@ -408,7 +407,7 @@ macOS のメニューバーのように**常時視界に入る面**へ状態を�
 ### 10.4 チーム展開
 
 - 設定ファイルのテンプレートを社内リポジトリで配布(シークレットは各自 Keychain / env)。
-- オンボーディング手順: インストール(ダウンロード / `cargo install`) → `init` → キー設定 → `doctor` → `run` の5ステップに収める。
+- オンボーディング手順: インストール(ダウンロード / `cargo install`) → `setup` → 生成された設定の編集 → キー設定 → `doctor` → `run` の5ステップに収める。
 
 ---
 

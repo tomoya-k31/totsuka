@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](event-gateway-setup.ja.md)
 
-<!-- generated-from: ai-docs/operations/event-gateway-setup.md sha256:3fcb047d7fe3be52e320a76ca19b174be8dd21651c91fb6771f895412ccfbe83 -->
+<!-- generated-from: ai-docs/operations/event-gateway-setup.md sha256:48b2591089c7b11eb18d9b02cc6307cb2089d6775c4a5edc7a0acc93649fcefc -->
 
 # Event Gateway setup
 
@@ -194,7 +194,7 @@ tofu output -json totsuka_config
 
 **These are keys to add to the `[slack]` table, not a table to paste.**
 
-Run `totsuka setup` first (step 3 of [Slack setup](slack-setup.md)) and let it
+Run `totsuka setup` first and edit the config it writes (step 3 of [Slack setup](slack-setup.md)), letting it
 write `[slack]` with `user_token` and `target_user_id`. **`setup` leaves an
 existing `[slack]` table alone**, so pasting only this block first means those
 required keys never get added.

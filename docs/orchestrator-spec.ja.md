@@ -1,7 +1,7 @@
 > 🌐 [English](orchestrator-spec.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/product/orchestrator-spec.ja.md sha256:0658189d38c04e4ba8f68bc3865446db003e3a3469cb5ebf1e2529e1d3c3e1b8 -->
+<!-- generated-from: ai-docs/product/orchestrator-spec.ja.md sha256:6a5134572c37f48af18d329ba9b2db98cf00bb1566b0db8b43282eb42302ed7b -->
 
 # totsuka とは
 
@@ -86,8 +86,7 @@ worktree の置き場所は設定でき、ディレクトリ名はブランチ�
 
 | コマンド | 用途 |
 |---|---|
-| `init` | 設定の雛形生成と環境チェック |
-| `setup` | レシピからの対話的な初期セットアップ |
+| `setup` | 初期セットアップ: 選んだプラグインを導入し、全設定をコメントで書いた設定ファイルを生成する |
 | `run [--watch] [--json]` | 取り込みからディスパッチまでのメインループ。`--watch` は止めるまで常駐する |
 | `status [--json]` | 実行中・待機中・入力待ちのタスクと worktree の一覧、および動作中の totsuka が今できていないこと |
 | `menu [--json]` | メニューバー向けの表示。可用性と、自分の対応を待っている件数 |
@@ -124,7 +123,7 @@ totsuka task export --since 4213 > today.ndjson   # 前回の続きだけ
 
 ## 保証すること
 
-**エラーは必ず「次に何をすればよいか」まで示す。** 何が起きたかだけでは終わらない（`config not found → run 'totsuka init'`）。
+**エラーは必ず「次に何をすればよいか」まで示す。** 何が起きたかだけでは終わらない（`config not found → run 'totsuka setup'`）。
 
 **秘密はログ層で無条件にマスクされる** — API キー、トークン、認証ヘッダ。プロンプト本文は debug 以上でしか書き出されず、設定で完全に止められる。ログは構造化された JSON Lines で、日次ローテーションと保持世代数の設定を持ち、`logs` コマンドが読みやすく整形する。
 

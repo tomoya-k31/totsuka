@@ -110,7 +110,7 @@ impl Cx {
         match std::fs::read_to_string(&self.config_path) {
             Ok(s) => self.parse_and_overlay(&s, env),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Err(format!(
-                "config not found at {} → run `totsuka init` to create it",
+                "config not found at {} → run `totsuka setup` to create it",
                 self.config_path.display()
             )
             .into()),
@@ -122,7 +122,7 @@ impl Cx {
     /// empty default config is used instead (#175). The `TOTSUKA_*` env layer
     /// still applies on top — so an invalid override value fails here exactly
     /// like it does with a present file. For the commands that must work
-    /// before `totsuka init` — `plugin install` / `uninstall` / `list` only
+    /// before `totsuka setup` — `plugin install` / `uninstall` / `list` only
     /// consult the config to cross-check declarations, so an absent file
     /// simply means "nothing declared". Every other command errors via
     /// [`Cx::load_config`]; which command gets which behavior is documented
@@ -371,3 +371,26 @@ pub fn print_json<T: serde::Serialize>(value: &T) -> Result<(), CliError> {
 /// makes the rule visible in one file: the JSON path escapes for a machine,
 /// the human path escapes for a terminal, and no value takes both.
 pub use orchestrator_core::terminal::safe;
+
+/// The installed git version string, if git is on PATH.
+///
+/// Lives here rather than next to a command because two of them want it:
+/// `doctor` reports it as a check, and `setup` warns when it is missing — a
+/// worktree cannot be created without git, and since `setup` no longer ends by
+/// running `doctor`, that warning is the only one a fresh machine gets.
+pub fn git_version() -> Option<String> {
+    let out = std::process::Command::new("git")
+        .arg("--version")
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    Some(
+        text.trim()
+            .strip_prefix("git version ")
+            .unwrap_or(text.trim())
+            .to_string(),
+    )
+}

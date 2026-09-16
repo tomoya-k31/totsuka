@@ -193,7 +193,7 @@ fn install_then_enable_produces_loadable_config() {
     let env = Env::new("install_enable");
     let src = env.root.join("src");
     fake_source(&src, "github", ">=0.6.0, <0.8");
-    // A config exists (as after `init`) but has no [plugins.github] section yet.
+    // A config exists (as after `setup`) but has no [plugins.github] section yet.
     fs::write(env.config_toml(), "version = 1\n").unwrap();
 
     let (ok, _, _) = env.run(&["plugin", "install", src.to_str().unwrap(), "--yes"], None);
@@ -321,7 +321,7 @@ fn plugin_list_honors_config_override() {
     // The default XDG location has no config at all: without the override the
     // declaration must not be visible (or-default semantics, not an error).
     let (ok, out, _) = env.run(&["plugin", "list", "--json"], None);
-    assert!(ok, "list works before `totsuka init`");
+    assert!(ok, "list works before `totsuka setup`");
     let rows: serde_json::Value = serde_json::from_str(&out).unwrap();
     assert!(rows.as_array().unwrap().is_empty(), "{rows}");
 }
@@ -576,7 +576,7 @@ fn enable_flag_fails_before_touching_the_store() {
         None,
     );
     assert!(!ok);
-    assert!(err.contains("totsuka init"), "{err}");
+    assert!(err.contains("totsuka setup"), "{err}");
     // Assert against the store on disk rather than `plugin list`: the whole
     // point is that nothing was *written*, and with a broken config `list`
     // cannot run either.

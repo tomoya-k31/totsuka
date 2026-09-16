@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](operations-guide.ja.md)
 
-<!-- generated-from: ai-docs/operations/operations-guide.md sha256:925f434b94009297fab95273824d6e347613ccff698a472cfdcdf5331caca0e0 -->
+<!-- generated-from: ai-docs/operations/operations-guide.md sha256:9269ae35253e1a69746206a7713dab84792bca9ba086b9902060b28842c26cd9 -->
 
 # Operations guide
 
@@ -239,7 +239,7 @@ EOF
 
 | Symptom | What to do |
 |---|---|
-| `config not found` | Run `totsuka init` to generate a template, then edit it |
+| `config not found` | Run `totsuka setup` to generate a template, then edit it |
 | `state database not found` | Run `totsuka run` once and it is created |
 | A plugin is `enabled but not installed` | `totsuka plugin install <dir>` |
 | Tasks are not picked up | Use `totsuka run --dry-run` to check trigger matching, repository selection, and agent assignment with no side effects. A workflow's `projects` must match `[[projects]].name` entries, and their `source` must match the plugin instance name |

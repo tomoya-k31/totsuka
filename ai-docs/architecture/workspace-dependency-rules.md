@@ -4,7 +4,7 @@ title: ワークスペース依存境界ルール（Fitness Function）
 description: ヘキサゴナル構成の依存不変条件（plugins → plugin-protocol / plugin-sdk のみ、plugin-protocol は leaf、依存循環なし）と、それを CI で機械検証する scripts/arch-lint.sh の仕組み・正当な依存追加時の更新手順。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/scripts/arch-lint.sh
 tags: [architecture, fitness-function, ci, workspace, dependency]
-generated: { by: human:tomoya-k31, at: 2026-07-23T12:00:00Z }
+generated: { by: claude-code/opus-5, at: 2026-09-17T12:00:00+09:00 }
 status: stable
 ---
 
@@ -34,7 +34,7 @@ graph BT
     cli -. "dev（#349・生成した plugins/*.toml の検証用）" .-> plugins
 ```
 
-`cli -. dev .-> plugins` は**このグラフで唯一「上位が下位ではなく横を向く」エッジ**なので、意図を書き残しておく。`totsuka setup` が生成する `plugins/<name>.toml` を、プラグイン自身のデシリアライザ（`GithubConfig` / `SlackConfig`）が受理することをテストで固定するためだけに存在する（[#349](https://github.com/tomoya-k31/totsuka/issues/349)）。「TOML としてパースできる」までしか見ないと、キー名を 1 つ間違えても実行時まで露見しない。
+`cli -. dev .-> plugins` は**このグラフで唯一「上位が下位ではなく横を向く」エッジ**なので、意図を書き残しておく。`totsuka setup` が生成する設定テーブルを、プラグイン自身のデシリアライザ（`GithubConfig` / `SlackConfig`）が受理することをテストで固定するためだけに存在する（[#349](https://github.com/tomoya-k31/totsuka/issues/349)）。「TOML としてパースできる」までしか見ないと、キー名を 1 つ間違えても実行時まで露見しない。
 
 **実行時のリンクは無い**（`[dev-dependencies]` なので `totsuka` バイナリには入らない）。プラグインはプロセス境界の向こうで動く（[ADR-0011](/decisions/adr-0011-arch-fitness-function.md) が守っている前提）という点は変わらず、`plugins/*` 側の許可リストにも影響しない — 向きが逆なので `plugin-deps` / `plugin-dev` の検査対象外である。
 

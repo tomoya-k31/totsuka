@@ -144,7 +144,7 @@ fn show(cx: &Cx, redacted: bool) -> Result<(), CliError> {
     let contents = std::fs::read_to_string(&cx.config_path).map_err(|e| -> CliError {
         if e.kind() == io::ErrorKind::NotFound {
             format!(
-                "config not found at {} → run `totsuka init` to create it",
+                "config not found at {} → run `totsuka setup` to create it",
                 cx.config_path.display()
             )
             .into()

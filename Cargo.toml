@@ -44,6 +44,10 @@ repository = "https://github.com/tomoya-k31/totsuka"
 [workspace.dependencies]
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
+# The plugin picker in `totsuka setup` (#705). Chosen over `inquire` for the
+# smaller footprint: it reaches the terminal through `console`, where inquire
+# pulls in all of `crossterm`.
+dialoguer = { version = "0.12", default-features = false }
 thiserror = "2"
 libc = "0.2"
 keyring = { version = "3", features = ["apple-native"] }

@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](setup-playbook.ja.md)
 
-<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:2c1cbb8846ed7d139e08873e466d53b54c1efa1d5bd402852c515d3243353449 -->
+<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:e29b2b7fd960b2d6731137bb679106e775ab28feb0c37aba0aa081ee2214b4be -->
 
 # Setup playbook
 
@@ -48,35 +48,52 @@ sudo xattr -dr com.apple.quarantine /usr/local/lib/totsuka
 totsuka setup
 ```
 
-It asks up to five kinds of question and gets the rest from the recipe you choose. The last one only comes up for recipes that move cards between status columns.
+**It asks one question** — which plugins you will use (arrow keys to move, space to toggle, enter to confirm). Nothing else. It installs what you picked and writes a `config.toml` with **every setting totsuka understands in it, commented out**, then tells you where that file is.
 
-1. **Which recipe to start from** (minimal GitHub, design-to-implement handoff, Slack replies under your own name, human sign-off required)
-2. **Repository paths and names** (more than one is fine)
-3. **Where to keep secrets** (1Password, Bitwarden, Keychain, or environment variables) — it never asks for the values themselves
-4. Whatever the recipe still needs (GitHub Project owner and number, your Slack member ID, the LLM model name)
-5. **The Project status column names**, if the recipe moves cards between them. The suggestions describe what each column is for (`Ready to implement`, and so on); **whatever you enter has to match an option in your board's Status field exactly.** Getting one wrong is the quiet failure here — the configuration is valid, `doctor` stays green, and `run` simply never picks anything up — which is why the plan prints each trigger with the names already filled in. An answers file that leaves these out is **refused, naming the keys to add**, rather than filled in with names you did not choose.
+Non-interactively:
 
-It prints a plan; nothing has side effects until you confirm. **Pressing Ctrl-C during the questions leaves nothing behind.**
+```bash
+totsuka setup --plugins github,herdr,macos     # or --plugins all / --plugins none
+totsuka setup --plugins all --secret-backend bw
+```
 
-It then writes each plugin's `[<name>]` table into `config.toml`, installs and enables the plugins, and runs `doctor`. You do not need to run `totsuka init` first.
+**Without a terminal and without `--plugins`, it stops.** A default selection would install plugins you did not pick, and an empty one would be indistinguishable from a run that worked. A misspelling (`--plugins gihub`) is an error for the same reason.
+
+`--secret-backend` takes `op` (the default), `bw`, `keychain`, `cmd` or `env`. **The form you pick is written into `config.toml` as well**, not just into the commands printed at the end — otherwise you would be told to run `security add-generic-password` over a file full of `op://` references, and register a secret nothing reads. Each reference line carries the other four forms in the comment above it, so switching stores later needs no documentation.
+
+The generated file has **exactly one live line, `version = 1`**; everything else is commented out. So `totsuka config validate` passes immediately, and **nothing runs yet**. At minimum, uncomment:
+
+1. a `[[repositories]]` block — the local clone tasks are dispatched into
+2. `[plugins.<name>] enabled = true` for the plugins you installed
+3. that plugin's own `[<name>]` table, including its token reference
+4. `[[projects]]` and `[[workflows]]` — **the recipe section at the end of the file** has four combinations that work, ready to uncomment
+
+**The plugins are installed but not enabled.** `totsuka config validate` launches every enabled plugin, so enabling `github` while `[github].token` is still commented out would make the command that confirms your setup fail on the setup itself.
+
+**If a `config.toml` already exists, only the missing sections are appended.** Not one existing line changes. When you later want Notion, `totsuka setup --plugins notion` adds the commented `[notion]` skeleton to the end of the file.
 
 ### 3. Register your secrets
 
-Setup finishes with a checklist. Each line gives the reference name, what it enables, and the command to register it, so you can copy them straight out.
+Setup finishes with **the secrets the plugins you picked are referenced by**. Each line gives the reference name, what it enables, and the command to register it, so you can copy them straight out.
 
 ```bash
 security add-generic-password -U -s totsuka -a github-token -w '<paste the value>'
 ```
 
-**Everything on that checklist is required.** Your configuration refers to these, so a single missing one stops that plugin from starting. Anything genuinely optional never appears on the list in the first place.
+**Register the ones whose lines you actually uncomment.** The list names every reference the file *mentions*, but a commented line is never resolved. The converse is what matters: an uncommented reference that is not registered stops that plugin from starting.
 
-If you chose Bitwarden, **run `bw login`, then `bw unlock`, and export the `BW_SESSION` it prints before you start** — the registration command writes to your vault and needs an unlocked session. (The prerequisites table below says the same thing, but this step comes first, so it is repeated here.) The command is a `bw get template item | jq … | bw encode | bw create item` pipeline (it needs `jq`), because `bw` has no single-line equivalent of `op item edit`. **That command always creates a new item** — if one with the same name already exists, edit that one instead, because a duplicate makes `bw get` fail with "more than one result" and the reference stops resolving. You get one item per account (`bw:totsuka-<name>/password`). That is a convention rather than a limit — a Bitwarden item does hold a `username`, `password`, `uri` and `totp` — but `bw:` references do not reach custom fields, so an item cannot hold *arbitrarily many* secrets, and everything the wizard registers is a token, which maps to the same `password` object.
+`--secret-backend cmd` and `env` have no registration command — the value lives in another tool or in your environment — so they say so instead.
 
-The Slack bot token looks optional but is not: **replies posted under your own name raise no Slack notification at all**, so the recipes are built around the bot delivering the nudge.
+If you chose Bitwarden, **run `bw login`, then `bw unlock`, and export the `BW_SESSION` it prints before you start** — the registration command writes to your vault and needs an unlocked session. (The prerequisites table below says the same thing, but this step comes first, so it is repeated here.) The command is a `bw get template item | jq … | bw encode | bw create item` pipeline (it needs `jq`), because `bw` has no single-line equivalent of `op item edit`. **That command always creates a new item** — if one with the same name already exists, edit that one instead, because a duplicate makes `bw get` fail with "more than one result" and the reference stops resolving. You get one item per account (`bw:totsuka-<name>/password`). That is a convention rather than a limit — a Bitwarden item does hold a `username`, `password`, `uri` and `totp` — but `bw:` references do not reach custom fields, so an item cannot hold *arbitrarily many* secrets, and everything setup names is a token, which maps to the same `password` object.
+
+If you reply on Slack under your own name, register the bot token too: **replies posted under your own name raise no Slack notification at all**, so without the bot's nudge you never learn a draft is waiting.
 
 ### 4. Verify and run
 
+Do this **after** editing `config.toml`. Setup does not run `doctor` for you: before you edit, the configuration is effectively empty, so `doctor` would only report that nothing is configured yet.
+
 ```bash
+totsuka config validate # the configuration parses and hangs together
 totsuka doctor          # tells you if any secret is still unregistered
 totsuka run --dry-run   # which task goes to which agent in which repository
 totsuka run --watch
@@ -104,8 +121,7 @@ Build and install from source. No tarball needed.
 git clone https://github.com/tomoya-k31/totsuka
 cd totsuka
 cargo build --release --workspace --bins
-totsuka plugin install --from-source --all --enable
-totsuka setup
+totsuka setup --plugins all
 ```
 
 `--from-source` walks upwards from the current directory looking for one that is both a Cargo workspace root and has a `plugins/` directory, so it will not misfire inside some other repository. Running `totsuka setup` inside the checkout picks `--from-source` automatically when there is no bundled tree.
@@ -144,35 +160,38 @@ You do not need to re-run `setup`. The reference names have not changed, only th
 **Run it again.** Each step is idempotent, and it prints how far it got.
 
 ```bash
-totsuka setup
+totsuka setup --plugins <the same selection>
 ```
 
-Existing config files are skipped, so the second run effectively does just the plugin installation and `doctor`.
+Only the sections your `config.toml` is missing get appended, so the second run effectively does just the plugin installation.
 
 ### You want to start the configuration over
 
-Setup never overwrites existing files. To start over, move them aside yourself.
+Setup never rewrites a line in an existing file. To start from scratch, move it aside yourself.
 
 ```bash
 mv ~/.config/totsuka/config.toml{,.bak}
-mv ~/.config/totsuka/plugins ~/.config/totsuka/plugins.bak
-totsuka setup
+totsuka setup --plugins all
 ```
 
-One exception: the all-comments template that `totsuka init` writes is treated as unconfigured, and setup fills it in. That one needs no moving aside.
+**To add a section you do not need to move anything aside.** `totsuka setup --plugins notion` appends the commented `[notion]` skeleton to the end of the file and changes nothing you wrote.
 
 ### You want the same configuration on another machine
 
-Save the answers file and take it with you. **`setup` never writes a secret value into it** — it records which backend to use and prints the commands to register the values — so a file it generated is safe to keep in your dotfiles.
+**Take the `config.toml` itself.** Setup writes no secret *values* — only references such as `op://…` and `keychain:…` — so the file is safe to keep in your dotfiles.
 
 ```bash
-totsuka setup --save-answers ~/dotfiles/totsuka-answers.toml
-totsuka setup --answers ~/dotfiles/totsuka-answers.toml --yes
+cp ~/.config/totsuka/config.toml ~/dotfiles/totsuka-config.toml
 ```
 
-Registering the secrets themselves is still done by a human on each machine.
+On the other machine:
 
-The file is read by a different build than wrote it, so the format is treated as a contract: a change that would alter what an older file means bumps its `version`, and a file from another version is **refused rather than guessed at** — it tells you to regenerate it. The recipe is named (`recipe = "minimal-github-herdr"`), not numbered, so adding a recipe to the menu never silently repoints a file you have been carrying around.
+```bash
+totsuka setup --plugins <the same selection>   # directories and plugin installation
+cp ~/dotfiles/totsuka-config.toml ~/.config/totsuka/config.toml
+```
+
+Registering the secrets themselves is still done by a human on each machine. Fix up `[[repositories]].path` if your clones live somewhere else there.
 
 ### doctor is still red
 

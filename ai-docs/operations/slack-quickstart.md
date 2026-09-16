@@ -1,10 +1,10 @@
 ---
 type: Runbook
 title: Slack セットアップ Quickstart（task-source-slack）
-description: 受信方式（Socket Mode / Event Gateway）の選択から始まり、manifest からの Slack アプリ作成 → トークン発行 → トークン保管 → totsuka setup → doctor → run --watch までの導入手順と、手で書く場合のフォールバック、トークン失効・スコープ変更時の対処。
+description: 受信方式（Socket Mode / Event Gateway）の選択から始まり、manifest からの Slack アプリ作成 → トークン発行 → トークン保管 → totsuka setup → config.toml の編集 → doctor → run --watch までの導入手順と、手で書く場合のフォールバック、トークン失効・スコープ変更時の対処。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-slack
 tags: [slack, setup, runbook, secrets, doctor]
-generated: { by: claude-code/opus-5, at: 2026-09-15T02:17:56+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-17T12:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -49,7 +49,7 @@ owner: tomoya-k31
    `manifest.gateway.yml` の `<gateway-host>` は**プレースホルダのままでよい**
 2. [Event Gateway 構築手順](/operations/event-gateway-setup.md) を通す
 3. 出てきた Request URL を**アプリに戻って 2 箇所に入れる**
-4. このページの手順 2（トークン保管）と手順 3（`totsuka setup`）を通す
+4. このページの手順 2（トークン保管）と手順 3（`totsuka setup` と config.toml の編集）を通す
 5. **`setup` が書いた `[slack]` テーブルに `event_source` と `[slack.gateway]` を足す**
 
 **手順 5 を飛ばせない理由。** `setup` は**既に存在する `[slack]` テーブルには触らない**ので、
@@ -119,20 +119,37 @@ security add-generic-password -U -s totsuka -a slack-bot  -w 'xoxb-…'   # 通�
 # 3. `totsuka setup` で設定を作る
 
 ```bash
-totsuka setup
+totsuka setup --plugins slack,herdr
 ```
 
-レシピの選択で **「Slack — reply as yourself」** を選ぶ。聞かれるのはリポジトリと、手順 2 で控えたメンバー ID、リポジトリ分類用の LLM だけで、`[slack]` の生成・プラグインの install + enable・`doctor` の実行までこの 1 コマンドで済む。トークンの**値**は聞かれない（[ADR-0028](/decisions/adr-0028-setup-wizard.md)）。
+聞かれるのは使うプラグインだけで（`--plugins` を渡さなければチェックボックスで選ぶ）、トークンの**値**は聞かれない
+（[ADR-0077](/decisions/adr-0077-setup-writes-the-whole-surface.md)）。`config.toml` が
+**全設定パターンをコメントで載せた状態**で生成され、パスと「編集しろ」が印字される。
 
-手順 2 のトークン保管がまだなら、`setup` が登録コマンドのチェックリストを印字するので、それから登録する。
+そのファイルを開いて、少なくとも次のコメントを外す。`[slack]` の節はすぐ見つかるはずで、各キーに 1 行の説明が付いている:
 
-**登録が済んでも `state-db` チェックだけは fail のままで、`doctor` は exit 3 で終わる。** これは状態 DB がまだ無いというだけで、作るのは次の手順の `totsuka run` だけ。緑になるのは 1 回走らせたあと。
+1. `[[repositories]]` —— リポジトリのパスと名前
+2. `[plugins.slack] enabled = true` と `[plugins.herdr] enabled = true`
+3. `[slack]` の `app_token` / `user_token` / `bot_token` / `target_user_id`（手順 2 で控えたメンバー ID）
+4. `[[projects]]` の slack エントリと `[[workflows]]` —— **ファイル末尾のレシピ集にある「Slack — reply as yourself」**を
+   そのままコメント解除するのが早い
+
+手順 2 のトークン保管がまだなら、`setup` が登録コマンドの一覧を印字しているので、それから登録する。
+
+編集が済んだら検証する:
+
+```bash
+totsuka config validate
+totsuka doctor
+```
+
+**`state-db` チェックだけは fail のままで、`doctor` は exit 3 で終わる。** これは状態 DB がまだ無いというだけで、作るのは次の手順の `totsuka run` だけ。緑になるのは 1 回走らせたあと。
 
 通しの導入手順（新マシン・開発機・復旧）は [セットアップ Playbook](/operations/setup-playbook.md)。
 
 ## 手で書く場合（フォールバック）
 
-`setup` は**既存ファイルを上書きしない**ので、すでに config がある環境で Slack だけ足すときや、レシピが表現していない構成にしたいときは手で書く。
+`setup` は**既存ファイルの行を書き換えない**（足りない節を追記するだけ）ので、生成された雛形を使わず自分で書いてもよい。プラグインだけ入れて config は手で書く形:
 
 ```bash
 totsuka plugin install --bundled slack --enable

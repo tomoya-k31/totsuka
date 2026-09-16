@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:23677ed95b3b0d35da513d36a7c58f5408c9119fe583991f9ccd89dccf55fe4c -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:7501d3d65aff9c1b73a9cf492001aaa80439808e49abd79ff99438422bd665df -->
 
 # 設定リファレンス
 
@@ -16,7 +16,7 @@
 
 `plugins/{name}.toml` への分離は無くなった。残っていても読まれず、エラーにもならないので、設定を移したら消すこと。
 
-`totsuka init` が雛形を書き出す。`totsuka config validate` で検証し、`totsuka config show [--redacted]` で表示する。
+`totsuka setup` が雛形を書き出す。**このページが記述するキーはすべてその雛形にコメント付きで入っている**（1 キー 1 行の要約つき）ので、設定を探すときはこのページより先にファイルを開くほうが早いことが多い。`totsuka config validate` で検証し、`totsuka config show [--redacted]` で表示する。
 
 ## シークレット参照
 
@@ -27,7 +27,7 @@
 | `op://<vault>/<item>/<field>` | 1Password | **通常はこれ。** macOS 以外でも動く |
 | `bw:<item>/<field>` | Bitwarden | `op://` と同じ役回りの、Bitwarden 版。`BW_SESSION` の export が要る |
 | `cmd:<command>` | コマンドの標準出力 | 別ツールが管理・ローテートする credential（例 `cmd:gh auth token`） |
-| `${ENV_VAR}` を含む文字列 | 環境変数 | すでに export してある値を使うとき |
+| `${ENV_VAR}` を含む文字列 | 環境変数 | すでに export してある値を使うとき。`totsuka setup --secret-backend env` が書く名前は `TOTSUKA_SECRET_<ACCOUNT>` で、この接頭辞は他の未知の `TOTSUKA_*` が受ける「unknown environment override」警告から除外されている |
 | `keychain:<service>/<account>` | macOS Keychain | macOS 専用 |
 
 `~` と `${ENV}` はパスでも展開される。

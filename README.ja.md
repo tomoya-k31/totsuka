@@ -94,45 +94,52 @@ cargo install --git https://github.com/tomoya-k31/totsuka orchestrator-cli
 ## クイックスタート（5 分・1 タスク）
 
 ```sh
-# 1. いくつか質問に答える。開始レシピを選び、リポジトリを登録し、シークレットの
-#    置き場所を指定すると、設定の書き出し・レシピが必要とするプラグインの
-#    install + enable・最後に `doctor` の実行まで一気に済む。
-totsuka setup
+# 1. 使うプラグインを選ぶ。質問はこれだけ。選んだものを導入し、totsuka が解釈する
+#    設定を全部コメントで書いた config.toml を置いて、その場所を教えてくれる。
+totsuka setup                                  # あるいは: --plugins github,herdr,macos
 
-# 2. 印字されたシークレットを登録する。値そのものは setup が扱わないので、
+# 2. そのファイルを開いて、必要な行のコメントを外す。最低限 [[repositories]]、
+#    導入したプラグインの `[plugins.<name>] enabled = true`、そのプラグインの
+#    [<name>] テーブル、そして [[workflows]]。ファイル末尾のレシピ集に、
+#    コメントを外せばそのまま動く組み合わせが入っている。
+$EDITOR ~/.config/totsuka/config.toml
+
+# 3. 印字されたシークレットを登録する。値そのものは setup が扱わないので、
 #    そのまま貼れるコマンドが 1 件ずつ出る。例:
 security add-generic-password -U -s totsuka -a github-token -w '<トークン>'
 
-# 3. 1 サイクル実行（常駐ポーリングは --watch）。
+# 4. 検証してから 1 サイクル実行（常駐ポーリングは --watch）。
+totsuka config validate # 設定がパースでき、辻褄が合っている
+totsuka doctor          # まわりの環境が整っている
 totsuka run --dry-run   # プレビュー: どのタスク -> どのリポジトリ -> どのエージェント
 totsuka run             # 実行: fetch -> dispatch -> 監視 -> publish
 ```
 
-印字されたシークレットが 1 つでも未登録のうち、`setup` は終了コード 3 で終わり
-ます。これは `doctor` が「まだ人間がやることが残っている」と報告しているので
-あって、setup 自体の失敗ではありません。
+**編集するまで何も有効になりません。** `setup` が書く有効行は `version = 1` の 1 行だけで、
+残りは全部ドキュメントとして置かれます。それが狙いです —— ウィザードがたまたま聞いた質問
+からしか到達できない代わりに、選択肢の全体が、いま開いているファイルの中にあります。
+導入したプラグインを **enabled にしない**のも同じ理由です: `totsuka config validate` は
+enabled なプラグインを実際に起動するので、トークン参照がまだコメントのうちに有効化すると、
+セットアップを確認するためのコマンドがそのセットアップ自身で落ちます。
 
 **シークレットを全部登録しても、`totsuka run` を一度打つまで `doctor` は赤のままです。**
-状態 DB が無いあいだ `state-db` チェックが fail し、これを作るのは
-`run` だけだからです。上の順番どおり「登録 → 1 回実行 → `totsuka doctor`」で
-終了コード 0 になります。`warn:` の行（hook トークン未設定、同梱プラグイン無し
-など）は残ることがありますが、これらは助言であって失敗ではありません。
+状態 DB が無いあいだ `state-db` チェックが fail し、これを作るのは `run` だけだからです。
+上の順番がそのまま緑になる順番です。`warn:` の行（hook トークン未設定、同梱プラグイン
+無しなど）は残ることがありますが、これらは助言であって失敗ではありません。
 
 進捗は `totsuka status`、個別タスクは `totsuka task show <id>`、ログ追尾は
 `totsuka logs -f` で確認します。
 
-`totsuka init` は CI・スクリプト用に残しています。**絶対に対話しない**代わりに、
-ディレクトリと全行コメントの雛形しか書きません。`setup` はその雛形を埋めるので、
-先に `init` を打っても害はありませんが不要です。
+あとから `setup` を打ち直すと、まだ無い節だけが追記され、自分で書いた行は 1 バイトも
+変わりません。`totsuka setup --plugins notion` が、何か月も後に `[notion]` の
+コメント付き雛形を docs 抜きで手に入れる方法です。
 
-`setup` には非対話の形もあります。1 度答えてファイルを残しておけば、次のマシンは
-そこから立ち上げられます。`setup` は機密の値をファイルに書きません（どのバックエンド
-を使うかを記録し、値の登録コマンドを印字するだけです）。したがって `setup` が生成
-したファイルは dotfiles にコミットしても安全です。
+2 台目には **config.toml そのもの**を持っていきます。中身は
+シークレットの*参照*（`op://…` / `keychain:…`）だけで値は入らないので、dotfiles に
+置いても安全です。
 
 ```sh
-totsuka setup --save-answers ~/dotfiles/totsuka-answers.toml
-totsuka setup --answers ~/dotfiles/totsuka-answers.toml --yes   # 次のマシンで
+cp ~/.config/totsuka/config.toml ~/dotfiles/totsuka-config.toml
 ```
 
 新マシン・開発機・トークンローテーション・復旧は

@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:23677ed95b3b0d35da513d36a7c58f5408c9119fe583991f9ccd89dccf55fe4c -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:7501d3d65aff9c1b73a9cf492001aaa80439808e49abd79ff99438422bd665df -->
 
 # Configuration reference
 
@@ -15,7 +15,7 @@ Every key in `config.toml` — totsuka's own and each plugin's — with its type
 
 The separate `plugins/{name}.toml` files are gone. If you still have them they are not read, and they do not produce an error either — delete them when you move your settings across.
 
-`totsuka init` writes a template. `totsuka config validate` checks it; `totsuka config show [--redacted]` prints it.
+`totsuka setup` writes a template. **Every key this page documents is in that template, commented out**, with a one-line summary — so the fastest way to find a setting is usually to open the file rather than this page. `totsuka config validate` checks it; `totsuka config show [--redacted]` prints it.
 
 ## Secret references
 
@@ -26,7 +26,7 @@ Never write a plain secret into your configuration. Any string value can instead
 | `op://<vault>/<item>/<field>` | 1Password | **The usual choice.** Works outside macOS |
 | `bw:<item>/<field>` | Bitwarden | The same role as `op://`, for Bitwarden users. Needs `BW_SESSION` exported |
 | `cmd:<command>` | The standard output of a command | Credentials another tool owns and rotates, e.g. `cmd:gh auth token` |
-| A string containing `${ENV_VAR}` | Environment variables | A value you already export |
+| A string containing `${ENV_VAR}` | Environment variables | A value you already export. `totsuka setup --secret-backend env` writes `TOTSUKA_SECRET_<ACCOUNT>` names, which are exempt from the unknown-override warning that every other unrecognised `TOTSUKA_*` gets |
 | `keychain:<service>/<account>` | The macOS Keychain | macOS only |
 
 `~` and `${ENV}` are also expanded in paths.

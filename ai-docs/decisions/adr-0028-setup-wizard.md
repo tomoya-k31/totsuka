@@ -1,15 +1,25 @@
 ---
 type: Decision
 title: ADR-0028 totsuka setup は対話ウィザードにし、機密は一切扱わない
-description: "init が全行コメントの雛形しか書かず config を手書きするしかなかった問題に対し、対話ウィザード totsuka setup を追加する決定。init は非対話・CI 用として残す。既存の設定ファイルは上書きせずスキップし、全行コメントの雛形だけを未設定として扱う。setup は機密の値を一切扱わず参照だけを書いて登録コマンドを印字する。宣言ファイル駆動・SecretWriter ポート・setup --repair・doctor --fix は不採用。"
+description: "**ADR-0077 が置き換えた（#705）。記録として残す。** init が全行コメントの雛形しか書かず config を手書きするしかなかった問題に対し、対話ウィザード totsuka setup を追加する決定。init は非対話・CI 用として残す。既存の設定ファイルは上書きせずスキップし、全行コメントの雛形だけを未設定として扱う。setup は機密の値を一切扱わず参照だけを書いて登録コマンドを印字する。宣言ファイル駆動・SecretWriter ポート・setup --repair・doctor --fix は不採用。"
 resource: https://github.com/tomoya-k31/totsuka/issues/348
 tags: [decision, cli, setup, onboarding, secrets, adr]
-generated: { by: claude-code/opus-5, at: 2026-08-01T19:30:00+09:00 }
-status: stable
+generated: { by: claude-code/opus-5, at: 2026-09-17T12:00:00+09:00 }
+status: deprecated
 owner: tomoya-k31
 ---
 
 # Status
+
+**deprecated。[ADR-0077](/decisions/adr-0077-setup-writes-the-whole-surface.md) が置き換えた**（[#705](https://github.com/tomoya-k31/totsuka/issues/705)）。
+
+下の決定 1〜4・6 は現行の実装ではない: `totsuka setup` は対話ウィザードではなくなり（残る質問は使うプラグインの複数選択 1 問だけ）、`init` は `setup` に統合されて廃止され、レシピ・回答ファイル（`--answers` / `--save-answers`）・確認プロンプト（`--yes`）も無い。既存ファイルはスキップではなく「足りない節の追記」になった。**決定 5（機密の値を一切扱わない）だけが現行でも生きている**。
+
+なぜ覆ったかは ADR-0077 の Context に書いた —— 要約すると、対話は設定スキーマの網羅に向かず、レシピが組み合わせ爆発する。**このファイルは記録として残す**: 当時なぜ対話を選んだかと、それが到達できなかった範囲の両方が、次に同じ設計を検討するときの材料になる。
+
+---
+
+（以下、当時の記述。）
 
 stable。[#348](https://github.com/tomoya-k31/totsuka/issues/348) の実装とともに確定した。エピック [#342](https://github.com/tomoya-k31/totsuka/issues/342)（インストール・セットアップの摩擦をゼロにする）の設定層の中核で、配布層（[ADR-0027](/decisions/adr-0027-plugin-artifact-naming.md) と #344〜#346）の上に載る。
 

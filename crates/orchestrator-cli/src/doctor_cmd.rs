@@ -28,8 +28,8 @@ use serde::Serialize;
 use orchestrator_core::plugins::plugin_spec;
 
 use crate::bundled;
+use crate::common::git_version;
 use crate::common::{self, CliError, Cx, safe};
-use crate::init_cmd::git_version;
 
 /// `serde` `skip_serializing_if` predicate: omit a `false` flag from the JSON.
 fn is_false(b: &bool) -> bool {
@@ -314,7 +314,7 @@ impl SecretReadiness {
     /// The skip for the first blocked string leaf under `value`, if any.
     ///
     /// Only *actual string values* count, so a commented-out example — like
-    /// the one `totsuka init` generates — never gates anything.
+    /// the one `totsuka setup` generates — never gates anything.
     fn skip_in_toml(self, value: &toml::Value) -> Option<SecretSkip> {
         match value {
             toml::Value::String(s) => self.skip_for(s),
@@ -454,7 +454,7 @@ pub fn run(cx: &Cx, args: DoctorArgs) -> Result<(), CliError> {
             checks.push(Check::fail(
                 "config",
                 e.to_string(),
-                "run `totsuka init`, then edit the generated config.toml",
+                "run `totsuka setup`, then edit the generated config.toml",
             ));
             None
         }
@@ -1125,7 +1125,7 @@ fn override_mentions_scheme(cfg: &RootConfig, scheme: SecretScheme) -> bool {
 /// Whether `config.toml` holds a reference of `scheme` in an **actual string
 /// value** (resolution stays lazy, this only decides whether to probe that
 /// backend at all). The file is TOML-parsed and its string leaves walked, so a
-/// commented-out example — like the one `totsuka init` generates — never
+/// commented-out example — like the one `totsuka setup` generates — never
 /// triggers the backend's checks.
 ///
 /// One file since #554: plugin settings live in the same document, so the

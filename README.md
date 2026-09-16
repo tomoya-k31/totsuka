@@ -92,45 +92,55 @@ This installs the CLI only. Plugins are built from a checkout — see
 ## Quickstart (5 minutes, 1 task)
 
 ```sh
-# 1. Answer a few questions. Pick a starting recipe, name your repositories,
-#    say where your secrets live — the wizard writes the config, installs and
-#    enables the plugins the recipe needs, and finishes by running `doctor`.
-totsuka setup
+# 1. Pick the plugins you will use. That is the only question. `setup` installs
+#    them and writes a config.toml with every setting totsuka understands in it,
+#    commented out, then tells you where the file is.
+totsuka setup                                  # or: --plugins github,herdr,macos
 
-# 2. Register the secrets it listed. It never handles the values itself, so it
+# 2. Open that file and uncomment what you need. At minimum a [[repositories]]
+#    block, `[plugins.<name>] enabled = true` for what you installed, that
+#    plugin's own [<name>] table, and a [[workflows]] block — the recipe section
+#    at the end of the file has combinations that work, ready to uncomment.
+$EDITOR ~/.config/totsuka/config.toml
+
+# 3. Register the secrets it listed. It never handles the values itself, so it
 #    prints one ready-to-paste command per secret, e.g.
 security add-generic-password -U -s totsuka -a github-token -w '<the token>'
 
-# 3. Run one cycle (add --watch to keep polling).
+# 4. Check, then run one cycle (add --watch to keep polling).
+totsuka config validate # the config parses and hangs together
+totsuka doctor          # the environment around it is ready
 totsuka run --dry-run   # preview: which task -> which repo -> which agent
 totsuka run             # execute: fetch -> dispatch -> monitor -> publish
 ```
 
-`setup` exits with code 3 until every secret it listed exists — that is
-`doctor` reporting real work left to do, not a failure of the setup itself.
+**Nothing is active until you edit the file.** `setup` writes one live line —
+`version = 1` — and leaves everything else as documentation. That is the point:
+every option is in front of you, in the file you already have open, instead of
+being reachable only through questions a wizard happened to ask. It also means
+the plugins it installed are **not** enabled: `totsuka config validate` launches
+every enabled plugin, so enabling one before its token reference exists would
+make the command that confirms your setup fail on the setup itself.
 
 **`doctor` stays red until after your first `totsuka run`**, even with every
 secret registered: the `state-db` check fails while the state database does not
 exist, and only `run` creates it. So the order above is the order that goes
-green — register the secrets, run once, then `totsuka doctor` exits 0. It may
-still print `warn:` lines (an unset hook token, no bundled plugins); those are
-advisory and do not fail it.
+green. It may still print `warn:` lines (an unset hook token, no bundled
+plugins); those are advisory and do not fail it.
 
 Inspect progress with `totsuka status`, drill into a task with
 `totsuka task show <id>`, and follow logs with `totsuka logs -f`.
 
-`totsuka init` is still there for CI and scripted bootstraps: it never prompts,
-and writes only directories plus a fully commented config skeleton. `setup`
-fills that skeleton in, so running `init` first is harmless but unnecessary.
+Re-running `setup` later appends the sections your config does not have yet and
+never rewrites a line you wrote — so `totsuka setup --plugins notion` is how you
+get the commented `[notion]` skeleton months after your first run.
 
-`setup` also has a non-interactive form: answer once, keep the file, and bring
-the next machine up from it. `setup` never writes a secret value into the file —
-it records which backend to use and prints the commands to register the values —
-so a file it generated is safe to commit to your dotfiles.
+To bring up a second machine, copy the config file itself: it contains secret
+*references* (`op://…`, `keychain:…`), never values, so it is safe in your
+dotfiles.
 
 ```sh
-totsuka setup --save-answers ~/dotfiles/totsuka-answers.toml
-totsuka setup --answers ~/dotfiles/totsuka-answers.toml --yes   # on the next machine
+cp ~/.config/totsuka/config.toml ~/dotfiles/totsuka-config.toml
 ```
 
 New machine, dev checkout, token rotation, and recovery are covered end to end

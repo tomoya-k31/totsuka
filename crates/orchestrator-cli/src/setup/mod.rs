@@ -1,312 +1,521 @@
-//! `totsuka setup` — the interactive path from a fresh install to a config
-//! that loads (#348).
+//! `totsuka setup` — from a fresh install to a `config.toml` that loads, and a
+//! clear instruction to go edit it (#705).
 //!
-//! # Why this exists next to `init`
+//! # What it does, and what it deliberately does not
 //!
-//! `init` writes a skeleton in which **every line is a comment**, so the file
-//! it produces does nothing until it is hand-edited against the reference docs.
-//! That is the right behaviour for CI and for bootstrapping, and it stays
-//! unchanged. `setup` is the human path: it asks, then writes values.
+//! It writes the **whole** configuration surface into `config.toml`, commented
+//! out, and tells you where the file is. It does not try to fill it in.
 //!
-//! | | `init` | `setup` |
-//! |---|---|---|
-//! | interactive | never | yes, or `--answers <file>` to replay a saved one |
-//! | writes | dirs + commented skeleton | dirs + real values |
-//! | existing files | skipped | skipped |
-//! | secrets | untouched | **untouched** — references only |
+//! That is the correction #705 made to [ADR-0028]. The interactive wizard this
+//! replaces asked a dozen questions and produced a working config — for the
+//! four recipes it knew. Everything else (notion, discord, orca, `[hooks]`,
+//! `[tools.*]`, `[log]`, most of `[[workflows]]`) was unreachable, and adding
+//! it meant more questions and more recipes, combinatorially. Writing every
+//! option down as a comment costs one line each and has no such ceiling, so
+//! the wizard's own knowledge — which columns pair with which profile — moved
+//! into the skeleton's recipe section rather than being lost.
 //!
-//! # Two phases
+//! One question survives, because it is the one answer that changes what is
+//! *installed* rather than what is written: which plugins you will use.
 //!
-//! The interview is pure: it builds [`Answers`] in memory and touches nothing.
-//! Nothing is *configured* until the plan is printed and confirmed. So Ctrl-C
-//! during the questions leaves no trace, and a failure during apply reports how
-//! far it got — every step is idempotent, so re-running converges rather than
-//! double-applying.
+//! # Why nothing is enabled
 //!
-//! The one file written outside apply is `--save-answers`, and deliberately so:
-//! "let me see the plan and keep my answers, without applying them" is the
-//! point of pairing it with `--dry-run`. It is called out here, and in what
-//! `--dry-run` prints, because a blanket "nothing was written" would be a lie
-//! the moment both flags are used together.
+//! Selected plugins are installed, and their `[plugins.<name>] enabled = true`
+//! stays commented. `totsuka config validate` **launches** every enabled
+//! plugin, so enabling `github` before `[github].token` exists would make the
+//! command that is supposed to confirm the setup fail on the setup itself.
 //!
 //! # Secrets
 //!
 //! `setup` never handles a secret value. It picks a backend, writes the
-//! *references* into the config, and prints the commands to register them. The
-//! orchestrator's own contract is that it only ever reads secrets (F-65), and
-//! a wizard that collected tokens would be the one place that broke it.
+//! *references* into the config, and prints the commands to register them
+//! (F-65). See [`secrets`].
+//!
+//! [ADR-0028]: https://github.com/tomoya-k31/totsuka/blob/main/ai-docs/decisions/adr-0028-setup-wizard.md
 
-mod answers;
-mod interview;
-mod plugin_config;
-mod recipes;
+mod secrets;
+mod template;
 
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
-use orchestrator_core::config::{
-    ProjectDraft, RepositoryDraft, WorkflowDraft, set_llm, set_plugin_enabled, upsert_project,
-    upsert_repository, upsert_workflow,
-};
-
 use crate::common::{CliError, Cx, EXIT_USAGE, ExitWith};
-use crate::{bundled, doctor_cmd, from_source, init_cmd, plugin_cmd};
+use crate::{bundled, from_source, plugin_cmd};
 
-pub use answers::{
-    Answers, GitHubAnswer, GitHubOwnerType, LlmAnswer, RepositoryAnswer, SecretBackend,
-};
-use interview::Prompt;
-use recipes::{Blank, RECIPES, Recipe};
+pub use secrets::SecretBackend;
 
 /// Options parsed from the command line.
 #[derive(Debug, Default)]
 pub struct SetupArgs {
-    /// Replay a saved answers file instead of asking; see [`answers`] for the
-    /// format's stability contract.
-    pub answers: Option<PathBuf>,
-    /// Write the collected answers here.
-    pub save_answers: Option<PathBuf>,
+    /// Which plugins to install: a comma-separated list, `all`, or `none`.
+    ///
+    /// The non-interactive form of the one remaining question. Without a
+    /// terminal and without this, `setup` stops rather than guessing.
+    pub plugins: Option<String>,
+    /// Which secret store the written references point at.
+    pub secret_backend: SecretBackend,
     /// Print the plan and stop.
     pub dry_run: bool,
-    /// Skip the final confirmation.
-    pub yes: bool,
     /// Pin where bundled plugins are looked up, instead of detecting.
     ///
-    /// Hidden, and the same affordance `plugin install --bundled-dir` provides,
-    /// for the same reason: an E2E runs `totsuka` as a child process whose
-    /// working directory is inside this checkout, so without a pin the wizard
-    /// would detect a checkout and shell out to `cargo build` — which tests are
-    /// not allowed to do (ADR-0018). An env var is not an option either
-    /// (ADR-0009).
+    /// Hidden, and the same affordance `plugin install --bundled-dir`
+    /// provides, for the same reason: an E2E runs `totsuka` as a child process
+    /// whose working directory is inside this checkout, so without a pin the
+    /// command would detect a checkout and shell out to `cargo build` — which
+    /// tests are not allowed to do (ADR-0018). An env var is not an option
+    /// either (ADR-0009).
     pub bundled_dir: Option<PathBuf>,
 }
 
-/// Run the wizard.
+/// Run the command.
 pub fn run(cx: &Cx, args: &SetupArgs) -> Result<(), CliError> {
-    let mut stdout = std::io::stdout();
-    let answers = match &args.answers {
-        Some(path) => load_answers(path)?,
+    let selected = select_plugins(args)?;
+    let source = PluginSource::detect(args.bundled_dir.as_deref());
+    let rendered = template::render(&selected, args.secret_backend);
+    let existing = read_existing(&cx.config_path)?;
+    let plan = Plan::new(cx, &selected, &rendered, existing.as_deref(), &source);
+
+    print!("{}", plan.render());
+    if args.dry_run {
+        println!("\n--dry-run: nothing was written.");
+        return Ok(());
+    }
+
+    ensure_dirs(cx)?;
+    match &plan.write {
+        ConfigWrite::Fresh(text) => {
+            write_atomically(&cx.config_path, text)?;
+            println!("created: {}", cx.config_path.display());
+        }
+        ConfigWrite::Append(text) => {
+            let mut merged = existing.clone().unwrap_or_default();
+            if !merged.ends_with('\n') {
+                merged.push('\n');
+            }
+            merged.push('\n');
+            merged.push_str(text);
+            write_atomically(&cx.config_path, &merged)?;
+            println!("updated: {}", cx.config_path.display());
+        }
+        ConfigWrite::Unchanged => {
+            println!(
+                "unchanged: {} already documents every section setup would add",
+                cx.config_path.display()
+            );
+        }
+    }
+
+    // The checklist names the accounts the *write* introduced, not every
+    // account the selection could reference. A rerun with a different backend
+    // would otherwise print `keychain:` commands over a file that still says
+    // `op://` — sending the operator to register a secret nothing reads, since
+    // the append deliberately leaves existing reference lines alone.
+    let introduced = match &plan.write {
+        ConfigWrite::Fresh(_) => template::secret_accounts(&selected),
+        ConfigWrite::Append(text) => template::accounts_mentioned_in(text),
+        ConfigWrite::Unchanged => Vec::new(),
+    };
+
+    install_plugins(cx, &selected, &source)?;
+
+    // The check `init` used to carry. Nothing else in this command needs git,
+    // but everything downstream does — a worktree cannot be created without
+    // it — and with `doctor` no longer run here, this is the only place a
+    // fresh machine hears about it.
+    match crate::common::git_version() {
+        Some(version) => println!("ok: git {version}"),
+        None => println!("warning: git not found on PATH → install git (worktrees require it)"),
+    }
+
+    print_next_steps(cx, &selected, &introduced, args.secret_backend);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// The one question
+// ---------------------------------------------------------------------------
+
+/// Which plugins to install: from `--plugins`, or by asking.
+fn select_plugins(args: &SetupArgs) -> Result<BTreeSet<String>, CliError> {
+    let known = template::known_plugins();
+    match &args.plugins {
+        Some(spec) => parse_plugins(spec, &known),
         None => {
-            // Never fall back to defaults when there is nobody to ask: a
-            // silently-guessed config is worse than no config.
             if !std::io::stdin().is_terminal() {
-                // Names `--answers` first: it is the path that produces a
-                // working config without a terminal, which is what the caller
-                // was after. `init` writes a fully commented skeleton and
-                // nothing more, so sending them there is the fallback, not the
-                // answer (#466).
                 return Err(ExitWith::new(
                     EXIT_USAGE,
-                    "`totsuka setup` needs a terminal → replay a saved file with \
-                     `totsuka setup --answers <file> --yes`, run it interactively to \
-                     create one (`--save-answers <file>`), or run `totsuka init` and \
-                     edit config.toml by hand",
+                    format!(
+                        "`totsuka setup` needs a terminal to ask which plugins you will use → \
+                         pass them instead: `--plugins {}`, or `--plugins all` / `--plugins none`",
+                        known
+                            .iter()
+                            .map(|p| p.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    ),
                 )
                 .into());
             }
-            let stdin = std::io::stdin();
-            let mut locked = stdin.lock();
-            let mut prompt = Prompt::new(&mut locked, &mut stdout);
-            interview(&mut prompt)?
-        }
-    };
-
-    // Before the plan, so the answers survive even if the plan is rejected —
-    // re-answering a dozen questions to recover them would be the worse
-    // failure. `--dry-run`'s summary names this file so the claim it makes
-    // stays true.
-    if let Some(path) = &args.save_answers {
-        std::fs::write(path, answers.to_toml())?;
-        println!("Saved answers to {}", path.display());
-    }
-
-    let plan = Plan::new(cx, &answers, args)?;
-    print!("{}", plan.render());
-    if args.dry_run {
-        match &args.save_answers {
-            Some(path) => println!(
-                "\n--dry-run: nothing was configured (only {} was written).",
-                path.display()
-            ),
-            None => println!("\n--dry-run: nothing was written."),
-        }
-        return Ok(());
-    }
-    if !args.yes {
-        let stdin = std::io::stdin();
-        let mut locked = stdin.lock();
-        let mut prompt = Prompt::new(&mut locked, &mut stdout);
-        if !prompt.confirm("\nApply this?", true)? {
-            println!("Aborted; nothing was written.");
-            return Ok(());
+            ask_plugins(&known)
         }
     }
-
-    apply(cx, &answers, &plan)
 }
 
-/// Read and validate an answers file.
-fn load_answers(path: &Path) -> Result<Answers, CliError> {
-    let display = path.display().to_string();
-    let text = std::fs::read_to_string(path).map_err(|source| {
-        CliError::from(
-            answers::AnswersError::Read {
-                path: display.clone(),
-                source,
-            }
-            .to_string(),
-        )
-    })?;
-    Answers::from_toml_str(&display, &text, RECIPES).map_err(|e| CliError::from(e.to_string()))
-}
-
-/// The pure phase: ask everything, write nothing.
-fn interview(prompt: &mut Prompt) -> Result<Answers, CliError> {
-    prompt.say("totsuka setup — this asks a few questions, shows what it will do,")?;
-    prompt.say("and changes nothing until you confirm. Secrets are never entered here.")?;
-    prompt.say("")?;
-
-    let choices: Vec<(&str, &str)> = RECIPES.iter().map(|r| (r.label, r.blurb)).collect();
-    let recipe_index = prompt.choose("Which setup do you want to start from?", &choices, 0)?;
-    // Indexed, correctly: `recipe_index` is the menu position the prompt just
-    // returned, not a value that travelled through a file.
-    let recipe = &RECIPES[recipe_index];
-    prompt.say("")?;
-
-    let mut repositories = Vec::new();
-    loop {
-        let path = prompt.ask("Repository path", None)?;
-        let default_name = default_repo_name(&path);
-        let name = prompt.ask("  Name for it", Some(&default_name))?;
-        let summary = prompt.ask(
-            "  One-line summary (optional, aids repo selection)",
-            Some(""),
-        )?;
-        repositories.push(RepositoryAnswer {
-            name,
-            path,
-            summary: (!summary.is_empty()).then_some(summary),
-        });
-        if !prompt.confirm("Add another repository?", false)? {
-            break;
-        }
-    }
-    prompt.say("")?;
-
-    let backend_index = prompt.choose(
-        "Where do your secrets live? (setup only writes references, never values)",
-        &[
-            ("macOS Keychain", "keychain:totsuka/<name>"),
-            ("1Password", "op://Dev/totsuka/<name>"),
-            ("Bitwarden", "bw:totsuka-<name>/password"),
-            ("Environment variables", "${TOTSUKA_<NAME>}"),
-        ],
-        0,
-    )?;
-    let secret_backend = match backend_index {
-        0 => SecretBackend::Keychain,
-        1 => SecretBackend::OnePassword,
-        2 => SecretBackend::Bitwarden,
-        _ => SecretBackend::Env,
-    };
-
-    let mut llm = None;
-    let mut slack_user_id = None;
-    let mut github = None;
-    for blank in recipe.blanks {
-        prompt.say("")?;
-        match blank {
-            Blank::GitHub => {
-                prompt.say("Which GitHub Project board should tasks come from?")?;
-                let owner = prompt.ask("  Owner (user or org that owns the board)", None)?;
-                let owner_type = match prompt.choose(
-                    "  Is that a user or an organization?",
-                    &[
-                        ("User", "a personal account"),
-                        ("Organization", "a GitHub organization"),
-                    ],
-                    0,
-                )? {
-                    0 => GitHubOwnerType::User,
-                    _ => GitHubOwnerType::Organization,
-                };
-                // Free text rather than a number prompt: re-asking is the
-                // interview's job, and `ask` already loops until non-empty.
-                let project_number = loop {
-                    let typed = prompt.ask("  Project number (from the board's URL)", None)?;
-                    match typed.trim().parse::<i64>() {
-                        Ok(n) => break n,
-                        Err(_) => prompt.say("  → that is not a number; try again")?,
-                    }
-                };
-                let github_login = prompt.ask(
-                    "  Your GitHub login (whose cards get picked up)",
-                    Some(&owner),
-                )?;
-                github = Some(GitHubAnswer {
-                    owner,
-                    owner_type,
-                    project_number,
-                    github_login,
-                });
-            }
-            Blank::Llm => {
-                prompt
-                    .say("This setup needs an LLM to pick which repository a task belongs to.")?;
-                llm = Some(LlmAnswer {
-                    base_url: prompt.ask("  API base URL", Some("https://openrouter.ai/api/v1"))?,
-                    model: prompt.ask("  Model", Some("anthropic/claude-haiku-4-5"))?,
-                });
-            }
-            Blank::SlackUserId => {
-                prompt.say("Your Slack member ID (profile → ⋮ → Copy member ID).")?;
-                slack_user_id = Some(prompt.ask("  Member ID", None)?);
-            }
-        }
-    }
-
-    // Status columns last: they are the only questions whose right answer is
-    // sitting on screen in another window, and the operator has just been
-    // asked for the board's coordinates.
-    let mut statuses = std::collections::BTreeMap::new();
-    if !recipe.statuses.is_empty() {
-        prompt.say("Name the Project status columns this workflow moves cards between.")?;
-        prompt.say("  Each must match an option in the board's Status field exactly.")?;
-        for slot in recipe.statuses {
-            let answer = prompt.ask(&format!("  {}", slot.prompt), Some(slot.default))?;
-            statuses.insert(slot.key.to_string(), answer);
-        }
-    }
-
-    Ok(Answers {
-        version: answers::ANSWERS_VERSION,
-        recipe: recipe.key.to_string(),
-        repositories,
-        secret_backend,
-        llm,
-        slack_user_id,
-        github,
-        statuses,
-    })
-}
-
-/// A repository name guessed from its path, so the question has a default.
-fn default_repo_name(path: &str) -> String {
-    path.trim_end_matches('/')
-        .rsplit('/')
-        .find(|s| !s.is_empty())
-        .unwrap_or("repo")
-        .to_string()
-}
-
-/// Where the recipe's plugins will come from.
+/// Parse `--plugins`.
 ///
-/// Decided once, up front, so the plan shown is the plan run. The order is
-/// "what this machine already has": a release tarball carries its plugins next
-/// to the binary, a developer has a checkout to build from, and a bare
-/// `cargo install` has neither — which is not an error, just a setup that
-/// cannot finish the last step by itself.
+/// An unknown name is an error naming the valid ones rather than a silent
+/// omission: a typo'd `--plugins gihub` that installed nothing would look
+/// exactly like a successful run.
+fn parse_plugins(
+    spec: &str,
+    known: &[template::KnownPlugin],
+) -> Result<BTreeSet<String>, CliError> {
+    let spec = spec.trim();
+    if spec == "all" {
+        return Ok(known.iter().map(|p| p.name.clone()).collect());
+    }
+    if spec == "none" {
+        return Ok(BTreeSet::new());
+    }
+    // An empty list is the state the TTY gate and `--plugins` exist to rule
+    // out: a run that installs nothing and reports success. `none` is how you
+    // say it on purpose.
+    if spec.split(',').all(|s| s.trim().is_empty()) {
+        return Err(ExitWith::new(
+            EXIT_USAGE,
+            "`--plugins` names no plugin → list them, or say `--plugins none` if that is what you meant",
+        )
+        .into());
+    }
+    let mut selected = BTreeSet::new();
+    for name in spec.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+        if !known.iter().any(|p| p.name == name) {
+            return Err(ExitWith::new(
+                EXIT_USAGE,
+                format!(
+                    "unknown plugin `{name}` → pick from {}, or use `all` / `none`",
+                    known
+                        .iter()
+                        .map(|p| p.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" / ")
+                ),
+            )
+            .into());
+        }
+        selected.insert(name.to_string());
+    }
+    Ok(selected)
+}
+
+/// Ask, on a terminal.
+fn ask_plugins(known: &[template::KnownPlugin]) -> Result<BTreeSet<String>, CliError> {
+    let items: Vec<String> = known
+        .iter()
+        .map(|p| format!("{:<8} {}", p.name, p.label))
+        .collect();
+    println!("totsuka setup — this installs the plugins you pick and writes a config.toml");
+    println!("with every setting in it, commented out. It never asks for a secret.");
+    println!();
+    let chosen = dialoguer::MultiSelect::new()
+        .with_prompt("Which plugins will you use? (space to toggle, enter to confirm)")
+        .items(&items)
+        .interact()
+        .map_err(|e| CliError::from(format!("could not read the selection ({e})")))?;
+    Ok(chosen.into_iter().map(|i| known[i].name.clone()).collect())
+}
+
+// ---------------------------------------------------------------------------
+// The config file
+// ---------------------------------------------------------------------------
+
+/// Read the config, distinguishing "absent" from "unreadable".
+///
+/// Any failure other than absence is reported rather than read as "no file":
+/// the answer decides whether `setup` writes into a file it could not inspect,
+/// and that file holds the operator's secret references.
+fn read_existing(path: &Path) -> Result<Option<String>, CliError> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(Some(text)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(CliError::from(format!(
+            "cannot read {} ({e}) → refusing to write into a config it cannot inspect",
+            path.display()
+        ))),
+    }
+}
+
+/// What will happen to `config.toml`.
+enum ConfigWrite {
+    /// No file yet: write the rendered skeleton.
+    Fresh(String),
+    /// A file exists: append the sections it does not have yet.
+    Append(String),
+    /// A file exists and has them all.
+    Unchanged,
+}
+
+/// Decided before anything is written, so it can be shown and so `--dry-run`
+/// and the real run cannot disagree.
+struct Plan<'a> {
+    config_path: PathBuf,
+    selected: &'a BTreeSet<String>,
+    write: ConfigWrite,
+    /// Table paths the append is made of, for the printed plan.
+    added: Vec<String>,
+    source: &'a PluginSource,
+}
+
+impl<'a> Plan<'a> {
+    fn new(
+        cx: &Cx,
+        selected: &'a BTreeSet<String>,
+        rendered: &str,
+        existing: Option<&str>,
+        source: &'a PluginSource,
+    ) -> Plan<'a> {
+        let (write, added) = match existing {
+            None => (ConfigWrite::Fresh(rendered.to_string()), Vec::new()),
+            Some(existing) => {
+                let missing: Vec<Block> = blocks(rendered)
+                    .into_iter()
+                    .filter(|b| !b.is_present_in(existing))
+                    .collect();
+                if missing.is_empty() {
+                    (ConfigWrite::Unchanged, Vec::new())
+                } else {
+                    // Several commented examples can document the same table
+                    // (`[[projects]]` appears once per source and again in the
+                    // recipes); the plan names each table once.
+                    let mut paths: Vec<String> = Vec::new();
+                    for block in &missing {
+                        if !paths.contains(&block.path) {
+                            paths.push(block.path.clone());
+                        }
+                    }
+                    let text = missing
+                        .iter()
+                        .map(|b| b.text.as_str())
+                        .collect::<Vec<_>>()
+                        .join("");
+                    (ConfigWrite::Append(text), paths)
+                }
+            }
+        };
+        Plan {
+            config_path: cx.config_path.clone(),
+            selected,
+            write,
+            added,
+            source,
+        }
+    }
+
+    fn render(&self) -> String {
+        let mut out = String::from("\nSetup plan\n\n");
+        out.push_str(&format!("  config   {}\n", self.config_path.display()));
+        out.push_str(&match &self.write {
+            ConfigWrite::Fresh(_) => {
+                "           write it, with every setting commented out\n".into()
+            }
+            ConfigWrite::Append(_) => format!(
+                "           append the {} table(s) it does not document yet:\n{}",
+                self.added.len(),
+                self.added
+                    .iter()
+                    .map(|t| format!("             [{t}]\n"))
+                    .collect::<String>()
+            ),
+            ConfigWrite::Unchanged => "           leave it alone; nothing to add\n".into(),
+        });
+        out.push_str(&format!(
+            "  plugins  {}\n",
+            if self.selected.is_empty() {
+                "none".to_string()
+            } else {
+                self.selected.iter().cloned().collect::<Vec<_>>().join(", ")
+            }
+        ));
+        out.push_str(&match self.source {
+            PluginSource::Bundled(root) => format!("           install from {}\n", root.display()),
+            PluginSource::Checkout(root) => format!("           build from {}\n", root.display()),
+            PluginSource::Unavailable => {
+                "           nothing to install from; you will be told what to run\n".into()
+            }
+        });
+        out
+    }
+}
+
+/// One documented table of the rendered skeleton, with the prose above it.
+///
+/// **The append unit is a table, not a banner section.** Two things follow from
+/// that, and both are the reason it is not a section:
+///
+/// * Content that is *not* under a table — the file's preamble, and the
+///   top-level keys — is never appended. Appending it would drop root-level
+///   keys at the end of a file that ends inside a table, where TOML reads them
+///   as that table's keys: the one live line in the skeleton, `version = 1`,
+///   lands inside the last `[[workflows]]` and `deny_unknown_fields` rejects
+///   it. (Appending a *second* root `version` is the other half of the same
+///   bug, and equally unwanted.)
+/// * A plugin picked on a later run gets its roster entry. All seven
+///   `[plugins.<name>]` entries share one banner, so a section-sized unit is
+///   "already there" the moment any of them is — and the flagship case of
+///   [`ADR-0077`] decision 6, adding `notion` months later, would append
+///   `[notion]` with no `[plugins.notion]` to enable it by.
+///
+/// [`ADR-0077`]: https://github.com/tomoya-k31/totsuka/blob/main/ai-docs/decisions/adr-0077-setup-writes-the-whole-surface.md
+struct Block {
+    /// The dotted path of the table this block documents (`plugins.notion`,
+    /// `notion.property_map`, `projects`).
+    path: String,
+    /// The block, including the banner and prose that introduce it.
+    text: String,
+}
+
+impl Block {
+    /// Whether `existing` already documents or defines this table.
+    ///
+    /// Both halves matter, and for different callers. The **active** form
+    /// catches a hand-written config: appending a commented block about
+    /// `[github]` below a live `[github]` would read as a second,
+    /// contradictory definition. The **commented** form catches a config this
+    /// command wrote before — where nothing is active yet, so without it every
+    /// re-run would append the whole file again.
+    fn is_present_in(&self, existing: &str) -> bool {
+        let active = [format!("[{}]", self.path), format!("[[{}]]", self.path)];
+        let documented = [format!("# [{}]", self.path), format!("# [[{}]]", self.path)];
+        // A header may carry a trailing comment (`# [herdr.kind_map]   # …`),
+        // so this is a prefix test. The closing bracket makes it exact enough:
+        // `# [github.prompts]` does not start with `# [github]`.
+        existing.lines().any(|line| {
+            let line = line.trim();
+            active
+                .iter()
+                .chain(documented.iter())
+                .any(|f| line.starts_with(f.as_str()))
+        })
+    }
+}
+
+/// The banner line the skeleton separates its sections with.
+fn banner_prefix() -> &'static str {
+    "# ========"
+}
+
+/// Split rendered text into table blocks.
+///
+/// Lines between blocks attach to the block that *follows* them, so an
+/// appended block carries the banner and the explanation that introduce it and
+/// reads exactly as it does in a fresh file. Whatever trails the last block is
+/// prose, and is dropped.
+fn blocks(rendered: &str) -> Vec<Block> {
+    let mut blocks: Vec<Block> = Vec::new();
+    let mut pending = String::new();
+    let mut current: Option<Block> = None;
+    // Distance from the last banner line, to tell a banner that opens a new
+    // section from the one that closes the same section's title.
+    let mut since_banner = usize::MAX;
+
+    for line in rendered.lines() {
+        if line.starts_with(banner_prefix()) {
+            if let Some(block) = current.take() {
+                blocks.push(block);
+            }
+            // A new section starts here, so whatever is still unattributed
+            // belongs to the section that just ended and is not part of any
+            // table. Dropping it is the whole point: that is where the
+            // skeleton's root-level keys live.
+            if since_banner > 2 {
+                pending.clear();
+            }
+            since_banner = 0;
+            pending.push_str(line);
+            pending.push('\n');
+            continue;
+        }
+        since_banner = since_banner.saturating_add(1);
+        // The line right after a banner is the section's title, and titles are
+        // written as `# [llm] — the AI Gateway …`. Reading that as a table
+        // header would make every section start a block of its own, on top of
+        // the one its real header starts.
+        if since_banner == 1 {
+            pending.push_str(line);
+            pending.push('\n');
+            continue;
+        }
+        if let Some(path) = table_path(line) {
+            if let Some(block) = current.take() {
+                blocks.push(block);
+            }
+            let mut text = std::mem::take(&mut pending);
+            text.push_str(line);
+            text.push('\n');
+            current = Some(Block { path, text });
+            continue;
+        }
+        match &mut current {
+            Some(block) => {
+                block.text.push_str(line);
+                block.text.push('\n');
+            }
+            None => {
+                pending.push_str(line);
+                pending.push('\n');
+            }
+        }
+    }
+    if let Some(block) = current {
+        blocks.push(block);
+    }
+    blocks
+}
+
+/// The table path a commented header line documents, if it is one.
+fn table_path(line: &str) -> Option<String> {
+    let line = line.trim().strip_prefix("# ").unwrap_or(line.trim());
+    let line = line.trim();
+    let inner = line
+        .strip_prefix("[[")
+        .and_then(|r| r.split("]]").next())
+        .or_else(|| line.strip_prefix('[').and_then(|r| r.split(']').next()))?;
+    inner
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '.' || c == '-')
+        .then(|| inner.to_string())
+        .filter(|s| !s.is_empty())
+}
+
+fn write_atomically(path: &Path, contents: &str) -> Result<(), CliError> {
+    let staged = path.with_extension("toml.new");
+    std::fs::write(&staged, contents)?;
+    if let Err(e) = std::fs::rename(&staged, path) {
+        let _ = std::fs::remove_file(&staged);
+        return Err(e.into());
+    }
+    Ok(())
+}
+
+/// Create the XDG directories totsuka writes into (§5.6).
+pub fn ensure_dirs(cx: &Cx) -> Result<(), CliError> {
+    for (label, dir) in [
+        ("config", cx.config_path.parent().unwrap_or(Path::new("."))),
+        ("data", cx.paths.data_dir()),
+        ("state", cx.paths.state_dir()),
+        ("cache", cx.paths.cache_dir()),
+    ] {
+        std::fs::create_dir_all(dir)?;
+        println!("ok: {label} directory {}", dir.display());
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Plugins
+// ---------------------------------------------------------------------------
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum PluginSource {
     /// A bundled tree next to the binary (#345).
@@ -334,265 +543,16 @@ impl PluginSource {
     }
 }
 
-/// What apply will do, decided before anything is written so it can be shown
-/// and so `--dry-run` and the real run cannot disagree.
-struct Plan<'a> {
-    recipe: &'a Recipe,
-    answers: &'a Answers,
-    /// `config.toml` is written only when absent or still a bare skeleton.
-    write_config: bool,
-    config_path: PathBuf,
-    /// Plugin settings tables (`[<name>]`) to add to `config.toml`, minus the
-    /// ones already there (#554).
-    plugin_configs: Vec<&'static str>,
-    plugin_source: PluginSource,
-}
-
-impl<'a> Plan<'a> {
-    fn new(cx: &Cx, answers: &'a Answers, args: &SetupArgs) -> Result<Plan<'a>, CliError> {
-        // Resolved by key, not position (#466). `from_toml_str` has already
-        // rejected an unknown one, and the interview only ever writes a key
-        // it just read out of `RECIPES`.
-        let recipe =
-            recipes::by_key(&answers.recipe).expect("the recipe key was validated on the way in");
-        let existing = existing_top_level_tables(&cx.config_path)?;
-        let plugin_configs: Vec<&'static str> = plugin_config::drafts_for(answers, recipe)
-            .into_iter()
-            .map(|draft| draft.name)
-            .filter(|name| !existing.contains(*name))
-            .collect();
-        Ok(Plan {
-            recipe,
-            answers,
-            write_config: is_unconfigured(&cx.config_path)?,
-            config_path: cx.config_path.clone(),
-            plugin_configs,
-            plugin_source: PluginSource::detect(args.bundled_dir.as_deref()),
-        })
-    }
-
-    fn render(&self) -> String {
-        let mut out = String::new();
-        out.push_str("\nPlan\n────\n");
-        out.push_str(&format!("Recipe:   {}\n", self.recipe.label));
-        for repo in &self.answers.repositories {
-            out.push_str(&format!("Repo:     {} → {}\n", repo.name, repo.path));
-        }
-        for plugin in self.recipe.plugins {
-            out.push_str(&format!("Plugin:   {} ({})\n", plugin.name, plugin.kind));
-        }
-        for workflow in self.recipe.workflows {
-            // Whichever notation the recipe uses, name what the workflow will
-            // do: the profile if it has one, else the mode it spells out.
-            let shape = workflow
-                .profile
-                .map(orchestrator_core::config::Profile::as_str)
-                .or_else(|| {
-                    workflow
-                        .mode
-                        .map(orchestrator_core::config::WorkflowMode::as_str)
-                })
-                .unwrap_or("?");
-            out.push_str(&format!(
-                "Workflow: {} — {} → {} ({})\n",
-                workflow.name, workflow.source, workflow.agent, shape
-            ));
-            // Show the trigger with the status names already substituted. A
-            // column name that does not exist on the board is the one mistake
-            // here whose symptom is silence — `run` picks nothing up and
-            // `doctor` stays green — so it has to be visible while there is
-            // still a prompt to say no at.
-            //
-            // Printed whether or not the config is written, like the `Repo:`
-            // lines above: an existing file is left untouched, and the `Skip:`
-            // line below says so for every answer at once. Suppressing just
-            // these would make the recipe's answers the only ones asked for
-            // and then shown nowhere.
-            if let Some(trigger) = workflow.trigger {
-                out.push_str(&format!(
-                    "          when {}\n",
-                    resolve_statuses_for_display(trigger, self.recipe, self.answers)
-                ));
-            }
-            if let Some(on_success) = workflow.on_success {
-                out.push_str(&format!(
-                    "          then {}\n",
-                    resolve_statuses_for_display(on_success, self.recipe, self.answers)
-                ));
-            }
-        }
-        if self.write_config {
-            out.push_str(&format!("Write:    {}\n", self.config_path.display()));
-        } else {
-            out.push_str(&format!(
-                "Skip:     {} already exists (left untouched) — nothing above is applied to it\n",
-                self.config_path.display()
-            ));
-        }
-        for name in &self.plugin_configs {
-            out.push_str(&format!(
-                "Write:    [{name}] in {}\n",
-                self.config_path.display()
-            ));
-        }
-        out.push_str(&match &self.plugin_source {
-            PluginSource::Bundled(root) => {
-                format!("Install:  from the plugins bundled at {}\n", root.display())
-            }
-            PluginSource::Checkout(root) => {
-                format!("Install:  by building from {}\n", root.display())
-            }
-            PluginSource::Unavailable => {
-                "Install:  nothing to install from → the commands will be printed\n".to_string()
-            }
-        });
-        out.push_str("Then:     totsuka doctor\n");
-        out
-    }
-}
-
-/// Whether `config.toml` is absent or still the untouched skeleton.
-///
-/// `init` writes a file in which every line is a comment. Treating that as
-/// "already configured" would make `setup` a no-op for everyone who ran `init`
-/// first — which the docs told them to do. Anything with real content is left
-/// alone.
-///
-/// Only *absent* counts as unconfigured. Any other read failure — a permission
-/// error, a directory in the way — is reported rather than assumed empty: the
-/// answer decides whether `setup` overwrites the file, and the rename in
-/// [`write_atomically`] only needs the *directory* to be writable, so a config
-/// that cannot be read can still be clobbered.
-fn is_unconfigured(path: &Path) -> Result<bool, CliError> {
-    match std::fs::read_to_string(path) {
-        Ok(text) => Ok(text
-            .lines()
-            .all(|line| line.trim().is_empty() || line.trim_start().starts_with('#'))),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(true),
-        Err(e) => Err(CliError::from(format!(
-            "cannot read {} ({e}) → refusing to overwrite a config it cannot inspect",
-            path.display()
-        ))),
-    }
-}
-
-/// The names of the top-level tables `config.toml` already defines.
-///
-/// Used to decide which `[<name>]` plugin settings tables `setup` still has to
-/// add (#554). An absent file has none; **any other failure is reported**
-/// rather than read as "no tables", for the same reason
-/// [`is_unconfigured`] refuses to guess: the answer decides whether `setup`
-/// writes into a file it could not inspect, and those tables hold the
-/// operator's secret references.
-///
-/// Unparsable content is an error too. Appending a section to a document that
-/// does not parse would either produce a second definition of a table that is
-/// already there or compound a syntax error, and neither is a state to leave a
-/// config in.
-fn existing_top_level_tables(path: &Path) -> Result<HashSet<String>, CliError> {
-    let text = match std::fs::read_to_string(path) {
-        Ok(text) => text,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(HashSet::new()),
-        Err(e) => {
-            return Err(CliError::from(format!(
-                "cannot read {} ({e}) → refusing to write into a config it cannot inspect",
-                path.display()
-            )));
-        }
-    };
-    let table: toml::Table = text.parse().map_err(|e| {
-        CliError::from(format!(
-            "cannot parse {} ({e}) → fix the syntax before running setup again",
-            path.display()
-        ))
-    })?;
-    Ok(table.keys().cloned().collect())
-}
-
-/// The effecting phase. Every step is idempotent so a failure part-way can be
-/// recovered by running the command again.
-fn apply(cx: &Cx, answers: &Answers, plan: &Plan) -> Result<(), CliError> {
-    init_cmd::ensure_dirs(cx)?;
-
-    if plan.write_config {
-        let current = std::fs::read_to_string(&cx.config_path).unwrap_or_default();
-        let updated = build_config(&current, answers, plan.recipe)?;
-        write_atomically(&cx.config_path, &updated)?;
-        println!("wrote: {}", cx.config_path.display());
-    } else {
-        println!(
-            "skipped: {} already exists (left untouched)",
-            cx.config_path.display()
-        );
-    }
-
-    merge_plugin_configs(cx, answers, plan.recipe)?;
-    install_plugins(cx, plan)?;
-    print_secret_checklist(answers, plan.recipe);
-
-    // `doctor` last, and in-process. It is the only step that can tell the user
-    // whether the setup they just ran actually works, and its exit code 3 is
-    // the contract scripts read — swallowing it here would make `setup` report
-    // success over a config `doctor` has already found problems with.
-    println!();
-    println!("Running `totsuka doctor` …");
-    println!();
-    // Defaults on purpose: `setup` is the one caller that *wants* the repairs
-    // — materialising the hook assets is part of finishing the install.
-    doctor_cmd::run(cx, doctor_cmd::DoctorArgs::default())
-}
-
-/// Add each `[<name>]` plugin settings table the recipe needs to `config.toml`,
-/// skipping the ones already there (#554).
-///
-/// The unit is the **table**, not the file. Before the two config files became
-/// one, "the file exists" meant "a human or an earlier `setup` wrote it, and
-/// either way it is theirs"; the same rule keyed on `config.toml` would mean
-/// `setup` could never add plugin settings after its first run, because
-/// `config.toml` is a file it writes itself.
-///
-/// Sections are appended as text rather than merged through a TOML editor so
-/// the rest of the document — comments included — comes out byte-identical.
-/// Appending is safe precisely because a table that already exists is skipped:
-/// a second definition of one would be a parse error.
-fn merge_plugin_configs(cx: &Cx, answers: &Answers, recipe: &Recipe) -> Result<(), CliError> {
-    let drafts = plugin_config::drafts_for(answers, recipe);
-    if drafts.is_empty() {
+/// Install the selected plugins — **without enabling them**.
+fn install_plugins(
+    cx: &Cx,
+    selected: &BTreeSet<String>,
+    source: &PluginSource,
+) -> Result<(), CliError> {
+    if selected.is_empty() {
         return Ok(());
     }
-    let existing = existing_top_level_tables(&cx.config_path)?;
-    let mut text = std::fs::read_to_string(&cx.config_path).unwrap_or_default();
-    let mut added = Vec::new();
-    for draft in &drafts {
-        if existing.contains(draft.name) {
-            println!(
-                "skipped: [{}] already in {} (left untouched)",
-                draft.name,
-                cx.config_path.display()
-            );
-            continue;
-        }
-        if !text.is_empty() && !text.ends_with('\n') {
-            text.push('\n');
-        }
-        text.push('\n');
-        text.push_str(&draft.body);
-        added.push(draft.name);
-    }
-    if added.is_empty() {
-        return Ok(());
-    }
-    write_atomically(&cx.config_path, &text)?;
-    for name in added {
-        println!("wrote: [{name}] in {}", cx.config_path.display());
-    }
-    Ok(())
-}
-
-/// Install and enable the recipe's plugins from whichever source this build has.
-fn install_plugins(cx: &Cx, plan: &Plan) -> Result<(), CliError> {
-    let names: Vec<&str> = plan.recipe.plugins.iter().map(|p| p.name).collect();
-    match &plan.plugin_source {
+    match source {
         PluginSource::Bundled(root) => {
             println!();
             println!("Installing plugins from {}", root.display());
@@ -605,35 +565,44 @@ fn install_plugins(cx: &Cx, plan: &Plan) -> Result<(), CliError> {
             println!();
             println!("No plugins to install from: this `totsuka` ships none and you are not in");
             println!("a checkout. Install them, then re-run `totsuka setup`:");
-            for name in &names {
-                println!("  totsuka plugin install <dir-with-{name}> --enable");
+            for name in selected {
+                println!("  totsuka plugin install <dir-with-{name}>");
             }
             return Ok(());
         }
     }
 
-    for name in names {
-        // One at a time rather than `--all`: a recipe asks for a specific set,
-        // and installing whatever else happens to be bundled would enable
-        // plugins nobody chose.
+    // `--from-source` builds every package it is given in one `cargo` call, so
+    // handing it one plugin at a time would run N builds where one would do.
+    // It only takes a name or `--all`, never a subset, so this shortcut is
+    // available exactly when the selection is everything — which is the
+    // documented dev-machine flow, `totsuka setup --plugins all`.
+    let build_all_at_once = matches!(source, PluginSource::Checkout(_))
+        && selected.len() == template::known_plugins().len();
+    for name in if build_all_at_once {
+        vec![None]
+    } else {
+        selected.iter().map(|n| Some(n.clone())).collect()
+    } {
         plugin_cmd::run(
             cx,
             plugin_cmd::PluginCommand::Install {
-                source: Some(name.to_string()),
-                bundled: matches!(plan.plugin_source, PluginSource::Bundled(_)),
-                from_source: matches!(plan.plugin_source, PluginSource::Checkout(_)),
-                repo: match &plan.plugin_source {
+                all: name.is_none(),
+                source: name,
+                bundled: matches!(source, PluginSource::Bundled(_)),
+                from_source: matches!(source, PluginSource::Checkout(_)),
+                repo: match source {
                     PluginSource::Checkout(root) => Some(root.clone()),
                     _ => None,
                 },
-                bundled_dir: match &plan.plugin_source {
+                bundled_dir: match source {
                     PluginSource::Bundled(root) => Some(root.clone()),
                     _ => None,
                 },
-                all: false,
-                // The plan was already confirmed; a second prompt per plugin
-                // would ask the same question up to three more times.
-                enable: true,
+                // Deliberately not enabled: `config validate` launches every
+                // enabled plugin, and the settings it needs are still
+                // commented out. See the module docs.
+                enable: false,
                 yes: true,
                 profile: plugin_cmd::BuildProfile::Release,
                 print_plan: false,
@@ -643,634 +612,201 @@ fn install_plugins(cx: &Cx, plan: &Plan) -> Result<(), CliError> {
     Ok(())
 }
 
-/// Apply every config edit for `answers`, returning the new text.
-///
-/// Separated from the writing so it can be tested directly — the property that
-/// matters is that the result loads and validates, not that a file appeared.
-/// The `[[projects]]` entry the wizard writes for the GitHub board.
-///
-/// One name, because the wizard asks about one board. An operator adding a
-/// second edits `config.toml` by hand, and this name is what the first one is
-/// called there.
-const GITHUB_BOARD_NAME: &str = "github-board";
+// ---------------------------------------------------------------------------
+// What to do next
+// ---------------------------------------------------------------------------
 
-/// The `[[projects]]` name for a task source, given its plugin name (#626).
-///
-/// A workflow names domains rather than plugins, so every installed source
-/// needs one entry for its workflows to point at. github's is the board and
-/// keeps the name repositories already bind to; a source that serves a single
-/// domain (a Slack workspace, a Discord guild) has nothing to distinguish, so
-/// its entry is named after the plugin.
-fn domain_name(source: &str) -> &str {
-    if source == "github" {
-        GITHUB_BOARD_NAME
-    } else {
-        source
-    }
-}
-
-pub(crate) fn build_config(
-    current: &str,
-    answers: &Answers,
-    recipe: &Recipe,
-) -> Result<String, CliError> {
-    let mut text = current.to_string();
-
-    // The board goes in as a `[[projects]]` entry, and every repository binds
-    // to it (#554). The wizard asks about one board, so every repository the
-    // operator listed files into it — which is what a single-board setup meant
-    // before the mapping moved out of the plugin's own config.
-    let board = answers.github.as_ref().map(|_| GITHUB_BOARD_NAME);
-    if let Some(gh) = answers.github.as_ref() {
-        let options = format!(
-            "{{ owner = \"{}\", owner_type = \"{}\", project_number = {} }}",
-            gh.owner,
-            gh.owner_type.as_str(),
-            gh.project_number
-        );
-        text = upsert_project(
-            &text,
-            &ProjectDraft {
-                name: GITHUB_BOARD_NAME,
-                source: "github",
-                options: &options,
-            },
-        )?;
-    }
-    // Every other task source the recipe installs gets an entry too, with no
-    // keys of its own: it is one domain, and its existence is the whole point
-    // (#626). Written before the workflows so the names they reference already
-    // resolve in the document being built.
-    for plugin in recipe.plugins {
-        if plugin.kind != "task_source" || plugin.name == "github" {
-            continue;
-        }
-        text = upsert_project(
-            &text,
-            &ProjectDraft {
-                name: domain_name(plugin.name),
-                source: plugin.name,
-                options: "{}",
-            },
-        )?;
-    }
-    for repo in &answers.repositories {
-        text = upsert_repository(
-            &text,
-            &RepositoryDraft {
-                name: &repo.name,
-                path: &repo.path,
-                summary: repo.summary.as_deref(),
-                project: board,
-            },
-        )?;
-    }
-    for plugin in recipe.plugins {
-        text = set_plugin_enabled(&text, plugin.name, true, Some(plugin.kind))?;
-    }
-    for workflow in recipe.workflows {
-        // Owned, because the fragments are templates until the answers are
-        // substituted in. `WorkflowDraft` is already lifetime-generic, so it
-        // takes a borrow of these without any signature change.
-        let trigger = workflow
-            .trigger
-            .map(|t| resolve_statuses(t, recipe, answers));
-        let on_success = workflow
-            .on_success
-            .map(|t| resolve_statuses(t, recipe, answers));
-        text = upsert_workflow(
-            &text,
-            &WorkflowDraft {
-                name: workflow.name,
-                projects: &[domain_name(workflow.source)],
-                trigger: trigger.as_deref(),
-                profile: workflow.profile,
-                mode: workflow.mode,
-                agent: workflow.agent,
-                output: workflow.output,
-                verification: workflow.verification,
-                on_success: on_success.as_deref(),
-                on_failure: None,
-            },
-        )?;
-    }
-    if let Some(llm) = &answers.llm {
-        let reference = answers.secret_backend.reference("llm-api-key");
-        text = set_llm(&text, &llm.base_url, &llm.model, Some(&reference))?;
-    }
-    Ok(text)
-}
-
-/// Substitute a recipe fragment's `{{…}}` placeholders from the answers.
-///
-/// Both entry points guarantee every declared slot is present: the interview
-/// asks for exactly the ones its recipe declares, and `--answers` is refused
-/// with [`AnswersError::MissingStatus`](answers::AnswersError::MissingStatus)
-/// when one is absent. The `unwrap_or_else` below is therefore unreachable —
-/// it is there so a future third caller degrades to the suggestion rather than
-/// writing a literal `{{…}}`, not as a supported path.
-fn resolve_statuses(fragment: &str, recipe: &Recipe, answers: &Answers) -> String {
-    recipes::render_fragment(fragment, &status_values(recipe, answers))
-}
-
-/// [`resolve_statuses`] for the confirmation screen: the operator's own text,
-/// unescaped (see [`recipes::render_fragment_for_display`]).
-fn resolve_statuses_for_display(fragment: &str, recipe: &Recipe, answers: &Answers) -> String {
-    recipes::render_fragment_for_display(fragment, &status_values(recipe, answers))
-}
-
-fn status_values(recipe: &Recipe, answers: &Answers) -> std::collections::BTreeMap<String, String> {
-    recipe
-        .statuses
-        .iter()
-        .map(|slot| {
-            let value = answers
-                .statuses
-                .get(slot.key)
-                .cloned()
-                .unwrap_or_else(|| slot.default.to_string());
-            (slot.key.to_string(), value)
-        })
-        .collect()
-}
-
-/// Write via a temporary file and rename, so an interrupted write cannot leave
-/// a half-config in place (the same staging discipline `commit_install` uses).
-fn write_atomically(path: &Path, contents: &str) -> Result<(), CliError> {
-    let staged = path.with_extension("toml.new");
-    std::fs::write(&staged, contents)?;
-    if let Err(e) = std::fs::rename(&staged, path) {
-        let _ = std::fs::remove_file(&staged);
-        return Err(e.into());
-    }
-    Ok(())
-}
-
-/// Print the secrets the chosen recipe needs and how to register them.
-fn print_secret_checklist(answers: &Answers, recipe: &Recipe) {
-    let accounts = required_secrets(answers, recipe);
-    if accounts.is_empty() {
-        return;
-    }
+fn print_next_steps(
+    cx: &Cx,
+    selected: &BTreeSet<String>,
+    accounts: &[String],
+    backend: SecretBackend,
+) {
+    let path = cx.config_path.display();
     println!();
-    println!("Secrets to register (setup never handles the values):");
-    for account in accounts {
-        let reference = answers.secret_backend.reference(&account);
-        println!("  {reference}  — {}", purpose_of(&account));
-        if let Some(command) = answers.secret_backend.register_command(&account) {
-            println!("    {command}");
-        }
+    println!("Your configuration is at:");
+    println!();
+    println!("    {path}");
+    println!();
+    println!("**Nothing in it is active yet.** Every setting totsuka understands is in");
+    println!("there, commented out, with a line saying what it does. Open it and uncomment");
+    println!("what you need — at minimum:");
+    println!();
+    println!("  1. a `[[repositories]]` block: the clone tasks are dispatched into");
+    if !selected.is_empty() {
+        println!(
+            "  2. `[plugins.<name>] enabled = true` for the plugins you just installed ({})",
+            selected.iter().cloned().collect::<Vec<_>>().join(", ")
+        );
+        println!("  3. that plugin's own `[<name>]` table, including its token reference");
+        println!("  4. a `[[projects]]` block and a `[[workflows]]` block — the recipe section");
+        println!("     at the end of the file has combinations that work, ready to uncomment");
+    } else {
+        println!("  2. a `[[projects]]` block and a `[[workflows]]` block — the recipe section");
+        println!("     at the end of the file has combinations that work, ready to uncomment");
     }
-    println!("  Every one of these is required: the config references it, so a");
-    println!("  missing one stops the plugin from starting. `totsuka doctor`");
-    println!("  verifies them once they exist.");
-}
 
-/// What each account is for, so the checklist is not four opaque names.
-///
-/// `slack-bot` in particular looks skippable — the plugin treats `bot_token` as
-/// opt-in — but the recipe writes it, so leaving it unregistered breaks the
-/// whole source rather than just the nudge. Saying what it buys is what makes
-/// that a choice instead of a surprise.
-fn purpose_of(account: &str) -> &'static str {
-    match account {
-        "slack-user" => "posts the reply under your own name",
-        "slack-app" => "opens the Socket Mode connection",
-        "slack-bot" => "sends the notification nudge (self-replies raise none)",
-        "github-token" => "reads the Project board and writes results back",
-        "notion-token" => "reads the database and writes results back",
-        "llm-api-key" => "picks which repository a task belongs to",
-        _ => "used by the config setup just wrote",
-    }
-}
-
-/// Which secret accounts the chosen recipe needs, in a stable order.
-///
-/// "Needs" means the generated config **references** it, which is a stronger
-/// condition than the plugin's own required-field list: `slack`'s `bot_token`
-/// is optional to the plugin, but the reply-as-yourself recipe writes it
-/// because a self-reply produces no Slack notification at all without the nudge
-/// (ADR-0021). Once written, an unregistered reference fails the plugin's
-/// launch — so it belongs on this list, not in a footnote.
-pub(crate) fn required_secrets(answers: &Answers, recipe: &Recipe) -> Vec<String> {
-    let mut accounts: Vec<String> = Vec::new();
-    for plugin in recipe.plugins {
-        match plugin.name {
-            "slack" => accounts.extend(
-                ["slack-user", "slack-app", "slack-bot"]
-                    .iter()
-                    .map(|s| s.to_string()),
-            ),
-            "github" => accounts.push("github-token".to_string()),
-            "notion" => accounts.push("notion-token".to_string()),
-            _ => {}
+    if !accounts.is_empty() {
+        println!();
+        println!(
+            "Secrets the file references ({backend}) — setup never handles the values, only \
+             the references:"
+        );
+        println!();
+        for account in accounts {
+            println!(
+                "  {}  — {}",
+                backend.reference(account),
+                secrets::purpose_of(account)
+            );
+            if let Some(command) = backend.register_command(account) {
+                println!("    {command}");
+            }
         }
+        if let Some(note) = backend.register_note() {
+            println!();
+            println!("  {note}");
+        }
+        println!();
+        println!("  Register only the ones whose lines you actually uncomment: an unregistered");
+        println!("  reference stops that plugin from starting.");
     }
-    if answers.llm.is_some() {
-        accounts.push("llm-api-key".to_string());
-    }
-    accounts
+
+    println!();
+    println!("Then:");
+    println!();
+    println!("    totsuka config validate      # the config parses and hangs together");
+    println!("    totsuka doctor               # the environment around it is ready");
+    println!("    totsuka run --dry-run        # what one cycle would do");
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use orchestrator_core::config::RootConfig;
 
-    /// **An answers file written before the interview asked is refused, not
-    /// filled in.**
-    ///
-    /// Falling back to a suggestion would write column names the operator
-    /// never chose, and a name that is not on their board fails silently —
-    /// valid config, green `doctor`, a `run` that picks nothing up. Refusing
-    /// by name is the whole point, so it is pinned by replaying a file in the
-    /// old shape rather than by reasoning.
+    fn known() -> Vec<template::KnownPlugin> {
+        template::known_plugins()
+    }
+
+    fn set(names: &[&str]) -> BTreeSet<String> {
+        names.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    /// **An empty list is refused, not read as "none".** It is the same state
+    /// the TTY gate exists to rule out: a run that installs nothing and
+    /// reports success.
     #[test]
-    fn an_answers_file_without_statuses_is_refused_with_the_keys_to_add() {
-        let old_file = r#"
-version = 2
-recipe = "design-implement-handoff"
-secret_backend = "keychain"
-
-[[repositories]]
-name = "totsuka"
-path = "~/Workspace/totsuka"
-
-[github]
-owner = "tomoya-k31"
-owner_type = "user"
-project_number = 1
-github_login = "tomoya-k31"
-"#;
-        let err = Answers::from_toml_str("old.toml", old_file, RECIPES)
-            .expect_err("a file with no statuses must be refused");
-        let message = err.to_string();
-        // Naming one key is not enough: the operator has to know the whole set
-        // to add, or they come back four times.
-        for key in [
-            "design_status",
-            "design_done_status",
-            "implement_status",
-            "implement_done_status",
-        ] {
-            assert!(message.contains(key), "`{key}` missing from: {message}");
+    fn an_empty_plugin_list_is_refused_and_points_at_none() {
+        for spec in ["", "   ", ",", " , "] {
+            let err = parse_plugins(spec, &known()).unwrap_err().to_string();
+            assert!(err.contains("--plugins none"), "for {spec:?}: {err}");
         }
     }
 
-    /// A recipe that uses no status columns is unaffected — an old file for it
-    /// still replays.
     #[test]
-    fn a_recipe_without_status_columns_still_replays_an_old_file() {
-        let old_file = r#"
-version = 2
-recipe = "human-sign-off"
-secret_backend = "keychain"
+    fn plugins_all_and_none_are_the_two_bulk_answers() {
+        assert_eq!(parse_plugins("all", &known()).unwrap().len(), known().len());
+        assert!(parse_plugins("none", &known()).unwrap().is_empty());
+    }
 
-[[repositories]]
-name = "totsuka"
-path = "~/Workspace/totsuka"
-
-[github]
-owner = "tomoya-k31"
-owner_type = "user"
-project_number = 1
-github_login = "tomoya-k31"
-"#;
-        let answers = Answers::from_toml_str("old.toml", old_file, RECIPES).expect("still parses");
-        let recipe = recipes::by_key("human-sign-off").unwrap();
-        let text = build_config("", &answers, recipe).expect("config builds");
-        assert!(text.contains("migration"), "{text}");
-        assert!(
-            !text.contains("{{"),
-            "no placeholder may reach the config:\n{text}"
+    #[test]
+    fn plugins_takes_a_comma_separated_list_and_tolerates_spaces() {
+        assert_eq!(
+            parse_plugins("github, herdr ,macos", &known()).unwrap(),
+            set(&["github", "herdr", "macos"])
         );
     }
 
-    fn answers_for(recipe: &str) -> Answers {
-        Answers {
-            version: answers::ANSWERS_VERSION,
-            recipe: recipe.to_string(),
-            repositories: vec![RepositoryAnswer {
-                name: "totsuka".to_string(),
-                path: "~/Workspace/totsuka".to_string(),
-                summary: Some("the orchestrator".to_string()),
-            }],
-            secret_backend: SecretBackend::Keychain,
-            llm: recipes::by_key(recipe)
-                .unwrap()
-                .blanks
-                .contains(&Blank::Llm)
-                .then(|| LlmAnswer {
-                    base_url: "https://openrouter.ai/api/v1".to_string(),
-                    model: "anthropic/claude-haiku-4-5".to_string(),
-                }),
-            slack_user_id: recipes::by_key(recipe)
-                .unwrap()
-                .blanks
-                .contains(&Blank::SlackUserId)
-                .then(|| "U123456".to_string()),
-            github: recipes::by_key(recipe)
-                .unwrap()
-                .blanks
-                .contains(&Blank::GitHub)
-                .then(|| GitHubAnswer {
-                    owner: "tomoya-k31".to_string(),
-                    owner_type: GitHubOwnerType::User,
-                    project_number: 1,
-                    github_login: "tomoya-k31".to_string(),
-                }),
-            statuses: Default::default(),
-        }
+    /// **A typo is refused, not silently dropped.** `--plugins gihub`
+    /// installing nothing looks exactly like a run that worked.
+    #[test]
+    fn an_unknown_plugin_name_is_an_error_that_lists_the_real_ones() {
+        let err = parse_plugins("gihub", &known()).unwrap_err().to_string();
+        assert!(err.contains("gihub"), "{err}");
+        assert!(err.contains("github"), "{err}");
     }
 
-    /// Every task source the recipe installs gets a `[[projects]]` entry, and
-    /// each workflow names one (#626).
-    ///
-    /// Checked on a recipe with **no** board question, because that is where
-    /// the gap was: a slack setup wrote no `[[projects]]` at all before #626,
-    /// and a workflow now has to point at something. The wizard reporting
-    /// success and `run` then refusing the config is the failure this pins.
+    /// **Root-level content is never appended.** The skeleton's one live line,
+    /// `version = 1`, sits under no table; appending it to a file that ends
+    /// inside `[[workflows]]` makes it that workflow's key, which
+    /// `deny_unknown_fields` rejects — and appending it to one that ends at
+    /// root level is a duplicate key. Neither is recoverable by the operator
+    /// without reading the diff.
     #[test]
-    fn every_installed_source_gets_a_domain_a_workflow_can_name() {
-        let recipe = RECIPES
-            .iter()
-            .find(|r| {
-                r.plugins.iter().any(|p| p.name == "slack")
-                    && !r.plugins.iter().any(|p| p.name == "github")
-            })
-            .expect("a recipe with slack and no github board");
-        let text = build_config("", &answers_for(recipe.key), recipe).expect("builds");
-        let cfg = RootConfig::from_toml_str(&text).unwrap_or_else(|e| panic!("{e}\n{text}"));
+    fn nothing_outside_a_table_is_ever_appended() {
+        let rendered = template::render(&set(&["github"]), SecretBackend::OnePassword);
+        assert!(
+            rendered.contains("\nversion = 1"),
+            "fixture assumption: the skeleton sets version"
+        );
+        let appended: String = blocks(&rendered).iter().map(|b| b.text.clone()).collect();
+        assert!(
+            !appended.lines().any(|l| l.trim() == "version = 1"),
+            "a root-level key reached the append path"
+        );
+        assert!(
+            !appended
+                .lines()
+                .any(|l| !l.trim().is_empty() && !l.trim_start().starts_with('#')),
+            "every appended line must be a comment"
+        );
+    }
 
-        let sources: Vec<&str> = recipe
-            .plugins
-            .iter()
-            .filter(|p| p.kind == "task_source")
-            .map(|p| p.name)
-            .collect();
-        for source in &sources {
-            assert!(
-                cfg.projects.iter().any(|p| &p.source == source),
-                "source `{source}` has no domain to draw from: {text}"
-            );
-        }
-        assert!(!cfg.workflows.is_empty(), "{text}");
-        for wf in &cfg.workflows {
-            assert!(
-                !wf.projects.is_empty(),
-                "workflow `{}` names no project: {text}",
-                wf.name
-            );
-            for name in &wf.projects {
-                assert!(
-                    cfg.projects.iter().any(|p| &p.name == name),
-                    "workflow `{}` names `{name}`, which was not written: {text}",
-                    wf.name
-                );
-            }
-        }
-
-        // And the whole thing passes the checks `run` performs. The repository
-        // paths do not exist here, so those findings are expected.
-        let no_env = |_: &str| None;
-        let unexpected: Vec<String> = orchestrator_core::config::validate_static(&cfg, &no_env)
+    /// **A plugin picked on a later run gets its roster entry too.** All seven
+    /// `[plugins.<name>]` entries share one banner, so a section-sized append
+    /// unit would call the roster "already there" and add `[notion]` with
+    /// nothing to enable it by — the exact scenario ADR-0077 decision 6 exists
+    /// for.
+    #[test]
+    fn a_plugin_added_later_brings_its_roster_entry() {
+        let first = template::render(&set(&["github"]), SecretBackend::OnePassword);
+        let second = template::render(&set(&["notion"]), SecretBackend::OnePassword);
+        let missing: Vec<String> = blocks(&second)
             .into_iter()
-            .map(|e| e.to_string())
-            .filter(|e| !e.contains("path"))
+            .filter(|b| !b.is_present_in(&first))
+            .map(|b| b.path)
             .collect();
-        assert!(unexpected.is_empty(), "{unexpected:?}\n{text}");
+        assert!(
+            missing.contains(&"plugins.notion".to_string()),
+            "the roster entry was not appended: {missing:?}"
+        );
+        assert!(
+            missing.contains(&"notion".to_string()),
+            "the settings table was not appended: {missing:?}"
+        );
+        assert!(
+            !missing.contains(&"plugins.github".to_string()),
+            "an entry the file already has must not be added twice: {missing:?}"
+        );
     }
 
-    /// The board the wizard writes, and the binding that makes it reachable
-    /// (#554). Two halves of one answer: a `[[projects]]` entry nothing points
-    /// at routes nothing, and a `project` naming no entry fails validation.
+    /// Re-running with the same selection changes nothing.
+    ///
+    /// Nothing in a generated file is active, so presence cannot be judged by
+    /// live tables alone — without the commented form counting too, every
+    /// re-run would append the whole file again.
     #[test]
-    fn the_board_is_written_and_every_repository_binds_to_it() {
-        let recipe = RECIPES
-            .iter()
-            .find(|r| r.plugins.iter().any(|p| p.name == "github"))
-            .expect("a recipe with the github plugin");
-        let mut answers = answers_for(recipe.key);
-        answers.repositories.push(super::answers::RepositoryAnswer {
-            name: "dotfiles".to_string(),
-            path: "/tmp/dotfiles".to_string(),
-            summary: None,
-        });
-        let text = build_config("", &answers, recipe).expect("builds");
-        let cfg = RootConfig::from_toml_str(&text).unwrap_or_else(|e| panic!("{e}\n{text}"));
-
-        assert_eq!(cfg.projects.len(), 1, "{text}");
-        let board = &cfg.projects[0];
-        assert_eq!(board.source, "github");
-        // The plugin's own keys ride in the entry's options, uninterpreted.
-        assert_eq!(
-            board
-                .options
-                .get("project_number")
-                .and_then(toml::Value::as_integer),
-            Some(1),
-            "{text}"
-        );
-        assert_eq!(
-            board
-                .options
-                .get("owner_type")
-                .and_then(toml::Value::as_str),
-            Some(answers.github.as_ref().unwrap().owner_type.as_str()),
-            "the owner_type the operator picked is what gets written: {text}"
-        );
-
-        // **Every** repository binds to it: that is what a single-board setup
-        // meant before the mapping moved out of the plugin's config.
-        assert_eq!(cfg.repositories.len(), 2, "{text}");
-        for repo in &cfg.repositories {
-            assert_eq!(repo.project.as_deref(), Some(board.name.as_str()), "{text}");
-        }
-
-        // Parseable is not the same as configured. Resolve the board the way
-        // `initialize` does and run the plugin's own static checks over it —
-        // an entry the plugin cannot read, or one nothing binds to, is the
-        // "setup reported success, the plugin refuses later" failure.
-        let projects: Vec<plugin_protocol::methods::ProjectInfo> = cfg
-            .projects
-            .iter()
-            .map(|p| plugin_protocol::methods::ProjectInfo {
-                name: p.name.clone(),
-                options: match serde_json::to_value(&p.options) {
-                    Ok(serde_json::Value::Object(map)) => map,
-                    _ => Default::default(),
-                },
-            })
+    fn a_rerun_with_the_same_selection_appends_nothing() {
+        let rendered = template::render(&set(&["github", "herdr"]), SecretBackend::OnePassword);
+        let missing: Vec<String> = blocks(&rendered)
+            .into_iter()
+            .filter(|b| !b.is_present_in(&rendered))
+            .map(|b| b.path)
             .collect();
-        let repositories: Vec<plugin_protocol::methods::RepoInfo> = cfg
-            .repositories
-            .iter()
-            .map(|r| plugin_protocol::methods::RepoInfo {
-                name: r.name.clone(),
-                summary: None,
-                path: None,
-                project: r.project.clone(),
-            })
-            .collect();
-        let mut github: task_source_github::config::GithubConfig =
-            serde_json::from_value(serde_json::json!({ "token": "t", "github_login": "me" }))
-                .expect("a minimal github table");
-        github.projects =
-            task_source_github::config::ProjectConfig::resolve(&projects, &repositories)
-                .unwrap_or_else(|e| panic!("the wizard's board does not resolve: {e:?}\n{text}"));
-        let errors = task_source_github::client::static_config_errors(&github);
-        assert!(errors.is_empty(), "{errors:?}\n{text}");
+        assert!(missing.is_empty(), "would append again: {missing:?}");
     }
 
+    /// **A live table stops its block from being appended.** Adding a
+    /// commented block about `[github]` below a `[github]` the operator wrote
+    /// would read as a second, contradictory definition.
     #[test]
-    fn every_recipe_produces_a_config_that_loads_and_validates() {
-        // The wizard's whole job. A recipe that writes an unloadable config
-        // would fail at `run`, long after the questions that caused it.
-        for recipe in RECIPES {
-            let answers = answers_for(recipe.key);
-            let text = build_config("", &answers, recipe)
-                .unwrap_or_else(|e| panic!("{}: {e}", recipe.label));
-
-            let cfg = RootConfig::from_toml_str(&text)
-                .unwrap_or_else(|e| panic!("{}: does not load: {e}\n---\n{text}", recipe.label));
-
-            let no_env = |_: &str| None;
-            let unexpected: Vec<String> = orchestrator_core::config::validate_static(&cfg, &no_env)
-                .into_iter()
-                .map(|e| e.to_string())
-                // The repository path does not exist in a test environment.
-                .filter(|e| !e.contains("path"))
-                .collect();
-            assert!(
-                unexpected.is_empty(),
-                "{}: {unexpected:?}\n---\n{text}",
-                recipe.label
-            );
-
-            assert_eq!(cfg.workflows.len(), recipe.workflows.len());
-            for plugin in recipe.plugins {
-                assert!(
-                    cfg.plugins.get(plugin.name).is_some_and(|p| p.enabled),
-                    "{}: {} not enabled",
-                    recipe.label,
-                    plugin.name
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn applying_twice_is_a_no_op() {
-        // `setup` is expected to be re-run; a second pass must converge, not
-        // append duplicate `[[workflows]]` (which `validate` rejects outright).
-        for recipe in RECIPES {
-            let answers = answers_for(recipe.key);
-            let once = build_config("", &answers, recipe).unwrap();
-            let twice = build_config(&once, &answers, recipe).unwrap();
-            assert_eq!(once, twice, "{}", recipe.label);
-        }
-    }
-
-    #[test]
-    fn the_commented_skeleton_counts_as_unconfigured() {
-        let dir = std::env::temp_dir().join(format!("totsuka-setup-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("config.toml");
-
-        // Absent.
-        assert!(is_unconfigured(&path).unwrap());
-
-        // What `init` writes: comments and blank lines only.
-        std::fs::write(&path, "# totsuka configuration\n\n# max_concurrency = 4\n").unwrap();
-        assert!(
-            is_unconfigured(&path).unwrap(),
-            "an untouched skeleton must not block setup"
-        );
-
-        // One real key is enough to mean "hands off".
-        std::fs::write(&path, "# comment\nmax_concurrency = 4\n").unwrap();
-        assert!(!is_unconfigured(&path).unwrap());
-
-        // Unreadable is not the same as absent. Reporting it beats assuming
-        // "empty" and overwriting — the rename only needs a writable
-        // directory, so an unreadable config is still clobberable.
-        let blocked = dir.join("blocked");
-        std::fs::create_dir(&blocked).unwrap();
-        let err = is_unconfigured(&blocked).unwrap_err().to_string();
-        assert!(err.contains("blocked"), "{err}");
-
-        std::fs::remove_dir_all(&dir).unwrap();
-    }
-
-    /// The successor of the `is_absent` hazard test (#554). The file whose
-    /// readability decides whether `setup` writes is now `config.toml` itself,
-    /// so the "every failure folds into safe-to-create" mistake would be worse
-    /// than before: it would append a duplicate table to a document holding
-    /// every setting the operator has.
-    #[test]
-    fn an_unexaminable_config_is_reported_not_assumed_empty() {
-        let dir = std::env::temp_dir().join(format!("totsuka-tables-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-
-        // Absent is the one failure that legitimately means "no tables".
-        assert!(
-            existing_top_level_tables(&dir.join("nope.toml"))
-                .unwrap()
-                .is_empty()
-        );
-
-        let path = dir.join("config.toml");
-        std::fs::write(&path, "[slack]\nx = 1\n\n[worktree]\n").unwrap();
-        let tables = existing_top_level_tables(&path).unwrap();
-        assert!(
-            tables.contains("slack") && tables.contains("worktree"),
-            "{tables:?}"
-        );
-
-        // A path whose *parent* is a file, not a directory: reported, not
-        // read as empty.
-        let err = existing_top_level_tables(&path.join("child.toml"))
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("child.toml"), "{err}");
-        assert!(err.contains("refusing to write into"), "{err}");
-
-        // Unparsable is reported too: appending a section to a broken document
-        // cannot produce a config worth writing.
-        std::fs::write(&path, "[slack\n").unwrap();
-        let err = existing_top_level_tables(&path).unwrap_err().to_string();
-        assert!(err.contains("cannot parse"), "{err}");
-
-        std::fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[test]
-    fn secret_checklist_matches_what_the_config_references() {
-        // A reference in config.toml that the checklist forgets to mention is
-        // a setup that looks finished and then fails with "secret not found".
-        let slack = RECIPES
-            .iter()
-            .find(|r| r.plugins.iter().any(|p| p.name == "slack"))
-            .unwrap();
-        let answers = answers_for(slack.key);
-        let text = build_config("", &answers, slack).unwrap();
-        let accounts = required_secrets(&answers, slack);
-
-        assert!(accounts.iter().any(|a| a == "slack-user"), "{accounts:?}");
-        assert!(accounts.iter().any(|a| a == "llm-api-key"), "{accounts:?}");
-
-        // Every reference the config carries is on the checklist.
-        let llm_ref = answers.secret_backend.reference("llm-api-key");
-        assert!(text.contains(&llm_ref), "{text}");
-        assert!(accounts.iter().any(|a| llm_ref.ends_with(a)));
-    }
-
-    #[test]
-    fn a_repository_name_is_guessed_from_the_path() {
-        assert_eq!(default_repo_name("~/Workspace/totsuka"), "totsuka");
-        assert_eq!(default_repo_name("/a/b/dotfiles/"), "dotfiles");
-        assert_eq!(default_repo_name(""), "repo");
+    fn a_table_the_config_already_defines_is_not_appended() {
+        let rendered = template::render(&set(&["github"]), SecretBackend::OnePassword);
+        let github = blocks(&rendered)
+            .into_iter()
+            .find(|b| b.path == "github")
+            .expect("the [github] block");
+        assert!(github.is_present_in("[github]\ntoken = \"op://Dev/totsuka/github-token\"\n"));
+        assert!(!github.is_present_in("[worktree]\ncleanup = \"manual\"\n"));
     }
 }

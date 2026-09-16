@@ -4,7 +4,7 @@ title: 運用ガイド（doctor / worktree 掃除 / FAQ）
 description: totsuka 日常運用の手引き。doctor の読み方、ランタイム health（縮退）の読み方と doctor との守備範囲の違い、worktree 掃除ポリシーと孤児掃除、run 停止・回復、メニューバー表示（SwiftBar）の導入と読み方、よくある問題の切り分け。
 resource: https://github.com/tomoya-k31/totsuka
 tags: [operations, doctor, health, worktree, menu, swiftbar, faq, troubleshooting]
-generated: { by: claude-code/fable-5-1, at: 2026-09-12T02:53:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-17T12:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -259,7 +259,7 @@ EOF
 
 # FAQ / 切り分け
 
-- **`config not found`**: `totsuka init` で雛形生成 → 編集
+- **`config not found`**: `totsuka setup` で雛形生成 → 編集
 - **`state database not found`**: 一度 `totsuka run` すると作成される
 - **プラグインが `enabled but not installed`**: `totsuka plugin install <dir>`
 - **タスクが取り込まれない**: `totsuka run --dry-run` でトリガーマッチ・リポジトリ選択・エージェント割当を副作用ゼロで確認。ワークフローの `projects` は `[[projects]].name` と、その `source` は `[plugins.{name}]` のインスタンス名と一致させる（#626）
