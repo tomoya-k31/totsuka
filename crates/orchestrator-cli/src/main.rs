@@ -10,7 +10,6 @@ mod config_cmd;
 mod doctor_cmd;
 mod focus_cmd;
 mod from_source;
-mod init_cmd;
 mod logs_cmd;
 mod menu_cmd;
 mod plugin_cmd;
@@ -42,29 +41,23 @@ struct Cli {
 /// Top-level commands.
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Generate a config skeleton and check the environment.
-    Init,
-    /// Fill the config in interactively: pick a starting recipe, answer a few
-    /// questions, review the plan. Never handles secret values.
+    /// Set up this machine: install the plugins you pick and write a
+    /// config.toml with every setting in it, commented out, then say where it
+    /// is. Never handles secret values.
     Setup {
-        /// Replay a saved answers file instead of asking.
+        /// Which plugins to install: a comma-separated list, `all`, or `none`.
         ///
-        /// The non-interactive form of this command, and the pair to
-        /// `--save-answers`: answer once, keep the file, and set up the next
-        /// machine from it. `setup` never writes a secret value into the file —
-        /// it records which backend to use and prints the register commands —
-        /// so a generated one is safe in a dotfiles repository.
-        #[arg(long, value_name = "FILE")]
-        answers: Option<PathBuf>,
-        /// Write the collected answers to a file, to replay with `--answers`.
-        #[arg(long, value_name = "FILE")]
-        save_answers: Option<PathBuf>,
+        /// The non-interactive form of the one question this command asks.
+        /// Without a terminal and without this, `setup` stops rather than
+        /// guessing.
+        #[arg(long, value_name = "LIST")]
+        plugins: Option<String>,
+        /// Which secret store the written references point at.
+        #[arg(long, value_name = "BACKEND", default_value = "op")]
+        secret_backend: setup::SecretBackend,
         /// Show the plan and stop without writing.
         #[arg(long)]
         dry_run: bool,
-        /// Skip the confirmation prompt.
-        #[arg(long)]
-        yes: bool,
         /// Override where bundled plugins are looked up, and never fall back
         /// to building from a checkout. Testing affordance, mirroring
         /// `plugin install --bundled-dir`.
@@ -277,20 +270,17 @@ fn execute(
     let cx = Cx::resolve(config)?;
     match command {
         Command::Completion { .. } => unreachable!("handled above"),
-        Command::Init => init_cmd::run(&cx),
         Command::Setup {
-            answers,
-            save_answers,
+            plugins,
+            secret_backend,
             dry_run,
-            yes,
             bundled_dir,
         } => setup::run(
             &cx,
             &setup::SetupArgs {
-                answers,
-                save_answers,
+                plugins,
+                secret_backend,
                 dry_run,
-                yes,
                 bundled_dir,
             },
         ),

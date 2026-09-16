@@ -102,6 +102,7 @@
 # repositories, projects, plugins, default_tool, tools, workflows, llm,
 # worktree, log, hooks, prompts).
 
+# totsuka:section plugin=github
 # [plugins.github]
 # enabled = true                            # F-56; `totsuka plugin enable/disable` also flips this
 # kind = "task_source"                      # "task_source" / "agent_ide" / "notifier"
@@ -112,29 +113,36 @@
 #                                           #   exponential backoff. `false` still detects and
 #                                           #   escalates; only the restart stops
 
+# totsuka:section plugin=notion
 # [plugins.notion]
 # enabled = true
 # kind = "task_source"
 
+# totsuka:section plugin=slack
 # [plugins.slack]
 # enabled = true
 # kind = "task_source"
 
+# totsuka:section plugin=discord
 # [plugins.discord]
 # enabled = true
 # kind = "task_source"
 
+# totsuka:section plugin=herdr
 # [plugins.herdr]
 # enabled = true
 # kind = "agent_ide"
 
+# totsuka:section plugin=orca
 # [plugins.orca]
 # enabled = true
 # kind = "agent_ide"
 
+# totsuka:section plugin=macos
 # [plugins.macos]
 # enabled = true
 # kind = "notifier"
+# totsuka:section core
 
 # ============================================================================
 # [[workflows]] — what to watch, and what to do about it
@@ -205,8 +213,8 @@
 # model = "anthropic/claude-haiku-4-5"
 # max_tokens = 256                          # cap for the classification call
 # timeout_secs = 30                         # request timeout
-# A secret reference — see "Secret references" at the top for the other four forms.
-# api_key_ref = "op://Dev/Openrouter/api_key"
+# totsuka:secret llm-api-key
+# api_key_ref = "op://Dev/totsuka/llm-api-key"
 
 # ============================================================================
 # [worktree] — where task worktrees go, and when they are removed
@@ -235,7 +243,7 @@
 # ============================================================================
 
 # [hooks]
-# A secret reference — see "Secret references" at the top for the other four forms.
+# totsuka:secret hook-token
 # auth_token_ref = "op://Dev/totsuka/hook-token"   # Bearer token authenticating hook POSTs.
 #                                           #   Operationally required: without it the only defence
 #                                           #   is the 0600 socket permission
@@ -243,13 +251,14 @@
 # spool_dir = "${XDG_STATE_HOME}/totsuka/hooks/spool"            # where events go when a POST fails
 # block_retry_limit = 3                     # consecutive Stop-hook block re-asks before escalating
 
+# totsuka:section plugin=github label=GitHub Issues and Projects boards
 # ============================================================================
 # [github] — task-source-github
 # ============================================================================
 
 # [github]
-# A secret reference — see "Secret references" at the top for the other four forms.
-# token = "op://Dev/GitHub/token"           # `cmd:gh auth token` works well here — it never goes stale
+# totsuka:secret github-token
+# token = "op://Dev/totsuka/github-token"           # `cmd:gh auth token` works well here — it never goes stale
 # github_login = "my-login"                 # your login: detects self-assigned tasks and is the
 #                                           #   self-assign target when claiming. One login per instance
 # status_field = "Status"                   # the SingleSelect field holding the status column
@@ -266,13 +275,14 @@
 # design_instructions = "..."               # …`design`
 # implement_instructions = "..."            # …`implement`
 
+# totsuka:section plugin=notion label=Notion databases
 # ============================================================================
 # [notion] — task-source-notion
 # ============================================================================
 
 # [notion]
-# A secret reference — see "Secret references" at the top for the other four forms.
-# token = "op://Dev/Notion/token"           # integration secret, or `cmd:ntn auth token --plain`
+# totsuka:secret notion-token
+# token = "op://Dev/totsuka/notion-token"           # integration secret, or `cmd:ntn auth token --plain`
 # notion_user_id = "00000000-0000-0000-0000-000000000000"   # your user id; `trigger.assignee = "@me"`
 #                                           #   matches against this. Omitted, `@me` matches nobody
 # body_source = "page"                      # where the task body comes from: "none" / "property" / "page"
@@ -307,18 +317,19 @@
 # design_instructions = "..."
 # implement_instructions = "..."
 
+# totsuka:section plugin=slack label=Slack mentions and reactions, answered as yourself
 # ============================================================================
 # [slack] — task-source-slack
 # ============================================================================
 
 # [slack]
-# A secret reference — see "Secret references" at the top for the other four forms.
-# app_token = "op://Dev/Slack/app_token"    # xapp-… App-Level Token for Socket Mode.
+# totsuka:secret slack-app
+# app_token = "op://Dev/totsuka/slack-app"    # xapp-… App-Level Token for Socket Mode.
 #                                           #   Not needed when event_source = "gateway"
-# A secret reference — see "Secret references" at the top for the other four forms.
-# user_token = "op://Dev/Slack/user_token"  # xoxp-… reads and writes AS YOU
-# A secret reference — see "Secret references" at the top for the other four forms.
-# bot_token = "op://Dev/Slack/bot_token"    # xoxb-… posts the notification nudge. Unset = feature off,
+# totsuka:secret slack-user
+# user_token = "op://Dev/totsuka/slack-user"  # xoxp-… reads and writes AS YOU
+# totsuka:secret slack-bot
+# bot_token = "op://Dev/totsuka/slack-bot"    # xoxb-… posts the notification nudge. Unset = feature off,
 #                                           #   and a reply under your own name raises NO Slack
 #                                           #   notification at all, so the nudge is what makes it
 #                                           #   noticeable
@@ -349,8 +360,8 @@
 # [slack.llm]                               # repository classification; defaults to the core [llm]
 # base_url = "https://openrouter.ai/api/v1"
 # model = "anthropic/claude-haiku-4-5"
-# A secret reference — see "Secret references" at the top for the other four forms.
-# api_key = "op://Dev/Openrouter/api_key"
+# totsuka:secret llm-api-key
+# api_key = "op://Dev/totsuka/llm-api-key"
 # confidence_threshold = 0.6                # below this, selection becomes ephemeral
 
 # [[slack.repos]]                           # candidate repositories; omitted, [[repositories]] is used
@@ -380,13 +391,14 @@
 # classifier_user = "..."                   # …user message. {mention_text} {thread_context} {catalog}
 # classifier_correction = "..."             # the retry turn when the reply was not valid JSON
 
+# totsuka:section plugin=discord label=Discord threads and channels
 # ============================================================================
 # [discord] — task-source-discord
 # ============================================================================
 
 # [discord]
-# A secret reference — see "Secret references" at the top for the other four forms.
-# bot_token = "op://Dev/Discord/bot_token"  # Bot Token. There is no user-token option — Discord
+# totsuka:secret discord-bot-token
+# bot_token = "op://Dev/totsuka/discord-bot-token"  # Bot Token. There is no user-token option — Discord
 #                                           #   forbids automating a normal account
 # operator_user_id = "000000000000000000"   # your user id (all digits, a snowflake). Only posts from
 #                                           #   this id raise tasks by default. A username is rejected
@@ -397,6 +409,7 @@
 # api_url = "https://discord.com/api/v10"
 # source_name = "discord"
 
+# totsuka:section plugin=herdr label=herdr — runs agents in tmux panes
 # ============================================================================
 # [herdr] — agent-ide-herdr
 # ============================================================================
@@ -418,6 +431,7 @@
 # [herdr.kind_map]                          # executable name → herdr `kind`
 # claude-code = "claude"
 
+# totsuka:section plugin=orca label=orca — runs agents in worktree terminals
 # ============================================================================
 # [orca] — agent-ide-orca
 # ============================================================================
@@ -430,6 +444,7 @@
 # plan_prompt_prefix = "Plan only. "        # prepended in plan mode — orca has no structured plan API
 # poll_interval_ms = 500                    # state-loop poll when there is no handle to block on
 
+# totsuka:section plugin=macos label=macOS notifications
 # ============================================================================
 # [macos] — notifier-macos
 # ============================================================================
@@ -453,6 +468,7 @@
 # [macos.filter.workflows.my-workflow]      # per-workflow overrides; the most specific toggle wins
 # done = false
 
+# totsuka:section core
 # ============================================================================
 # Recipes — combinations that work
 # ============================================================================

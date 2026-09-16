@@ -92,7 +92,7 @@ impl PluginCommand {
 /// like every other command (#175), so `--config` and the `TOTSUKA_*` env
 /// layer apply here too. `install` / `uninstall` / `list` load the config
 /// with [`Cx::load_config_or_default`] — they only cross-check declarations,
-/// and must work before `totsuka init`. `enable` / `disable` edit the file
+/// and must work before `totsuka setup`. `enable` / `disable` edit the file
 /// and error when it is missing.
 pub fn run(cx: &Cx, command: PluginCommand) -> Result<(), CliError> {
     let env: HashMap<String, String> = std::env::vars().collect();
@@ -208,12 +208,12 @@ fn install(cx: &Cx, env: &HashMap<String, String>, args: InstallArgs) -> Result<
 }
 
 /// Read `config.toml` as raw text for a `set_plugin_enabled` edit, mapping a
-/// missing file to the "run `totsuka init`" guidance.
+/// missing file to the "run `totsuka setup`" guidance.
 fn read_config_for_edit(cx: &Cx) -> Result<String, CliError> {
     let text = std::fs::read_to_string(&cx.config_path).map_err(|e| {
         if e.kind() == io::ErrorKind::NotFound {
             CliError::from(format!(
-                "config.toml not found at {} → run `totsuka init` to create it",
+                "config.toml not found at {} → run `totsuka setup` to create it",
                 cx.config_path.display()
             ))
         } else {

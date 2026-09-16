@@ -133,7 +133,6 @@ fn help_lists_every_command_and_completion_generates() {
     assert!(help.status.success());
     let text = stdout(&help);
     for command in [
-        "init",
         "run",
         "status",
         "task",
@@ -776,7 +775,7 @@ fn missing_config_and_db_errors_have_cause_and_action() {
     assert!(!out.status.success());
     let err = stderr(&out);
     assert!(
-        err.contains("config not found") && err.contains("→") && err.contains("totsuka init"),
+        err.contains("config not found") && err.contains("→") && err.contains("totsuka setup"),
         "cause+action for missing config: {err}"
     );
 
@@ -850,36 +849,6 @@ fn missing_config_and_db_errors_have_cause_and_action() {
     assert!(
         stderr(&out).contains("error: doctor found problems → follow the actions above"),
         "human-facing error keeps the → convention: {}",
-        stderr(&out)
-    );
-    let _ = std::fs::remove_dir_all(&base);
-}
-
-#[test]
-fn init_creates_skeleton_and_never_overwrites() {
-    let base = scratch("init");
-    let out = run(&base, &["init"]);
-    assert!(out.status.success(), "stderr: {}", stderr(&out));
-    let config_path = base.join("cfg/totsuka/config.toml");
-    assert!(config_path.exists());
-
-    // Re-running must not clobber user edits.
-    std::fs::write(&config_path, "# my edits\n").unwrap();
-    let out = run(&base, &["init"]);
-    assert!(out.status.success());
-    assert!(stdout(&out).contains("skipped"));
-    assert_eq!(
-        std::fs::read_to_string(&config_path).unwrap(),
-        "# my edits\n"
-    );
-
-    // The generated skeleton passes offline validation once uncommented-free.
-    std::fs::remove_file(&config_path).unwrap();
-    run(&base, &["init"]);
-    let out = run(&base, &["config", "validate", "--offline"]);
-    assert!(
-        out.status.success(),
-        "generated skeleton must validate: {}",
         stderr(&out)
     );
     let _ = std::fs::remove_dir_all(&base);
