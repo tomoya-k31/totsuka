@@ -1,7 +1,7 @@
 > 🌐 [English](setup-playbook.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:f9ade033efad7ae5c6000d3c678445ffe120734ac895b021510c532d7b6af3ab -->
+<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:2c1cbb8846ed7d139e08873e466d53b54c1efa1d5bd402852c515d3243353449 -->
 
 # セットアップ Playbook
 
@@ -53,7 +53,7 @@ totsuka setup
 
 1. **どのレシピから始めるか**（GitHub 最小構成 / 設計→実装ハンドオフ / Slack 本人名義返信 / 人間検収必須）
 2. **リポジトリのパスと名前**（複数可）
-3. **シークレットをどこに置くか**（1Password / Keychain / 環境変数）— **値そのものは一切聞かれない**
+3. **シークレットをどこに置くか**（1Password / Bitwarden / Keychain / 環境変数）— **値そのものは一切聞かれない**
 4. レシピが要求する項目だけ（GitHub Project の owner や番号、Slack のメンバー ID、LLM のモデル名など）
 5. **Project の Status 列名**（そのレシピが列を使う場合のみ）。候補は役割を説明する名前（`Ready to implement` など）だが、**入力した値はボードの Status フィールドの選択肢と完全に一致させる必要がある。** ここを間違えたときが一番厄介で、設定は valid のまま `doctor` も緑、`run` が何も拾わないという無言の失敗になる。だから計画には、名前を埋めた後の trigger をそのまま表示する。answers ファイルがこれを欠いている場合は、選んでいない名前で埋めるのではなく**足すべきキー名を名指しして拒否する**。
 
@@ -70,6 +70,8 @@ security add-generic-password -U -s totsuka -a github-token -w '<paste the value
 ```
 
 **ここに出た参照はすべて必須**である。設定が参照している以上、1 つでも欠けるとそのプラグインは起動しない。「任意の機能だから飛ばしてよい」ものは、そもそもチェックリストに出ない。
+
+Bitwarden を選んだ場合、**先に `bw login` → `bw unlock` を済ませ、表示された `BW_SESSION` を export しておくこと**。登録コマンドは vault を書き換えるので、アンロック済みのセッションが無いと実行できない（下の前提条件の表にも同じことがあるが、この手順のほうが先に来るので再掲する）。登録コマンドは `bw get template item | jq … | bw encode | bw create item` の形になる（`jq` が要る）。`bw` に `op item edit` 相当の 1 行が無いためである。**このコマンドは常に新規作成する** —— 同名のアイテムが既にあるなら作らずそちらを編集すること。重複すると `bw get` が「複数ヒット」で失敗し、参照が解決できなくなる。アカウントごとに 1 アイテム（`bw:totsuka-<name>/password`）にするのは**取り決め**であって制限ではない —— 1 アイテムは `username` / `password` / `uri` / `totp` を持てる。ただし `bw:` はカスタムフィールドに届かないので任意個の秘密は詰められず、ウィザードが登録するのはどれもトークン（= `password`）なので、結果として 1 つずつになる。
 
 Slack の bot トークンは一見任意に見えるが必須である。**本人名義での返信は Slack の通知を一切鳴らさない**ため、レシピは bot からの通知を前提に組まれている。
 
@@ -92,6 +94,7 @@ totsuka run --watch
 | Codex | TUI で hooks の信頼を承認する。**しないとフックが黙ってスキップされ、全タスクがタイムアウトする** |
 | OpenCode | 初回起動と設定の配置 |
 | 1Password | `op://` 参照を使うなら `op signin` |
+| Bitwarden | `bw:` 参照を使うなら `bw login` → `bw unlock` し、表示された `BW_SESSION` を export する。**`totsuka run` はその同じシェルから起動する** —— `bw` は常駐セッションを持たず、セッションが無いとマスターパスワードを標準入力から訊くので、常駐プロセスは画面に何も出ないまま止まってしまう |
 | 通知クリック | `terminal-notifier` の導入と bundle id の設定 → [click-to-focus セットアップ](click-to-focus-setup.ja.md) |
 
 ## 開発機に入れる

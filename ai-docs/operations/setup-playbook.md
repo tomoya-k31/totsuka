@@ -4,7 +4,7 @@ title: セットアップ Playbook（新マシン / 開発機 / ローテーシ�
 description: "ゼロから totsuka が動くまでを通しで示す導入手順。新マシン（tarball 配置 → totsuka setup → シークレット登録 → doctor → run）、開発機（クローン → --from-source）、トークンローテーション、中断・失敗時の復旧を扱う。"
 resource: https://github.com/tomoya-k31/totsuka/issues/350
 tags: [setup, onboarding, runbook, playbook, secrets, doctor, rotation]
-generated: { by: claude-code/opus-5, at: 2026-08-01T09:40:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-17T03:20:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -64,7 +64,7 @@ totsuka setup
 
 1. **どのレシピから始めるか**（GitHub 最小構成 / 設計→実装ハンドオフ / Slack 本人名義返信 / 人間検収必須）
 2. **リポジトリのパスと名前**（複数可）
-3. **シークレットをどこに置くか**（1Password / Keychain / 環境変数）— **値そのものは一切聞かれない**
+3. **シークレットをどこに置くか**（1Password / Bitwarden / Keychain / 環境変数）— **値そのものは一切聞かれない**
 4. レシピが要求する穴だけ（GitHub Project の owner / owner_type / 番号 / 自分の login、Slack のメンバー ID、LLM の model）
 5. **Project の Status 列名**（そのレシピが列を使う場合のみ）。候補として出るのは役割を説明する英語名（`Ready to implement` など）で、**どのみちボードの Status フィールドの選択肢と完全に一致させる必要がある**。ここを間違えると config は valid で `doctor` も緑のまま、`run` が何も拾わないという無言の失敗になる —— だから計画の確認画面に置換後の trigger をそのまま出している。**`--answers` ファイルがこの列名を欠いていると、既定で埋めるのではなく足すべきキー名を名指しして拒否する**（選んでいない列名を黙って書くほうが危険なため）
 
@@ -81,6 +81,8 @@ security add-generic-password -U -s totsuka -a github-token -w '<paste the value
 ```
 
 **ここに出た参照はすべて必須**である。config が参照している以上、1 つでも欠けるとそのプラグインは起動しない。「任意の機能だから飛ばしてよい」ものは、そもそもチェックリストに出ない。
+
+Bitwarden を選んだ場合、**先に `bw login` → `bw unlock` を済ませ、表示された `BW_SESSION` を export しておくこと**。登録コマンドは vault を書き換えるので、アンロック済みのセッションが無いと実行できない（下の「一回きりの対話セットアップ」に同じことが書いてあるが、ここでの手順がそれより前に来るため再掲する）。登録コマンドは `bw get template item | jq … | bw encode | bw create item` の形になる（`jq` が要る）。`bw` に `op item edit` 相当の 1 行が無いためで、**このコマンドは常に新規作成する**。同名のアイテムが既にあるなら作らずそちらを編集すること —— 重複すると `bw get` が「複数ヒット」で失敗し、参照が解決できなくなる。アカウントごとに 1 アイテム（`bw:totsuka-<name>/password`）にするのは**運用上の取り決め**であって、Bitwarden の制限ではない —— 1 アイテムは `username` / `password` / `uri` / `totp` を持てる。ただし `bw:` はカスタムフィールドに届かないので、任意個の秘密を 1 アイテムに詰めることはできず、ウィザードが登録するのはどれもトークン（= `password`）なので、結果として 1 つずつになる。
 
 > Slack の `slack-bot` は例外に見えるが必須。プラグイン単体では opt-in（無ければナッジ無し）だが、**本人名義の返信は Slack 通知を一切上げない**ため、レシピはナッジ前提で構成されている（[ADR-0021](/decisions/adr-0021-slack-bot-notification-nudge.md)）。
 
@@ -103,6 +105,7 @@ totsuka run --watch
 | Codex | TUI で **hooks trust** を承認。**しないとフックが黙ってスキップされ、全タスクが timeout する** | [Codex ツールのセットアップ](/operations/codex-tool-setup.md) |
 | OpenCode | 初回起動と config 配置 | [OpenCode ツールのセットアップ](/operations/opencode-tool-setup.md) |
 | 1Password | `op signin`（`op://` 参照を使う場合） | [ADR-0006](/decisions/adr-0006-onepassword-secret-backend.md) |
+| Bitwarden | `bw login` → `bw unlock` し、表示された `BW_SESSION` を export（`bw:` 参照を使う場合）。**`totsuka run` はその export をしたシェルから起動する** —— `bw` は常駐セッションを持たないので、セッションが無いとマスターパスワードを標準入力から訊き、常駐プロセスは画面に何も出ないまま止まる | [ADR-0076](/decisions/adr-0076-bitwarden-secret-backend.md) |
 | 通知クリック | `terminal-notifier` の導入と bundle id | [click-to-focus セットアップ](/operations/click-to-focus-setup.md) |
 
 # 開発機
