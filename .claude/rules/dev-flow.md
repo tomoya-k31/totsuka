@@ -315,12 +315,30 @@ gh pr checks <n> --watch --interval 30   # wrap with a 10-min cap; raw --watch r
    echo "no Copilot review after 10 min — report to the user and wait"
    ```
 
-   **Fetch both levels.** The review-level record carries the verdict and the
-   summary; the findings themselves are the inline comments and are absent from
-   it. A PR can have a review with zero inline comments (no findings) — that is
-   a real result, not a fetch failure.
+   **Fetch both levels, and read the findings out of BOTH.** The review-level
+   record carries the verdict and the summary; findings usually arrive as the
+   inline comments. A PR can have a review with zero inline comments and no
+   findings at all — that is a real result, not a fetch failure.
 
-   The `id` printed per inline comment is what you reply to when recording a
+   **But zero inline comments does not mean zero findings.** Copilot files some
+   of them as **suppressed comments**, which live *only* inside the review
+   body, in a `<details><summary>Review details</summary>` block under a
+   `Suppressed comments (N)` heading — each one naming a `path:line` and
+   quoting the offending lines, exactly like an inline comment. The review's
+   own footer says `Comments generated: 0` and
+   `pulls/<n>/comments` returns **nothing for Copilot**. PR #697 arrived in
+   precisely this shape: two real, valid findings, both worth a fix commit,
+   with the inline endpoint empty. Reading only the inline level would have
+   dropped the entire review on the floor while reporting "no findings".
+
+   So: after fetching, **scan the review body for `Suppressed comments`** and
+   treat anything there as a finding, subject to the same vetting as an inline
+   one (step 4). The watcher above already prints the body, so this costs no
+   extra call — what it costs is remembering to read it.
+
+   A suppressed comment has no comment `id`, so there is nothing to reply to;
+   record its rationale as a PR-level comment (`gh pr comment <n>`) instead.
+   The `id` printed per *inline* comment is what you reply to when recording a
    rationale (→ Handling findings):
 
    ```bash
