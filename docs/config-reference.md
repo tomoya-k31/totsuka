@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:50a4feb961e0325a4b50f6253fa019204bc9ff0157519c055eed4ddfc4d1c51b -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:800ba61ff614b6fbafae0f4f2dba61412bd29205f4607ebc5f125cc022f25899 -->
 
 # Configuration reference
 
@@ -23,14 +23,25 @@ Never write a plain secret into your configuration. Any string value can instead
 
 | Form | Resolves from | When to use |
 |---|---|---|
-| `op://<vault>/<item>/<field>` | 1Password | **The usual choice.** The only secret store that works outside macOS |
+| `op://<vault>/<item>/<field>` | 1Password | **The usual choice.** Works outside macOS |
+| `bw:<item>/<field>` | Bitwarden | The same role as `op://`, for Bitwarden users. Needs `BW_SESSION` exported |
 | `cmd:<command>` | The standard output of a command | Credentials another tool owns and rotates, e.g. `cmd:gh auth token` |
 | A string containing `${ENV_VAR}` | Environment variables | A value you already export |
 | `keychain:<service>/<account>` | The macOS Keychain | macOS only |
 
 `~` and `${ENV}` are also expanded in paths.
 
-**`op://`** shells out to the 1Password CLI and assumes you have already run `op signin`. It works on **any string value** in either config file, and because the CLI is cross-platform this is the only secret *store* that works outside macOS (`keychain:` is the macOS-only one; `${ENV_VAR}` and `cmd:` run anywhere but hold nothing themselves). A missing CLI, a missing item, and a missing sign-in each produce a specific, actionable error. `totsuka doctor` only probes 1Password when your configuration actually contains an `op://` reference.
+**`op://`** shells out to the 1Password CLI and assumes you have already run `op signin`. It works on **any string value** in either config file, and because the CLI is cross-platform it works outside macOS (`keychain:` is the macOS-only form; `${ENV_VAR}` and `cmd:` run anywhere but hold nothing themselves). A missing CLI, a missing item, and a missing sign-in each produce a specific, actionable error. `totsuka doctor` only probes 1Password when your configuration actually contains an `op://` reference.
+
+**`bw:`** shells out to the Bitwarden CLI — `bw:totsuka-slack/password` becomes `bw get password totsuka-slack`. `<field>` is a `bw get` object name (`password`, `username`, `totp`, `uri`, …), so a reference reads the way you would invoke the CLI yourself, and the vocabulary is not checked here: a new `bw get` object works as soon as your `bw` supports it. **The split is at the last `/`**, so an item name may contain one — `bw:github.com/myorg/password` means item `github.com/myorg`, field `password`. Note that this is the opposite of `keychain:`, where everything after the *first* `/` is the account.
+
+Bitwarden has no background session, so **`BW_SESSION` must be exported**: run `bw unlock`, export the session key it prints, and start `totsuka run` from that shell. Without it the reference fails immediately instead of starting `bw` at all — `bw` asks for your master password on standard input, and a long-running `totsuka run` that reaches that prompt stops with nothing on screen. If the item name matches more than one entry, the error tells you to use the item's id instead. `totsuka doctor` only probes Bitwarden when your configuration actually contains a `bw:` reference, and it treats the vault as usable only when `bw status` reports `unlocked`.
+
+**Custom fields are out of scope for this form**, because the Bitwarden CLI has no single command that returns one. Use `cmd:` for those:
+
+```bash
+cmd:bw get item totsuka-slack | jq -r '.fields[]|select(.name=="api_token").value'
+```
 
 **`cmd:`** runs the command through `/bin/sh -c` and uses its standard output as the secret, with the trailing newline stripped. It is meant for credentials another tool already manages and rotates — `token = "cmd:gh auth token"` — because it fetches the current value every time rather than keeping a copy that can silently go stale. A non-zero exit or empty output is a startup error, quoting the first line of stderr; standard output is never quoted anywhere. The command runs only when `totsuka run` resolves secrets, never during parsing or `config show`.
 
