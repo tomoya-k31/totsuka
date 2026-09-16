@@ -2,6 +2,8 @@
 
 ## 2026-09-16
 
+* **Update**: doctor の非対話ゲートを**スキーム非依存**に畳んだ（#699 の地ならし）。各 probe が自分で `starts_with("op://")` / `starts_with("cmd:")` を見ていたのをやめ、`SecretScheme::of`（参照文字列を `SecretRef` へ parse して分類）＋ `SecretReadiness` / `SecretSkip` に一本化した。**この `match` が `SecretRef` に対して網羅的であることがゲートの担保**で、core にスキームを足すと doctor がコンパイルエラーになる — #444 で `cmd:` を足したとき 3 経路のうち 1 経路にしかゲートを入れておらず後から 2 経路を塞いだ事故を、型で再発不能にする。あわせて `hook-token` / `llm` が**報告に見えて実はゲート**（`deferred_note` が `None` を返した参照はその場で実解決され、バックエンドが stdin で待ちうる）であることを明示し、probe の分岐を `CliProbe` + 純粋関数 `onepassword_checks` に分離してテストを入れた（この分岐は spawn に埋まっていた間テストが 1 本も無く、#289 の「probe が実装されているのに一度も走っていなかった」事故を許した箇所）[orchestrator-cli](/components/orchestrator-cli.md)
+* **Update**: `SecretError::BackendUnavailable` に `install_hint` を持たせ、各バックエンドが自分のインストール手順を渡す形にした（#699）。`backend` は変数なのに案内文は `brew install 1password-cli` 決め打ちで、2 つ目のシェルアウト系バックエンドが入った瞬間に**明確に誤った次アクション**を出す形だった。あわせて `ResolveError::EnvNotSet` が列挙する代替スキームから漏れていた `cmd:`（#444 で追加）を補った [orchestrator-core](/components/orchestrator-core.md)
 * **Update**: 削除済みメッセージを指すキューイベントで `conversations.replies` が返す `thread_not_found` を、`fetch_message` が `Err` ではなく `Ok(None)` として扱うようにした。Err のままだと Event Gateway 取り込みの drain が「Slack に到達できない」と読んでレコードを ack せず、1 件のメンションが `drain_max_age_hours`（既定 1 日）を過ぎるまで毎パス再配送され、起動のたびに WARN を出し続けていた。[task-source-slack](/components/task-source-slack.md)
 * **Update**: 上を実機（運用者の実ワークスペース）で測って [ADR-0025](/decisions/adr-0025-reaction-task-trigger.md) の未確認項目のうち 1 件を確定させた —— `conversations.replies` は存在する**スレッド返信**の `ts` を渡せば親スレッドに解決せずその 1 件を返し、`thread_not_found` はその `ts` がチャンネルのどのメッセージでもないときにだけ返る。スレッドに属さない単発メッセージの挙動は測っていないので未確認項目に残した。
 
