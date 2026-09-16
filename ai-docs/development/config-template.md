@@ -4,7 +4,7 @@ title: config.toml 雛形とその網羅性検査
 description: "totsuka が書き出す config.toml 雛形の置き場（crates/orchestrator-cli/templates/config.toml）と、そこに全設定キーが載っていることを機械検証する scripts/config-template-lint.sh の仕組み・キーを増減したときの手順。Rust の文字列リテラルではなく実ファイルに置く理由（クレート境界を跨いで検査できる唯一の場所）も含む。"
 resource: https://github.com/tomoya-k31/totsuka/blob/main/scripts/config-template-lint.sh
 tags: [config, toml, template, lint, fitness-function, ci]
-generated: { by: claude-code/opus-5, at: 2026-09-17T18:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-17T19:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -108,6 +108,18 @@ github / slack の 2 本だけで、しかも dev-dependency である
 これは意図した割り切りである。パスまで見るにはコード側でフィールドが**どのテーブルに属するか**を
 解く必要があり、それは struct のネスト関係を追うことなので、テキスト抽出の範囲を超える。
 捕まえたいのは「キーを足したのに雛形を直し忘れた」であって、そちらは同名衝突が無い限り機能する。
+
+**`missing-key` は config struct の外で宣言されたキーを見られない。** 走査対象は `schema.rs` と
+`plugins/*/src/config.rs` だが、プラグインが `[[workflows]]` へ足す追加プロパティは
+`toml::Table` から文字列定数で引かれる（slack の `publish` は
+`plugins/task-source-slack/src/workflow_options.rs`、trigger のキーは各プラグインの取り込み経路）。
+struct のフィールドではないので、雛形から消しても `missing-key` にはならない。
+
+**代わりに効くのが `OPAQUE_ALLOWED` と `dead-declaration` の組である。** そういうキーは
+`OPAQUE_ALLOWED` に理由付きで宣言されており、雛形から消えれば宣言が浮いて `dead-declaration` が
+落ちる。網羅は「宣言したものに限って」保証される —— **新しい追加プロパティを足した人が
+`OPAQUE_ALLOWED` にも書かなければ、検査は何も言わない**。プラグイン側で追加プロパティを増やすときは、
+雛形と `OPAQUE_ALLOWED` の両方を同じ PR で触ること。
 
 # 雛形は 1 行も有効行を持たない
 
