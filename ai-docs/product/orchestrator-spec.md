@@ -3,7 +3,7 @@ type: Spec
 title: totsuka — Local AI-Agent Orchestrator Requirements (v1)
 description: Requirements specification for the totsuka orchestrator CLI — task-source/agent-IDE/notifier plugins, git-worktree lifecycle, workflows, parallel execution control, and v1 scope.
 tags: [orchestrator, requirements, plugin, worktree, cli, rust]
-generated: { by: claude-code/fable-5-1, at: 2026-09-12T02:53:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-17T19:00:00+09:00 }
 status: draft
 owner: tomoya-k31
 ---
@@ -292,8 +292,7 @@ The path to a surface that is **always in view**, such as the macOS menu bar. No
 
 | Command | Purpose |
 |---|---|
-| `init` | Generate configuration scaffolding, environment check |
-| `setup` | Interactive first-time setup from a recipe (added after this table was first written; see the setup playbook) |
+| `setup` | First-time setup: install the plugins you pick and write a configuration with every setting in it, commented out (added after this table was first written; see the setup playbook) |
 | `run [--watch] [--json]` | Main loop from task intake (push, `task/submit`) to dispatch (one-shot by default; `--watch` stays up receiving pushes until shutdown — see Open Question #2, resolved) |
 | `status [--json]` | List running / queued / waiting tasks and worktrees, plus what the live run cannot currently do (F-110) |
 | `menu [--json]` | The menu-bar view (F-109). SwiftBar plugin format by default, the display model with `--json`. Always exits 0 |
@@ -354,7 +353,7 @@ The path to a surface that is **always in view**, such as the macOS menu bar. No
 ## 7. UI/UX Requirements
 
 - totsuka draws no GUI of its own. CLI output quality is defined as the UX — and a text format meant to be fed to a GUI host (a menu bar, for one) is treated as one more CLI output under that same definition (F-109).
-- Error messages always include "cause + next action" (e.g. `config not found → run 'app init'`).
+- Error messages always include "cause + next action" (e.g. `config not found → run 'app setup'`).
 - `--debug` outputs information needed during development (RPC payloads, state transitions, LLM decision rationale). Sensitive data follows the §5.2 masking policy.
 - Output respects the NO_COLOR environment variable and non-TTY.
 
@@ -405,7 +404,7 @@ Define a glossary (Task / Source / Agent / worktree / dispatch, etc.) and use it
 ### 10.4 Team rollout
 
 - Distribute configuration templates via an internal repository (secrets are per-person Keychain / env).
-- Onboarding: keep it to 5 steps — install (download / `cargo install`) → `init` → set keys → `doctor` → `run`.
+- Onboarding: keep it to 5 steps — install (download / `cargo install`) → `setup` → edit the generated configuration → set keys → `doctor` → `run`.
 
 ---
 

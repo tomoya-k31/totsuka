@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](orchestrator-spec.ja.md)
 
-<!-- generated-from: ai-docs/product/orchestrator-spec.md sha256:fb24bb5b61fa527b81eaf1809d43d84f4689a7aa8851752baee34b19244441ee -->
+<!-- generated-from: ai-docs/product/orchestrator-spec.md sha256:36feed052ff161c37f4277bb8cb2929f52f9858704fb83f11018cc8e73e1decf -->
 
 # What totsuka is
 
@@ -85,8 +85,7 @@ A single binary, run in the foreground.
 
 | Command | Purpose |
 |---|---|
-| `init` | Generate configuration scaffolding and check the environment |
-| `setup` | Interactive first-time setup, from a recipe |
+| `setup` | First-time setup: install the plugins you pick and write a configuration with every setting in it, commented out |
 | `run [--watch] [--json]` | The main loop, from intake to dispatch. `--watch` stays up until you stop it |
 | `status [--json]` | Running, queued, and waiting tasks, plus worktrees, and anything the running orchestrator cannot currently do |
 | `menu [--json]` | The menu-bar view: availability, plus how many tasks are waiting on you |
