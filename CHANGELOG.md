@@ -11,6 +11,13 @@ Note: the plugin protocol is versioned independently of the application (see
 `crates/plugin-protocol`); a totsuka release does not imply a protocol-version
 change.
 
+## [0.7.11](https://github.com/tomoya-k31/totsuka/compare/v0.7.10...v0.7.11) (2026-09-16)
+
+
+### Bug Fixes
+
+* **slack:** 削除済みメッセージを指すキューイベントが毎起動 WARN を出し続けるのを直す ([#697](https://github.com/tomoya-k31/totsuka/issues/697)) ([296e85c](https://github.com/tomoya-k31/totsuka/commit/296e85cf8090573d5193df2ad0c7008d8add6077))
+
 ## [0.7.10](https://github.com/tomoya-k31/totsuka/compare/v0.7.9...v0.7.10) (2026-09-15)
 
 
