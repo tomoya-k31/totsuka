@@ -124,10 +124,18 @@ extract_code_keys() {
 #   - `key = …` で始まる行（同じ行の inline table の内側キーも拾う）
 #   - `[a.b]` / `[[a]]` のテーブル見出しの各セグメント
 # の 2 つだけ。散文のコメントを誤って拾わないための制限である。
+#
+# 引数 `assign` を渡すと**代入行のキーだけ**を返す。見出しを外すのは、末尾の
+# セグメントがユーザーの決めるインスタンス名になる見出しがあるため
+# （`[tools.claude]` / `[notion.dynamic.sprint]` / `[macos.filter.workflows.<name>]`）。
+# これらを「どの struct にも無いキー」として報告させないための区別であり、
+# 見出しの綴り間違い自体は `totsuka config validate` が別途弾く
+# （ロスターに無い名前のトップレベルテーブルは検証エラーになる）。
 extract_template_keys() {
-  awk '
+  awk -v mode="${1:-all}" '
     { line = $0; sub(/^[[:space:]]*#[[:space:]]?/, "", line) }
     line ~ /^\[\[?[a-z_][a-z0-9_.]*\]\]?/ {
+      if (mode == "assign") next
       hdr = line
       sub(/^\[+/, "", hdr); sub(/\]+.*$/, "", hdr)
       n = split(hdr, seg, ".")
@@ -146,30 +154,18 @@ extract_template_keys() {
   ' "$TEMPLATE" | sort -u
 }
 
-# ---------- 3) プラグイン名 ----------
-#
-# `[github]` のようなプラグイン設定テーブルの見出しは、どの struct のフィールド
-# でもなくプラグインの名前である。plugin.toml から引いて許可する（列挙しない）。
-plugin_names() {
-  for m in "$ROOT"/plugins/*/plugin.toml; do
-    [ -f "$m" ] || continue
-    awk -F'"' '/^name[[:space:]]*=/ { print $2; exit }' "$m"
-  done | sort -u
-}
-
 CODE_KEYS="$(extract_code_keys)" || {
   echo "config-template-lint: config struct の走査に失敗" >&2
   exit 2
 }
-TEMPLATE_KEYS="$(extract_template_keys)" || {
+TEMPLATE_KEYS="$(extract_template_keys all)" || {
   echo "config-template-lint: 雛形の走査に失敗" >&2
   exit 2
 }
-PLUGINS="$(plugin_names)" || {
-  echo "config-template-lint: plugin.toml の走査に失敗" >&2
+TEMPLATE_ASSIGNED="$(extract_template_keys assign)" || {
+  echo "config-template-lint: 雛形の走査に失敗" >&2
   exit 2
 }
-
 [ -n "$CODE_KEYS" ] || {
   echo "config-template-lint: config struct から 1 件もキーを抽出できませんでした（抽出器の破損を疑うこと）" >&2
   exit 2
@@ -200,10 +196,9 @@ done <<<"$CODE_KEYS"
 while IFS= read -r key; do
   [ -n "$key" ] || continue
   contains "$CODE_KEYS" "$key" && continue
-  contains "$PLUGINS" "$key" && continue
   error unknown-key "$TEMPLATE" \
     "雛形のキー '$key' がどの config struct にも無い: 綴りを直すか、削除済みなら雛形からも消すこと"
-done <<<"$TEMPLATE_KEYS"
+done <<<"$TEMPLATE_ASSIGNED"
 
 # ---------- サマリ ----------
 N_CODE="$(printf '%s\n' "$CODE_KEYS" | grep -c . || true)"
