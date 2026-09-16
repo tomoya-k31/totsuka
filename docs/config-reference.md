@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:e94b0fbb5aac9a329cb75f3efcf81bb7f3a4cbc155cf101c0355a0f68dee9c51 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:7501d3d65aff9c1b73a9cf492001aaa80439808e49abd79ff99438422bd665df -->
 
 # Configuration reference
 
@@ -26,7 +26,7 @@ Never write a plain secret into your configuration. Any string value can instead
 | `op://<vault>/<item>/<field>` | 1Password | **The usual choice.** Works outside macOS |
 | `bw:<item>/<field>` | Bitwarden | The same role as `op://`, for Bitwarden users. Needs `BW_SESSION` exported |
 | `cmd:<command>` | The standard output of a command | Credentials another tool owns and rotates, e.g. `cmd:gh auth token` |
-| A string containing `${ENV_VAR}` | Environment variables | A value you already export |
+| A string containing `${ENV_VAR}` | Environment variables | A value you already export. `totsuka setup --secret-backend env` writes `TOTSUKA_SECRET_<ACCOUNT>` names, which are exempt from the unknown-override warning that every other unrecognised `TOTSUKA_*` gets |
 | `keychain:<service>/<account>` | The macOS Keychain | macOS only |
 
 `~` and `${ENV}` are also expanded in paths.

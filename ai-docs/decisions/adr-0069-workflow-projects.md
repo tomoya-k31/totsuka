@@ -4,7 +4,7 @@ title: ADR-0069 workflow は source ではなく projects で domain を名指�
 description: "同一 source の複数ボードで Status の option 集合が違う構成が動かない問題への決定。[[workflows]].source を廃止し projects（[[projects]].name の配列・必須）へ置き換え、source は [[projects]].source から導出する。[[projects]] の意味を「起票先トラッカー」から「ソースが持つ domain」へ広げ、slack / discord もキーなしのエントリを 1 本持つ。閉路検査のグラフを (domain, 列名) でキーし、protocol 0.7.0 で WorkflowInfo.projects / status_writebacks と TaskUpdateStatusParams.projects を追加する。走査範囲を絞るだけでは綴り違いが無言のままなので、status option の実在検査を config validate のオンライン部と doctor に error として入れる。改名・source の任意併記・スキーマ移動の同梱・移行案内の実装は不採用。"
 resource: https://github.com/tomoya-k31/totsuka/issues/626
 tags: [decision, config, workflow, projects, protocol, breaking, adr]
-generated: { by: claude-code/fable-5, at: 2026-09-08T00:20:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-17T18:00:00+09:00 }
 verified:
   - { by: human:tomoya-k31, at: 2026-09-08T00:14:00+09:00 }
 status: stable
@@ -24,7 +24,7 @@ stable。実装済み・テスト green（1,617 件）。**実機（実 GitHub P
 - **旧 config と旧プラグインが起動しない**（§5・§6）。`source = "github"` のままの実運用同形 config は ``missing field `projects` `` で `validate` / `doctor` とも exit 1。`>=0.6.0, <0.7` の github / herdr は F-54 で `protocol-incompatible` として拒否
 - **status option の実在検査**（§7）。#8 に無い `Design` / `Design Review`（`trigger.status` と書き戻し）と `triage_status = "Nope"` を、実在 option 一覧つきで error。`Backlog` / `Shipped` は通る
 - **domain を持たないソースのキーなしエントリ**（§3）。`[[projects]] name = "slack"` を経由する 4 本の slack workflow（`projects = ["slack"]`）で、メンション → 下書き → 承認 → 本人名義のスレッド返信、リアクション（answer）、`:books:` 起票の 3 経路が従来どおり動いた。`:books:` の起票は、解決先 repo（cli）の `[[repositories]].project` が指す #8 に `triage_status` の `Todo` で載り、#7 には載らなかった
-- **`setup` の生成物**。`--answers` で github recipe は `projects = ["github-board"]`、slack recipe は `[[projects]] name = "slack"` を吐き、両方 `validate --offline` を通る
+- **`setup` の生成物**。`--answers` とレシピ選択は [ADR-0077](/decisions/adr-0077-setup-writes-the-whole-surface.md)（#705）で廃止された。現在は `totsuka setup --plugins …` が書く雛形が `validate --offline` を通り、`projects = ["…"]` を使う組み合わせは雛形末尾のレシピ集にコメントで入っている
 
 確認していないこと:
 
@@ -186,7 +186,7 @@ ADR-0062 と同じ理由。上げると「移行方式」と「`version` 省略�
 2. domain を持たないソース（slack / discord）に `[[projects]]` を 1 本足す（`name` は任意の安定 ID、`source` はプラグイン名、他のキーは無し）
 3. `totsuka config validate --offline` を通す
 
-`totsuka setup` が生成する config はこの形に追随している（1 ボード前提は維持。2 枚目は手編集）。
+`totsuka setup` が生成する雛形のレシピ集はこの形に追随している（1 ボード前提は維持。2 枚目は手編集）。
 
 # Consequences
 

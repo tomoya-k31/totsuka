@@ -84,6 +84,11 @@ UI は `dialoguer` の `MultiSelect`（`inquire` ではなく —— 前者は `
 
 ## 7. シークレットのバックエンドは `--secret-backend`（既定 `op`）で 1 つに絞る
 
+**`env` の参照は `TOTSUKA_SECRET_` 接頭辞を使う。** `TOTSUKA_*` は設定オーバーライドの名前空間で、
+認識できない名前には毎回 warning が出る（`env_overrides`）。素朴に `TOTSUKA_GITHUB_TOKEN` を案内すると、
+このツール自身が export させた変数について、利用者に対処しようのない警告を毎回出すことになる。
+接頭辞を予約して除外する。
+
 対話を廃止したので「あなたが選んだバックエンドで、あなたのレシピに必要な一覧」は作れない。
 代わりにフラグで選ばせ、**選んだ 1 種の形を config.toml の参照行にも書く**。
 端末に印字する登録コマンドだけを切り替えると、`op://` だらけのファイルの上で
@@ -95,9 +100,13 @@ UI は `dialoguer` の `MultiSelect`（`inquire` ではなく —— 前者は `
 ## 8. 雛形は実ファイルに置き、網羅を双方向に機械検証する
 
 雛形を `crates/orchestrator-cli/templates/config.toml` に置き `include_str!` で焼く。
-[依存境界](/architecture/workspace-dependency-rules.md)により `orchestrator-cli` は `plugins/*` に
-依存できないので、**Rust 側のテストからは `plugins/*/src/config.rs` が原理的に見えない**。
-ファイルにして初めて、両方をテキストとして読めるシェルから照合できる。
+
+**Rust には struct のフィールドを列挙する手段が無い。** リフレクションが無く、導出マクロを新設しない
+限り、テストは「このキーの一覧」を手で書き写すことになる —— 写した一覧こそが次にズレるものなので、
+検査の意味が消える。ソースをテキストとして読めば、その一覧は書き写さずに得られる。
+副次的に、キーの過半を決める `plugins/*` へ `orchestrator-cli` が張っている依存は github / slack の
+2 本・dev のみで（[依存境界](/architecture/workspace-dependency-rules.md)）、検査のために 7 本ぶん
+張ると CLI の dev ビルドに全プラグインが入る。
 
 `scripts/config-template-lint.sh` が `arch-lint.sh` と同じ枠組みでそれを検査する。
 検査は**双方向**である —— 片方向（足し忘れのみ）だと、削除・改名されたキーが雛形に残り続け、

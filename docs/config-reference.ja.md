@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:e94b0fbb5aac9a329cb75f3efcf81bb7f3a4cbc155cf101c0355a0f68dee9c51 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:7501d3d65aff9c1b73a9cf492001aaa80439808e49abd79ff99438422bd665df -->
 
 # 設定リファレンス
 
@@ -27,7 +27,7 @@
 | `op://<vault>/<item>/<field>` | 1Password | **通常はこれ。** macOS 以外でも動く |
 | `bw:<item>/<field>` | Bitwarden | `op://` と同じ役回りの、Bitwarden 版。`BW_SESSION` の export が要る |
 | `cmd:<command>` | コマンドの標準出力 | 別ツールが管理・ローテートする credential（例 `cmd:gh auth token`） |
-| `${ENV_VAR}` を含む文字列 | 環境変数 | すでに export してある値を使うとき |
+| `${ENV_VAR}` を含む文字列 | 環境変数 | すでに export してある値を使うとき。`totsuka setup --secret-backend env` が書く名前は `TOTSUKA_SECRET_<ACCOUNT>` で、この接頭辞は他の未知の `TOTSUKA_*` が受ける「unknown environment override」警告から除外されている |
 | `keychain:<service>/<account>` | macOS Keychain | macOS 専用 |
 
 `~` と `${ENV}` はパスでも展開される。

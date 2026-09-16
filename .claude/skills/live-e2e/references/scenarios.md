@@ -239,7 +239,7 @@ config で回すこと）:
 | 表現不能な 3 状態 | `projects = []` / `["e2e-board", "slack"]` / `["no-such-board"]` を `--offline` | 3 つとも別のメッセージで exit 1 |
 | 閉路検査が domain で分かれる | `#7: Todo → Done` と `#8: Done → Todo`（`trigger = Done`, `on_success = Todo`） | valid。対照として #8 側を `e2e-board` に向けると閉路 |
 | option の実在検査（#628） | #8 の workflow に `trigger = { status = "Design" }` / `triage_status = "Nope"` を書いて online validate | 実在 option 一覧つきで error。**#8 に紐づく repo が 1 つも無いと先に「no repository is bound」で落ちる**ので、cli を紐づけてから |
-| `setup` の生成物 | `--answers` で github / slack recipe | `projects = ["github-board"]` と `[[projects]] name = "slack"` が出て `validate --offline` を通る |
+| `setup` の生成物 | `totsuka setup --plugins github,slack,herdr` | `config validate --offline` を通り、有効行は `version = 1` だけ。`[[projects]]` と `[[workflows]]` は雛形末尾のレシピ集にコメントで入っている（#705 で対話とレシピ選択は廃止された） |
 
 **Slack 側も回す**（S3 / S4 と `:books:`）。`[[projects]] name = "slack"` のキーなしエントリを
 経由する経路が変わっていないことと、`:books:` の起票が**解決先 repo の `[[repositories]].project`
