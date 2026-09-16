@@ -44,6 +44,26 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 TEMPLATE_EXEMPT=""
 
+# ---------------------------------------------------------------------------
+# 雛形に書いてよい「struct を持たないキー」。
+#
+# `[[workflows]].trigger` と、プラグインが `[[workflows]]` へフラットに足す
+# 追加プロパティは、core が `toml::Table` のまま保持してプラグインへ渡す
+# （#554）。解釈するのはプラグイン側のコードで、config struct のフィールドには
+# ならないため、どれだけ正しく書いても unknown-key に見える。
+#
+# `<key>=<理由>` を 1 行で書く。これも理由なしで足さないこと —— タイポを
+# 通す穴になる。
+# ---------------------------------------------------------------------------
+OPAQUE_ALLOWED="
+reaction=[[workflows]].trigger。slack が絵文字でワークフローを選ぶ（ADR-0025）
+channel=[[workflows]].trigger。チャンネル監視トリガの宣言そのもの（ADR-0068）
+channel_name=[[workflows]].trigger。監視対象チャンネルの照合名（ADR-0068）
+repo=[[workflows]].trigger。監視トリガが固定するリポジトリ（ADR-0068）
+from=[[workflows]].trigger。監視トリガで起動を許す投稿者（ADR-0068）
+publish=[[workflows]] の追加プロパティ。slack の承認フロー切り替え（ADR-0057）
+"
+
 for tool in awk grep; do
   command -v "$tool" >/dev/null 2>&1 || {
     echo "config-template-lint: ${tool} が必要です" >&2
@@ -153,8 +173,9 @@ extract_code_keys() {
 # （ロスターに無い名前のトップレベルテーブルは検証エラーになる）。
 extract_template_keys() {
   awk -v mode="${1:-all}" '
+    { raw = ($0 ~ /lint:raw/) }
     { line = $0; sub(/^[[:space:]]*#[[:space:]]?/, "", line) }
-    line ~ /^\[\[?[a-z_][a-z0-9_.]*\]\]?/ {
+    line ~ /^\[\[?[a-z_][a-z0-9_.-]*\]\]?/ {
       if (mode == "assign") next
       hdr = line
       sub(/^\[+/, "", hdr); sub(/\]+.*$/, "", hdr)
@@ -163,12 +184,25 @@ extract_template_keys() {
       next
     }
     line ~ /^[a-z_][a-z0-9_]*[[:space:]]*=/ {
-      rest = line
-      while (match(rest, /[a-z_][a-z0-9_]*[[:space:]]*=/)) {
-        k = substr(rest, RSTART, RLENGTH)
-        sub(/[[:space:]]*=$/, "", k)
-        print k
-        rest = substr(rest, RSTART + RLENGTH)
+      k = line
+      sub(/[[:space:]]*=.*$/, "", k)
+      print k
+      # inline table の中のキーも設定キーである（`cleanup = { retention_days = 3 }`）。
+      # 走査を `{` 〜 最後の `}` に閉じ込めるのは、値の後ろに続く散文の
+      # 「unset = no -activate」のような字面を拾わないため。
+      #
+      # `lint:raw` はここだけを止める。**左辺のキー名は数える** ——
+      # `filter = { property = … }` の `filter` は totsuka の設定キーであり、
+      # 行ごと読み飛ばすと綴り間違いが素通りする（`fillter` と書いても
+      # 0 error になる）。止めたいのは右辺、つまり第三者の DSL の語彙だけ。
+      if (!raw && match(line, /\{.*\}/)) {
+        rest = substr(line, RSTART, RLENGTH)
+        while (match(rest, /[a-z_][a-z0-9_]*[[:space:]]*=/)) {
+          k = substr(rest, RSTART, RLENGTH)
+          sub(/[[:space:]]*=$/, "", k)
+          print k
+          rest = substr(rest, RSTART + RLENGTH)
+        }
       }
     }
   ' "$TEMPLATE" | sort -u
@@ -203,6 +237,10 @@ exempt_reason() {
   printf '%s\n' "$TEMPLATE_EXEMPT" | awk -F= -v k="$1" '$1 == k { sub(/^[^=]*=/, ""); print; exit }'
 }
 
+opaque_reason() {
+  printf '%s\n' "$OPAQUE_ALLOWED" | awk -F= -v k="$1" '$1 == k { sub(/^[^=]*=/, ""); print; exit }'
+}
+
 # ---------- 4) 足し忘れ（コード → 雛形）----------
 while IFS= read -r key; do
   [ -n "$key" ] || continue
@@ -216,9 +254,39 @@ done <<<"$CODE_KEYS"
 while IFS= read -r key; do
   [ -n "$key" ] || continue
   contains "$CODE_KEYS" "$key" && continue
+  [ -n "$(opaque_reason "$key")" ] && continue
   error unknown-key "$TEMPLATE" \
-    "雛形のキー '$key' がどの config struct にも無い: 綴りを直すか、削除済みなら雛形からも消すこと"
+    "雛形のキー '$key' がどの config struct にも無い: 綴りを直すか、削除済みなら雛形からも消すか、プラグインが解釈する無解釈テーブルのキーなら OPAQUE_ALLOWED に理由付きで登録すること"
 done <<<"$TEMPLATE_ASSIGNED"
+
+# ---------- 6) 死んだ宣言 ----------
+#
+# 免除・許可はどちらも「検査の穴」なので、要らなくなったら消えてほしい。
+# 消えないと、汎用的な名前（`repo` / `from` / `channel`）の素通し口が
+# 残り続け、後から入った本物のタイポをそこで受け止めてしまう。
+# arch-lint の declaration-consumed と同じ発想である。
+while IFS= read -r entry; do
+  key="${entry%%=*}"
+  [ -n "$key" ] || continue
+  # 生きている免除は「コードにあって雛形に無いキー」——`missing-key` を
+  # 抑えているもの。死ぬのはその逆の 2 通りで、どちらも免除が仕事をして
+  # いない。
+  if ! contains "$CODE_KEYS" "$key"; then
+    error dead-declaration "$TEMPLATE" \
+      "TEMPLATE_EXEMPT の '$key' はもう config struct に無い（削除か改名）: 免除ごと消すこと"
+  elif contains "$TEMPLATE_KEYS" "$key"; then
+    error dead-declaration "$TEMPLATE" \
+      "TEMPLATE_EXEMPT の '$key' は雛形に載っているので免除が要らない: 免除ごと消すこと"
+  fi
+done <<<"$TEMPLATE_EXEMPT"
+
+while IFS= read -r entry; do
+  key="${entry%%=*}"
+  [ -n "$key" ] || continue
+  contains "$TEMPLATE_ASSIGNED" "$key" && continue
+  error dead-declaration "$TEMPLATE" \
+    "OPAQUE_ALLOWED の '$key' を雛形が書いていない: 使うか、宣言ごと消すこと（汎用的な名前の素通し口が残るとタイポを受け止めてしまう）"
+done <<<"$OPAQUE_ALLOWED"
 
 # ---------- サマリ ----------
 N_CODE="$(printf '%s\n' "$CODE_KEYS" | grep -c . || true)"

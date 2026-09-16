@@ -4,7 +4,7 @@ title: config.toml 雛形とその網羅性検査
 description: "totsuka が書き出す config.toml 雛形の置き場（crates/orchestrator-cli/templates/config.toml）と、そこに全設定キーが載っていることを機械検証する scripts/config-template-lint.sh の仕組み・キーを増減したときの手順。Rust の文字列リテラルではなく実ファイルに置く理由（クレート境界を跨いで検査できる唯一の場所）も含む。"
 resource: https://github.com/tomoya-k31/totsuka/blob/main/scripts/config-template-lint.sh
 tags: [config, toml, template, lint, fitness-function, ci]
-generated: { by: claude-code/opus-5, at: 2026-09-17T18:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-17T19:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -75,6 +75,62 @@ github / slack の 2 本だけで、しかも dev-dependency である
 - **自由キーのテーブルは例を工夫して避ける**。`[herdr.kind_map]`（実行ファイル名 → kind）と
   `[notion.priority_map]`（option 名 → 数値）はキーがスキーマでは決まらないので、雛形の例には
   ハイフンを含む名前や大文字始まりの名前を使う（抽出器は `^[a-z_][a-z0-9_]*$` にしか反応しない）。
+- **inline table の走査は `{` 〜 最後の `}` に閉じ込める**。`cleanup = { retention_days = 3 }` の
+  内側は設定キーだが、値の後ろに続く散文（`# … unset = no -activate`）は設定キーではない。
+- **`lint:raw` は inline table の内側だけを止める**。第三者の DSL をそのまま渡す値
+  （`trigger.filter` に書く Notion のフィルタ）の**語彙**は totsuka の設定スキーマではないので数えない。
+  **左辺のキー名は数える** —— `filter = { property = … }` の `filter` は実在の設定キーであり、
+  行ごと読み飛ばすと綴り間違いが素通りする（`fillter` と書いても 0 error になり、
+  そこからコピーした config.toml が `config validate` で落ちる。まさにこの検査が防ぐはずの失敗である）。
+
+# 3 つの宣言リスト
+
+スクリプト冒頭に 3 つある。**どれも「理由付き 1 行」で書く** —— 忘れと意図の区別が検査の主眼なので、
+理由なしで足すとその区別が消える。
+
+| リスト | 向き | 何を宣言するか |
+|---|---|---|
+| `TEMPLATE_EXEMPT` | コード → 雛形 | struct にはあるが、雛形に**載せない**と決めたキー |
+| `OPAQUE_ALLOWED` | 雛形 → コード | 雛形に書くが、**どの struct にも現れない**キー。`[[workflows]].trigger` と、プラグインが `[[workflows]]` へフラットに足す追加プロパティは core が `toml::Table` のまま保持して渡すので（#554）、解釈するコードはあってもフィールドは無い |
+| `lint:raw`（行内マーカー） | 雛形 → コード | その行の **inline table の内側**を読まない。第三者の DSL 用。左辺のキー名は数える |
+
+**3 つとも「使われなくなったら落ちる」。** 免除も許可も検査の穴なので、要らなくなったら消えてほしい。
+消えないと汎用的な名前（`repo` / `from` / `channel`）の素通し口が残り続け、後から入った本物のタイポを
+そこで受け止めてしまう。`dead-declaration` がそれを報告する（`arch-lint.sh` の
+`declaration-consumed` と同じ発想）。
+
+# 検査の限界
+
+**照合はキー名のフラットな集合で行い、テーブルのパスを見ない。** したがって `[tools.<name>].command` を
+1 つ書けば、別テーブルの `command`（`[macos]` の `click_command` ではなく、仮に同名のキーがあった場合）も
+`missing-key` を免れる。同名キーが別テーブルに現れる限り、「どこかに 1 つ載っていれば緑」になる。
+
+これは意図した割り切りである。パスまで見るにはコード側でフィールドが**どのテーブルに属するか**を
+解く必要があり、それは struct のネスト関係を追うことなので、テキスト抽出の範囲を超える。
+捕まえたいのは「キーを足したのに雛形を直し忘れた」であって、そちらは同名衝突が無い限り機能する。
+
+**`missing-key` は config struct の外で宣言されたキーを見られない。** 走査対象は `schema.rs` と
+`plugins/*/src/config.rs` だが、プラグインが `[[workflows]]` へ足す追加プロパティは
+`toml::Table` から文字列定数で引かれる（slack の `publish` は
+`plugins/task-source-slack/src/workflow_options.rs`、trigger のキーは各プラグインの取り込み経路）。
+struct のフィールドではないので、雛形から消しても `missing-key` にはならない。
+
+**代わりに効くのが `OPAQUE_ALLOWED` と `dead-declaration` の組である。** そういうキーは
+`OPAQUE_ALLOWED` に理由付きで宣言されており、雛形から消えれば宣言が浮いて `dead-declaration` が
+落ちる。網羅は「宣言したものに限って」保証される —— **新しい追加プロパティを足した人が
+`OPAQUE_ALLOWED` にも書かなければ、検査は何も言わない**。プラグイン側で追加プロパティを増やすときは、
+雛形と `OPAQUE_ALLOWED` の両方を同じ PR で触ること。
+
+# 雛形は 1 行も有効行を持たない
+
+生成しただけでは**何も設定されない**のがこのファイルの契約である。だから `totsuka init` 直後の
+`config.toml` は読み込めて、中身はすべて人間がコメントを外すまで説明文でしかない。
+
+400 行のコメント例を編集している最中に有効行が 1 本紛れ込むと、それはそのリリース以降 `init` を
+走らせた全員に効く。`orchestrator_cli::init_cmd` のユニットテスト
+`the_skeleton_activates_nothing` が、雛形を TOML としてパースして**空のテーブル**になることを
+検査する —— 網羅性検査はファイルをテキストとして読むので、コメント行と有効行を区別できない。
+両方あって初めて「全部載っていて、何も効いていない」が言える。
 
 この照合は **「Rust のフィールド名 ≒ TOML のキー名」** に寄りかかっている。config の struct は
 フィールドに `serde(rename)` をほぼ使っていないため（`rename_all` は enum の変種名向け、
