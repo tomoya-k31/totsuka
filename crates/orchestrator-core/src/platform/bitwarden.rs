@@ -161,14 +161,18 @@ fn classify_bw_error(stderr: &[u8], reference: &SecretRef) -> SecretError {
     let lower = text.to_lowercase();
     // The vault locked (or the session expired) between the pre-spawn check
     // and here. Same recovery as a missing session.
-    if lower.contains("vault is locked") || lower.contains("locked") {
+    //
+    // Matched on the whole phrase, never a bare `"locked"`: **"unlocked"
+    // contains "locked"**, so the loose test would report a message about a
+    // perfectly healthy vault as a locked one.
+    if lower.contains("vault is locked") {
         return SecretError::Backend(format!(
             "the Bitwarden vault is locked → run `bw unlock`, export the {SESSION_ENV} it \
              prints, and retry ({})",
             first_line(&text)
         ));
     }
-    if lower.contains("not logged in") || lower.contains("you are not logged in") {
+    if lower.contains("not logged in") {
         return SecretError::Backend(format!(
             "not logged in to Bitwarden → run `bw login`, then `bw unlock` ({})",
             first_line(&text)
@@ -182,7 +186,20 @@ fn classify_bw_error(stderr: &[u8], reference: &SecretRef) -> SecretError {
              (`bw list items --search <name>` prints it) instead of a name"
         ));
     }
-    if lower.contains("not found") {
+    // Deliberately **not** a bare `"not found"` search, for the reason recorded
+    // in [`classify_op_error`](super::onepassword): it misclassifies unrelated
+    // failures — "server not found" from a DNS error naming a self-hosted
+    // host, say — as a missing item. That trade is worse than it looks, because
+    // `NotFound` carries only the reference: the stderr diagnosis and the next
+    // action (§7) are both dropped, so the operator is told the item is absent
+    // when the truth is that the server is unreachable.
+    //
+    // `bw get` prints exactly `Not found.`, so the first line is *compared*
+    // rather than searched. Anything else stays `Backend`, which quotes stderr.
+    if matches!(
+        first_line(&text).to_lowercase().trim(),
+        "not found." | "not found"
+    ) {
         return SecretError::NotFound {
             reference: reference.to_string(),
         };
@@ -328,6 +345,46 @@ mod tests {
             SecretError::NotFound { reference } => assert_eq!(reference, "bw:gone/password"),
             other => panic!("expected NotFound, got {other:?}"),
         }
+    }
+
+    /// A bare `"not found"` search would call a DNS or connection failure a
+    /// missing item — and `NotFound` carries only the reference, so the stderr
+    /// diagnosis and the next action would both be lost. `classify_op_error`
+    /// records the same decision.
+    #[test]
+    fn an_unreachable_server_is_not_a_missing_item() {
+        for stderr in [
+            &b"getaddrinfo ENOTFOUND vault.example.com: server not found"[..],
+            &b"Error: connect ECONNREFUSED 127.0.0.1:8080"[..],
+        ] {
+            let store = BitwardenCli::with_runner(move |_, _| Ok(output(1, b"", stderr)));
+            let err = store.get(&bw_ref("x", "password")).unwrap_err();
+            assert!(
+                !matches!(err, SecretError::NotFound { .. }),
+                "{err} must stay a Backend error so the diagnosis survives"
+            );
+            // The diagnosis is what makes it actionable.
+            assert!(
+                err.to_string().to_lowercase().contains("not found")
+                    || err.to_string().contains("ECONNREFUSED"),
+                "{err}"
+            );
+        }
+    }
+
+    /// `"unlocked"` contains `"locked"`, so a bare substring test would report
+    /// a healthy vault as a locked one.
+    #[test]
+    fn an_unlocked_vault_is_not_reported_as_locked() {
+        let store = BitwardenCli::with_runner(|_, _| {
+            Ok(output(
+                1,
+                b"",
+                b"Vault is unlocked but the item could not be read",
+            ))
+        });
+        let err = store.get(&bw_ref("x", "password")).unwrap_err();
+        assert!(!err.to_string().contains("bw unlock"), "{err}");
     }
 
     /// An empty value would surface later as an unexplained 401; fail now.

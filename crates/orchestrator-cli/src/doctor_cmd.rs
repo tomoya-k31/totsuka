@@ -696,6 +696,12 @@ const BITWARDEN_PROBE: BackendProbe = BackendProbe {
 /// Anything unparseable counts as **locked**: skipping a probe costs a line of
 /// output, while guessing "unlocked" costs an unattended run hanging on the
 /// master-password prompt.
+///
+/// The `status.success()` term is part of that fail-closed stance rather than a
+/// reading of the state. `bw status` normally exits 0 whatever the vault is
+/// doing, but it has been reported to exit non-zero while offline
+/// (bitwarden/clients#18373); treating that as locked costs one advisory line
+/// and a skipped probe, which is the cheap direction to be wrong in.
 fn bw_vault_unlocked(out: &Output) -> bool {
     out.status.success()
         && serde_json::from_slice::<serde_json::Value>(&out.stdout)
