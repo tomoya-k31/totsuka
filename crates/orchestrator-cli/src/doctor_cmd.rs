@@ -462,7 +462,7 @@ pub fn run(cx: &Cx, args: DoctorArgs) -> Result<(), CliError> {
         // `check_plugins` had already resolved the very references the `llm`
         // and `hook-token` checks claimed the probes would cover.
         let secrets = SecretReadiness {
-            onepassword: check_onepassword(cx, &env, &mut checks),
+            onepassword: check_onepassword(cx, cfg, &env, &mut checks),
         };
         check_worktree_location(cfg, &env, &mut checks);
         check_hooks(cx, cfg, config_ok, &env, secrets, args, &mut checks);
@@ -575,10 +575,11 @@ fn probe_cli(binary: &str, session_args: &[&str], env: &HashMap<String, String>)
 /// without prompting (#289).
 fn check_onepassword(
     cx: &Cx,
+    cfg: &RootConfig,
     env: &HashMap<String, String>,
     checks: &mut Vec<Check>,
 ) -> BackendReadiness {
-    if !config_mentions_scheme(cx, SecretScheme::OnePassword) {
+    if !scheme_in_use(cx, cfg, SecretScheme::OnePassword) {
         return BackendReadiness::NotUsed;
     }
     onepassword_checks(probe_cli("op", &["whoami"], env), checks)
@@ -860,6 +861,38 @@ fn plugin_secret_skip(
         .as_ref()
         .and_then(|llm| llm.api_key_ref.as_deref())
         .and_then(|reference| readiness.skip_for(reference))
+}
+
+/// Whether a reference of `scheme` reaches `doctor` at all.
+///
+/// Checked against **both** the file on disk and the effective config, because
+/// they are not the same document: `Cx::load_config` applies the `TOTSUKA_*`
+/// env overrides *after* parsing, and two of them
+/// (`TOTSUKA_HOOKS_AUTH_TOKEN_REF`, `TOTSUKA_LLM_API_KEY_REF`) carry secret
+/// references.
+///
+/// Scanning only the file reports `NotUsed` for an `op://` supplied that way,
+/// which opens the gate and lets `check_hook_socket` / `check_plugins` resolve
+/// it for real — exactly the unattended prompt this gate exists to prevent
+/// (Copilot review, #699).
+fn scheme_in_use(cx: &Cx, cfg: &RootConfig, scheme: SecretScheme) -> bool {
+    config_mentions_scheme(cx, scheme) || override_mentions_scheme(cfg, scheme)
+}
+
+/// The effective-config half of [`scheme_in_use`]: the two typed fields an env
+/// override can replace after the file has been parsed.
+///
+/// Deliberately not a walk of the whole `RootConfig`: the file scan already
+/// covers everything written in the document, and the override table is the
+/// only way a reference can reach `doctor` without appearing there.
+fn override_mentions_scheme(cfg: &RootConfig, scheme: SecretScheme) -> bool {
+    [
+        cfg.hooks.auth_token_ref.as_deref(),
+        cfg.llm.as_ref().and_then(|llm| llm.api_key_ref.as_deref()),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|reference| SecretScheme::of(reference) == scheme)
 }
 
 /// Whether `config.toml` holds a reference of `scheme` in an **actual string
@@ -1565,7 +1598,29 @@ fn check_hook_socket(
         ));
         return;
     }
-    let token = token_ref.and_then(|reference| secret_resolver(env).resolve(reference).ok());
+    // Resolution failures used to be swallowed by `.ok()`, which then probed
+    // with no token at all: the receiver answered 401 and the check reported a
+    // *token mismatch* that did not exist. A reference that cannot resolve is
+    // its own finding, and saying so is strictly more informative than a 401
+    // that says nothing about the receiver (Copilot review, #699).
+    let token = match token_ref {
+        None => None,
+        Some(reference) => match secret_resolver(env).resolve(reference) {
+            Ok(token) => Some(token),
+            Err(e) => {
+                checks.push(Check::fail(
+                    "hook-socket",
+                    format!(
+                        "a receiver is live at {} but [hooks].auth_token_ref does not resolve: {e}",
+                        socket_path.display()
+                    ),
+                    "fix the reference — probing without the token would report a 401 that \
+                     says nothing about the receiver",
+                ));
+                return;
+            }
+        },
+    };
     match self_post(&socket_path, token.as_ref().map(|t| t.expose())) {
         Ok(200) => checks.push(Check::ok(
             "hook-socket",
@@ -2348,10 +2403,26 @@ fn check_orphan_panes(
             .map(|(name, skip)| format!("`{name}` ({})", skip.summary))
             .collect::<Vec<_>>()
             .join(", ");
+        // Every distinct reason contributes its action. Taking only the first
+        // would tell the operator to run `op signin` (which does not unblock a
+        // `cmd:` agent) or to test it by hand (which omits the sign-in) — in a
+        // mixed config the detail names every agent, so the action has to
+        // cover them all (Copilot review, #699).
+        let mut distinct: Vec<SecretSkip> = Vec::new();
+        for (_, skip) in &skipped {
+            if !distinct.contains(skip) {
+                distinct.push(*skip);
+            }
+        }
+        let action = distinct
+            .iter()
+            .map(|skip| skip.action("those agents"))
+            .collect::<Vec<_>>()
+            .join("; ");
         checks.push(Check::skip(
             "panes",
             format!("did not list panes via {reasons}"),
-            skipped[0].1.action("those agents"),
+            action,
         ));
     }
 
@@ -3043,6 +3114,54 @@ location = "${MY_ROOT}/wt/{worktree_name}"
             .expect("a session check");
         assert!(session.warning, "{session:?}");
         assert!(session.ok, "a dead session must not turn doctor red");
+    }
+
+    /// A reference can reach doctor without ever appearing in `config.toml`:
+    /// `Cx::load_config` applies the `TOTSUKA_*` env overrides **after**
+    /// parsing, and two of them carry secret references.
+    ///
+    /// Measuring readiness from the file alone reported `NotUsed`, which opens
+    /// the gate — and `check_hook_socket` / `check_plugins` then resolve for
+    /// real, which is the unattended prompt the gate exists to prevent.
+    #[test]
+    fn an_override_supplied_reference_counts_as_in_use() {
+        let cfg = RootConfig::from_toml_str(
+            r#"
+[hooks]
+auth_token_ref = "op://Dev/totsuka/hook-token"
+"#,
+        )
+        .unwrap();
+        assert!(override_mentions_scheme(&cfg, SecretScheme::OnePassword));
+        assert!(!override_mentions_scheme(&cfg, SecretScheme::Command));
+
+        let cfg = RootConfig::from_toml_str(
+            r#"
+[llm]
+base_url = "https://openrouter.ai/api/v1"
+model = "anthropic/claude-haiku-4-5"
+api_key_ref = "cmd:gh auth token"
+"#,
+        )
+        .unwrap();
+        assert!(override_mentions_scheme(&cfg, SecretScheme::Command));
+        assert!(!override_mentions_scheme(&cfg, SecretScheme::OnePassword));
+
+        // A config with neither field set must not switch any probe on.
+        let cfg = RootConfig::from_toml_str("").unwrap();
+        assert!(!override_mentions_scheme(&cfg, SecretScheme::OnePassword));
+        assert!(!override_mentions_scheme(&cfg, SecretScheme::Command));
+
+        // Silent schemes never gate anything, wherever they came from.
+        let cfg = RootConfig::from_toml_str(
+            r#"
+[hooks]
+auth_token_ref = "keychain:totsuka/hook-token"
+"#,
+        )
+        .unwrap();
+        assert!(!override_mentions_scheme(&cfg, SecretScheme::OnePassword));
+        assert!(!override_mentions_scheme(&cfg, SecretScheme::Command));
     }
 
     /// A missing binary fails with the install next-action (§7).
