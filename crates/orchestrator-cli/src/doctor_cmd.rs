@@ -640,6 +640,30 @@ fn onepassword_checks(probe: CliProbe, checks: &mut Vec<Check>) -> BackendReadin
     }
 }
 
+/// The next action for a set of skips: one clause per **distinct** reason.
+///
+/// Taking only the first reason would tell the operator to run `op signin`
+/// (which does not unblock a `cmd:` agent) or to test by hand (which omits the
+/// sign-in), while the detail line names every agent (Copilot review, #699).
+///
+/// Pulled out as a pure function so the mixed case has a test. The branch
+/// exists *because* a review found the single-reason version wrong, and
+/// shipping that fix untested would repeat exactly what let the probes stay
+/// dead code in the first place (#289).
+fn combined_skip_action(skips: &[SecretSkip], target: &str) -> String {
+    let mut distinct: Vec<SecretSkip> = Vec::new();
+    for skip in skips {
+        if !distinct.contains(skip) {
+            distinct.push(*skip);
+        }
+    }
+    distinct
+        .iter()
+        .map(|skip| skip.action(target))
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
 /// The false-negative note appended to every `agent-tool:*` failure.
 ///
 /// A `const`, not a local, so `no_check_text_carries_collapsed_indentation` can
@@ -2403,26 +2427,11 @@ fn check_orphan_panes(
             .map(|(name, skip)| format!("`{name}` ({})", skip.summary))
             .collect::<Vec<_>>()
             .join(", ");
-        // Every distinct reason contributes its action. Taking only the first
-        // would tell the operator to run `op signin` (which does not unblock a
-        // `cmd:` agent) or to test it by hand (which omits the sign-in) — in a
-        // mixed config the detail names every agent, so the action has to
-        // cover them all (Copilot review, #699).
-        let mut distinct: Vec<SecretSkip> = Vec::new();
-        for (_, skip) in &skipped {
-            if !distinct.contains(skip) {
-                distinct.push(*skip);
-            }
-        }
-        let action = distinct
-            .iter()
-            .map(|skip| skip.action("those agents"))
-            .collect::<Vec<_>>()
-            .join("; ");
+        let reasons_only: Vec<SecretSkip> = skipped.iter().map(|(_, skip)| *skip).collect();
         checks.push(Check::skip(
             "panes",
             format!("did not list panes via {reasons}"),
-            action,
+            combined_skip_action(&reasons_only, "those agents"),
         ));
     }
 
@@ -3162,6 +3171,37 @@ auth_token_ref = "keychain:totsuka/hook-token"
         .unwrap();
         assert!(!override_mentions_scheme(&cfg, SecretScheme::OnePassword));
         assert!(!override_mentions_scheme(&cfg, SecretScheme::Command));
+    }
+
+    /// A config can mix an `op://` plugin with a `cmd:` one, and the two
+    /// recoveries do not substitute for each other: `op signin` does nothing
+    /// for a `cmd:` agent, and "test it by hand" omits the sign-in.
+    #[test]
+    fn a_mixed_skip_list_names_every_recovery() {
+        let action = combined_skip_action(
+            &[SecretSkip::ONEPASSWORD, SecretSkip::COMMAND],
+            "those agents",
+        );
+        assert!(action.contains("op signin"), "{action}");
+        assert!(
+            action.contains("`totsuka run` resolves the config"),
+            "{action}"
+        );
+        assert!(action.contains("those agents"), "{action}");
+    }
+
+    /// Repeats collapse, so five `op://` agents still read as one instruction.
+    #[test]
+    fn repeated_skip_reasons_are_stated_once() {
+        let action = combined_skip_action(
+            &[
+                SecretSkip::ONEPASSWORD,
+                SecretSkip::ONEPASSWORD,
+                SecretSkip::ONEPASSWORD,
+            ],
+            "those agents",
+        );
+        assert_eq!(action, SecretSkip::ONEPASSWORD.action("those agents"));
     }
 
     /// A missing binary fails with the install next-action (§7).
