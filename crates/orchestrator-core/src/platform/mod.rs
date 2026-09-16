@@ -7,8 +7,10 @@
 //! `#[cfg]` leaking into callers. The 1Password ([`onepassword`]) and
 //! Bitwarden ([`bitwarden`]) backends shell out to the cross-platform `op` /
 //! `bw` CLIs and therefore carry no `#[cfg]` gate at all — on non-macOS they
-//! are the only *working* secret backends. Process liveness is POSIX-generic
-//! and lives in [`unix`].
+//! are the working secret *stores* (the command-backed [`command`] resolver
+//! runs everywhere too, but it holds nothing itself: it re-fetches from
+//! whatever tool owns the credential). Process liveness is POSIX-generic and
+//! lives in [`unix`].
 
 use crate::ports::{SecretError, SecretRef, SecretStore, SecretString};
 

@@ -109,12 +109,25 @@ impl SecretStore for BitwardenCli {
             return Err(SecretError::InvalidReference(reference.to_string()));
         };
         if !(self.session)() {
-            // Deliberately before the spawn: with no session `bw` reads the
+            // A missing session and a missing *binary* both arrive here, and
+            // their recoveries differ — telling someone with no `bw`
+            // installed to run `bw unlock` sends them in a circle. Ask the
+            // binary itself, with `--version`: it cannot prompt, so this keeps
+            // the guarantee that nothing prompt-capable is spawned without a
+            // session.
+            if is_missing_binary(&(self.runner)(&self.binary, &["--version"])) {
+                return Err(SecretError::BackendUnavailable {
+                    backend: BACKEND_NAME.to_string(),
+                    install_hint: INSTALL_HINT.to_string(),
+                });
+            }
+            // Deliberately before any `bw get`: with no session `bw` reads the
             // master password from stdin, which hangs an unattended
             // `totsuka run` forever instead of failing.
             return Err(SecretError::Backend(format!(
-                "no Bitwarden session ({SESSION_ENV} is not set) → run `bw unlock`, \
-                 export the {SESSION_ENV} it prints, and start `totsuka run` from that shell"
+                "no Bitwarden session ({SESSION_ENV} is not set) → run `bw login` if you \
+                 have not, then `bw unlock`, export the {SESSION_ENV} it prints, and start \
+                 `totsuka run` from that shell"
             )));
         }
         // `--nointeraction` is not optional: it is what turns an expired
@@ -207,6 +220,11 @@ fn classify_bw_error(stderr: &[u8], reference: &SecretRef) -> SecretError {
     SecretError::Backend(format!("`{reference}` failed: {}", first_line(&text)))
 }
 
+/// Whether a spawn attempt failed because the binary is not on PATH.
+fn is_missing_binary(result: &io::Result<Output>) -> bool {
+    matches!(result, Err(e) if e.kind() == io::ErrorKind::NotFound)
+}
+
 /// The first non-empty stderr line, trimmed — enough diagnosis for one error
 /// message without pasting a whole CLI dump.
 fn first_line(text: &str) -> String {
@@ -277,23 +295,50 @@ mod tests {
         );
     }
 
-    /// Without a session `bw` reads the master password from stdin, which
-    /// hangs an unattended `totsuka run`. The check must happen *before* the
-    /// spawn, so no process is started at all.
+    /// Without a session `bw get` reads the master password from stdin, which
+    /// hangs an unattended `totsuka run`. The guard must fire before it —
+    /// `--version` is allowed through because it cannot prompt.
     #[test]
-    fn a_missing_session_fails_without_spawning() {
-        let spawned = Arc::new(Mutex::new(false));
-        let flag = spawned.clone();
-        let store = BitwardenCli::with_runner(move |_, _| {
-            *flag.lock().unwrap() = true;
-            Ok(output(0, b"never", b""))
+    fn a_missing_session_never_spawns_anything_prompt_capable() {
+        let calls: Arc<Mutex<Vec<Vec<String>>>> = Arc::default();
+        let record = calls.clone();
+        let store = BitwardenCli::with_runner(move |_, args| {
+            record
+                .lock()
+                .unwrap()
+                .push(args.iter().map(|a| a.to_string()).collect());
+            Ok(output(0, b"2024.1.0", b""))
         })
         .without_session();
         let err = store.get(&bw_ref("x", "password")).unwrap_err();
-        assert!(!*spawned.lock().unwrap(), "bw must not be spawned at all");
+
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.as_slice(), [vec!["--version".to_string()]]);
         let msg = err.to_string();
         assert!(msg.contains("BW_SESSION"), "{msg}");
         assert!(msg.contains("bw unlock"), "{msg}");
+        // `bw unlock` is not a recovery for someone who never logged in.
+        assert!(msg.contains("bw login"), "{msg}");
+    }
+
+    /// With neither a session nor the binary, "run `bw unlock`" sends the
+    /// operator in a circle — there is no `bw` to run. The install hint has to
+    /// win.
+    #[test]
+    fn a_missing_binary_beats_a_missing_session() {
+        let store = BitwardenCli::with_runner(|_, _| {
+            Err(io::Error::new(io::ErrorKind::NotFound, "no such file"))
+        })
+        .without_session();
+        let err = store.get(&bw_ref("x", "password")).unwrap_err();
+        assert!(
+            matches!(err, SecretError::BackendUnavailable { .. }),
+            "{err:?}"
+        );
+        assert!(
+            err.to_string().contains("brew install bitwarden-cli"),
+            "{err}"
+        );
     }
 
     #[test]

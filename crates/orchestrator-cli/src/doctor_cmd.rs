@@ -251,13 +251,19 @@ impl SecretSkip {
     };
 
     /// `bw:` — gated on the vault state `check_bitwarden` measured.
+    ///
+    /// The wording says the resolution would **fail**, not prompt. `bw get`
+    /// does read the master password from stdin, but the backend refuses
+    /// before spawning it and passes `--nointeraction` besides, so a locked
+    /// vault is an error rather than a hang. Saying "would prompt" would send
+    /// the operator hunting for a hang that cannot happen.
     const BITWARDEN: Self = Self {
         label: "a bw: reference",
-        detail: "resolving its bw: reference would prompt for the Bitwarden master \
-                 password on stdin (doctor stays non-interactive)",
-        summary: "its bw: reference would prompt",
-        action: "run `bw unlock` and export BW_SESSION, then re-run `totsuka doctor` \
-                 to probe {target}",
+        detail: "resolving its bw: reference needs an unlocked Bitwarden vault, and \
+                 there is none (doctor stays non-interactive)",
+        summary: "its bw: reference needs an unlocked vault",
+        action: "run `bw login` if you have not, then `bw unlock` and export BW_SESSION, \
+                 and re-run `totsuka doctor` from that shell to probe {target}",
         note: "doctor stays non-interactive; see the bitwarden checks above",
         note_ready: Some("the Bitwarden vault is unlocked, so `totsuka run` will resolve it"),
     };
@@ -591,22 +597,26 @@ enum CliProbe {
 /// `session_ok` reads the verdict out of the query's output, because the exit
 /// code is not always the answer: `bw status` succeeds in every state and
 /// reports the state in its JSON.
-fn probe_cli(
-    binary: &str,
-    session_args: &[&str],
-    session_ok: fn(&Output) -> bool,
-    env: &HashMap<String, String>,
-) -> CliProbe {
-    let Some(path) = which(binary, env) else {
+fn probe_cli(spec: &BackendProbe, env: &HashMap<String, String>) -> CliProbe {
+    let Some(path) = which(spec.binary, env) else {
         return CliProbe::Missing;
     };
-    match std::process::Command::new(&path).arg("--version").output() {
+    probe_located_cli(spec, &|args| {
+        std::process::Command::new(&path).args(args).output()
+    })
+}
+
+/// The half of [`probe_cli`] that builds the argv and reads the results.
+///
+/// Split out so the **command shape** is testable, not just the decision made
+/// from it: a wrong flag or a swapped argument would otherwise pass the whole
+/// suite while making `doctor` gate on nothing. The `CliProbe` seam covers the
+/// branching; this covers what is actually run.
+fn probe_located_cli(spec: &BackendProbe, run: &dyn Fn(&[&str]) -> io::Result<Output>) -> CliProbe {
+    match run(&["--version"]) {
         Ok(out) if out.status.success() => CliProbe::Probed {
             version: String::from_utf8_lossy(&out.stdout).trim().to_string(),
-            session: std::process::Command::new(&path)
-                .args(session_args)
-                .output()
-                .is_ok_and(|out| session_ok(&out)),
+            session: run(spec.session_args).is_ok_and(|out| (spec.session_ok)(&out)),
         },
         Ok(out) => CliProbe::VersionFailed {
             code: out.status.code().unwrap_or(-1),
@@ -685,10 +695,15 @@ const BITWARDEN_PROBE: BackendProbe = BackendProbe {
     session_args: &["status", "--nointeraction"],
     session_ok: bw_vault_unlocked,
     session_live: "bw vault is unlocked",
-    session_dead: "the Bitwarden vault is locked or BW_SESSION is not exported — probes \
-                   that need a bw: secret are skipped",
-    session_action: "run `bw unlock`, export the BW_SESSION it prints, then re-run \
-                     `totsuka doctor` from that shell for the full picture",
+    // `bw status` separates `unauthenticated` from `locked`, and
+    // `bw_vault_unlocked` collapses both into "not usable" — so the action has
+    // to cover both. `bw unlock` is not a recovery for someone who has never
+    // run `bw login`; it fails and leaves them no better off.
+    session_dead: "the Bitwarden vault is not unlocked (locked, not logged in, or \
+                   BW_SESSION is not exported) — probes that need a bw: secret are skipped",
+    session_action: "run `bw login` if you have not, then `bw unlock`, export the \
+                     BW_SESSION it prints, and re-run `totsuka doctor` from that shell \
+                     for the full picture",
 };
 
 /// Whether `bw status` reported an unlocked vault.
@@ -761,11 +776,7 @@ fn check_backend(
     if !scheme_in_use(cx, cfg, scheme) {
         return BackendReadiness::NotUsed;
     }
-    backend_checks(
-        spec,
-        probe_cli(spec.binary, spec.session_args, spec.session_ok, env),
-        checks,
-    )
+    backend_checks(spec, probe_cli(spec, env), checks)
 }
 
 /// Turn a [`CliProbe`] into checks and a [`BackendReadiness`].
@@ -3112,6 +3123,8 @@ location = "${MY_ROOT}/wt/{worktree_name}"
         );
     }
 
+    use std::sync::{Arc, Mutex};
+
     /// A fake process result, for the pure probe helpers.
     fn output(code: i32, stdout: &[u8], stderr: &[u8]) -> Output {
         use std::os::unix::process::ExitStatusExt;
@@ -3435,20 +3448,34 @@ auth_token_ref = "keychain:totsuka/hook-token"
         );
     }
 
-    /// The `bw:` skip has to name the stdin prompt: unlike 1Password's
-    /// biometric dialog, an unattended `totsuka run` that hits it just stops
-    /// with nothing on screen.
+    /// The `bw:` skip must **not** promise a prompt. `bw get` does read the
+    /// master password from stdin, but the backend refuses before spawning it
+    /// and passes `--nointeraction` besides — so a locked vault is an error,
+    /// and telling the operator to expect a hang sends them hunting for
+    /// something that cannot happen (Copilot review, #699).
     #[test]
-    fn the_bw_skip_names_the_stdin_prompt_and_the_recovery() {
-        assert!(
-            SecretSkip::BITWARDEN.detail.contains("stdin"),
-            "{}",
-            SecretSkip::BITWARDEN.detail
-        );
+    fn the_bw_skip_describes_a_failure_not_a_prompt() {
+        let detail = SecretSkip::BITWARDEN.detail;
+        assert!(detail.contains("unlocked Bitwarden vault"), "{detail}");
+        assert!(!detail.contains("prompt"), "{detail}");
+        assert!(!SecretSkip::BITWARDEN.summary.contains("prompt"));
+
+        // `bw unlock` alone is no recovery for someone who never logged in.
         let action = SecretSkip::BITWARDEN.action("this plugin");
+        assert!(action.contains("bw login"), "{action}");
         assert!(action.contains("bw unlock"), "{action}");
         assert!(action.contains("BW_SESSION"), "{action}");
         assert!(action.contains("this plugin"), "{action}");
+    }
+
+    /// Same for the probe's own dead-session line: `bw status` distinguishes
+    /// `unauthenticated` from `locked`, and the verdict collapses them, so the
+    /// action has to cover both.
+    #[test]
+    fn the_bitwarden_session_action_covers_login_as_well_as_unlock() {
+        assert!(BITWARDEN_PROBE.session_action.contains("bw login"));
+        assert!(BITWARDEN_PROBE.session_action.contains("bw unlock"));
+        assert!(BITWARDEN_PROBE.session_dead.contains("not logged in"));
     }
 
     #[test]
@@ -3548,6 +3575,63 @@ auth_token_ref = "keychain:totsuka/hook-token"
                 assert!(!checks.is_empty(), "{} {probe:?}", spec.name);
             }
         }
+    }
+
+    /// The **command shape** each backend probes with, not just the decision
+    /// made from it. A swapped argument or a dropped flag would otherwise pass
+    /// the whole suite while making `doctor` gate on nothing — and
+    /// `--nointeraction` in particular is what stops `bw status` becoming a
+    /// prompt.
+    #[test]
+    fn each_backend_probes_with_the_documented_argv() {
+        for (spec, expected) in [
+            (&ONEPASSWORD_PROBE, vec![vec!["--version"], vec!["whoami"]]),
+            (
+                &BITWARDEN_PROBE,
+                vec![vec!["--version"], vec!["status", "--nointeraction"]],
+            ),
+        ] {
+            let seen: Arc<Mutex<Vec<Vec<String>>>> = Arc::default();
+            let record = seen.clone();
+            let probe = probe_located_cli(spec, &move |args| {
+                record
+                    .lock()
+                    .unwrap()
+                    .push(args.iter().map(|a| a.to_string()).collect());
+                Ok(output(0, br#"{"status":"unlocked"}"#, b""))
+            });
+            assert!(
+                matches!(probe, CliProbe::Probed { .. }),
+                "{} {probe:?}",
+                spec.name
+            );
+            assert_eq!(
+                seen.lock().unwrap().as_slice(),
+                expected.as_slice(),
+                "{}",
+                spec.name
+            );
+        }
+    }
+
+    /// The session query only runs once presence is established — probing a
+    /// broken binary twice would just double the noise.
+    #[test]
+    fn a_failed_version_skips_the_session_query() {
+        let seen: Arc<Mutex<Vec<Vec<String>>>> = Arc::default();
+        let record = seen.clone();
+        let probe = probe_located_cli(&BITWARDEN_PROBE, &move |args| {
+            record
+                .lock()
+                .unwrap()
+                .push(args.iter().map(|a| a.to_string()).collect());
+            Ok(output(127, b"", b"broken"))
+        });
+        assert!(
+            matches!(probe, CliProbe::VersionFailed { code: 127 }),
+            "{probe:?}"
+        );
+        assert_eq!(seen.lock().unwrap().len(), 1, "only `--version` should run");
     }
 
     /// A missing binary fails with the install next-action (§7).

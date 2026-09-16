@@ -217,6 +217,16 @@ fn parse_scheme(s: &str) -> Option<Result<SecretRef, SecretError>> {
         return Some(Ok(SecretRef::command(rest)));
     }
     if let Some(rest) = s.strip_prefix(BITWARDEN_PREFIX) {
+        // Reject a `/`-leading body *before* splitting. `bw://item/password`
+        // otherwise parses happily as item `//item`, and the operator gets a
+        // "Not found" about an item they never named instead of being told
+        // the spelling is wrong. `bw://` is the one spelling a reader is most
+        // likely to try, by analogy with `op://` — accepting it silently is
+        // the worst possible answer for the scheme this ADR deliberately did
+        // *not* give a `//`.
+        if rest.starts_with('/') {
+            return Some(malformed());
+        }
         // Split at the **last** `/`: the item may contain one, the `bw get`
         // object name cannot. Splitting at the first `/` instead would make
         // `bw:github.com/myorg/password` unreachable forever.
@@ -366,6 +376,20 @@ mod tests {
         }
     }
 
+    /// `bw://` is the spelling a reader reaches for by analogy with `op://`,
+    /// and Bitwarden has no URI form to justify it. It has to be *rejected*,
+    /// not quietly reinterpreted: `rsplit_once` alone accepted it as the item
+    /// `//item`, which would have sent `bw get password //item` and reported a
+    /// missing item the operator never named.
+    #[test]
+    fn bitwarden_rejects_the_uri_spelling_it_does_not_have() {
+        let err = "bw://item/password".parse::<SecretRef>().unwrap_err();
+        assert!(matches!(err, SecretError::InvalidReference(_)), "{err:?}");
+        // Still a *reference*, so the resolver reports it instead of silently
+        // expanding the literal text.
+        assert!(is_secret_reference("bw://item/password"));
+    }
+
     /// `is_secret_reference` is derived from the parser, so the two cannot
     /// disagree about what carries a scheme — the resolver used to keep its
     /// own prefix list and would have missed `bw:` entirely (#699).
@@ -416,6 +440,12 @@ mod tests {
             "bw:no-field",
             "bw:/password",
             "bw:item/",
+            // `bw://` is not a spelling this scheme has — Bitwarden has no
+            // URI form, which is the whole reason the prefix carries no `//`.
+            // Without the guard this parsed as the item `//item`.
+            "bw://item/password",
+            "bw://Dev/item/password",
+            "bw://",
         ] {
             assert!(
                 bad.parse::<SecretRef>().is_err(),
