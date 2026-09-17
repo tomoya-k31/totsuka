@@ -4,8 +4,8 @@ title: ADR-0079 bot が投稿したメッセージへのリアクションでタ
 description: "Slack の全経路（Gateway の publish 判定・メンション判定表・チャンネル監視・リアクション）が bot 投稿を無条件に捨てているため、bot が流す PR 承認申請を起点にできなかった問題への決定。緩めるのは「リアクションを付けた人」ではなく「反応先の投稿者」だけであり、許可は workflow の trigger 単位の from_bot で宣言する。Gateway を変更せず schema も据え置ける理由、repo 解決を既存の LLM 分類のままにする理由、profile に implement を選ばざるを得ない理由（design は Bash(gh api *) を deny するため対象スキルが動かない）を記録する。"
 resource: https://github.com/tomoya-k31/totsuka/blob/main/plugins/task-source-slack/src/reaction.rs
 tags: [decision, adr, slack, reaction, trigger, bot, permissions]
-generated: { by: claude-code/opus-5, at: 2026-09-18T10:00:00+09:00 }
-status: draft
+generated: { by: claude-code/opus-5, at: 2026-09-18T12:00:00+09:00 }
+status: stable
 owner: tomoya-k31
 sources:
   - id: adr-0025
@@ -21,7 +21,7 @@ sources:
 
 # Status
 
-本 ADR は**提案（draft）であり、未実装**である。
+**採択（stable）。** 決定 1〜5 は実装済みで、決定 6・7 は設定と運用の取り決めである。
 
 [ADR-0025](/decisions/adr-0025-reaction-task-trigger.md) 決定 1（「本人が付けたときだけ受理する。緩和口は作らない」）は**変えない**。本 ADR が緩めるのは別の軸 —— **反応先メッセージの投稿者**である。
 
@@ -172,4 +172,18 @@ totsuka が用意する worktree は `origin/{default}` の detached HEAD であ
 
 # 実装
 
-未着手。
+`trigger.from_bot` として実装した。Gateway・orchestrator-core・wire schema はいずれも無変更である。
+
+| 対象 | 何をしたか |
+|---|---|
+| `reaction.rs` | `WorkflowTrigger` / `TriggerEmoji` / `ReactionTarget` に `from_bot` を通し、`to_mention` の bot フィルタを許可リスト参照に変更。`user` が無ければ `bot_id` を入れる |
+| `server.rs` | `TRIGGER_KEYS` に `from_bot` を追加。`parse_from_bot` が値の形を検証し、`reaction` 無し・`channel` 併記の 2 つの誤用を `initialize` で弾く |
+| `approval.rs` | 返信の先頭に付く `<@sender_id>` を `asker_prefix` に切り出し、**人間の id（`U…` / `W…`）のときだけ**付けるようにした |
+| `templates/config.toml` | トリガ形状の例に 1 行追加 |
+| `scripts/config-template-lint.sh` | `OPAQUE_ALLOWED` に登録（プラグインが解釈する無解釈キーなので config struct には現れない） |
+
+`approval.rs` の変更は決定 4 の副作用を塞ぐものである。返信は「訊いた人」への `<@…>` メンションで始まるが、bot 由来のタスクではその id が `B…` になる。**Slack の id は接頭辞で型が決まり、`U…` / `W…` だけが人間を指す**ので、`<@B0123ABC>` は黙って落ちるのではなく**その文字列のまま**返信の先頭に描画される。しかも通知すべき相手が居ないので、そもそもこの接頭辞が存在する理由が無い。`output = "source"` と `from_bot` を併用した構成でのみ踏むが、踏むと投稿済みのメッセージに残る。
+
+回帰ガードは 8 本。うち 2 本が不変条件そのものを固定している —— **空の `from_bot` はどの bot も通さない**（このキーができる前の挙動）と、**許可した bot の編集は依然として落ちる**（広がるのは投稿者であってイベント種別ではない）。
+
+**まだ実機で確かめていない。** 対象スキルが前提条件チェックで Notion MCP を要求し、無ければレビューせず中断するため、無人 pane での故障モードは「何も出力せず終了」になる。`verified` はそれを確認してから書く。

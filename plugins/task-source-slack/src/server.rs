@@ -55,7 +55,14 @@ pub trait TransportFactory {
 /// `initialize` rejects every other key, so a typo cannot silently turn a
 /// reaction workflow into the plain-mention catch-all — add a key here in the
 /// same edit that teaches the reader to read it.
-const TRIGGER_KEYS: &[&str] = &["reaction", "channel", "channel_name", "repo", "from"];
+const TRIGGER_KEYS: &[&str] = &[
+    "reaction",
+    "from_bot",
+    "channel",
+    "channel_name",
+    "repo",
+    "from",
+];
 
 /// `(workflow name, its `trigger.reaction`)` for every workflow the
 /// Orchestrator sent, in definition order (#396).
@@ -73,6 +80,32 @@ fn workflow_reactions(
     workflows: &[plugin_protocol::methods::WorkflowInfo],
 ) -> Result<Vec<WorkflowTrigger>, Vec<String>> {
     let mut errors = Vec::new();
+    // `from_bot` is a reaction trigger's key and nothing else's. Both misuses
+    // below are written with **valid** keys, so `unknown_trigger_keys` cannot
+    // catch either, and both fail silently without this check: a channel watch
+    // drops out of this function one line below (before `parse_from_bot` ever
+    // runs), and a catch-all has no reader for the key at all. The symptom in
+    // both cases is "I allowed a bot and nothing happens".
+    for t in workflows {
+        if t.trigger.get("from_bot").is_none() {
+            continue;
+        }
+        if t.trigger.get("channel").is_some() {
+            errors.push(format!(
+                "workflow `{}` has both `channel` and `from_bot` in its trigger → `from_bot` \
+                 admits bot posts for a **reaction** trigger; a channel watch names who may \
+                 trigger with `from`, and admits no bot at all",
+                t.workflow
+            ));
+        } else if t.trigger.get("reaction").is_none() {
+            errors.push(format!(
+                "workflow `{}` has `from_bot` but no `reaction` in its trigger → `from_bot` \
+                 widens what a reaction may be put on, so without an emoji nothing reads it; \
+                 add `reaction = \"<emoji>\"`, or drop `from_bot`",
+                t.workflow
+            ));
+        }
+    }
     let triggers = workflows
         .iter()
         // A channel watch is its own trigger kind (#617), so it is neither a
@@ -82,6 +115,10 @@ fn workflow_reactions(
         // it has no `reaction` key, so it otherwise reads as one.
         .filter(|t| t.trigger.get("channel").is_none())
         .filter_map(|t| {
+            let from_bot = match parse_from_bot(t, &mut errors) {
+                Ok(ids) => ids,
+                Err(()) => return None,
+            };
             let reaction = match t.trigger.get("reaction") {
                 Some(value) => match value.as_str() {
                     Some(s) => Some(s.to_string()),
@@ -105,6 +142,7 @@ fn workflow_reactions(
                 // profile-derived keys no longer ride inside the trigger.
                 task_id_prefix: t.task_id_prefix.clone(),
                 instructions_kind: t.instructions_kind.clone(),
+                from_bot,
             })
         })
         .collect();
@@ -113,6 +151,61 @@ fn workflow_reactions(
     } else {
         Err(errors)
     }
+}
+
+/// Parse one workflow's `trigger.from_bot` — the bot ids whose posts this
+/// emoji may be used on (ADR-0079).
+///
+/// Absent is `Ok(vec![])`, which is "human posts only" — what every reaction
+/// trigger did before the key existed. `Err(())` means the value was written
+/// wrong and an error has been recorded; the caller drops the workflow, which
+/// is harmless because a non-empty `errors` already fails `initialize`.
+///
+/// An empty array is refused rather than read as the default. Writing
+/// `from_bot = []` says "admit these bots" and names none, so it is either a
+/// leftover or a half-finished edit — and read as the default it would mean
+/// the reaction silently stops working on the very posts it was added for.
+fn parse_from_bot(
+    workflow: &plugin_protocol::methods::WorkflowInfo,
+    errors: &mut Vec<String>,
+) -> Result<Vec<String>, ()> {
+    let Some(value) = workflow.trigger.get("from_bot") else {
+        return Ok(Vec::new());
+    };
+    let Some(items) = value.as_array() else {
+        errors.push(format!(
+            "workflow `{}` has a `trigger.from_bot` of {value}, which is not an array → write \
+             the bot ids as a list of strings, e.g. `from_bot = [\"B0123ABC\"]`",
+            workflow.workflow
+        ));
+        return Err(());
+    };
+    if items.is_empty() {
+        errors.push(format!(
+            "workflow `{}` has `trigger.from_bot = []` → an empty list admits no bot, so the \
+             reaction would keep working on human posts only; drop the key, or name the bot \
+             ids whose posts this emoji may be used on",
+            workflow.workflow
+        ));
+        return Err(());
+    }
+    let mut ids = Vec::with_capacity(items.len());
+    let mut ok = true;
+    for item in items {
+        match item.as_str() {
+            Some(s) if !s.trim().is_empty() => ids.push(s.trim().to_string()),
+            _ => {
+                errors.push(format!(
+                    "workflow `{}` has {item} inside `trigger.from_bot`, which is not a bot id \
+                     → write Slack's bot ids as strings, e.g. `from_bot = [\"B0123ABC\"]` (the \
+                     `bot_id` on the post, not the app name and not a `U…` user id)",
+                    workflow.workflow
+                ));
+                ok = false;
+            }
+        }
+    }
+    if ok { Ok(ids) } else { Err(()) }
 }
 
 /// Connection settings derived from a [`SlackConfig`].
@@ -975,6 +1068,7 @@ mod tests {
                 reaction: Some((*n).to_string()),
                 task_id_prefix: None,
                 instructions_kind: None,
+                from_bot: Vec::new(),
             })
             .collect();
         ReactionTriggers::resolve(&workflows).expect("valid")
@@ -1001,6 +1095,97 @@ mod tests {
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert!(errors[0].contains("not a string"), "{}", errors[0]);
         assert!(errors[0].contains("books"), "{}", errors[0]);
+    }
+
+    /// One workflow with the given trigger table, for the `from_bot` cases.
+    fn wf_with(trigger: serde_json::Value) -> plugin_protocol::methods::WorkflowInfo {
+        plugin_protocol::methods::WorkflowInfo {
+            workflow: "approvals".into(),
+            projects: vec![],
+            status_writebacks: vec![],
+            trigger,
+            instructions_kind: None,
+            task_id_prefix: None,
+            options: serde_json::Map::new(),
+        }
+    }
+
+    /// The shape ADR-0079 adds: an emoji that may also be used on one bot's
+    /// posts. It reaches the resolved trigger verbatim.
+    #[test]
+    fn from_bot_rides_the_trigger_into_the_resolved_workflow() {
+        let wf = wf_with(serde_json::json!({
+            "reaction": "mag", "from_bot": ["B0123ABC"]
+        }));
+        let triggers = workflow_reactions(std::slice::from_ref(&wf)).expect("valid");
+        assert_eq!(triggers.len(), 1);
+        assert_eq!(triggers[0].from_bot, vec!["B0123ABC".to_string()]);
+    }
+
+    /// Every way of writing `from_bot` wrong is refused at `initialize`
+    /// rather than read as "no bots". Read as the default, each of these
+    /// would present as "I allowed a bot and the reaction does nothing".
+    #[test]
+    fn each_malformed_from_bot_is_refused_with_its_own_cause() {
+        for (trigger, needle) in [
+            (
+                serde_json::json!({ "reaction": "mag", "from_bot": "B0123ABC" }),
+                "not an array",
+            ),
+            (
+                serde_json::json!({ "reaction": "mag", "from_bot": [] }),
+                "admits no bot",
+            ),
+            (
+                serde_json::json!({ "reaction": "mag", "from_bot": [42] }),
+                "not a bot id",
+            ),
+            (
+                serde_json::json!({ "reaction": "mag", "from_bot": ["  "] }),
+                "not a bot id",
+            ),
+        ] {
+            let wf = wf_with(trigger.clone());
+            let errors = workflow_reactions(std::slice::from_ref(&wf))
+                .expect_err("a malformed `from_bot` must be refused");
+            assert!(
+                errors.iter().any(|e| e.contains(needle)),
+                "{trigger} → {errors:?}"
+            );
+            assert!(errors.iter().all(|e| e.contains("approvals")), "{errors:?}");
+        }
+    }
+
+    /// `from_bot` on a trigger that reads it nowhere. Both shapes use only
+    /// **valid** keys, so `unknown_trigger_keys` cannot catch either — and
+    /// both would otherwise be dropped in silence.
+    #[test]
+    fn from_bot_outside_a_reaction_trigger_is_refused() {
+        let watch = wf_with(serde_json::json!({
+            "channel": "C1", "channel_name": "approvals", "repo": "r",
+            "from_bot": ["B0123ABC"]
+        }));
+        let errors = workflow_reactions(std::slice::from_ref(&watch)).unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("channel") && e.contains("from_bot")),
+            "{errors:?}"
+        );
+
+        let catch_all = wf_with(serde_json::json!({ "from_bot": ["B0123ABC"] }));
+        let errors = workflow_reactions(std::slice::from_ref(&catch_all)).unwrap_err();
+        assert!(
+            errors.iter().any(|e| e.contains("no `reaction`")),
+            "{errors:?}"
+        );
+    }
+
+    /// The key has to be in the source's vocabulary, or `initialize` rejects
+    /// every config that uses it before any of the above runs (#574).
+    #[test]
+    fn from_bot_is_a_known_trigger_key() {
+        assert!(TRIGGER_KEYS.contains(&"from_bot"));
     }
 
     /// The case that cost hours live (#379): the feature is configured, the

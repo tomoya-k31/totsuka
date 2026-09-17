@@ -104,7 +104,7 @@ pub async fn publish_direct<T: SlackTransport>(
             "task {task_id} published an empty result → nothing to post as a reply"
         ));
     }
-    let text = format!("<@{}> {text}", pending.sender_id);
+    let text = format!("{}{text}", asker_prefix(&pending.sender_id));
     let message = PostMessage {
         channel: &pending.channel,
         text: &text,
@@ -170,7 +170,7 @@ pub async fn publish_draft<T: SlackTransport>(
     }
     // Mechanically (not LLM-authored) prefix a mention of the asker, so the
     // reply notifies them like a normal Slack reply would.
-    let text = format!("<@{}> {text}", pending.sender_id);
+    let text = format!("{}{text}", asker_prefix(&pending.sender_id));
 
     let draft = Draft {
         task_id: task_id.to_string(),
@@ -728,6 +728,23 @@ fn clipped(text: &str, status: DraftStatus) -> String {
 /// asker (or, as the operator, a self) tag in front of the text is an echo —
 /// a third party addressed at the head ("<@X> さんに聞いてください") is not,
 /// and stays.
+/// The `<@…>` prefix that addresses whoever raised the task, or an empty
+/// string when addressing them is not a thing that can be done.
+///
+/// **Slack ids are prefix-typed**, and only `U…` / `W…` name a human. A task
+/// raised by reacting to a bot's post (ADR-0079) carries that bot's `B…` id
+/// as its sender, and `<@B0123ABC>` is not an unresolved mention that Slack
+/// quietly drops — it renders as those literal characters at the head of the
+/// reply. There is also nobody there to notify, which is the only reason the
+/// prefix exists.
+fn asker_prefix(sender_id: &str) -> String {
+    if sender_id.starts_with('U') || sender_id.starts_with('W') {
+        format!("<@{sender_id}> ")
+    } else {
+        String::new()
+    }
+}
+
 fn sanitize_reply(
     content: &str,
     post_as: PostAs,
@@ -892,6 +909,18 @@ fn starts_with_iso_date(text: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::asker_prefix;
+
+    /// The prefix addresses a human and nobody else. A bot-raised task
+    /// (ADR-0079) carries a `B…` sender, and `<@B…>` is not a mention Slack
+    /// resolves — it renders as literal characters at the head of the reply.
+    #[test]
+    fn only_a_human_sender_is_addressed() {
+        assert_eq!(asker_prefix("U0ABC"), "<@U0ABC> ");
+        assert_eq!(asker_prefix("W0ABC"), "<@W0ABC> ", "Enterprise Grid ids");
+        assert_eq!(asker_prefix("B0ABC"), "");
+    }
+
     use super::*;
 
     fn draft_of(text: &str, status: DraftStatus) -> Draft {
