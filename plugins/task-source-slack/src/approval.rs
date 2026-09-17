@@ -310,9 +310,11 @@ pub async fn handle_approval_action<T: SlackTransport>(
         return;
     };
     if draft.status != DraftStatus::Pending {
-        // The double-send guard. **It repaints the surface rather than just
-        // answering**, because a second press is evidence the buttons are
-        // still there — and buttons that survive a decision keep inviting the
+        // The double-send guard. **It runs the same finalize as a deciding
+        // press rather than just answering** — record the outcome, then clear
+        // the surface (delete it, or repaint it when there was nowhere to
+        // record) — because a second press is evidence the surface is still
+        // there, and a surface that survives a decision keeps inviting the
         // press that produced this branch. Reaching it twice is normal, not
         // exceptional: `block_actions` arrive at-least-once through the Event
         // Gateway, so a redelivery lands here with nobody having pressed
