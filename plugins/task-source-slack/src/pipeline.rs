@@ -231,6 +231,12 @@ impl SharedState {
         self.drafts.lock().unwrap().set_status(draft_id, status);
     }
 
+    /// Remember which bot-DM nudge announced `draft_id`, so a decision can be
+    /// recorded there before the ephemeral is deleted (ADR-0074 amendment 7).
+    pub fn set_draft_nudge_ts(&self, draft_id: &str, nudge_ts: String) {
+        self.drafts.lock().unwrap().set_nudge_ts(draft_id, nudge_ts);
+    }
+
     /// Drop drafts past [`DRAFT_TTL`], returning the dropped ids. Wall-clock
     /// (`SystemTime`): draft ages span restarts (#122).
     pub fn sweep_drafts(&self, now: SystemTime) -> Vec<String> {
@@ -819,7 +825,9 @@ async fn handle_mention<T: SlackTransport, C: ChatTransport, S: Submitter>(
                     tracing::info!(message_key, "asked the operator to pick a repository");
                     // The picker is an ephemeral, which generates no Slack
                     // notification of its own — nudge via the bot DM (#305).
-                    crate::notify::send_nudge(
+                    // Its `ts` is dropped: only a draft writes a decision back
+                    // onto its nudge, and a picker has no decision to write.
+                    let _ = crate::notify::send_nudge(
                         api.as_ref(),
                         &state,
                         "リポジトリ選択の確認が届きました",
