@@ -184,6 +184,7 @@
 #
 # trigger = {}                                     # catch-all (slack: the mention workflow)
 # trigger = { reaction = "hammer" }                # slack: you react with :hammer:
+# trigger = { reaction = "mag", from_bot = ["B0000000000"] }   # slack: that emoji also works on posts by those bots
 # trigger = { assignee = ["@me", "@none"] }        # the ingest assignee gate; this is the default
 # trigger = { filter = { property = "Sprint", status = { equals = "Active" } } }   # notion: a raw Notion filter, passed through untouched   lint:raw
 # trigger = { channel = true, channel_name = "team-support", repo = "my-repo", from = ["U0000000000"] }

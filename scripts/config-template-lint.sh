@@ -57,6 +57,7 @@ TEMPLATE_EXEMPT=""
 # ---------------------------------------------------------------------------
 OPAQUE_ALLOWED="
 reaction=[[workflows]].trigger。slack が絵文字でワークフローを選ぶ（ADR-0025）
+from_bot=[[workflows]].trigger。その絵文字を使ってよい bot 投稿の許可リスト（ADR-0079）
 channel=[[workflows]].trigger。チャンネル監視トリガの宣言そのもの（ADR-0068）
 channel_name=[[workflows]].trigger。監視対象チャンネルの照合名（ADR-0068）
 repo=[[workflows]].trigger。監視トリガが固定するリポジトリ（ADR-0068）

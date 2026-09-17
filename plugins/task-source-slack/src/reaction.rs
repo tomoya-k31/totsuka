@@ -74,6 +74,10 @@ struct TriggerEmoji {
     /// `instructions_kind` from the trigger (#398) — which instruction set
     /// the matched workflow's profile wants (#450).
     instructions_kind: Option<String>,
+    /// Bot ids whose posts this emoji may be used on (ADR-0079). Empty —
+    /// the default — means human posts only, which is what every trigger did
+    /// before the key existed.
+    from_bot: Vec<String>,
 }
 
 impl ReactionTriggers {
@@ -94,6 +98,7 @@ impl ReactionTriggers {
             reaction,
             task_id_prefix,
             instructions_kind,
+            from_bot,
         } in triggers
         {
             let Some(raw) = reaction else { continue };
@@ -122,6 +127,7 @@ impl ReactionTriggers {
                 workflow: workflow.clone(),
                 task_id_prefix: task_id_prefix.clone(),
                 instructions_kind: instructions_kind.clone(),
+                from_bot: from_bot.clone(),
             });
         }
 
@@ -189,6 +195,14 @@ pub struct WorkflowTrigger {
     /// `implement` both carry a prefix, so branching on the prefix told a
     /// triage agent to implement and open a PR.
     pub instructions_kind: Option<String>,
+    /// `trigger.from_bot`: the bot ids whose posts this emoji may be used on.
+    ///
+    /// Empty is the default and means **human posts only** — the behaviour
+    /// every reaction trigger had before this key existed. Declaring it per
+    /// trigger rather than once per `[slack]` is deliberate: a global list
+    /// would open *every* emoji to that bot at once, so adding one automated
+    /// entry point would quietly change what the operator's existing emoji do.
+    pub from_bot: Vec<String>,
 }
 
 /// Where a reaction points: the coordinates needed to re-fetch the message.
@@ -213,6 +227,13 @@ pub struct ReactionTarget {
     /// The instruction set the matched workflow's profile asks for (#398),
     /// carried to the [`Mention`] so the pipeline can pick by kind (#450).
     pub instructions_kind: Option<String>,
+    /// The bot ids this emoji's workflow admits, copied from its trigger.
+    ///
+    /// It has to travel here rather than being consulted at the event half:
+    /// `reaction_added` does not say who wrote the message, so whether the
+    /// author is an admitted bot is only answerable once the body has been
+    /// re-fetched — which is [`to_mention`]'s half.
+    pub from_bot: Vec<String>,
 }
 
 impl ReactionTarget {
@@ -240,6 +261,13 @@ impl ReactionTarget {
             Some(prefix) => format!("{prefix}:{}:{}", self.channel, self.ts),
             None => format!("{}:{}", self.channel, self.ts),
         }
+    }
+
+    /// Whether a post by `bot_id` may be reacted into a task under this
+    /// trigger. Ids are compared exactly: they are Slack-issued, not typed by
+    /// a human, so case-folding would only widen the set.
+    fn admits_bot(&self, bot_id: &str) -> bool {
+        self.from_bot.iter().any(|id| id == bot_id)
     }
 }
 
@@ -273,29 +301,68 @@ pub fn reaction_target(
         workflow: entry.workflow.clone(),
         task_id_prefix: entry.task_id_prefix.clone(),
         instructions_kind: entry.instructions_kind.clone(),
+        from_bot: entry.from_bot.clone(),
     })
 }
 
 /// The message half of the filter, plus the conversion into the shape the
 /// mention pipeline consumes.
 ///
-/// `None` when the reacted-to message is an edit, a deletion, a system
-/// message or a bot post — the same exclusion mention detection applies, for
-/// the same reason: there is no human-authored request in them.
+/// `None` when the reacted-to message is an edit, a deletion or a system
+/// message — the same exclusion mention detection applies, for the same
+/// reason: there is no request in them, only a record that something changed.
 ///
-/// Note what is **not** excluded: the message's own author. Reacting to your
-/// own note to turn it into a task is a first-class use, so unlike mention
-/// detection (which ignores the operator's own posts to avoid looping on an
-/// approved auto-reply) this path does not look at `message.user` at all.
+/// # Bot posts (ADR-0079)
+///
+/// A bot post is excluded **unless the trigger named its `bot_id` in
+/// `from_bot`**. The relaxation is deliberately on this axis and no other:
+/// the gesture that starts the task is still a reaction the operator put
+/// there themselves ([ADR-0025] decision 1 is untouched), so an admitted bot
+/// cannot start anything by posting. What it can do is be *pointed at*.
+///
+/// The check is a `bot_id` match rather than a channel or a text pattern
+/// because `bot_id` is Slack-issued and appears on the message itself — a
+/// channel allowlist would admit every bot in that channel, and a text
+/// pattern is written by whoever posts.
+///
+/// An admitted bot's own post carries `subtype: "bot_message"` (or no
+/// subtype). Every **other** subtype stays excluded even for an admitted bot:
+/// `message_changed` on a bot post is still an edit.
+///
+/// # What is **not** excluded
+///
+/// The message's own author. Reacting to your own note to turn it into a task
+/// is a first-class use, so unlike mention detection (which ignores the
+/// operator's own posts to avoid looping on an approved auto-reply) this path
+/// does not compare `message.user` against the operator.
+///
+/// [ADR-0025]: https://github.com/tomoya-k31/totsuka/blob/main/ai-docs/decisions/adr-0025-reaction-task-trigger.md
 pub fn to_mention(target: &ReactionTarget, message: SlackMessage) -> Option<Mention> {
-    if message.subtype.is_some() || message.bot_id.is_some() {
+    let admitted_bot = message
+        .bot_id
+        .as_deref()
+        .is_some_and(|id| target.admits_bot(id));
+    if admitted_bot {
+        if message
+            .subtype
+            .as_deref()
+            .is_some_and(|s| s != "bot_message")
+        {
+            return None;
+        }
+    } else if message.subtype.is_some() || message.bot_id.is_some() {
         return None;
     }
     Some(Mention {
         channel: target.channel.clone(),
         // The task's "sender" is whoever wrote the message, not whoever
         // reacted — that is the name the downstream context should show.
-        user: message.user?,
+        //
+        // A bot post has no `user`, so its `bot_id` stands in. Downstream
+        // only reads this to resolve a display name, and that lookup already
+        // falls back to printing the id when it fails, so a `B…` here degrades
+        // to a `B…` in the pane rather than to a broken task.
+        user: message.user.or(message.bot_id)?,
         text: message.text,
         ts: message.ts,
         thread_ts: message.thread_ts,
@@ -327,12 +394,14 @@ mod tests {
                 reaction: None,
                 task_id_prefix: None,
                 instructions_kind: None,
+                from_bot: Vec::new(),
             },
             WorkflowTrigger {
                 workflow: "slack-other".into(),
                 reaction: None,
                 task_id_prefix: None,
                 instructions_kind: None,
+                from_bot: Vec::new(),
             },
         ])
         .expect_err("two mention workflows must be refused");
@@ -352,12 +421,14 @@ mod tests {
                 reaction: Some("hammer".into()),
                 task_id_prefix: Some("impl".into()),
                 instructions_kind: Some("implement".into()),
+                from_bot: Vec::new(),
             },
             WorkflowTrigger {
                 workflow: "slack-reply".into(),
                 reaction: None,
                 task_id_prefix: None,
                 instructions_kind: None,
+                from_bot: Vec::new(),
             },
         ])
         .expect("one of each is the intended shape");
@@ -375,6 +446,7 @@ mod tests {
             reaction: Some("eyes".into()),
             task_id_prefix: None,
             instructions_kind: None,
+            from_bot: Vec::new(),
         }])
         .expect("valid")
     }
@@ -388,6 +460,19 @@ mod tests {
             "item_user": "U_OTHER",
             "event_ts": "2.0"
         })
+    }
+
+    /// A target whose workflow admits `bots`.
+    fn bot_target(bots: &[&str]) -> ReactionTarget {
+        ReactionTarget {
+            workflow: "slack-implement".into(),
+            channel: "C1".to_string(),
+            ts: "1.0".to_string(),
+            reaction: "eyes".into(),
+            task_id_prefix: None,
+            instructions_kind: None,
+            from_bot: bots.iter().map(|b| (*b).to_string()).collect(),
+        }
     }
 
     fn message() -> SlackMessage {
@@ -410,6 +495,7 @@ mod tests {
             reaction: Some("hammer".into()),
             task_id_prefix: Some("impl".into()),
             instructions_kind: None,
+            from_bot: Vec::new(),
         }])
         .expect("valid");
         let target = reaction_target(&event("U_ME", "hammer", "message"), "U_ME", &triggers)
@@ -437,12 +523,14 @@ mod tests {
                 reaction: Some("eyes".into()),
                 task_id_prefix: None,
                 instructions_kind: None,
+                from_bot: Vec::new(),
             },
             WorkflowTrigger {
                 workflow: "slack-implement".into(),
                 reaction: Some("hammer".into()),
                 task_id_prefix: Some("impl".into()),
                 instructions_kind: None,
+                from_bot: Vec::new(),
             },
         ])
         .expect("valid");
@@ -497,6 +585,7 @@ mod tests {
             reaction: Some(":eyes:".into()),
             task_id_prefix: None,
             instructions_kind: None,
+            from_bot: Vec::new(),
         }])
         .expect("valid");
         assert!(reaction_target(&event("U_ME", "eyes", "message"), "U_ME", &triggers).is_some());
@@ -512,12 +601,14 @@ mod tests {
                 reaction: Some("eyes".into()),
                 task_id_prefix: None,
                 instructions_kind: None,
+                from_bot: Vec::new(),
             },
             WorkflowTrigger {
                 workflow: "b".into(),
                 reaction: Some(":eyes:".into()),
                 task_id_prefix: None,
                 instructions_kind: None,
+                from_bot: Vec::new(),
             },
         ])
         .expect_err("duplicate emoji must be rejected");
@@ -535,6 +626,7 @@ mod tests {
             reaction: Some("::".into()),
             task_id_prefix: None,
             instructions_kind: None,
+            from_bot: Vec::new(),
         }])
         .expect_err("a non-name must be rejected");
         assert!(errors[0].contains("wf"), "{errors:?}");
@@ -549,6 +641,7 @@ mod tests {
             reaction: None,
             task_id_prefix: None,
             instructions_kind: None,
+            from_bot: Vec::new(),
         }])
         .unwrap();
         assert!(triggers.is_empty());
@@ -634,6 +727,7 @@ mod tests {
             reaction: "eyes".into(),
             task_id_prefix: None,
             instructions_kind: None,
+            from_bot: Vec::new(),
         };
         let mention = to_mention(&target, message()).expect("converted");
         // The reacting user is the operator; the mention's `user` is the
@@ -657,6 +751,7 @@ mod tests {
             reaction: "eyes".into(),
             task_id_prefix: None,
             instructions_kind: None,
+            from_bot: Vec::new(),
         };
         let own = SlackMessage {
             user: Some("U_ME".to_string()),
@@ -675,6 +770,7 @@ mod tests {
             reaction: "eyes".into(),
             task_id_prefix: None,
             instructions_kind: None,
+            from_bot: Vec::new(),
         };
         let reply = SlackMessage {
             ts: "2.0".to_string(),
@@ -698,6 +794,7 @@ mod tests {
             reaction: "eyes".into(),
             task_id_prefix: None,
             instructions_kind: None,
+            from_bot: Vec::new(),
         };
         let edited = SlackMessage {
             subtype: Some("message_changed".to_string()),
@@ -708,7 +805,84 @@ mod tests {
             bot_id: Some("B1".to_string()),
             ..message()
         };
-        assert!(to_mention(&target, bot).is_none());
+        assert!(
+            to_mention(&target, bot).is_none(),
+            "a trigger with an empty `from_bot` admits no bot — the default, and the \
+             behaviour every reaction trigger had before the key existed"
+        );
+    }
+
+    /// A trigger that names the bot admits its post (ADR-0079). The post has
+    /// no `user`, which is what a real bot post looks like, so this also
+    /// covers the `bot_id` standing in as the sender.
+    #[test]
+    fn a_named_bots_post_converts_with_the_bot_id_as_the_sender() {
+        let target = bot_target(&["B_APPROVALS"]);
+        let post = SlackMessage {
+            user: None,
+            bot_id: Some("B_APPROVALS".to_string()),
+            subtype: Some("bot_message".to_string()),
+            ..message()
+        };
+        let mention = to_mention(&target, post).expect("a named bot's post converts");
+        assert_eq!(mention.user, "B_APPROVALS");
+        assert_eq!(mention.text, "please look at this");
+        assert_eq!(mention.task_id(), "C1:1.0");
+    }
+
+    /// The allowlist is exact. A second bot in the same channel is refused by
+    /// the same trigger — which is the whole point of keying on `bot_id`
+    /// rather than on the channel.
+    #[test]
+    fn a_bot_the_trigger_does_not_name_is_still_refused() {
+        let target = bot_target(&["B_APPROVALS"]);
+        let other = SlackMessage {
+            user: None,
+            bot_id: Some("B_SOMETHING_ELSE".to_string()),
+            subtype: Some("bot_message".to_string()),
+            ..message()
+        };
+        assert!(to_mention(&target, other).is_none());
+    }
+
+    /// Admitting a bot widens *which authors* count, not *which events* do.
+    /// An edit is still an edit.
+    #[test]
+    fn an_admitted_bots_edit_is_still_refused() {
+        let target = bot_target(&["B_APPROVALS"]);
+        let edited = SlackMessage {
+            user: None,
+            bot_id: Some("B_APPROVALS".to_string()),
+            subtype: Some("message_changed".to_string()),
+            ..message()
+        };
+        assert!(to_mention(&target, edited).is_none());
+    }
+
+    /// The allowlist travels from the workflow trigger through `resolve` and
+    /// `reaction_target` to the target `to_mention` reads. Without this the
+    /// unit tests above would pass against a target nothing ever builds.
+    #[test]
+    fn the_allowlist_reaches_the_target_the_event_half_builds() {
+        let triggers = ReactionTriggers::resolve(&[WorkflowTrigger {
+            workflow: "wf".into(),
+            reaction: Some("eyes".into()),
+            task_id_prefix: None,
+            instructions_kind: None,
+            from_bot: vec!["B_APPROVALS".to_string()],
+        }])
+        .expect("valid");
+        let target = reaction_target(&event("U_ME", "eyes", "message"), "U_ME", &triggers)
+            .expect("the operator reacted with a trigger emoji");
+        assert_eq!(target.from_bot, vec!["B_APPROVALS".to_string()]);
+
+        let post = SlackMessage {
+            user: None,
+            bot_id: Some("B_APPROVALS".to_string()),
+            subtype: Some("bot_message".to_string()),
+            ..message()
+        };
+        assert!(to_mention(&target, post).is_some());
     }
 
     #[test]
@@ -720,6 +894,7 @@ mod tests {
             reaction: "eyes".into(),
             task_id_prefix: None,
             instructions_kind: None,
+            from_bot: Vec::new(),
         };
         let authorless = SlackMessage {
             user: None,

@@ -56,8 +56,13 @@ pub struct Draft {
     pub sender_name: String,
     /// Permalink to the mention, when resolvable.
     pub permalink: Option<String>,
-    /// The reply text (agent-generated, prefixed with a mechanical
-    /// `<@sender_id>` mention of the asker), sent verbatim on approval.
+    /// The reply text (agent-generated), sent verbatim on approval.
+    ///
+    /// A mechanical `<@sender_id>` mention of the asker is prefixed **when
+    /// there is someone to address**. A task raised by reacting to a bot's
+    /// post (ADR-0079) carries that bot's `B…` id as its sender, which Slack
+    /// does not resolve as a mention, so those drafts start with the reply
+    /// itself.
     pub text: String,
     /// Where the draft is in its lifecycle.
     pub status: DraftStatus,

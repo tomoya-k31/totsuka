@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:7501d3d65aff9c1b73a9cf492001aaa80439808e49abd79ff99438422bd665df -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:0e100daeb412fa712fbd9a9300c2396f0e77eb1ded57e114aefd5ac1a9f1948d -->
 
 # Configuration reference
 
@@ -236,6 +236,27 @@ agent = "herdr"
 - **Two workflows without a reaction is also an error** — a mention would go to whichever came first
 - **Order does not matter.** Mentions and reactions arrive on different paths inside the plugin, so a reaction workflow written after the mention one is not shadowed by it
 - Only your own reactions start a task. There is no setting that relaxes this
+
+#### `from_bot` — let that emoji work on a bot's posts too
+
+By default a reaction can only turn a **human** post into a task. To start from a notification a bot posts, list that bot's id on the trigger.
+
+```toml
+[[workflows]]
+name = "pr-approval-review"
+projects = ["slack"]
+trigger = { reaction = "mag", from_bot = ["B0123ABC"] }
+profile = "implement"
+agent = "herdr"
+```
+
+- **It is still only your own reaction that starts anything.** An allowed bot posting does nothing on its own; what widens is only *what you can point the emoji at*
+- What you write is the `bot_id` (`B…`) carried on the post — not the app's name and not a channel. Allowing a whole channel instead would admit every bot in it
+- **Edits and deletions are still excluded**, even for an allowed bot. Only the post the bot actually made gets through
+- A bot post carries no sender user id, so the sender shown in the pane is the `bot_id` itself
+- **It is written per workflow; there is no global setting.** One global list would open every emoji you already use to that bot at once
+- `from_bot` without a `reaction`, `from_bot` beside `channel` (a channel watch), an empty `[]`, and a value that is not shaped like a bot id (a `U…` user id, an app's display name) are all startup errors. Each of them fails silently as "I allowed a bot and nothing happens", so totsuka refuses to start instead
+- **Mentions and channel watching still never turn a bot post into a task.** This setting applies to reactions only
 
 ### `initial_prompt`
 

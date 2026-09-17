@@ -88,6 +88,71 @@ async fn an_unknown_trigger_key_fails_initialize() {
     assert!(error.message.contains("`reaction`"), "{error:?}");
 }
 
+/// `from_bot`'s refusals, through the **public** `initialize` path.
+///
+/// The unit tests beside `parse_from_bot` cover the same cases, but they call
+/// it directly: a regression in how `initialize` aggregates or wires those
+/// errors would leave every one of them green while the config that reaches a
+/// real operator is accepted. Every shape here fails the same way if it is
+/// let through — the reaction is configured, and nothing ever happens.
+#[tokio::test]
+async fn from_bot_misuse_fails_initialize() {
+    for (trigger, needle) in [
+        // Wrong kind of id: a perfectly good string that can never match.
+        (
+            json!({ "reaction": "mag", "from_bot": ["U0123ABC"] }),
+            "not a bot id",
+        ),
+        // Names nobody.
+        (
+            json!({ "reaction": "mag", "from_bot": [] }),
+            "admits no bot",
+        ),
+        // Not a list.
+        (
+            json!({ "reaction": "mag", "from_bot": "B0123ABC" }),
+            "not an array",
+        ),
+        // A valid key with no reader: `unknown_trigger_keys` accepts it.
+        (json!({ "from_bot": ["B0123ABC"] }), "no `reaction`"),
+    ] {
+        let shared = Shared::default();
+        push_guard_ok(&shared);
+        let (mut srv, _harness) = server(&shared);
+
+        let params = json!({
+            "protocol_version": "0.1.0",
+            "config": init_config(),
+            "workflows": [{ "workflow": "approvals", "trigger": trigger }],
+        });
+        let resp = call(&mut srv, 1, "initialize", params).await;
+        let (code, message) = error_of(&resp);
+        assert_eq!(
+            code,
+            plugin_protocol::jsonrpc::error_code::CONFIG_INVALID,
+            "{trigger}"
+        );
+        assert!(message.contains(needle), "{trigger} → {message}");
+    }
+}
+
+/// The converse: a well-formed `from_bot` is accepted, so the refusals above
+/// are about the value and not about the key existing at all.
+#[tokio::test]
+async fn a_well_formed_from_bot_initializes() {
+    let shared = Shared::default();
+    push_guard_ok(&shared);
+    let (mut srv, _harness) = server(&shared);
+
+    let params = json!({
+        "protocol_version": "0.1.0",
+        "config": init_config(),
+        "workflows": [{ "workflow": "approvals",
+                        "trigger": { "reaction": "mag", "from_bot": ["B0123ABC"] } }],
+    });
+    result_of(call(&mut srv, 1, "initialize", params).await);
+}
+
 fn auth_ok() -> Value {
     json!({ "ok": true, "user_id": "U_ME", "user": "me", "team": "T1" })
 }
