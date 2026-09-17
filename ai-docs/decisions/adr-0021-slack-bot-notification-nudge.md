@@ -3,7 +3,7 @@ type: Decision
 title: ADR-0021 Slack 返信案・ピッカーの通知は「ナッジ専用 bot」の DM で行う
 description: エフェメラルと自分名義 self-DM は Slack 通知を一切発生させず、オペレーターが返信案の到着に気づけない問題（#305）に対し、通知ナッジ専用の bot user を追加して bot→本人 DM で push 通知を出す決定。投稿主体は user token のまま不変で、ADR-0003 の「Bot なし」前提を部分改訂する。reminders.add ハックと macOS 通知強化のみの案は不採用。
 tags: [slack, plugin, task-source, notification, bot, token, approval]
-generated: { by: claude-code/fable-5, at: 2026-09-15T02:37:34+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-17T12:00:00+09:00 }
 status: stable
 sources:
   - id: ref-1
@@ -41,7 +41,8 @@ task-source-slack は返信案とリポジトリピッカーを「スレッド�
 Slack アプリに bot user を追加し（manifest: bot scopes は `chat:write` + `im:write` のみ）、次の 2 タイミングで bot がオペレーターへ短い DM ナッジ（🔔 + スレッド permalink リンク）を送る:
 
 1. 返信案ドラフト到着時（`approval::publish_draft` の投稿後。**ADR-0074 以降は 1 面なので、その投稿が失敗したら**ボタンがどこにも無いため送らない）
-   - **追記（2026-08-15、#456）**: ドラフトのナッジには返信案本文をブロックで同梱する（エフェメラル消失後も App DM 側から内容を追えるようにするログ）。**ボタンは付けず、approve/reject 後の更新もしない** — 通知フィードであるという役割は不変（下の追記のとおり、記録面のほうは ADR-0074 で無くなった）
+   - **追記（2026-08-15、#456）**: ドラフトのナッジには返信案本文をブロックで同梱する（エフェメラル消失後も App DM 側から内容を追えるようにするログ）。**ボタンは付けない** — 通知フィードであるという役割は不変（下の追記のとおり、記録面のほうは ADR-0074 で無くなった）
+   - **追記（2026-09-17、[ADR-0074](/decisions/adr-0074-single-draft-surface.md) 決定 7）**: 「approve/reject 後の更新もしない」は**撤回した**。押下時にドラフトのナッジだけは ✅/❌ に `chat.update` する（bot が自分のメッセージを編集するので通知は増えない）。それが**押下後にエフェメラルを削除してよい根拠**になる。ピッカーのナッジは対象外 —— 記録すべき決定が無い
 2. リポジトリピッカー投稿成功時（`pipeline::post_selection_ephemeral` の成功後。投稿失敗時は hint なし提出に縮退しており、答えるべき UI が無いため送らない）
 
 bot DM は Slack ネイティブの push・バッジがデスクトップ+モバイル両方に届き、スレッドの相手には見えない。permalink は enrich 時に解決済みの値を再利用し、`chat.getPermalink` の追加呼び出しはしない。
@@ -52,7 +53,8 @@ bot DM は Slack ネイティブの push・バッジがデスクトップ+モバ
 - **transport**: `TokenKind::Bot` を追加。`bot_token` 未設定での Bot 呼び出しは `InvalidRequest`（プラグインバグ級 — 呼び出し側が設定でゲートする契約）。
 - **bot↔operator DM** は起動時に `conversations.open`（bot token）で 1 回解決し `SharedState` に保持（`self_dm` と同型）。解決失敗は warn のみの非致命（以後ナッジをスキップ、提示面は無傷）。
 - **fire-and-forget**: ナッジ送信失敗は warn で握り潰し、draft/picker フローを決してブロックしない（`notify::send_nudge`）。
-- **ナッジは approve/reject 後に更新・削除しない**: nudge の `ts` を永続化する（= `drafts.json` スキーマ bump）価値が無い。bot DM は通知フィードである。**追記（[ADR-0074](/decisions/adr-0074-single-draft-surface.md)）: 「記録・監査面は self-DM 記録が担う」という後半は成り立たなくなった** —— その面を廃止したためで、いまは押下後のエフェメラル自身が ✅/❌ を持つ。ナッジにボタンを付けない判断は**維持する**（付ければ面が再び 2 つになり、ADR-0074 が消した問題が戻る）。
+- **ナッジは削除しない。更新は下書きのナッジだけ**（2026-09-17 改訂。当初は「approve/reject 後に更新・削除しない」だった）: 当初の理由は、nudge の `ts` を永続化する（= `drafts.json` スキーマ bump）価値が無いことと、bot DM は通知フィードであること。**追記（[ADR-0074](/decisions/adr-0074-single-draft-surface.md)）: 「記録・監査面は self-DM 記録が担う」という後半は成り立たなくなった** —— その面を廃止したためで、いまは押下後のエフェメラル自身が ✅/❌ を持つ。ナッジにボタンを付けない判断は**維持する**（付ければ面が再び 2 つになり、ADR-0074 が消した問題が戻る）。
+  **再追記（2026-09-17、ADR-0074 決定 7）: この項目の前半も撤回した。** 「価値が無い」は記録面が他にあった頃の判断で、いまは `ts` が「押下後に決定を残せる唯一の場所」を指している。そして**スキーマ bump は要らなかった** —— `Draft.nudge_ts` は `#[serde(default)]` の任意フィールドで、旧ファイルは `None` として読める。削除はしない（編集するだけ）。
 - **ループ安全は構造で担保**: `event_subscriptions` は変更しない（`message.im` 非購読のまま）。bot DM への投稿はそもそもパイプラインに入らない。
 
 # 不採用案

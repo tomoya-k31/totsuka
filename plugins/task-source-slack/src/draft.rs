@@ -64,6 +64,16 @@ pub struct Draft {
     /// Insertion time, for the TTL sweep. Wall-clock (`SystemTime`, not
     /// `Instant`) so expiry survives a process restart (#122).
     pub created_at: SystemTime,
+    /// `ts` of the bot-DM nudge that announced this draft (#305), when one
+    /// was sent — the message a decision is recorded on before the ephemeral
+    /// is deleted (ADR-0074 amendment 7).
+    ///
+    /// `None` whenever there is no such message: `bot_token` unset, the DM
+    /// channel unresolved, or the nudge post failed. A draft persisted before
+    /// this field existed also loads as `None`, which is the truth for it —
+    /// its nudge, if any, is no longer addressable.
+    #[serde(default)]
+    pub nudge_ts: Option<String>,
 }
 
 /// The on-disk shape of the store: schema version, the id counter, and the
@@ -208,6 +218,16 @@ impl DraftStore {
         }
     }
 
+    /// Record the `ts` of the nudge DM that announced `draft_id`. Written
+    /// after the insert because the nudge names the draft, so the draft has
+    /// to exist first.
+    pub fn set_nudge_ts(&mut self, draft_id: &str, nudge_ts: String) {
+        if let Some(draft) = self.entries.get_mut(draft_id) {
+            draft.nudge_ts = Some(nudge_ts);
+            self.save();
+        }
+    }
+
     /// Drop drafts older than `ttl`, returning the dropped ids.
     pub fn sweep(&mut self, now: SystemTime, ttl: Duration) -> Vec<String> {
         let expired: Vec<String> = self
@@ -282,6 +302,7 @@ mod tests {
             text: "返信案".into(),
             status: DraftStatus::Pending,
             created_at,
+            nudge_ts: None,
         }
     }
 

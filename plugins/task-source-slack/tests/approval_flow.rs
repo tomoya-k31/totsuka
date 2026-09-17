@@ -642,9 +642,10 @@ async fn approve_posts_the_reply_and_finalizes_the_one_view() {
         "{body}"
     );
 
-    // **The ephemeral is replaced, not deleted.** With the self-DM record
-    // retired there is nowhere else for the ✅ to live, so erasing this would
-    // leave the decision with no trace at all.
+    // **No `bot_token` here, so no nudge — and with no nudge the ephemeral is
+    // repainted, not deleted** (ADR-0074 amendment 7). Deleting it would leave
+    // the decision with no trace at all: the self-DM record is retired, and a
+    // rejection posts nothing to the thread either.
     wait_until("the ephemeral rewrite", || !shared.posted_urls().is_empty()).await;
     let posted = shared.posted_urls();
     assert_eq!(posted[0].body["replace_original"], true);
@@ -660,7 +661,7 @@ async fn approve_posts_the_reply_and_finalizes_the_one_view() {
     );
     assert!(
         requests_for(&shared, "chat.update").is_empty(),
-        "nothing else to update any more"
+        "no nudge exists, so there is nothing to record the decision on"
     );
 
     // The posted auto-reply comes back as a message event from U_ME and must
@@ -696,10 +697,10 @@ async fn approve_posts_the_reply_and_finalizes_the_one_view() {
     .await;
     let posted = shared.posted_urls();
     let again = &posted.last().unwrap().body;
-    // **A second press repaints rather than just answering.** Leaving the
-    // buttons up after a decision is what makes an operator press again —
-    // and under the Event Gateway a redelivery lands here with nobody having
-    // pressed twice at all.
+    // **A second press clears the surface again rather than just answering.**
+    // Leaving the buttons up after a decision is what makes an operator press
+    // again — and under the Event Gateway a redelivery lands here with nobody
+    // having pressed twice at all.
     assert_eq!(again["replace_original"], true, "{again}");
     assert!(again["blocks"].to_string().contains("送信済み"), "{again}");
     assert_eq!(
@@ -817,7 +818,8 @@ async fn reject_finalizes_without_sending() {
 
     // Nothing was posted anywhere — rejecting sends no message.
     assert!(requests_for(&shared, "chat.postMessage").is_empty());
-    // The ❌ evidence lives on the ephemeral itself, rewritten in place.
+    // No `bot_token`, so no nudge to record the ❌ on: the evidence stays on
+    // the ephemeral itself, rewritten in place (ADR-0074 amendment 7).
     let posted = shared.posted_urls();
     assert_eq!(posted[0].body["replace_original"], true);
     assert!(
@@ -827,9 +829,215 @@ async fn reject_finalizes_without_sending() {
     );
     assert!(
         requests_for(&shared, "chat.update").is_empty(),
-        "there is no second surface to update"
+        "there is no nudge to record the decision on"
     );
     assert_no_markdown_in_response_urls(&shared, "the reject flow");
+}
+
+/// **With a nudge to record it on, a press deletes the ephemeral** (ADR-0074
+/// amendment 7).
+///
+/// An ephemeral that survives a press reads as "the press did not take", and
+/// #684 only kept it because the ✅/❌ had nowhere else to live once the
+/// self-DM record was retired. The nudge DM (#305) is that somewhere: it
+/// already carries the reply text as a log (#456), so the decision goes on
+/// with one `chat.update` — the bot editing its own message, no second
+/// notification — and only then is `delete_original` sent.
+#[tokio::test]
+async fn approve_with_a_nudge_records_the_decision_and_deletes_the_ephemeral() {
+    let (listener, url) = ws_listener().await;
+    let shared = Shared::default();
+    canned_web_api(&shared, &url);
+    canned_bot_ok(&shared);
+    // In order: the nudge (bot), then the approved reply (operator).
+    shared.push_for(
+        "chat.postMessage",
+        Canned::Data(json!({ "ok": true, "ts": "888.8" })),
+    );
+    shared.push_for(
+        "chat.postMessage",
+        Canned::Data(json!({ "ok": true, "ts": "777.7" })),
+    );
+    let (_srv, mut ws) = publish_draft_flow_with(&shared, &listener, init_params_with_bot()).await;
+    let (draft_id, ..) = draft_buttons(&shared);
+
+    send_and_await_ack(
+        &mut ws,
+        block_actions_envelope("e2", "approve_reply", &draft_id, "C1"),
+    )
+    .await;
+    wait_until("the decision record", || {
+        !requests_for(&shared, "chat.update").is_empty()
+    })
+    .await;
+
+    // Recorded on the nudge the publish posted — same message, same channel,
+    // as the bot.
+    let updates = requests_for(&shared, "chat.update");
+    assert_eq!(updates.len(), 1, "one edit, on the one nudge");
+    assert_eq!(
+        updates[0].token,
+        task_source_slack::transport::TokenKind::Bot
+    );
+    let body = updates[0].body.as_ref().unwrap();
+    assert_eq!(body["channel"], "D_BOT");
+    assert_eq!(body["ts"], "888.8", "the nudge's own ts, {body}");
+    let text = body["text"].as_str().unwrap();
+    assert!(text.contains("✅"), "{text}");
+    assert!(
+        text.contains("https://ws.slack.test/archives/C1/p1002"),
+        "the feed keeps pointing at the thread: {text}"
+    );
+    // The reply text stays on the record: what was sent, not just that
+    // something was (#456).
+    let blocks = body["blocks"].as_array().unwrap();
+    assert!(blocks[0]["text"]["text"].as_str().unwrap().contains("✅"));
+    assert_eq!(
+        blocks[1],
+        json!({ "type": "markdown", "text": expected_posted_reply() }),
+        "{blocks:?}"
+    );
+
+    // Only then is the ephemeral erased — and erased, not repainted.
+    wait_until("the ephemeral delete", || !shared.posted_urls().is_empty()).await;
+    let posted = shared.posted_urls();
+    assert_eq!(
+        posted[0].body,
+        json!({ "delete_original": true }),
+        "{posted:?}"
+    );
+}
+
+/// The same for a rejection — **the case the whole mechanism exists for**.
+/// A reject posts nothing to the thread, so once the ephemeral is gone the
+/// nudge is the only place left that says the operator decided at all.
+#[tokio::test]
+async fn reject_with_a_nudge_records_the_decision_and_deletes_the_ephemeral() {
+    let (listener, url) = ws_listener().await;
+    let shared = Shared::default();
+    canned_web_api(&shared, &url);
+    canned_bot_ok(&shared);
+    shared.push_for(
+        "chat.postMessage",
+        Canned::Data(json!({ "ok": true, "ts": "888.8" })),
+    );
+    let (_srv, mut ws) = publish_draft_flow_with(&shared, &listener, init_params_with_bot()).await;
+    let (draft_id, ..) = draft_buttons(&shared);
+
+    send_and_await_ack(
+        &mut ws,
+        block_actions_envelope("e2", "reject_reply", &draft_id, "C1"),
+    )
+    .await;
+    wait_until("the decision record", || {
+        !requests_for(&shared, "chat.update").is_empty()
+    })
+    .await;
+
+    let updates = requests_for(&shared, "chat.update");
+    let body = updates[0].body.as_ref().unwrap();
+    assert_eq!(body["ts"], "888.8");
+    assert!(body["text"].as_str().unwrap().contains("却下"), "{body}");
+    // The nudge was the only message: rejecting posts nothing.
+    assert_eq!(
+        requests_for(&shared, "chat.postMessage").len(),
+        1,
+        "the nudge, and nothing else"
+    );
+
+    wait_until("the ephemeral delete", || !shared.posted_urls().is_empty()).await;
+    assert_eq!(
+        shared.posted_urls()[0].body,
+        json!({ "delete_original": true })
+    );
+}
+
+/// **A record that could not be written keeps the ephemeral.** The delete is
+/// licensed by the record, not attempted alongside it — otherwise a failed
+/// `chat.update` would erase the only surface and take the decision with it.
+#[tokio::test]
+async fn a_failed_decision_record_repaints_the_ephemeral_instead() {
+    let (listener, url) = ws_listener().await;
+    let shared = Shared::default();
+    canned_web_api(&shared, &url);
+    canned_bot_ok(&shared);
+    shared.push_for(
+        "chat.postMessage",
+        Canned::Data(json!({ "ok": true, "ts": "888.8" })),
+    );
+    // The nudge posts fine; editing it later does not.
+    shared.push_front_for("chat.update", Canned::Network);
+    let (_srv, mut ws) = publish_draft_flow_with(&shared, &listener, init_params_with_bot()).await;
+    let (draft_id, ..) = draft_buttons(&shared);
+
+    send_and_await_ack(
+        &mut ws,
+        block_actions_envelope("e2", "reject_reply", &draft_id, "C1"),
+    )
+    .await;
+    wait_until("the ephemeral rewrite", || !shared.posted_urls().is_empty()).await;
+
+    let posted = shared.posted_urls();
+    assert_eq!(
+        posted[0].body["replace_original"], true,
+        "{:?}",
+        posted[0].body
+    );
+    assert!(
+        posted[0].body.get("delete_original").is_none(),
+        "the record failed, so the ❌ must stay on the ephemeral: {:?}",
+        posted[0].body
+    );
+    assert!(
+        posted[0].body["blocks"].to_string().contains("却下"),
+        "{:?}",
+        posted[0].body
+    );
+    assert_no_markdown_in_response_urls(&shared, "the failed-record fallback");
+}
+
+/// **A press with no `response_url` still records the decision.** The record
+/// type makes the URL optional (`GatewayRecord.response_url`), so such a
+/// delivery is contractually legal — and clearing the surface is the only step
+/// that needs it. Recording the ✅/❌ on the nudge does not, so gating both on
+/// the URL left the decision visible nowhere: the buttons stay up (nothing can
+/// clear them) *and* the DM still says only that a draft arrived.
+#[tokio::test]
+async fn a_press_without_a_response_url_still_records_the_decision() {
+    let (listener, url) = ws_listener().await;
+    let shared = Shared::default();
+    canned_web_api(&shared, &url);
+    canned_bot_ok(&shared);
+    shared.push_for(
+        "chat.postMessage",
+        Canned::Data(json!({ "ok": true, "ts": "888.8" })),
+    );
+    let (_srv, mut ws) = publish_draft_flow_with(&shared, &listener, init_params_with_bot()).await;
+    let (draft_id, ..) = draft_buttons(&shared);
+
+    // The same press, minus the one field Slack always sends but the contract
+    // does not require.
+    let mut envelope = block_actions_envelope("e2", "reject_reply", &draft_id, "C1");
+    envelope["payload"]
+        .as_object_mut()
+        .unwrap()
+        .remove("response_url");
+    send_and_await_ack(&mut ws, envelope).await;
+    wait_until("the decision record", || {
+        !requests_for(&shared, "chat.update").is_empty()
+    })
+    .await;
+
+    let updates = requests_for(&shared, "chat.update");
+    let body = updates[0].body.as_ref().unwrap();
+    assert_eq!(body["ts"], "888.8");
+    assert!(body["text"].as_str().unwrap().contains("却下"), "{body}");
+    // Nothing could be written to the surface — there was nowhere to write.
+    assert!(
+        shared.posted_urls().is_empty(),
+        "{:?}",
+        shared.posted_urls()
+    );
 }
 
 #[tokio::test]

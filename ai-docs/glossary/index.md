@@ -14,7 +14,7 @@
 * [worktree（ワークツリー）](worktree.md) - タスク専用の git 作業ディレクトリ。「1 task = 1 repo = 1 worktree = 1 branch」の正規化単位で、完了後は掃除ポリシー（immediate / retention_days / keep_7d / keep_28d / manual）が「判定 → pane 解放 → 削除」の3段で適用される。
 * [dispatch（ディスパッチ）](dispatch.md) - キュー済みタスクをエージェントに割り当てる操作。スロット確保 → worktree 準備 → task/dispatch RPC → セッションID永続化までを指す。
 * [Workflow（ワークフロー）](workflow.md) - projects × trigger × mode × agent × output の名前付き束ね（F-80）。タスクは定義順の first-match で最大1つのワークフローに割り当てられる（F-81）。タスクソースは名指した projects の所有者として導出される。mode / output / verification は profile の 4 原型でまとめて指定することもできる。
-* [エフェメラル承認フロー](ephemeral-approval.md) - エージェントの返信案をスレッド内エフェメラルに提示し、承認ボタン押下時のみ本人名義で送信する task-source-slack の仕組み。勝手に送信しないための防波堤。提示面は当初 self-DM 記録との 2 面だったが、押下後の後始末が片方だけ成功しうるため 1 面に減らした。
+* [エフェメラル承認フロー](ephemeral-approval.md) - エージェントの返信案をスレッド内エフェメラルに提示し、承認ボタン押下時のみ本人名義で送信する task-source-slack の仕組み。勝手に送信しないための防波堤。提示面は当初 self-DM 記録との 2 面だったが、押下後の後始末が片方だけ成功しうるため 1 面に減らした。押下後はナッジ DM に ✅/❌ を書き戻してからエフェメラルを削除し、書き戻せない構成では置換にフォールバックする。
 * [会話継続（conversation continuity）](conversation-continuity.md) - 1 スレッド = 1 会話を 1 タスクとして扱い、追いメンションを同じタスクへの追加メッセージとして取り込むことで worktree・ブランチ・エージェントセッションを共有する仕組み。#242 でタスク同一性そのものを会話単位に変えた。
 * [AI Tool（AI ツール）と 2 軸モデル](ai-tool.md) - pane 内で起動する AI エージェント CLI（Claude Code / Codex / OpenCode）。pane を管理する agent プラグイン（herdr 等）とは直交する軸で、[tools] レジストリと tool フィールド（workflow > repo > default_tool > 組み込み claude）で選択される。
 * [pane（ペイン）](pane.md) - エージェント CLI が実際に動くターミナル区画（herdr の pane）。dispatch 時に worktree を cwd、label を totsuka + source task id として作られ、pane_control capability 越しの session/focus・session/release・session/list で制御され、寿命は worktree の掃除ポリシーに連動する。

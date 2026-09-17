@@ -146,6 +146,17 @@ pub struct PostEphemeral<'a> {
 
 /// Arguments for `chat.update`.
 #[derive(Debug, Clone)]
+pub struct UpdateMessage<'a> {
+    /// Channel the message lives in.
+    pub channel: &'a str,
+    /// The message's `ts` — its id within the channel.
+    pub ts: &'a str,
+    /// Replacement text (also the notification fallback when `blocks` is set).
+    pub text: &'a str,
+    /// Replacement Block Kit blocks.
+    pub blocks: Option<Value>,
+}
+
 /// Slack Web API client, generic over its transport for testability.
 pub struct SlackApi<T> {
     transport: T,
@@ -652,6 +663,25 @@ impl<T: SlackTransport> SlackApi<T> {
             )
             .await?;
         string_field(&response, "chat.postMessage", "ts")
+    }
+
+    /// `chat.update` as the **bot** — rewrites a message the bot itself
+    /// posted, which is the nudge DM (#305) and nothing else. Idempotent:
+    /// the same edit applied twice lands on the same message.
+    pub async fn chat_update_bot(&self, message: &UpdateMessage<'_>) -> Result<(), SlackError> {
+        self.call_with(
+            TokenKind::Bot,
+            "chat.update",
+            Some(json!({
+                "channel": message.channel,
+                "ts": message.ts,
+                "text": message.text,
+                "blocks": message.blocks,
+            })),
+            true,
+        )
+        .await?;
+        Ok(())
     }
 
     /// `chat.postEphemeral` — visible only to `user`. Non-idempotent.

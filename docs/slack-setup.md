@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](slack-setup.ja.md)
 
-<!-- generated-from: ai-docs/operations/slack-quickstart.md sha256:06c3fdb840962d26d8c2f84f8b60cfcdc26c29f5740812fedc28f9b59e9447c2 -->
+<!-- generated-from: ai-docs/operations/slack-quickstart.md sha256:1b342f8e23767f790ef9367dc16c7d69dda7aa5d65b57b58d76dfa1349b76250 -->
 
 # Setting up the Slack source
 
@@ -235,7 +235,7 @@ With the gateway, run `gcloud auth application-default login` once on this
 machine. totsuka reads **your own** queues with **your own** Google account;
 no service-account key is handed out.
 
-To try it end to end, have someone mention you. After the agent finishes, a draft arrives as an ephemeral message in the thread — the only place the buttons appear — plus a bot DM if you configured `bot_token`. **Approve** posts it as a thread reply under your name; **reject** discards it. Either way the message is rewritten in place to show ✅ or ❌, so the decision stays visible.
+To try it end to end, have someone mention you. After the agent finishes, a draft arrives as an ephemeral message in the thread — the only place the buttons appear — plus a bot DM if you configured `bot_token`. **Approve** posts it as a thread reply under your name; **reject** discards it. Either way the ephemeral message goes away once you press, and the ✅ or ❌ is written onto the bot DM instead — so the decision stays visible somewhere that does not vanish. Without `bot_token` there is no DM to write it on, so the ephemeral is rewritten in place to show ✅ or ❌ and stays where it is.
 
 ## Troubleshooting
 

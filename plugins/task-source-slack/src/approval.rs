@@ -19,10 +19,13 @@
 //!   posted inside the original mention thread when the button value carries
 //!   the thread coordinates (#121), at the pressed surface otherwise;
 //! - a press on a non-`Pending` draft is the double-send guard, and it
-//!   **repaints** the pressed surface to the final state rather than only
-//!   answering: reaching that branch is evidence the buttons are still up,
-//!   and `block_actions` arrive at-least-once through the Event Gateway, so a
-//!   redelivery lands there with nobody having pressed twice.
+//!   **clears the pressed surface** rather than only answering: reaching that
+//!   branch is evidence the buttons are still up, and `block_actions` arrive
+//!   at-least-once through the Event Gateway, so a redelivery lands there with
+//!   nobody having pressed twice;
+//! - a decided draft's ephemeral is **deleted**, but only once the ✅/❌ is
+//!   recorded on the nudge DM; with no nudge to record it on, the ephemeral is
+//!   repainted in place instead (see `finalize_surface`).
 
 use serde_json::{Value, json};
 
@@ -179,6 +182,8 @@ pub async fn publish_draft<T: SlackTransport>(
         text,
         status: DraftStatus::Pending,
         created_at: std::time::SystemTime::now(),
+        // Filled in below, once the nudge that announces this draft exists.
+        nudge_ts: None,
     };
     let draft_id = state.insert_draft(draft.clone());
     let blocks = draft_blocks(&draft, &draft_id, &config.source_name, Surface::Message);
@@ -216,7 +221,20 @@ pub async fn publish_draft<T: SlackTransport>(
         // text rides along as a buttonless log (#456), which matters more now
         // that it is the only durable trace: the ephemeral is transient, and
         // once it is gone nothing else answers "what was it about to send?".
-        crate::notify::send_nudge(
+        // The nudge's `ts` is kept: a press records the ✅/❌ there and then
+        // deletes the ephemeral (ADR-0074 amendment 7). Without a nudge there
+        // is nowhere to record it, so the press keeps today's repaint.
+        //
+        // **The buttons are already live while this `await` runs**, so a press
+        // landing inside this window reads `nudge_ts: None` and takes the
+        // repaint path — the documented fallback, not a new failure mode: the
+        // ✅/❌ lands on the ephemeral instead of the DM, nothing is sent
+        // twice, and the window is one `chat.postMessage` wide. Closing it
+        // would mean nudging *before* posting the ephemeral, which contradicts
+        // the older and more valuable rule that a draft with nowhere to press
+        // must not be announced at all (ADR-0021) — pointing an operator at
+        // buttons that do not exist is worse than either.
+        if let Some(nudge_ts) = crate::notify::send_nudge(
             api,
             state,
             &format!("{} さんへの返信案が届きました", draft.sender_name),
@@ -228,7 +246,10 @@ pub async fn publish_draft<T: SlackTransport>(
                 draft.status,
             )]),
         )
-        .await;
+        .await
+        {
+            state.set_draft_nudge_ts(&draft_id, nudge_ts);
+        }
     }
     Ok(())
 }
@@ -289,36 +310,17 @@ pub async fn handle_approval_action<T: SlackTransport>(
         return;
     };
     if draft.status != DraftStatus::Pending {
-        // The double-send guard. **It repaints the surface rather than just
-        // answering**, because a second press is evidence the buttons are
-        // still there — and buttons that survive a decision keep inviting the
+        // The double-send guard. **It runs the same finalize as a deciding
+        // press rather than just answering** — record the outcome, then clear
+        // the surface (delete it, or repaint it when there was nowhere to
+        // record) — because a second press is evidence the surface is still
+        // there, and a surface that survives a decision keeps inviting the
         // press that produced this branch. Reaching it twice is normal, not
         // exceptional: `block_actions` arrive at-least-once through the Event
         // Gateway, so a redelivery lands here with nobody having pressed
         // anything a second time.
         tracing::info!(draft_id, action_id, ?draft.status, "draft already handled");
-        match response_url {
-            Some(url) => {
-                let body = json!({
-                    "replace_original": true,
-                    "text": final_fallback(draft.status),
-                    "blocks": draft_blocks(
-                        &draft,
-                        draft_id,
-                        &config.source_name,
-                        Surface::ResponseUrl,
-                    ),
-                });
-                if let Err(e) = api.post_response_url(url, body).await {
-                    tracing::warn!(draft_id, error = %e, "could not repaint an already-handled draft");
-                }
-            }
-            None => tracing::warn!(
-                draft_id,
-                "an already-handled draft was pressed with no response_url; \
-                 its buttons stay up"
-            ),
-        }
+        finalize_surface(api, state, config, &draft, draft_id, response_url).await;
         return;
     }
 
@@ -363,43 +365,120 @@ pub async fn handle_approval_action<T: SlackTransport>(
     };
     state.set_draft_status(draft_id, status);
 
-    // **Replace the ephemeral in place; never delete it.** Deleting used to be
-    // right when a self-DM record survived to carry the ✅/❌ outcome, but that
-    // record is gone (#107 retired), so erasing this one would leave a reject
-    // with no trace anywhere. What stays behind is the same block set with the
-    // buttons swapped for the final state.
     let finalized = Draft { status, ..draft };
-    // **`response_url` is the only way back to the surface now.** The record
-    // type makes it optional (`GatewayRecord.response_url`), so a delivery
-    // without one is contractually legal even though Slack always sends it
-    // for a message button. Acting anyway is still right — the operator
-    // decided, and refusing would drop a decision that was already made
-    // (for an approval the reply is posted by this point) — but it must not
-    // pass for success: the buttons stay live and nothing else can clear
-    // them. The double-press guard keeps a second press from re-sending.
-    match response_url {
-        Some(url) => {
-            let body = json!({
-                "replace_original": true,
-                "text": final_fallback(status),
-                "blocks": draft_blocks(
-                    &finalized,
-                    draft_id,
-                    &config.source_name,
-                    Surface::ResponseUrl,
-                ),
-            });
-            if let Err(e) = api.post_response_url(url, body).await {
-                tracing::warn!(draft_id, error = %e, "could not finalize the pressed draft view");
-            }
+    finalize_surface(api, state, config, &finalized, draft_id, response_url).await;
+}
+
+/// Clear the pressed surface once a draft is decided — **delete the ephemeral
+/// when, and only when, the outcome is recorded somewhere that outlives it**
+/// (ADR-0074 amendment 7).
+///
+/// An ephemeral is transient by nature and an operator reads a leftover one as
+/// "the press did not take", so deleting it is what a press should do. #684
+/// could not: it had just retired the self-DM record, leaving the ephemeral as
+/// the only surface, and erasing it would have left a **rejection with no
+/// trace anywhere** — nothing is posted to the thread, so the decision would
+/// exist only in the plugin's own store. The nudge DM (#305) is that trace:
+/// it already carries the reply text as a log (#456), so recording which way
+/// the operator decided costs one `chat.update` on the bot's own message, and
+/// no second notification.
+///
+/// Hence the order — record first, delete second, and **fall back to the
+/// in-place repaint whenever the record could not be written**: no nudge was
+/// ever sent (no `bot_token`, unresolved DM channel, failed post), the draft
+/// predates the field, or the `chat.update` failed. Losing the tidier surface
+/// is the acceptable half of that trade; losing the only evidence of a
+/// rejection is not.
+///
+/// **`response_url` is the only way back to the surface** — but it is not the
+/// only way to record the decision, which is why the nudge edit happens before
+/// the URL is looked at. The record type makes the URL optional
+/// (`GatewayRecord.response_url`), so a delivery without one is contractually
+/// legal even though Slack always sends it for a message button. Deciding
+/// anyway is still right — the operator decided, and refusing would drop a
+/// decision already made (for an approval the reply is posted by this point) —
+/// but it must not pass for success: the buttons stay live and nothing else
+/// can clear them. The double-press guard keeps a second press from
+/// re-sending, and routes it back here, where it gets another chance to clear
+/// them.
+async fn finalize_surface<T: SlackTransport>(
+    api: &SlackApi<T>,
+    state: &SharedState,
+    config: &SlackConfig,
+    draft: &Draft,
+    draft_id: &str,
+    response_url: Option<&str>,
+) {
+    // **The record comes first, and it does not depend on `response_url`.**
+    // The two steps answer different questions — "where does the decision
+    // live" and "how is the surface cleared" — and only the second one needs
+    // the URL. Gating the record on it left a press with no `response_url`
+    // (contractually legal, see below) recorded nowhere a human can see.
+    let recorded = match &draft.nudge_ts {
+        Some(nudge_ts) => {
+            crate::notify::record_decision(
+                api,
+                state,
+                nudge_ts,
+                &nudge_decision_line(draft),
+                // A `chat.update` is a message surface, so the rich block applies
+                // — the same rendering the nudge was posted with.
+                vec![reply_preview_block(
+                    &draft.text,
+                    Surface::Message,
+                    draft.status,
+                )],
+            )
+            .await
         }
-        None => tracing::warn!(
+        None => {
+            tracing::debug!(
+                draft_id,
+                "no nudge DM to record the decision on; keeping the ephemeral"
+            );
+            false
+        }
+    };
+    let Some(url) = response_url else {
+        tracing::warn!(
             draft_id,
-            ?status,
+            ?draft.status,
+            recorded,
             "the press carried no response_url, so the draft was decided but its \
              buttons could not be cleared; a second press is refused as handled"
-        ),
+        );
+        return;
+    };
+    let body = if recorded {
+        json!({ "delete_original": true })
+    } else {
+        json!({
+            "replace_original": true,
+            "text": final_fallback(draft.status),
+            "blocks": draft_blocks(draft, draft_id, &config.source_name, Surface::ResponseUrl),
+        })
+    };
+    if let Err(e) = api.post_response_url(url, body).await {
+        tracing::warn!(
+            draft_id, recorded, error = %e,
+            "could not clear the pressed draft surface"
+        );
     }
+}
+
+/// The nudge DM's headline once the draft is decided: the ✅/❌ the deleted
+/// ephemeral used to carry, plus the same thread link the nudge was posted
+/// with, so the feed still points back at the conversation.
+fn nudge_decision_line(draft: &Draft) -> String {
+    let mut line = format!(
+        "{} — {} さんへの返信案",
+        final_fallback(draft.status),
+        draft.sender_name
+    );
+    if let Some(link) = &draft.permalink {
+        line.push_str(&format!(" <{link}|スレッドを開く>"));
+    }
+    line
 }
 
 /// The approve/reject button `value`: the draft id plus the mention thread's
@@ -826,6 +905,7 @@ mod tests {
             text: text.into(),
             status,
             created_at: std::time::SystemTime::now(),
+            nudge_ts: None,
         }
     }
 
@@ -1075,6 +1155,7 @@ DEBUG: shutting down
             text: "返信案".into(),
             status: DraftStatus::Pending,
             created_at: std::time::SystemTime::now(),
+            nudge_ts: None,
         };
         let value = button_value("18f3-1", &draft);
         assert_eq!(
