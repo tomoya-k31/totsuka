@@ -216,10 +216,7 @@ pub async fn publish_draft<T: SlackTransport>(
         // text rides along as a buttonless log (#456), which matters more now
         // that it is the only durable trace: the ephemeral is transient, and
         // once it is gone nothing else answers "what was it about to send?".
-        // The nudge's `ts` is kept: a press records the ✅/❌ there and then
-        // deletes the ephemeral (ADR-0074 amendment 7). Without a nudge there
-        // is nowhere to record it, so the press keeps today's repaint.
-        if let Some(nudge_ts) = crate::notify::send_nudge(
+        crate::notify::send_nudge(
             api,
             state,
             &format!("{} さんへの返信案が届きました", draft.sender_name),
@@ -231,10 +228,7 @@ pub async fn publish_draft<T: SlackTransport>(
                 draft.status,
             )]),
         )
-        .await
-        {
-            state.set_draft_nudge_ts(&draft_id, nudge_ts);
-        }
+        .await;
     }
     Ok(())
 }
