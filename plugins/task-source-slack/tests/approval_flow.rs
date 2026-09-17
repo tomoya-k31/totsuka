@@ -996,6 +996,50 @@ async fn a_failed_decision_record_repaints_the_ephemeral_instead() {
     assert_no_markdown_in_response_urls(&shared, "the failed-record fallback");
 }
 
+/// **A press with no `response_url` still records the decision.** The record
+/// type makes the URL optional (`GatewayRecord.response_url`), so such a
+/// delivery is contractually legal — and clearing the surface is the only step
+/// that needs it. Recording the ✅/❌ on the nudge does not, so gating both on
+/// the URL left the decision visible nowhere: the buttons stay up (nothing can
+/// clear them) *and* the DM still says only that a draft arrived.
+#[tokio::test]
+async fn a_press_without_a_response_url_still_records_the_decision() {
+    let (listener, url) = ws_listener().await;
+    let shared = Shared::default();
+    canned_web_api(&shared, &url);
+    canned_bot_ok(&shared);
+    shared.push_for(
+        "chat.postMessage",
+        Canned::Data(json!({ "ok": true, "ts": "888.8" })),
+    );
+    let (_srv, mut ws) = publish_draft_flow_with(&shared, &listener, init_params_with_bot()).await;
+    let (draft_id, ..) = draft_buttons(&shared);
+
+    // The same press, minus the one field Slack always sends but the contract
+    // does not require.
+    let mut envelope = block_actions_envelope("e2", "reject_reply", &draft_id, "C1");
+    envelope["payload"]
+        .as_object_mut()
+        .unwrap()
+        .remove("response_url");
+    send_and_await_ack(&mut ws, envelope).await;
+    wait_until("the decision record", || {
+        !requests_for(&shared, "chat.update").is_empty()
+    })
+    .await;
+
+    let updates = requests_for(&shared, "chat.update");
+    let body = updates[0].body.as_ref().unwrap();
+    assert_eq!(body["ts"], "888.8");
+    assert!(body["text"].as_str().unwrap().contains("却下"), "{body}");
+    // Nothing could be written to the surface — there was nowhere to write.
+    assert!(
+        shared.posted_urls().is_empty(),
+        "{:?}",
+        shared.posted_urls()
+    );
+}
+
 #[tokio::test]
 async fn send_failure_keeps_the_draft_retryable() {
     let (listener, url) = ws_listener().await;

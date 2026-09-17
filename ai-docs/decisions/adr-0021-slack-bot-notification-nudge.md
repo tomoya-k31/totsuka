@@ -53,7 +53,7 @@ bot DM は Slack ネイティブの push・バッジがデスクトップ+モバ
 - **transport**: `TokenKind::Bot` を追加。`bot_token` 未設定での Bot 呼び出しは `InvalidRequest`（プラグインバグ級 — 呼び出し側が設定でゲートする契約）。
 - **bot↔operator DM** は起動時に `conversations.open`（bot token）で 1 回解決し `SharedState` に保持（`self_dm` と同型）。解決失敗は warn のみの非致命（以後ナッジをスキップ、提示面は無傷）。
 - **fire-and-forget**: ナッジ送信失敗は warn で握り潰し、draft/picker フローを決してブロックしない（`notify::send_nudge`）。
-- **ナッジは approve/reject 後に更新・削除しない**: nudge の `ts` を永続化する（= `drafts.json` スキーマ bump）価値が無い。bot DM は通知フィードである。**追記（[ADR-0074](/decisions/adr-0074-single-draft-surface.md)）: 「記録・監査面は self-DM 記録が担う」という後半は成り立たなくなった** —— その面を廃止したためで、いまは押下後のエフェメラル自身が ✅/❌ を持つ。ナッジにボタンを付けない判断は**維持する**（付ければ面が再び 2 つになり、ADR-0074 が消した問題が戻る）。
+- **ナッジは削除しない。更新は下書きのナッジだけ**（2026-09-17 改訂。当初は「approve/reject 後に更新・削除しない」だった）: 当初の理由は、nudge の `ts` を永続化する（= `drafts.json` スキーマ bump）価値が無いことと、bot DM は通知フィードであること。**追記（[ADR-0074](/decisions/adr-0074-single-draft-surface.md)）: 「記録・監査面は self-DM 記録が担う」という後半は成り立たなくなった** —— その面を廃止したためで、いまは押下後のエフェメラル自身が ✅/❌ を持つ。ナッジにボタンを付けない判断は**維持する**（付ければ面が再び 2 つになり、ADR-0074 が消した問題が戻る）。
   **再追記（2026-09-17、ADR-0074 決定 7）: この項目の前半も撤回した。** 「価値が無い」は記録面が他にあった頃の判断で、いまは `ts` が「押下後に決定を残せる唯一の場所」を指している。そして**スキーマ bump は要らなかった** —— `Draft.nudge_ts` は `#[serde(default)]` の任意フィールドで、旧ファイルは `None` として読める。削除はしない（編集するだけ）。
 - **ループ安全は構造で担保**: `event_subscriptions` は変更しない（`message.im` 非購読のまま）。bot DM への投稿はそもそもパイプラインに入らない。
 

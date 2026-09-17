@@ -224,6 +224,16 @@ pub async fn publish_draft<T: SlackTransport>(
         // The nudge's `ts` is kept: a press records the ✅/❌ there and then
         // deletes the ephemeral (ADR-0074 amendment 7). Without a nudge there
         // is nowhere to record it, so the press keeps today's repaint.
+        //
+        // **The buttons are already live while this `await` runs**, so a press
+        // landing inside this window reads `nudge_ts: None` and takes the
+        // repaint path — the documented fallback, not a new failure mode: the
+        // ✅/❌ lands on the ephemeral instead of the DM, nothing is sent
+        // twice, and the window is one `chat.postMessage` wide. Closing it
+        // would mean nudging *before* posting the ephemeral, which contradicts
+        // the older and more valuable rule that a draft with nowhere to press
+        // must not be announced at all (ADR-0021) — pointing an operator at
+        // buttons that do not exist is worse than either.
         if let Some(nudge_ts) = crate::notify::send_nudge(
             api,
             state,
@@ -378,15 +388,17 @@ pub async fn handle_approval_action<T: SlackTransport>(
 /// is the acceptable half of that trade; losing the only evidence of a
 /// rejection is not.
 ///
-/// **`response_url` is the only way back to the surface.** The record type
-/// makes it optional (`GatewayRecord.response_url`), so a delivery without one
-/// is contractually legal even though Slack always sends it for a message
-/// button. Deciding anyway is still right — the operator decided, and refusing
-/// would drop a decision already made (for an approval the reply is posted by
-/// this point) — but it must not pass for success: the buttons stay live and
-/// nothing else can clear them. The double-press guard keeps a second press
-/// from re-sending, and routes it back here, where it gets another chance to
-/// clear them.
+/// **`response_url` is the only way back to the surface** — but it is not the
+/// only way to record the decision, which is why the nudge edit happens before
+/// the URL is looked at. The record type makes the URL optional
+/// (`GatewayRecord.response_url`), so a delivery without one is contractually
+/// legal even though Slack always sends it for a message button. Deciding
+/// anyway is still right — the operator decided, and refusing would drop a
+/// decision already made (for an approval the reply is posted by this point) —
+/// but it must not pass for success: the buttons stay live and nothing else
+/// can clear them. The double-press guard keeps a second press from
+/// re-sending, and routes it back here, where it gets another chance to clear
+/// them.
 async fn finalize_surface<T: SlackTransport>(
     api: &SlackApi<T>,
     state: &SharedState,
@@ -395,15 +407,11 @@ async fn finalize_surface<T: SlackTransport>(
     draft_id: &str,
     response_url: Option<&str>,
 ) {
-    let Some(url) = response_url else {
-        tracing::warn!(
-            draft_id,
-            ?draft.status,
-            "the press carried no response_url, so the draft was decided but its \
-             buttons could not be cleared; a second press is refused as handled"
-        );
-        return;
-    };
+    // **The record comes first, and it does not depend on `response_url`.**
+    // The two steps answer different questions — "where does the decision
+    // live" and "how is the surface cleared" — and only the second one needs
+    // the URL. Gating the record on it left a press with no `response_url`
+    // (contractually legal, see below) recorded nowhere a human can see.
     let recorded = match &draft.nudge_ts {
         Some(nudge_ts) => {
             crate::notify::record_decision(
@@ -428,6 +436,16 @@ async fn finalize_surface<T: SlackTransport>(
             );
             false
         }
+    };
+    let Some(url) = response_url else {
+        tracing::warn!(
+            draft_id,
+            ?draft.status,
+            recorded,
+            "the press carried no response_url, so the draft was decided but its \
+             buttons could not be cleared; a second press is refused as handled"
+        );
+        return;
     };
     let body = if recorded {
         json!({ "delete_original": true })
