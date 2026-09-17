@@ -16,6 +16,8 @@
 * **Update**: `--secret-backend env` が書く参照を `${TOTSUKA_SECRET_<ACCOUNT>}` に変え、`orchestrator_core::config::env_overrides` に `SECRET_PREFIX` を予約して未知キー警告から除外した。`TOTSUKA_*` は設定オーバーライドの名前空間なので、素朴な `TOTSUKA_GITHUB_TOKEN` は **totsuka 自身が export させた変数について、利用者に対処しようのない警告を毎回出す**ことになる
 * **Update**: あわせて `--plugins ""` / `","` を拒否し（空の選択は TTY ゲートが排除しようとしている「成功した実行と見分けがつかない」状態そのもの）、`init` が持っていた git の存在確認を `setup` に戻し（`doctor` の自動実行も無くなったので、新マシンがそれを聞く経路が他に無い）、`SecretBackend` の `FromStr` から clap 側に無い別名（`1password` / `bitwarden`）を落とした（`--secret-backend` は derive した `ValueEnum` を通るので、この impl だけが知る別名はどこにも広告されず拒否される）
 * **Update**: Copilot のレビューを受けて 4 点直した。**シークレットのチェックリストが書いた内容と食い違いうる**のが一番効いていて、追記は既存の参照行を残すのに、チェックリストは毎回「今回選んだバックエンド」で組み立てていた —— `op://` のまま残るファイルの上で `security add-generic-password` を案内し、**何も読まないストアへ秘密を登録させる**形になる。書いたテキストから参照名を読み戻すようにし、`Unchanged` なら何も出さない。あわせて、チェックアウトからの `--plugins all` を 1 回の `cargo build` にまとめ（`cargo_argv` は与えられた全パッケージを 1 回で建てるので、1 つずつ渡すと N 回走る）、`main.rs` のモジュール doc と `config-examples.md` の `resource`（消える `init_cmd.rs` を指していた）を直し、製品仕様から `init` の行とオンボーディング手順の `init` を落として `docs/` の生成物 2 本を作り直した
+* **Creation**: [ADR-0078 Slack の pending 座標は result/publish で消費しない](/decisions/adr-0078-pending-coordinates-outlive-publish.md) — 作業中のスレッドへ追いメンションすると、再開された run の返信が必ず失われていた実機バグ（エージェントは `<STATUS:COMPLETED>` を出すのに Slack には何も出ない）への決定。#242 で 1 会話が複数回 dispatch されうるようになったのに `result/publish` を終端とみなして座標を消費していたのが原因で、peek のみに変え `take_pending` を削除した。
+* **Update**: [task-source-slack](/components/task-source-slack.md) — `approval` 行の座標ライフサイクルを新しい規律（direct / draft とも消費しない）に更新し、消費順の非対称という記述を撤回。
 
 ## 2026-09-16
 

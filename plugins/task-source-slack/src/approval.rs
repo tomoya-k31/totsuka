@@ -67,13 +67,18 @@ pub enum PostAs {
 /// the task is notified, exactly as an approved draft would have — for a
 /// watch that is whoever posted the clip.
 ///
-/// **The pending coordinates are consumed only after the post succeeds.**
-/// `publish_draft` below consumes them first and gets away with it because the
-/// draft it creates is persisted (`drafts.json`) and can still be sent after a
-/// crash; a direct post has no such residue, so consuming first would strand
-/// the reply with no way to retry — the coordinates are gone even across a
-/// plugin restart. On failure the entry stays put and the error goes back to
+/// **The pending coordinates are never consumed** ([ADR-0078]). Since #242 a
+/// task is a *conversation* and `Done` is reversible ([ADR-0015]): a message
+/// that arrives while the agent is working requeues the conversation once that
+/// dispatch ends, so one conversation reaches `result/publish` once per run.
+/// Taking the entry therefore made the **first** publish the only one that
+/// could land — every later run failed with "no pending Slack coordinates",
+/// a failure the message then blamed on a plugin restart that had not
+/// happened. On failure too the entry stays put and the error goes back to
 /// the Orchestrator, whose publish-failure path keeps the task's worktree.
+///
+/// [ADR-0015]: https://github.com/tomoya-k31/totsuka/blob/main/ai-docs/decisions/adr-0015-conversation-task-identity.md
+/// [ADR-0078]: https://github.com/tomoya-k31/totsuka/blob/main/ai-docs/decisions/adr-0078-pending-coordinates-outlive-publish.md
 pub async fn publish_direct<T: SlackTransport>(
     api: &SlackApi<T>,
     state: &SharedState,
@@ -82,11 +87,12 @@ pub async fn publish_direct<T: SlackTransport>(
     post_as: PostAs,
     operator_user_id: &str,
 ) -> Result<(), String> {
-    // Peek, do not take: see above.
+    // Peek, never take: see above.
     let Some(pending) = state.pending(task_id) else {
         return Err(format!(
-            "task {task_id} has no pending Slack coordinates (plugin restarted since the \
-             mention?) → the reply cannot be placed; re-trigger from a fresh mention"
+            "task {task_id} has no pending Slack coordinates (plugin restart, FIFO \
+             eviction, or a rolled-back delivery) → the reply cannot be placed; \
+             re-trigger from a fresh mention"
         ));
     };
     let text = sanitize_reply(content, post_as, operator_user_id, &pending.sender_id);
@@ -121,9 +127,6 @@ pub async fn publish_direct<T: SlackTransport>(
         ),
         PostAs::Operator => format!("direct reply could not be posted: {e}"),
     })?;
-    // Success is the terminal step: only now is the conversation's pending
-    // entry spent.
-    state.take_pending(task_id);
     Ok(())
 }
 
@@ -138,33 +141,30 @@ pub async fn publish_draft<T: SlackTransport>(
     task_id: &str,
     content: &str,
 ) -> Result<(), String> {
-    // Validate the content BEFORE consuming the pending entry: a rejected
-    // publish must leave the coordinates in place so a retry can still land.
-    // (Peek for the sender id the sanitizer needs; the take comes after.)
-    let Some(sender_id) = state.pending(task_id).map(|p| p.sender_id) else {
+    // **Peeked, never taken** — the same rule `publish_direct` states in full
+    // above: a conversation can be dispatched more than once since #242, so
+    // publish is not its terminal step and consuming here would strand the
+    // reply of every run but the first. The draft carries its own copy of the
+    // coordinates, so the entry left behind is not a second source of truth
+    // for this draft — it is what the *next* run of the conversation reads.
+    let Some(pending) = state.pending(task_id) else {
         return Err(format!(
-            "task {task_id} has no pending Slack coordinates (plugin restarted since the \
-             mention?) → the reply cannot be placed; re-trigger from a fresh mention"
+            "task {task_id} has no pending Slack coordinates (plugin restart, FIFO \
+             eviction, or a rolled-back delivery) → the reply cannot be placed; \
+             re-trigger from a fresh mention"
         ));
     };
     let text = sanitize_reply(
         content,
         PostAs::Operator,
         &config.target_user_id,
-        &sender_id,
+        &pending.sender_id,
     );
     if text.is_empty() {
         return Err(format!(
             "task {task_id} published an empty result → nothing to propose as a reply"
         ));
     }
-    // Publish is the task's terminal step: consume the pending entry.
-    let Some(pending) = state.take_pending(task_id) else {
-        return Err(format!(
-            "task {task_id} has no pending Slack coordinates (plugin restarted since the \
-             mention?) → the reply cannot be placed; re-trigger from a fresh mention"
-        ));
-    };
     // Mechanically (not LLM-authored) prefix a mention of the asker, so the
     // reply notifies them like a normal Slack reply would.
     let text = format!("<@{}> {text}", pending.sender_id);
