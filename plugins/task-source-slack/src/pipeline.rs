@@ -658,8 +658,9 @@ where
                         tracing::debug!(
                             channel = target.channel,
                             ts = target.ts,
-                            "reaction ignored: the reacted-to message is a bot post or carries \
-                             a subtype (edit, join, share, ...)"
+                            "reaction ignored: the reacted-to message carries a subtype \
+                             (edit, join, share, ...), or is a post by a bot this \
+                             workflow's `trigger.from_bot` does not name"
                         );
                         continue;
                     };

@@ -717,18 +717,6 @@ fn clipped(text: &str, status: DraftStatus) -> String {
     format!("{head}\n…（{note}）")
 }
 
-/// The reply text to post: log noise trimmed off the edges, then the mention
-/// tags the agent echoed from its prompt removed (#632), in the order the
-/// mechanical `<@sender>` prefix expects.
-///
-/// Which tags are echoes depends on who posts. A reply going out **as the
-/// operator** can never legitimately mention the operator, so that tag goes
-/// wherever it sits. A reply going out **as the bot** (a watched channel,
-/// #617) is another author's voice, and "ask <@operator>" is real content
-/// there. For both identities the caller prefixes the asker's mention, so an
-/// asker (or, as the operator, a self) tag in front of the text is an echo —
-/// a third party addressed at the head ("<@X> さんに聞いてください") is not,
-/// and stays.
 /// The `<@…>` prefix that addresses whoever raised the task, or an empty
 /// string when addressing them is not a thing that can be done.
 ///
@@ -746,6 +734,18 @@ fn asker_prefix(sender_id: &str) -> String {
     }
 }
 
+/// The reply text to post: log noise trimmed off the edges, then the mention
+/// tags the agent echoed from its prompt removed (#632), in the order the
+/// mechanical `<@sender>` prefix expects.
+///
+/// Which tags are echoes depends on who posts. A reply going out **as the
+/// operator** can never legitimately mention the operator, so that tag goes
+/// wherever it sits. A reply going out **as the bot** (a watched channel,
+/// #617) is another author's voice, and "ask <@operator>" is real content
+/// there. For both identities the caller prefixes the asker's mention, so an
+/// asker (or, as the operator, a self) tag in front of the text is an echo —
+/// a third party addressed at the head ("<@X> さんに聞いてください") is not,
+/// and stays.
 fn sanitize_reply(
     content: &str,
     post_as: PostAs,
