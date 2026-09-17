@@ -1,0 +1,1 @@
+* **Creation**: bot が投稿したメッセージへのリアクションでタスクを起こす決定を [ADR-0079](/decisions/adr-0079-reaction-on-bot-posts.md) に追加（draft・未実装）。緩めるのは反応先の投稿者だけで、起動のジェスチャは操作者本人のリアクションのまま。許可は workflow の trigger 単位の `from_bot` で宣言し、Gateway と wire schema は据え置く。
