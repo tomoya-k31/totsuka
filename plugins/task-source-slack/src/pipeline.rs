@@ -1095,6 +1095,16 @@ impl NameCache {
         if let Some(hit) = self.users.get(user_id) {
             return hit.clone();
         }
+        // Only a `U…` / `W…` id names a user. A task raised by reacting to a
+        // bot's post (ADR-0079) carries that bot's `B…` id as its sender, and
+        // `users.info` cannot answer for it — the call would fail every time,
+        // and the failure is deliberately not cached (below), so it would
+        // repeat once per task and log a warning that reads like a broken
+        // lookup rather than the wrong kind of id. Resolving a bot's display
+        // name needs `bots.info`, which this plugin does not call.
+        if !(user_id.starts_with('U') || user_id.starts_with('W')) {
+            return user_id.to_string();
+        }
         match api.users_info(user_id).await {
             Ok(name) => {
                 self.users.insert(user_id.to_string(), name.clone());

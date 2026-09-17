@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:fea620ececed511d0eefbd1f74273e94c136fa07cf7e5a9330df58ad7d0b11d1 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:0e100daeb412fa712fbd9a9300c2396f0e77eb1ded57e114aefd5ac1a9f1948d -->
 
 # Configuration reference
 
@@ -255,7 +255,7 @@ agent = "herdr"
 - **Edits and deletions are still excluded**, even for an allowed bot. Only the post the bot actually made gets through
 - A bot post carries no sender user id, so the sender shown in the pane is the `bot_id` itself
 - **It is written per workflow; there is no global setting.** One global list would open every emoji you already use to that bot at once
-- `from_bot` without a `reaction`, `from_bot` beside `channel` (a channel watch), and an empty `[]` are all startup errors. Each of them fails silently as "I allowed a bot and nothing happens", so totsuka refuses to start instead
+- `from_bot` without a `reaction`, `from_bot` beside `channel` (a channel watch), an empty `[]`, and a value that is not shaped like a bot id (a `U…` user id, an app's display name) are all startup errors. Each of them fails silently as "I allowed a bot and nothing happens", so totsuka refuses to start instead
 - **Mentions and channel watching still never turn a bot post into a task.** This setting applies to reactions only
 
 ### `initial_prompt`

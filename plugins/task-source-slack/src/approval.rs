@@ -1,5 +1,6 @@
 //! The approval flow (#107): `result/publish` turns an agent-generated reply
-//! (mechanically prefixed with a `<@sender_id>` mention of the asker) into a
+//! (mechanically prefixed with a `<@sender_id>` mention of the asker, when
+//! the asker is someone who can be mentioned — see `asker_prefix`) into a
 //! [`Draft`] presented **once** — an ephemeral inside the mention's thread —
 //! and the approve/reject `block_actions` finish it. It used to be two
 //! surfaces (the thread plus a self-DM record); [ADR-0074] retired the second

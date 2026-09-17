@@ -160,7 +160,7 @@ totsuka が用意する worktree は `origin/{default}` の detached HEAD であ
 | 対象 | 変更 |
 |---|---|
 | `plugins/task-source-slack/src/reaction.rs` | `WorkflowTrigger` / `TriggerEmoji` に `from_bot` を持たせ、`to_mention` の bot フィルタを「この workflow が許可した `bot_id` なら通す」に変更。`user` が無ければ `bot_id` で埋める |
-| 同 `config.rs` | trigger の有効キーに `from_bot` を追加（未知キーは `initialize` の硬い失敗になるため必須） |
+| 同 `server.rs` | `TRIGGER_KEYS` に `from_bot` を追加（未知キーは `initialize` の硬い失敗になるため必須）し、値の形を検証する |
 | `services/slack-event-gateway/` | **変更なし** |
 | `crates/orchestrator-core/` | **変更なし** |
 | `config.toml` | 対象 repo の `[[repositories]]` 登録と `[[slack.channel_groups]].repos` への追記、workflow 1 本の追加 |

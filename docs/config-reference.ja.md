@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:fea620ececed511d0eefbd1f74273e94c136fa07cf7e5a9330df58ad7d0b11d1 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:0e100daeb412fa712fbd9a9300c2396f0e77eb1ded57e114aefd5ac1a9f1948d -->
 
 # 設定リファレンス
 
@@ -256,7 +256,7 @@ agent = "herdr"
 - **編集・削除は、許可した bot の投稿でも対象にならない。** 通るのはその bot が投稿したメッセージそのものだけである
 - bot の投稿には送信者の user id が無いので、pane に出る送信者名は `bot_id` がそのまま入る
 - **ワークフローごとに書く。全体設定は無い。** 1 箇所に書けるようにすると、手元の絵文字が全部その bot へ一斉に開いてしまう
-- `reaction` を伴わない `from_bot`、`channel`（チャンネル監視）との併記、空の `[]` は、いずれも起動時エラーになる。どれも「bot を許可したのに無反応」という形で黙って壊れる書き方なので、起動を止める
+- `reaction` を伴わない `from_bot`、`channel`（チャンネル監視）との併記、空の `[]`、そして **`B…` の形をしていない値**（`U…` のユーザー id やアプリの表示名）は、いずれも起動時エラーになる。どれも「bot を許可したのに無反応」という形で黙って壊れる書き方なので、起動を止める
 - **メンションとチャンネル監視では、bot の投稿は従来どおりタスクにならない。** この設定が効くのはリアクションだけである
 
 ### `initial_prompt`

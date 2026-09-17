@@ -192,13 +192,13 @@ fn parse_from_bot(
     let mut ids = Vec::with_capacity(items.len());
     let mut ok = true;
     for item in items {
-        match item.as_str() {
-            Some(s) if !s.trim().is_empty() => ids.push(s.trim().to_string()),
+        match item.as_str().map(str::trim) {
+            Some(id) if is_bot_id(id) => ids.push(id.to_string()),
             _ => {
                 errors.push(format!(
                     "workflow `{}` has {item} inside `trigger.from_bot`, which is not a bot id \
                      → write Slack's bot ids as strings, e.g. `from_bot = [\"B0123ABC\"]` (the \
-                     `bot_id` on the post, not the app name and not a `U…` user id)",
+                     `bot_id` carried on the post — not the app's name, and not a `U…` user id)",
                     workflow.workflow
                 ));
                 ok = false;
@@ -206,6 +206,23 @@ fn parse_from_bot(
         }
     }
     if ok { Ok(ids) } else { Err(()) }
+}
+
+/// Whether `id` has the shape Slack gives a bot id: `B` and then alphanumerics.
+///
+/// **Checking the shape is what makes the rest of this validation worth
+/// anything.** Every other refusal here exists because a bad `from_bot` fails
+/// as "I allowed a bot and the reaction does nothing" rather than as an error
+/// — and a value of the wrong *kind* fails exactly that way too. A `U…` id or
+/// an app's display name is a perfectly good non-empty string, so it passes
+/// startup and then never equals the `bot_id` on any message.
+///
+/// Pasting a user id is the likely mistake, because Slack's UI shows a user id
+/// far more readily than a bot id (the bot id is the `bot_id` field on the
+/// post itself, not anything the app's profile displays).
+fn is_bot_id(id: &str) -> bool {
+    let mut chars = id.chars();
+    chars.next() == Some('B') && id.len() > 1 && chars.all(|c| c.is_ascii_alphanumeric())
 }
 
 /// Connection settings derived from a [`SlackConfig`].
@@ -1144,6 +1161,16 @@ mod tests {
                 serde_json::json!({ "reaction": "mag", "from_bot": ["  "] }),
                 "not a bot id",
             ),
+            // The one that would otherwise pass startup and then never match:
+            // a value of the wrong *kind*, which is still a fine string.
+            (
+                serde_json::json!({ "reaction": "mag", "from_bot": ["U0123ABC"] }),
+                "not a bot id",
+            ),
+            (
+                serde_json::json!({ "reaction": "mag", "from_bot": ["my-approvals-app"] }),
+                "not a bot id",
+            ),
         ] {
             let wf = wf_with(trigger.clone());
             let errors = workflow_reactions(std::slice::from_ref(&wf))
@@ -1179,6 +1206,19 @@ mod tests {
             errors.iter().any(|e| e.contains("no `reaction`")),
             "{errors:?}"
         );
+    }
+
+    /// The shape check is the one that separates "refused loudly" from
+    /// "accepted and then silently never matches".
+    #[test]
+    fn only_a_bot_id_shaped_value_is_a_bot_id() {
+        assert!(is_bot_id("B0123ABC"));
+        assert!(is_bot_id("B01234567890"));
+        assert!(!is_bot_id("U0123ABC"), "a user id is the likely paste");
+        assert!(!is_bot_id("B"), "the prefix alone names no bot");
+        assert!(!is_bot_id("my-app"), "an app name is not an id");
+        assert!(!is_bot_id(""));
+        assert!(!is_bot_id("B0123 ABC"), "ids carry no spaces");
     }
 
     /// The key has to be in the source's vocabulary, or `initialize` rejects
