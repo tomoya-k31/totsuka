@@ -4,7 +4,7 @@ title: agent-ide-herdr プラグイン
 description: herdr を Agent IDE として接続する公式 agent_ide プラグイン（v1 参照実装）。Orchestrator の JSON-RPC ↔ herdr Socket API（NDJSON）のアダプタで、dispatch/セッション管理/状態ストリーム/plan モード/pane レイアウトを担う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/agent-ide-herdr
 tags: [rust, crate, plugin, agent-ide, herdr, socket-api, streaming, hook, deadman, layout]
-generated: { by: claude-code/opus-5, at: 2026-09-15T16:10:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-18T12:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -41,6 +41,22 @@ owner: tomoya-k31
 新版の検知は日次 cron（`.github/workflows/herdr-schema-watch.yml`）が持つ。
 **PR の CI では最新版を取りに行かない** — herdr がリリースされた瞬間に無関係な PR が
 全部赤くなり、ネットワーク障害でも落ちるため。
+
+**同じ版で二度起票しないための鍵は、本文の先頭に置く
+`<!-- herdr-schema-watch: version=X.Y.Z -->` である。** 突き合わせは
+`gh issue list --state all --label herdr-schema --json body` の**一覧クエリ**で行い、
+**`--search` は使わない** — 生成タイトルは Conventional Commits なのでスコープ括弧
+`chore(herdr):` を含み、GitHub の issue 検索は `(` `)` をブーリアンのグルーピング演算子と
+して解釈する。壊れたクエリは**エラーにならず 0 件**を返すので、重複ガードは赤くならないまま
+毎日素通りした（herdr 0.9.1 で #710 と #714 が立った）。実測で `chore in:title` は当たり、
+`chore(herdr) in:title` は 0 件になる。一覧クエリなら構文解釈も検索インデックスの遅延も無い。
+
+**閉じた issue も突き合わせる**（`--state all`）。人が「この版は見送る」と閉じたものが
+翌日また立たないようにするため。取り込めばスライスの存在検査で早期 return するので、
+閉じた版を催促し続ける必要はない。
+
+重複ガードは「未取り込みの版が 2 日連続で検知された日」にしか走らず、壊れていても数週間
+気づけない。`workflow_dispatch` の `dry_run` 入力が、起票せずにこの経路だけを踏むための口である。
 
 **`protocol` 整数は見ない**（#520 で `version` へ移行）。あれは herdr の**バイナリ
 client↔server wire 形式**の版で、totsuka が使う NDJSON Socket API を追跡していない。実測では

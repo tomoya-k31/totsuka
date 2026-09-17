@@ -13,6 +13,15 @@ on:
   schedule:
     - cron: "23 20 * * *" # 05:23 JST daily
   workflow_dispatch:
+    inputs:
+      # **重複ガードを能動的に踏むための口。** この経路は「未取り込みの版が
+      # 2 日連続で検知された日」にしか走らないので、放っておくと壊れていても
+      # 数週間気づけない（実際、#710/#714 が同じ版で 2 本立つまで誰も気づか
+      # なかった）。手で 1 回叩けば判定結果と本文をログで確かめられる。
+      dry_run:
+        description: "起票せず、重複判定の結果と本文だけをログに出す"
+        type: boolean
+        default: false
 
 # issue を立てるためだけに write が要る。checkout は read で足りる。
 permissions:
@@ -121,16 +130,47 @@ jobs:
           VERSION: ${{ steps.upstream.outputs.version }}
           PREVIOUS: ${{ steps.diff.outputs.previous }}
           COMPAT: ${{ steps.diff.outputs.compat }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
         run: |
           title="chore(herdr): herdr ${VERSION} の API schema を取り込む"
-          # 同じ版で毎日立てないよう、開いている同題の issue を先に探す。
-          existing="$(gh issue list --state open --search "${title} in:title" \
-            --json number --jq '.[0].number // empty')"
+          # **重複判定のキーは版そのもの**で、タイトル文字列ではない。人が
+          # タイトルを直しても同一性が壊れないよう、本文の先頭へ機械可読な
+          # 印を置き、それを突き合わせる。
+          marker="<!-- herdr-schema-watch: version=${VERSION} -->"
+
+          # 突き合わせの母数を絞るためのラベル。`--force` なので二度目以降は
+          # 色と説明の上書きになるだけで、fork でも作り直しでも自己修復する。
+          # **dry-run でもここは通す** — 下の一覧がこのラベルで絞るので、
+          # 無いと判定そのものが試せない（ラベル作成は起票ではない）。
+          gh label create herdr-schema \
+            --description "herdr の新しい stable schema の取り込み依頼（herdr-schema-watch が自動起票）" \
+            --color 0e8a16 --force
+
+          # **`gh issue list --search` は使わない。** タイトルは Conventional
+          # Commits なのでスコープ括弧 `chore(herdr):` を含み、GitHub の issue
+          # 検索は `(` `)` を**ブーリアンのグルーピング演算子**として解釈する。
+          # 結果、クエリは**エラーにもならず 0 件**を返し、重複ガードが毎回
+          # 素通りした（同じ 0.9.1 で #710 と #714 が立った）。実測:
+          # `chore in:title` は当たるが `chore(herdr) in:title` は 0 件。
+          #
+          # 一覧クエリ（検索インデックスを経由しない・構文解釈が無い・強整合）
+          # に置き換える。検索は非同期インデックスでもあるので、立てた直後の
+          # issue が引けない窓もここでは消える。
+          #
+          # `--state all` にしてあるのは、人が「この版は見送る」と閉じた issue が
+          # 翌日また立たないようにするため。取り込めば上の `new=0` でそもそも
+          # ここへ来ないので、閉じた版を催促し続ける必要はない。
+          existing="$(gh issue list --state all --label herdr-schema --limit 100 \
+            --json number,body \
+            | jq -r --arg m "${marker}" \
+                'map(select(.body // "" | contains($m))) | .[0].number // empty')"
           if [ -n "${existing}" ]; then
-            echo "既に #${existing} が開いています"
+            echo "herdr ${VERSION} は既に #${existing} が持っています"
             exit 0
           fi
           {
+            echo "${marker}"
+            echo
             echo "herdr **${VERSION}** が出ました（コミット済みの最新は ${PREVIOUS}）。"
             echo
             echo "取り込み手順:"
@@ -157,4 +197,12 @@ jobs:
             fi
             cat /tmp/check.md
           } > /tmp/body.md
-          gh issue create --title "${title}" --body-file /tmp/body.md --label enhancement
+          if [ "${DRY_RUN}" = "true" ]; then
+            echo "dry-run: 起票しません。立てるはずだった issue はこれです。"
+            echo "title: ${title}"
+            echo "---"
+            cat /tmp/body.md
+            exit 0
+          fi
+          gh issue create --title "${title}" --body-file /tmp/body.md \
+            --label enhancement --label herdr-schema
