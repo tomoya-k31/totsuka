@@ -73,9 +73,9 @@ pub enum PostAs {
 /// dispatch ends, so one conversation reaches `result/publish` once per run.
 /// Taking the entry therefore made the **first** publish the only one that
 /// could land — every later run failed with "no pending Slack coordinates",
-/// which reads like a plugin restart and is not one. On failure too the entry
-/// stays put and the error goes back to the Orchestrator, whose
-/// publish-failure path keeps the task's worktree.
+/// a failure the message then blamed on a plugin restart that had not
+/// happened. On failure too the entry stays put and the error goes back to
+/// the Orchestrator, whose publish-failure path keeps the task's worktree.
 ///
 /// [ADR-0015]: https://github.com/tomoya-k31/totsuka/blob/main/ai-docs/decisions/adr-0015-conversation-task-identity.md
 /// [ADR-0078]: https://github.com/tomoya-k31/totsuka/blob/main/ai-docs/decisions/adr-0078-pending-coordinates-outlive-publish.md
@@ -90,8 +90,9 @@ pub async fn publish_direct<T: SlackTransport>(
     // Peek, never take: see above.
     let Some(pending) = state.pending(task_id) else {
         return Err(format!(
-            "task {task_id} has no pending Slack coordinates (plugin restarted since the \
-             mention?) → the reply cannot be placed; re-trigger from a fresh mention"
+            "task {task_id} has no pending Slack coordinates (plugin restart, FIFO \
+             eviction, or a rolled-back delivery) → the reply cannot be placed; \
+             re-trigger from a fresh mention"
         ));
     };
     let text = sanitize_reply(content, post_as, operator_user_id, &pending.sender_id);
@@ -148,8 +149,9 @@ pub async fn publish_draft<T: SlackTransport>(
     // for this draft — it is what the *next* run of the conversation reads.
     let Some(pending) = state.pending(task_id) else {
         return Err(format!(
-            "task {task_id} has no pending Slack coordinates (plugin restarted since the \
-             mention?) → the reply cannot be placed; re-trigger from a fresh mention"
+            "task {task_id} has no pending Slack coordinates (plugin restart, FIFO \
+             eviction, or a rolled-back delivery) → the reply cannot be placed; \
+             re-trigger from a fresh mention"
         ));
     };
     let text = sanitize_reply(
@@ -214,7 +216,10 @@ pub async fn publish_draft<T: SlackTransport>(
         // text rides along as a buttonless log (#456), which matters more now
         // that it is the only durable trace: the ephemeral is transient, and
         // once it is gone nothing else answers "what was it about to send?".
-        crate::notify::send_nudge(
+        // The nudge's `ts` is kept: a press records the ✅/❌ there and then
+        // deletes the ephemeral (ADR-0074 amendment 7). Without a nudge there
+        // is nowhere to record it, so the press keeps today's repaint.
+        if let Some(nudge_ts) = crate::notify::send_nudge(
             api,
             state,
             &format!("{} さんへの返信案が届きました", draft.sender_name),
@@ -226,7 +231,10 @@ pub async fn publish_draft<T: SlackTransport>(
                 draft.status,
             )]),
         )
-        .await;
+        .await
+        {
+            state.set_draft_nudge_ts(&draft_id, nudge_ts);
+        }
     }
     Ok(())
 }
