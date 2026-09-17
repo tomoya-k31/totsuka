@@ -301,20 +301,95 @@ async fn direct_delivery_posts_immediately_without_a_draft() {
         requests_for(&shared, "chat.postEphemeral").is_empty(),
         "direct must not present a draft"
     );
+}
 
-    // The coordinates were consumed by the successful post: a second publish
-    // for the same conversation has nowhere to go.
-    let again = call_expecting_error(
+/// **A second `result/publish` for the same conversation posts again**
+/// ([ADR-0078]). Since #242 a task is a conversation and `Done` is reversible:
+/// a mention that arrives while the agent is working requeues the
+/// conversation once that dispatch ends, so one conversation reaches
+/// `result/publish` **once per run**. Consuming the coordinates on the first
+/// post therefore failed every later run with "no pending Slack coordinates"
+/// — a message that reads like a plugin restart and is not one.
+///
+/// [ADR-0078]: https://github.com/tomoya-k31/totsuka/blob/main/ai-docs/decisions/adr-0078-pending-coordinates-outlive-publish.md
+#[tokio::test]
+async fn a_requeued_conversation_publishes_again_on_the_direct_path() {
+    let (listener, ws_url) = ws_listener().await;
+    let shared = Shared::default();
+    canned_web_api(&shared, &ws_url);
+    // One canned answer, sticky: it answers both posts.
+    shared.push_for(
+        "chat.postMessage",
+        Canned::Data(json!({ "ok": true, "ts": "100.9" })),
+    );
+    let (mut srv, _harness, _ws) =
+        mention_flow_with_publish(&shared, &listener, Some("direct")).await;
+
+    let publish = json!({
+        "task_id": "C1:100.0", "content": PUBLISHED_CONTENT,
+        "format": "markdown"
+    });
+    assert_eq!(
+        call(&mut srv, 3, "result/publish", publish.clone()).await,
+        Value::Null
+    );
+    assert_eq!(
+        call(&mut srv, 4, "result/publish", publish).await,
+        Value::Null
+    );
+
+    let posts = requests_for(&shared, "chat.postMessage");
+    assert_eq!(posts.len(), 2, "the requeued run's reply must land too");
+    for post in &posts {
+        let body = post.body.as_ref().unwrap();
+        assert_eq!(body["text"].as_str().unwrap(), expected_posted_reply());
+        assert_eq!(body["thread_ts"], "100.0");
+    }
+}
+
+/// The draft path holds the same rule: a requeued conversation gets a second
+/// draft surface rather than an error (ADR-0078). The two drafts are distinct
+/// — each run proposed its own answer — and both address the thread.
+#[tokio::test]
+async fn a_requeued_conversation_presents_a_second_draft() {
+    let (listener, ws_url) = ws_listener().await;
+    let shared = Shared::default();
+    canned_web_api(&shared, &ws_url);
+    let (mut srv, _ws) = publish_draft_flow(&shared, &listener).await;
+
+    call(
         &mut srv,
         4,
         "result/publish",
-        json!({
-            "task_id": "C1:100.0", "content": PUBLISHED_CONTENT,
-            "format": "markdown"
-        }),
+        json!({ "task_id": "C1:100.0", "content": PUBLISHED_CONTENT, "format": "markdown" }),
     )
     .await;
-    assert!(again.contains("no pending"), "{again}");
+
+    let ephemerals = requests_for(&shared, "chat.postEphemeral");
+    assert_eq!(
+        ephemerals.len(),
+        2,
+        "the requeued run needs its own surface"
+    );
+    let draft_id = |r: &Recorded| {
+        r.body.as_ref().unwrap()["blocks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|b| b["type"] == "actions")
+            .expect("an actions block")["elements"][0]["value"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    assert_ne!(
+        draft_id(&ephemerals[0]),
+        draft_id(&ephemerals[1]),
+        "each run's draft is its own"
+    );
+    for e in &ephemerals {
+        assert_eq!(e.body.as_ref().unwrap()["thread_ts"], "100.0");
+    }
 }
 
 /// A failed direct post keeps the coordinates, so the publish can be retried

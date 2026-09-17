@@ -73,9 +73,14 @@ pub struct PendingMention {
     pub post_as: crate::approval::PostAs,
 }
 
-/// Bound on the pending-mention index. `result/publish` (#107) consumes
-/// entries, but until every task round-trips, the oldest entries fall out
-/// FIFO instead of growing without bound in a long-running plugin.
+/// Bound on the pending-mention index — **the only one**, since nothing
+/// consumes an entry any more ([ADR-0078]): a conversation can be dispatched
+/// more than once, so `result/publish` is not its terminal step. The oldest
+/// entries fall out FIFO instead of growing without bound in a long-running
+/// plugin, which makes the index the last 1024 *conversations* rather than
+/// the ones still awaiting a reply.
+///
+/// [ADR-0078]: https://github.com/tomoya-k31/totsuka/blob/main/ai-docs/decisions/adr-0078-pending-coordinates-outlive-publish.md
 const PENDING_CAP: usize = 1024;
 
 /// How long an unanswered repository selection stays alive.
@@ -144,17 +149,20 @@ impl SharedState {
         index.entries.insert(task_id, pending);
     }
 
-    /// The Slack coordinates for `task_id`, if it is still pending.
+    /// The Slack coordinates for `task_id` — where the *next* reply in that
+    /// conversation belongs.
+    ///
+    /// Non-consuming, and there is no consuming variant: an entry lives until
+    /// a newer mention in the same thread overwrites it, its own delivery
+    /// rolls back (`discard_pending_delivery`), or the FIFO cap evicts it
+    /// (`PENDING_CAP`).
     pub fn pending(&self, task_id: &str) -> Option<PendingMention> {
         self.pending.lock().unwrap().entries.get(task_id).cloned()
     }
 
-    /// Remove and return `task_id`'s coordinates — the terminal consumption
-    /// at `result/publish` time, which also keeps the index from holding
-    /// entries for tasks that already round-tripped.
-    /// The workflow a pending task was submitted under (#554), without
-    /// consuming the entry — `result/publish` needs it *before* deciding which
-    /// presentation path takes (and consumes) it.
+    /// The workflow a pending task was submitted under (#554) —
+    /// `result/publish` needs it *before* deciding which presentation path
+    /// reads the entry.
     pub fn workflow_of(&self, task_id: &str) -> Option<String> {
         self.pending
             .lock()
@@ -165,7 +173,7 @@ impl SharedState {
     }
 
     /// Whose name `task_id`'s result goes out under (#617), as recorded when
-    /// the task was raised. Also non-consuming, for the same reason.
+    /// the task was raised.
     pub fn post_as_of(&self, task_id: &str) -> Option<crate::approval::PostAs> {
         self.pending
             .lock()
@@ -173,15 +181,6 @@ impl SharedState {
             .entries
             .get(task_id)
             .map(|p| p.post_as)
-    }
-
-    pub fn take_pending(&self, task_id: &str) -> Option<PendingMention> {
-        let mut index = self.pending.lock().unwrap();
-        let taken = index.entries.remove(task_id);
-        if taken.is_some() {
-            index.order.retain(|id| id != task_id);
-        }
-        taken
     }
 
     /// Drop `task_id`'s coordinates **only if they are still the ones this

@@ -1,0 +1,2 @@
+* **Creation**: [ADR-0078 Slack の pending 座標は result/publish で消費しない](/decisions/adr-0078-pending-coordinates-outlive-publish.md) — 作業中のスレッドへ追いメンションすると、再開された run の返信が必ず失われていた実機バグ（エージェントは `<STATUS:COMPLETED>` を出すのに Slack には何も出ない）への決定。#242 で 1 会話が複数回 dispatch されうるようになったのに `result/publish` を終端とみなして座標を消費していたのが原因で、peek のみに変え `take_pending` を削除した。
+* **Update**: [task-source-slack](/components/task-source-slack.md) — `approval` 行の座標ライフサイクルを新しい規律（direct / draft とも消費しない）に更新し、消費順の非対称という記述を撤回。
