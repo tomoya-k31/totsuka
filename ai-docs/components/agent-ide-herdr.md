@@ -4,7 +4,7 @@ title: agent-ide-herdr プラグイン
 description: herdr を Agent IDE として接続する公式 agent_ide プラグイン（v1 参照実装）。Orchestrator の JSON-RPC ↔ herdr Socket API（NDJSON）のアダプタで、dispatch/セッション管理/状態ストリーム/plan モード/pane レイアウトを担う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/agent-ide-herdr
 tags: [rust, crate, plugin, agent-ide, herdr, socket-api, streaming, hook, deadman, layout]
-generated: { by: claude-code/opus-5, at: 2026-09-18T10:05:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-18T10:40:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -59,8 +59,17 @@ owner: tomoya-k31
 ラベルの無い issue はマーカーを持っていてもガードから見えない。ジョブが自分で立てた issue には
 両方付くが、**人が手で立てた・ラベルを外した issue は素通りされる**。
 
-重複ガードは「未取り込みの版が 2 日連続で検知された日」にしか走らず、壊れていても数週間
-気づけない。`workflow_dispatch` の `dry_run` 入力が、起票せずにこの経路だけを踏むための口である。
+**ガードは起票ステップから切り出した独立ステップで、毎回走る。** 起票側に畳むと
+「未取り込みの版がある日」にしか評価されず、壊れていても誰も気づけない — 実際この経路は
+3.5 週間素通りし続けた。外に出してあるので、取り込み済みの平常日でも照合結果がログに出る。
+`workflow_dispatch` の `dry_run` は、起票の手前まで通して**本文だけ**を目視するための口で、
+ガードの生死を確かめるためのものではない。
+
+**この照合は `set -euo pipefail` の下でしか正しくない。** Actions の既定シェルは
+`bash -e {0}` で pipefail が付かず、`gh issue list | jq` の終了コードは末尾の `jq` のものに
+なる。`gh` がレート制限や API 障害で落ちると stdout は空になるが、**空入力の `jq` は何も
+出さず 0 で終わる**ので、照合結果が空のままジョブは緑で起票へ進む。`--search` が静かに
+0 件を返したのと同じ形が、別経路で戻ってくる。
 
 **`protocol` 整数は見ない**（#520 で `version` へ移行）。あれは herdr の**バイナリ
 client↔server wire 形式**の版で、totsuka が使う NDJSON Socket API を追跡していない。実測では

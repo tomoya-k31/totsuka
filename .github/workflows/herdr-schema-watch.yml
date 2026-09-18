@@ -14,12 +14,11 @@ on:
     - cron: "23 20 * * *" # 05:23 JST daily
   workflow_dispatch:
     inputs:
-      # **重複ガードを能動的に踏むための口。** この経路は「未取り込みの版が
-      # 2 日連続で検知された日」にしか走らないので、放っておくと壊れていても
-      # 数週間気づけない（実際、#710/#714 が同じ版で 2 本立つまで誰も気づか
-      # なかった）。手で 1 回叩けば判定結果と本文をログで確かめられる。
+      # 起票の手前まで通して、**本文だけ**を目視するための口。重複ガードの
+      # 結果はこれとは無関係に毎回ログへ出る（下の `guard` ステップ）ので、
+      # ガードが生きているかを確かめるのにこの入力は要らない。
       dry_run:
-        description: "起票せず、重複判定の結果と本文だけをログに出す"
+        description: "起票せず、立てるはずだった issue の本文をログに出す"
         type: boolean
         default: false
 
@@ -76,6 +75,10 @@ jobs:
           TAG: ${{ steps.upstream.outputs.tag }}
           VERSION: ${{ steps.upstream.outputs.version }}
         run: |
+          # Actions の既定シェルは `bash -e {0}` で **pipefail が付かない**。
+          # 下の `previous` はパイプなので、付けないと jq の失敗が握り潰されて
+          # 空文字が流れる。
+          set -euo pipefail
           if [ -f "plugins/agent-ide-herdr/schemas/herdr-${VERSION}.json" ]; then
             echo "herdr ${VERSION} は既にコミット済みです"
             echo "new=0" >> "${GITHUB_OUTPUT}"
@@ -122,17 +125,25 @@ jobs:
             echo "${out}"
             echo '```'
           } > /tmp/check.md
-      - name: Open an issue for the new release
-        if: steps.diff.outputs.new == '1'
+      # **ガードは毎回走らせる。独立ステップなのはそのため。** 起票ステップ側へ
+      # 畳むと `new == '1'`（＝未取り込みの版がある日）にしか評価されず、壊れて
+      # いても誰も気づけない — 実際この経路は 3.5 週間素通りし続け、同じ 0.9.1 で
+      # #710 と #714 が立つまで表に出なかった。ここを外に出しておけば、取り込み
+      # 済みの平常日でも照合結果が毎日ログに出る。
+      - name: Look for an issue already tracking this version
+        id: guard
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.upstream.outputs.tag }}
           VERSION: ${{ steps.upstream.outputs.version }}
-          PREVIOUS: ${{ steps.diff.outputs.previous }}
-          COMPAT: ${{ steps.diff.outputs.compat }}
-          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
         run: |
-          title="chore(herdr): herdr ${VERSION} の API schema を取り込む"
+          # **`pipefail` が無いとガードが無音で壊れる。** Actions の既定シェルは
+          # `bash -e {0}` で pipefail が付かないので、下のパイプの終了コードは
+          # 末尾の `jq` のものになる。`gh issue list` がレート制限・API 障害・
+          # 認証切れで落ちると stdout は空になるが、**空入力の `jq` は何も出さず
+          # 0 で終わる**ため、`existing` が空のまま `set -e` も発火せず、ジョブは
+          # 緑のまま起票へ進む。この PR が潰した「エラーにならず 0 件が返る」のと
+          # 同じ形が、別経路で戻ってくる。
+          set -euo pipefail
           # **重複判定のキーは版そのもの**で、タイトル文字列ではない。人が
           # タイトルを直しても同一性が壊れないよう、本文の先頭へ機械可読な
           # 印を置き、それを突き合わせる。
@@ -140,8 +151,6 @@ jobs:
 
           # 突き合わせの母数を絞るためのラベル。`--force` なので二度目以降は
           # 色と説明の上書きになるだけで、fork でも作り直しでも自己修復する。
-          # **dry-run でもここは通す** — 下の一覧がこのラベルで絞るので、
-          # 無いと判定そのものが試せない（ラベル作成は起票ではない）。
           gh label create herdr-schema \
             --description "herdr の新しい stable schema の取り込み依頼（herdr-schema-watch が自動起票）" \
             --color 0e8a16 --force
@@ -158,18 +167,36 @@ jobs:
           # issue が引けない窓もここでは消える。
           #
           # `--state all` にしてあるのは、人が「この版は見送る」と閉じた issue が
-          # 翌日また立たないようにするため。取り込めば上の `new=0` でそもそも
-          # ここへ来ないので、閉じた版を催促し続ける必要はない。
+          # 翌日また立たないようにするため。取り込めばスライスの存在検査が
+          # 早期 return するので、閉じた版を催促し続ける必要はない。
           existing="$(gh issue list --state all --label herdr-schema --limit 100 \
             --json number,body \
             | jq -r --arg m "${marker}" \
                 'map(select(.body // "" | contains($m))) | .[0].number // empty')"
+          {
+            echo "marker=${marker}"
+            echo "existing=${existing}"
+          } >> "${GITHUB_OUTPUT}"
           if [ -n "${existing}" ]; then
             echo "herdr ${VERSION} は既に #${existing} が持っています"
-            exit 0
+          else
+            echo "herdr ${VERSION} を追う issue はまだありません"
           fi
+      - name: Open an issue for the new release
+        if: steps.diff.outputs.new == '1' && steps.guard.outputs.existing == ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.upstream.outputs.tag }}
+          VERSION: ${{ steps.upstream.outputs.version }}
+          PREVIOUS: ${{ steps.diff.outputs.previous }}
+          COMPAT: ${{ steps.diff.outputs.compat }}
+          MARKER: ${{ steps.guard.outputs.marker }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        run: |
+          set -euo pipefail
+          title="chore(herdr): herdr ${VERSION} の API schema を取り込む"
           {
-            echo "${marker}"
+            echo "${MARKER}"
             echo
             echo "herdr **${VERSION}** が出ました（コミット済みの最新は ${PREVIOUS}）。"
             echo
