@@ -1,0 +1,1 @@
+* **Update**: [agent-ide-herdr プラグイン](/components/agent-ide-herdr.md) — `herdr-schema-watch` の重複ガードが一度も効いていなかった件を記録。`gh issue list --search` は生成タイトル中のスコープ括弧 `chore(herdr):` をブーリアンのグルーピング演算子として解釈し、エラーを出さずに 0 件を返す（同じ herdr 0.9.1 で #710 と #714 が立った）。判定を本文のマーカー `<!-- herdr-schema-watch: version=X.Y.Z -->` × `--state all --label herdr-schema` の一覧クエリに置き換え、経路を手で踏むための `dry_run` 入力を足した。
