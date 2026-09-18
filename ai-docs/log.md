@@ -5,6 +5,7 @@
 * **Creation**: bot が投稿したメッセージへのリアクションでタスクを起こす決定を [ADR-0079](/decisions/adr-0079-reaction-on-bot-posts.md) に追加。緩めるのは反応先の投稿者だけで、起動のジェスチャは操作者本人のリアクションのまま。許可は workflow の trigger 単位の `from_bot` で宣言し、Gateway と wire schema は据え置く。
 * **Update**: [task-source-slack](/components/task-source-slack.md) のリアクション判定に `from_bot` を反映。許可済み bot の投稿だけが `to_mention` を通り、`user` を持たない bot 投稿は `bot_id` が送信者として入る。許可済みでも編集・削除の subtype は従来どおり落ちる。
 * **Update**: [設定リファレンス](/development/config-reference.md) に `trigger.from_bot` の節を追加。既定は人間の投稿のみであること、グローバル設定にしなかった理由、`reaction` 無し・`channel` 併記・空配列を `initialize` が弾くことを記録した。
+* **Update**: herdr **0.9.1** の schema スライスを取り込み、`wire::NEWEST_CHECKED` を 0.9.0 → 0.9.1 に上げた（#710）。[ADR-0055](/decisions/adr-0055-herdr-schema-typed-wire.md) の protocol 実測表に 0.9.0 → 0.9.1 の行を足した — **protocol は 22 のまま据え置きで、切り出した 22 メソッドの閉包は `sliced_from` のメタを除いてバイト単位で同一**だった。生成物の差分も `NEWEST_CHECKED` の 1 行だけ。ただし **protocol の据え置きは「変化が無い」の証拠にはならない**（16 → 16 で `custom_status` が消えた前例がある）ので、今回一致したのは偶然として扱う。`herdr-schema-check.sh` は 0 error（下限 0.7.5 / 上位 4 版 / 22 メソッド）。
 * **Update**: [agent-ide-herdr プラグイン](/components/agent-ide-herdr.md) — `herdr-schema-watch` の重複ガードが一度も効いていなかった件を記録。`gh issue list --search` は生成タイトル中のスコープ括弧 `chore(herdr):` をブーリアンのグルーピング演算子として解釈し、エラーを出さずに 0 件を返す（同じ herdr 0.9.1 で #710 と #714 が立った）。判定を本文のマーカー `<!-- herdr-schema-watch: version=X.Y.Z -->` × `--state all --label herdr-schema` の一覧クエリに置き換え、経路を手で踏むための `dry_run` 入力を足した。
 
 ## 2026-09-17
