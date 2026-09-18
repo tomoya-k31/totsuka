@@ -2546,7 +2546,7 @@ fn check_orphan_panes(
         return Ok(());
     };
     let store = cx.store();
-    // Only agents that can control panes are asked; a config with none (orca,
+    // Only agents that can control panes are asked; a config with none (the
     // mock) gets no check at all rather than noise.
     let agents: Vec<String> = cfg
         .plugins

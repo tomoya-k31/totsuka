@@ -2,8 +2,8 @@
 //! ([ADR-0071](https://github.com/tomoya-k31/totsuka/blob/main/ai-docs/decisions/adr-0071-task-identifier-naming.md)).
 //!
 //! Every tool totsuka drives wants a name for what it creates — herdr names
-//! the agent, orca names the worktree, the Orchestrator names the worktree
-//! directory — and each imposes its own alphabet, its own length, and its own
+//! the agent, the Orchestrator names the worktree directory (and orca named
+//! a worktree of its own until ADR-0080) — and each imposes its own alphabet, its own length, and its own
 //! rule about the first character. The **constraints differ; the procedure
 //! does not**, so the constraints are declared per tool by implementing
 //! [`IdentifierPolicy`] and the procedure lives here, once.
@@ -384,7 +384,9 @@ mod tests {
         }
     }
 
-    /// orca's `worktree create --name`: no documented limit.
+    /// A policy with no length limit — orca's `worktree create --name`, as it
+    /// was declared before ADR-0080 stopped the plugin creating worktrees.
+    /// Kept as the fixture for the unlimited shape.
     struct Orca;
     impl IdentifierPolicy for Orca {
         fn prefix(&self) -> &str {

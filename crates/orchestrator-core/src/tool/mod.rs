@@ -309,7 +309,7 @@ impl ToolProfile {
                 // The deny rules reach Claude only through `--settings`, and
                 // `run::dispatch_one` resolves that path only for agents
                 // declaring `hook_completion` (0.5.0, #496). An agent_ide that
-                // does not — orca, mock, any plugin shaped like them — gets no
+                // does not — the mock, any plugin shaped like it — gets no
                 // settings file, so asking the
                 // profile alone would drop the plan flag from a dispatch that
                 // never received a deny list: strictly looser than before this
@@ -642,7 +642,7 @@ mod tests {
     /// The deny rules only reach Claude through `--settings`, and
     /// `run::dispatch_one` resolves that path only for agents declaring
     /// `Capabilities::hook_completion` (0.5.0, #496). An `answer` dispatch to
-    /// an agent_ide that does not (orca, mock) therefore carries **no deny
+    /// an agent_ide that does not (the mock) therefore carries **no deny
     /// list**, and dropping the plan flag as well would leave it with nothing
     /// at all — looser than before #410 touched this.
     #[test]

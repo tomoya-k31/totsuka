@@ -1,35 +1,38 @@
 //! `agent-ide-orca`: a totsuka agent_ide plugin that adapts the Orchestrator's
 //! JSON-RPC 2.0 plugin protocol (NDJSON, [`plugin_protocol`]) onto the **orca
-//! CLI** (F-30〜F-38). Protocol-side it is identical to the herdr plugin; the
-//! orca-specific launch/state means are hidden inside (F-32).
+//! CLI** (F-30〜F-38). Protocol-side it is the herdr plugin's twin — the same
+//! methods and capabilities — and the orca-specific means are hidden inside
+//! (F-32).
 //!
 //! # Why the CLI
 //!
 //! orca exposes no public socket/REST API — wrapping the `orca` CLI with
-//! `--json` is the officially recommended integration. The execution unit is a
-//! git worktree; the agent runs as a TUI process in that worktree's terminal.
-//! See `ai-docs/references/orca-cli-control.md`.
+//! `--json` is the officially recommended integration. See
+//! `ai-docs/references/orca-cli-control.md`.
 //!
 //! # Method mapping ([`agent::OrcaAgent`])
 //!
-//! - `task/dispatch` → `orca worktree create --agent … --prompt … --json`
-//! - `task/cancel`   → `orca worktree rm --worktree id:<id> --force --json`
-//! - `session/attach`→ `orca worktree show --worktree id:<id> --json` (weak
-//!   absorption: orca keeps the Agent Session History + `claude --resume`)
-//! - `state/subscribe` → poll `orca worktree ps --json` (state dots), pacing
-//!   with `orca terminal wait --for tui-idle`, mapping to normalized state.
+//! - `task/dispatch`  → `orca terminal create --worktree path:<worktree>
+//!   --command "exec env … <tool_launch>"`, `terminal wait --for tui-idle`,
+//!   `terminal send --wait-submit`
+//! - `task/cancel` / `session/release` → `orca terminal close --tab`
+//! - `session/attach` → `orca terminal show` (+ `worktree ps` for the state)
+//! - `session/focus`  → `orca terminal switch`
+//! - `session/list`   → `orca terminal list`, filtered on the `totsuka ` title
+//! - `diagnostics/snapshot` → `orca terminal read --screen`
+//! - `state/subscribe` → an exit deadman on `orca terminal wait --for exit`
 //!
-//! # Claude Code / orca caveats (F-32/F-33)
+//! # Completion is hook-based, as under herdr
 //!
-//! State is a coarse 3-value derived from OSC "state dots" (a status-line hook),
-//! not a structured stream; `failed` has no native signal (derived from an
-//! abnormal terminal exit / timeout); and orca has no structured plan/preview
-//! API. (There used to be a `design_preview` capability to *not* declare; it
-//! was removed in protocol 0.4.0, #411, because nothing ever read it.)
+//! The agent is launched from the Orchestrator's `tool_launch`, which carries
+//! the hook settings and env, so Claude Code reports completion out-of-band
+//! through its hooks (#131). orca's own coarse state dots are only read to
+//! tell recovery what a re-attached agent is doing.
 
 pub mod agent;
 pub mod cli;
 pub mod config;
 pub mod error;
+pub mod launch;
 pub mod server;
 pub mod state;

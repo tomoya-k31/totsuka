@@ -23,8 +23,9 @@ use crate::ports::git::GitRunner;
 /// Not derived from the branch — that is the agent's to name (ADR-0026), and a
 /// path depending on it could not be rendered before the agent had chosen. Not
 /// derived from the source's id either, since #645: the leaf carries the
-/// **same core** as the agent herdr starts and the worktree orca creates, so
-/// one `3-9f3c2a1e` finds all three, and the number in it is the one
+/// **same core** as the agent herdr starts, so one `3-9f3c2a1e` finds both
+/// (orca named a worktree of its own after it too, until ADR-0080 moved orca
+/// into this directory), and the number in it is the one
 /// `totsuka status` and `totsuka task retry <n>` take.
 ///
 /// `max_len` is `None` because no filesystem totsuka targets has a component
@@ -1355,8 +1356,8 @@ mod tests {
         );
     }
 
-    /// ADR-0071 D-1's claim is that one search finds the agent, the orca
-    /// worktree and this directory. The handle (0.7.2) is the first part that
+    /// ADR-0071 D-1's claim is that one search finds the agent and this
+    /// directory (and orca's worktree, until ADR-0080 retired it). The handle (0.7.2) is the first part that
     /// *could* break it — it is the only one carrying letters a tool might
     /// fold — so the leaf and herdr's agent name are compared directly here,
     /// on a handle whose case and length both differ from their raw form.

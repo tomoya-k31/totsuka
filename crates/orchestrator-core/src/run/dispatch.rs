@@ -348,7 +348,7 @@ impl<G: GitRunner, L: LlmRouter + 'static> Engine<G, L> {
     /// completion contract travels invisibly or as visible context (#471,
     /// split out of `dispatch_one`).
     ///
-    /// Returns all-`None` for an agent without hooks (orca / mock), which is
+    /// Returns all-`None` for an agent without hooks (the mock), which is
     /// the unchanged path.
     #[allow(clippy::type_complexity)]
     async fn wire_hooks(
@@ -374,7 +374,7 @@ impl<G: GitRunner, L: LlmRouter + 'static> Engine<G, L> {
         // `session_row` must exist *before* launch — it is injected into the
         // process and echoed by every hook — so the session row is reserved up
         // front and its native id filled in after `task/dispatch` returns.
-        // Non-hook agents (orca / mock) take the unchanged path below.
+        // Non-hook agents (the mock) take the unchanged path below.
         let hook_capable = self
             .plugins
             .agents
@@ -887,7 +887,7 @@ impl<G: GitRunner, L: LlmRouter + 'static> Engine<G, L> {
         // Context routing: hook dispatches deliver everything invisibly via
         // `TOTSUKA_PROMPT_CONTEXT` above when the tool supports it; a tool
         // without invisible injection got the same content as
-        // `visible_hook_context` instead. Non-hook dispatches (orca / mock)
+        // `visible_hook_context` instead. Non-hook dispatches (the mock)
         // have no invisible channel — fall back to the task's instructions as
         // visible string extra_context (no marker convention: non-hook agents
         // don't report completion through hooks).
@@ -925,8 +925,8 @@ impl<G: GitRunner, L: LlmRouter + 'static> Engine<G, L> {
             ),
             job_id: job_id.clone(),
             // 0.7.1 (#645): unconditional, where `job_id` above is not — an
-            // agent that declares no `hook_completion` (orca) never receives
-            // one, and the plugin still has to name what it creates after
+            // agent that declares no `hook_completion` (the mock; orca too before
+            // ADR-0080) never receives one, and the plugin still has to name what it creates after
             // *something* an operator can carry back to `totsuka status`.
             task_number: Some(record.id),
             tool_launch: tool_profile.launch_spec(&LaunchInputs {

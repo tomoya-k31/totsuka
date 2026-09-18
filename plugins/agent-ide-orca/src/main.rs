@@ -18,7 +18,10 @@ struct ProcessFactory;
 impl CliFactory for ProcessFactory {
     type Cli = ProcessCli;
     fn build(&self, config: &OrcaConfig) -> ProcessCli {
-        ProcessCli::new(config.orca_bin.clone())
+        ProcessCli::new(
+            config.orca_bin.clone(),
+            std::time::Duration::from_secs(config.request_timeout_secs),
+        )
     }
 }
 
