@@ -373,6 +373,23 @@ fn check_trigger_kind(
     let has = |key: &str| workflow.trigger.get(key).is_some();
     let Some(mention) = mention else { return };
     if mention {
+        // Watch-only keys, which a mention workflow never reaches a reader
+        // for. The SDK's own orphan check (`plugin_sdk::watch`: "a companion
+        // key without `channel`") used to catch these, but a mention workflow
+        // is held back from that resolver now — `repo` belongs to both kinds
+        // since ADR-0081, and passing a mention route through would have it
+        // refused as a watch missing its channel. These two belong to neither
+        // reader, so they are refused here instead of dropping silently.
+        for orphan in ["channel_name", "from"] {
+            if has(orphan) {
+                errors.push(format!(
+                    "workflow `{}` has `mention = true` and `{orphan}`, which only a channel \
+                     watch reads → nothing would read it here, so the condition you wrote \
+                     would simply go away; drop it, or make this a watch with `channel`",
+                    workflow.workflow
+                ));
+            }
+        }
         // `mention = false` beside a `reaction` is not this error: it states
         // something true about a reaction workflow (it does not answer
         // mentions), and refusing a true statement would make the key
@@ -1609,6 +1626,40 @@ mod tests {
                 "expected {needle:?} in {errors:?}"
             );
         }
+    }
+
+    /// Watch-only keys on a mention workflow are refused rather than dropped.
+    ///
+    /// The SDK's orphan check used to catch these, and holding mention
+    /// workflows back from that resolver (so a route may pin `repo`) took the
+    /// other two with it. A valid key with no reader silently drops the
+    /// condition that was written, which is the hazard this whole trigger
+    /// surface is built to avoid.
+    #[test]
+    fn watch_only_keys_on_a_mention_workflow_are_refused() {
+        for orphan in ["channel_name", "from"] {
+            let wf = wf_with(serde_json::json!({ "mention": true, orphan: ["U_MATE"] }));
+            let errors = workflow_reactions(std::slice::from_ref(&wf)).unwrap_err();
+            assert!(
+                errors
+                    .iter()
+                    .any(|e| e.contains(orphan) && e.contains("channel watch")),
+                "{orphan}: {errors:?}"
+            );
+        }
+    }
+
+    /// One workflow repeating a group is a different mistake from two
+    /// workflows fighting over one, and must not read as a bug in the check.
+    #[test]
+    fn a_workflow_listing_one_group_twice_is_told_so() {
+        let wf = wf_with(serde_json::json!({
+            "mention": true, "to_group": ["S0DUP", "S0DUP"]
+        }));
+        let triggers = workflow_reactions(std::slice::from_ref(&wf)).expect("shape is fine");
+        let errors = ReactionTriggers::resolve(&triggers).unwrap_err();
+        assert!(errors[0].contains("twice"), "{}", errors[0]);
+        assert!(!errors[0].contains("workflows `"), "{}", errors[0]);
     }
 
     /// The accepted shape reaches the resolved trigger verbatim, `repo` and

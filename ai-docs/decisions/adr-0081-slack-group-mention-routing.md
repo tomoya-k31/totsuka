@@ -88,6 +88,8 @@ group route のタスク ID は `{profile_prefix}:{group_id}:{channel}:{ts}`（p
 
 会話が既に settle したリポジトリより pin を優先する。`repo` を書くのは「このグループ宛は必ずこのリポジトリ」という明示的な表明であり、会話の状態次第で効いたり効かなかったりすると設定を読んでも結果が決まらない。代償として、**スレッドの途中で `@oncall` を呼ぶとその会話とは別リポジトリのタスクが立ちうる**。
 
+**`to_group` を伴わない `repo` も書ける。** catch-all もルートの 1 つなので、`trigger = { mention = true, repo = "web-app" }` は「どのメンションもこのリポジトリ」を意味し、分類 LLM を一切呼ばなくなる。候補リポジトリが 1 つしかない構成では素直に有用で、禁じる方が特例になる（watch の `repo` もグループを要求しない）。
+
 ## 7. `repo_pin` と「bot 名義で出す」の結合を切る
 
 `post_as` は `repo_pin.is_some()` から導出されていた。根拠は「`repo_pin` を立てるのは channel watch だけで、watch の結果は bot の投稿」だが、group route がその前提を破る。
@@ -108,12 +110,20 @@ group route を 1 つ足しても、**名指しされていない所属グルー
 
 `config/validate` は**意図的にオフライン**（ライブなトークン検証は `initialize` の TokenGuard の仕事）なので、`usergroups.list` を要する決定 4・9 はそこに置けない。**`totsuka config validate` は「あなたが抜けたグループ」を検出できない** —— 失効したトークンを検出できないのと同じ区分である。形（配列か・`S…` か・空でないか・`mention = true` があるか・同じグループを 2 つの workflow が claim していないか）は両方の経路で検査する。
 
+## 11. `task_id_prefix` と `instructions_kind` は必ず一緒に動く
+
+catch-all は prefix を持たない（タスクが会話そのものだから）ので、`profile` が何であれ**返信の指示**を取る —— ADR-0081 以前のメンション経路が両方を `None` に固定していたのと同じ挙動である。group route はメッセージ単位に key するので、`triage` / `implement` が想定する形になり、profile の指示を取る。
+
+**割ると 1 つだけ不整合な状態が生まれる**: 会話に key されたタスクが implement の指示で走り、返信を期待していたスレッドに対してブランチと PR を開く。実装レビューで実際にこの穴が見つかった（`instructions_kind` だけを profile 由来にしていた）ので、対であることをコードの上でも 1 つの規則として書いてある。
+
 # Consequences
 
 - **既存設定は無変更で動く。** `to_group` を書かなければ route は catch-all 1 つで、ADR-0080 以前と同じ
 - **`usergroups.list` の呼び出し位置が変わった。** `to_group` があるときだけ `initialize` で解決し、結果をパイプラインへ渡す（二重呼び出しをしない）。無ければ従来どおりパイプライン起動時に非致命的に解決する
 - **`repo_pin` から `post_as` を導出していた潜在バグが 1 つ消えた。** 「`repo_pin` を立てるのは watch だけ」という暗黙の前提を守る仕組みはコード上どこにも無かった
 - **mention workflow は watch リゾルバに渡さなくなった。** SDK は `channel` の無い `repo` を「壊れた watch」として拒否するので、渡したままだと group route の `repo` が弾かれる。mention は watch ではないので所有境界としても正しい
+- **「操作者本人のタグを引用本文から外すか」も `post_as_bot` に移した。** #632 の処理は `repo_pin` から同じ推論をしていたので、pin を持つ group route では**本人名義で答えるのに本人のタグがエージェントに渡る**ところだった。スレッド文脈の行は `sanitize_reply` を通らないので、そちらには後段の網も無い
+- **`channel_name` / `from` を mention workflow に書いたら拒否する。** mention workflow を watch リゾルバに渡さなくした副作用で、SDK の orphan 検査が効かなくなった 2 キーを自前で拾う
 - **`config validate` と `initialize` の検査範囲が非対称になった。** 決定 10 のとおり避けられないが、ADR-0080 で「両者が食い違えないように」`resolve_trigger_shape` へ集約した直後に、意図的な非対称を 1 つ足したことになる。形は共有し、ライブな事実だけが `initialize` 側にある
 
 # Alternatives

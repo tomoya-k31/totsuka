@@ -326,6 +326,9 @@ impl MentionFilter {
             return None;
         }
 
+        // Asked once: the prefix and the instruction set are two sides of one
+        // decision and must not be derived from different answers.
+        let claimed = route.claimed_group(&named_groups);
         Some(Mention {
             channel: channel.to_string(),
             user: user.to_string(),
@@ -342,8 +345,8 @@ impl MentionFilter {
             // a per-message sibling instead — the same shape a reaction
             // produces, and the reason a mid-run group mention is not lost to
             // a hand-over (ADR-0081).
-            task_id_prefix: route.task_id_prefix_for(route.claimed_group(&named_groups)),
-            instructions_kind: route.instructions_kind.clone(),
+            task_id_prefix: route.task_id_prefix_for(claimed),
+            instructions_kind: route.instructions_kind_for(claimed),
             workflow: Some(route.workflow.clone()),
             // A route may pin its repository (`trigger.repo`), which skips
             // resolution entirely — no `task/lookup`, no classifier, no
@@ -545,6 +548,44 @@ mod tests {
             .assess(&group_event("<@U_ME> <!subteam^S0ONCALL> 緊急", "200.5"))
             .expect("a task");
         assert_eq!(m.workflow.as_deref(), Some("slack-oncall"));
+    }
+
+    /// The catch-all keeps the reply instructions whatever its `profile`
+    /// says, because its task **is** the conversation.
+    ///
+    /// Before ADR-0081 the mention path hard-coded both this and the prefix to
+    /// `None`. Honouring `instructions_kind` here while still keying on the
+    /// conversation would produce the one incoherent state: a thread task that
+    /// opens a branch and a PR.
+    #[test]
+    fn the_catch_all_keeps_the_reply_instructions() {
+        let mut f = MentionFilter::new(
+            "U_ME",
+            vec![MentionRoute {
+                workflow: "slack-reply".into(),
+                to_group: Vec::new(),
+                task_id_prefix: Some("impl".into()),
+                instructions_kind: Some("implement".into()),
+                repo: None,
+            }],
+        );
+        f.set_subteams(["S0GUILD".to_string()]);
+        let m = f
+            .assess(&group_event("<@U_ME> これ見て", "400.1"))
+            .expect("a task");
+        assert_eq!(m.task_id_prefix, None);
+        assert_eq!(m.instructions_kind, None, "the two must move together");
+        assert_eq!(m.task_id(), "C1:400.1");
+    }
+
+    /// …and a group route takes both, for the same reason in reverse.
+    #[test]
+    fn a_group_route_takes_both_prefix_and_instructions() {
+        let m = routed_filter()
+            .assess(&group_event("<!subteam^S0ONCALL> 障害", "400.2"))
+            .expect("a task");
+        assert_eq!(m.instructions_kind.as_deref(), Some("triage"));
+        assert_eq!(m.task_id(), "books:S0ONCALL:C1:400.2");
     }
 
     /// A group the operator does **not** belong to claims nothing, even when

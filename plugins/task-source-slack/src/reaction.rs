@@ -151,6 +151,24 @@ impl MentionRoute {
             None => group.to_string(),
         })
     }
+
+    /// The instruction set a mention on this route asks for (#398, #450).
+    ///
+    /// **Moves with [`task_id_prefix_for`](Self::task_id_prefix_for), and the
+    /// pairing is the rule**: the two describe one thing from two sides. The
+    /// catch-all has no prefix because its task *is* the conversation
+    /// (ADR-0015), and a conversation is what `answer` replies to — so it
+    /// takes the reply instructions whatever `profile` says, exactly as the
+    /// mention path did before ADR-0081. A group route keys per message, which
+    /// is the shape `triage` and `implement` want, so it takes its profile's.
+    ///
+    /// Splitting them would allow the one incoherent state: a task keyed on
+    /// the conversation that runs the implement instructions, opening a branch
+    /// and a PR against a thread the operator expected a reply in.
+    pub(crate) fn instructions_kind_for(&self, group: Option<&str>) -> Option<String> {
+        group?;
+        self.instructions_kind.clone()
+    }
 }
 
 /// One accepted emoji and what the workflow behind it wants.
@@ -271,12 +289,23 @@ impl ReactionTriggers {
         for t in &group_routes {
             for group in &t.to_group {
                 if let Some((_, first)) = claimed_groups.iter().find(|(g, _)| g == group) {
-                    errors.push(format!(
-                        "workflows `{first}` and `{}` both claim user group `{group}` in \
-                         `to_group` → one group selects one workflow; give them different \
-                         groups or merge the workflows",
-                        t.workflow
-                    ));
+                    errors.push(if first == &t.workflow.as_str() {
+                        // One workflow listing a group twice is a different
+                        // mistake from two workflows fighting over it, and
+                        // "workflows `w` and `w`" reads as a bug in the check.
+                        format!(
+                            "workflow `{}` lists user group `{group}` twice in `to_group` → \
+                             drop the duplicate",
+                            t.workflow
+                        )
+                    } else {
+                        format!(
+                            "workflows `{first}` and `{}` both claim user group `{group}` in \
+                             `to_group` → one group selects one workflow; give them different \
+                             groups or merge the workflows",
+                            t.workflow
+                        )
+                    });
                     continue;
                 }
                 claimed_groups.push((group, &t.workflow));

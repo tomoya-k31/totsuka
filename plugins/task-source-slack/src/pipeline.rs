@@ -729,9 +729,10 @@ async fn handle_mention<T: SlackTransport, C: ChatTransport, S: Submitter>(
     enriched: EnrichedMention,
     orchestrator: Orchestrator<S>,
 ) {
-    // A watched channel settles its repository in config (#617), so there is
-    // nothing to look up and nothing to classify: skipping straight to submit
-    // is the whole point of pinning it. This is deliberately *before* the
+    // A trigger that pins its repository settles it in config — a watched
+    // channel (#617) or a group mention route (ADR-0081) — so there is nothing
+    // to look up and nothing to classify: skipping straight to submit is the
+    // whole point of pinning it. This is deliberately *before* the
     // `task/lookup` below — asking would spend a round trip on an answer that
     // cannot change the outcome.
     if let Some(repo) = enriched.mention.repo_pin.clone() {
@@ -739,7 +740,9 @@ async fn handle_mention<T: SlackTransport, C: ChatTransport, S: Submitter>(
             task_id = enriched.mention.task_id(),
             channel = enriched.mention.channel,
             repo,
-            "post in a watched channel; submitting with the channel's pinned repository"
+            // Both kinds reach here, so the line names the fact they share
+            // rather than guessing which one it was.
+            "the trigger pins a repository; submitting without resolving one"
         );
         submit(&state, &config, &enriched, Some(repo), &orchestrator.submit).await;
         return;
@@ -1404,13 +1407,16 @@ fn build_task(
     // here, before substitution, so an override that drops the leading `> `
     // still gets sane continuation lines.
     //
-    // For a mention-driven task the operator's own tag is dropped from the
+    // For a task answered *as the operator* their own tag is dropped from the
     // quoted body first (#632): the body already says it is a mention, and
     // leaving the raw `<@U_ME>` in front of the text is exactly what the agent
-    // then copies into a reply that goes out *as* the operator. A watched
-    // channel's task is answered as the bot, and there a mention of the
-    // operator is content the agent may need — it stays.
-    let text = if mention.repo_pin.is_none() {
+    // then copies into a reply that goes out as them. Where the bot answers, a
+    // mention of the operator is content the agent may need — it stays.
+    //
+    // **Keyed on who answers, not on `repo_pin`** (ADR-0081): a group mention
+    // route pins a repository and is still answered by the operator, so
+    // deriving it from the pin would hand the agent its own tag to copy.
+    let text = if !mention.post_as_bot {
         crate::approval::remove_mention_of(&mention.text, &config.target_user_id)
     } else {
         mention.text.clone()
@@ -1656,10 +1662,13 @@ async fn thread_context<T: SlackTransport>(
                 .clone()
                 .unwrap_or_else(|| "(unknown)".to_string()),
         };
-        // Same rule as the quoted body (#632): a mention-driven task answers
-        // as the operator, so the operator's raw tag in a context line is
-        // copy material, not content. A watch keeps it.
-        let text = if mention.repo_pin.is_none() {
+        // Same rule as the quoted body (#632), and keyed the same way: where
+        // the operator answers, their raw tag in a context line is copy
+        // material, not content. A watch keeps it.
+        //
+        // Context lines never reach `sanitize_reply`, so unlike the body
+        // above there is no second net under this one.
+        let text = if !mention.post_as_bot {
             crate::approval::remove_mention_of(&message.text, &config.target_user_id)
         } else {
             message.text.clone()
@@ -2536,6 +2545,36 @@ mod tests {
         // evict a live entry while a stale name for it lingers.
         assert_eq!(state.pending.lock().unwrap().entries.len(), 2);
     }
+    /// The operator's own tag is stripped whenever *they* answer, pinned
+    /// repository or not (#632 + ADR-0081).
+    ///
+    /// This used to key on `repo_pin`, which was the same "only a watch pins a
+    /// repository" inference `post_as` made. A group mention route pins one
+    /// and is answered by the operator, so the old form handed the agent the
+    /// operator's own `<@U_ME>` to copy into a reply going out under their
+    /// name.
+    #[test]
+    fn a_pinned_mention_route_still_has_the_operator_tag_stripped() {
+        let mut route = enriched("310.1");
+        route.mention.repo_pin = Some("docs".into());
+        route.mention.post_as_bot = false;
+        let (task, _) = build_task(&small_limit_config(), &route, None);
+        let body = task.body.clone().expect("a body");
+        assert!(
+            !body.contains("<@U_ME>"),
+            "the operator's tag is copy material when they answer: {body}"
+        );
+
+        // The watch keeps it: there the bot answers, so a mention of the
+        // operator is content.
+        let mut watch = enriched("310.2");
+        watch.mention.repo_pin = Some("docs".into());
+        watch.mention.post_as_bot = true;
+        let (task, _) = build_task(&small_limit_config(), &watch, None);
+        let body = task.body.clone().expect("a body");
+        assert!(body.contains("<@U_ME>"), "{body}");
+    }
+
     /// `post_as` follows the trigger, not the pinned repository (ADR-0081).
     ///
     /// Both directions, because the failure is silent either way: a watch
