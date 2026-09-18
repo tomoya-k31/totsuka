@@ -13,6 +13,8 @@ owner: tomoya-k31
 
 **採択（stable）。** [ADR-0032](/decisions/adr-0032-herdr-protocol-17.md) の D-2（`agent_name` の生成規則）を置き換える。D-3（`agent_name_taken` を孤児の徴候として扱い、別名で逃げない）は**前提ごと維持**する — D-1 はその前提を壊さないことを要件として選んである。
 
+ただし「orca の worktree 名」は [ADR-0081](/decisions/adr-0081-orca-herdr-parity.md) で対象が無くなった。orca は worktree を作らず、Orchestrator の worktree に端末を開く。
+
 実装は 2 段階に分かれる（#645）。protocol 0.7.1・`identifier` モジュール・herdr の移行が 1 本目、orca と Orchestrator の worktree 名が 2 本目。本 ADR は両方の決定を記す。
 
 # Context

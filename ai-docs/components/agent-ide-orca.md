@@ -24,10 +24,10 @@ orca は公開 REST/ソケット API を持たず、**`orca` CLI（`--json`）�
 
 | モジュール | 内容 |
 |---|---|
-| `cli` | `OrcaCli` trait（`run(args) → result`）＋ `ProcessCli`。orca の `--json` envelope（`{id, ok, result}` / `{id, ok: false, error: {code, message}}`）を剥がし、`ok: false` は `OrcaError::Orca { code }` にする。**トップレベルの `id` は CLI リクエストの id** で、変更前のプラグインはこれを worktree id と取り違えていた。1 回の呼び出しは `request_timeout_secs` で打ち切り（`kill_on_drop`）、`--timeout-ms` を持つ `terminal wait` にはその値＋10 秒を与える |
+| `cli` | `OrcaCli` trait（`run(args) → result`）＋ `ProcessCli`。orca の `--json` envelope（`{id, ok, result}` / `{id, ok: false, error: {code, message}}`）を剥がし、`ok: false` は `OrcaError::Orca { code }` にする。**トップレベルの `id` は CLI リクエストの id** で、変更前のプラグインはこれを worktree id と取り違えていた。1 回の呼び出しは `request_timeout_secs` で打ち切り（`kill_on_drop`）、`terminal wait --timeout-ms` と `terminal send --wait-submit` にはその待ち時間＋10 秒を与える |
 | `error` | `OrcaError`。orca のエラーコードで判定する: `is_missing`（`terminal_handle_stale` / `*_not_found`）・`is_exited`（`terminal_exited`）・`is_gone`（どちらか）・`is_wait_timeout`（`timeout`）。`WorktreeUnknown`（repo 未登録の案内）・`MissingToolLaunch`・`SessionUnresumable` |
 | `launch` | `tool_launch` を `terminal create --command` の文字列にする: `exec env 'K=V' … 'program' 'arg' …`。orca は `--command` をログインシェルに**打ち込む**ので全語を単一引用符でクォートし、`exec` でシェルを置き換えて端末の寿命をエージェントに一致させる。クォートは実際の `sh` で読み戻すテストで固定 |
-| `config` | `[orca]` = `orca_bin` / `request_timeout_secs`（既定 30）/ `[orca.layout]`（`shell` 既定 **false**・`direction`）/ `[orca.identity]`（`enabled` 既定 true）。`deny_unknown_fields`。廃止キー（`agent` / `setup` / `repo_selector` / `plan_prompt_prefix` / `poll_interval_ms`）は `removed_keys_in` が名指しで代替を案内する |
+| `config` | `[orca]` = `orca_bin` / `request_timeout_secs`（既定 30）/ `[orca.layout]`（`shell` 既定 **false**・`direction` は `horizontal` / `vertical` の閉じた集合）/ `[orca.identity]`（`enabled` 既定 true）。`deny_unknown_fields`。廃止キー（`agent` / `setup` / `repo_selector` / `plan_prompt_prefix` / `poll_interval_ms`）は `removed_keys_in` が名指しで代替を案内する |
 | `state` | orca の worktree `status`（state dots 由来）→ `AgentState`。**`session/attach` 専用**で、完了判定には使わない。`active` など不明値は呼び出し側が渡す前値（`running`）を保つ |
 | `agent` | `OrcaAgent<C: OrcaCli>`。下のメソッド写像のすべて |
 | `server` | JSON-RPC ディスパッチ `Server<F: CliFactory>`。herdr と同じメソッド集合。`SessionUnresumable` → `SESSION_UNRESUMABLE`、`MissingToolLaunch` → `INVALID_PARAMS` |
@@ -40,7 +40,7 @@ orca は公開 REST/ソケット API を持たず、**`orca` CLI（`--json`）�
 | `task/dispatch` | `terminal create --worktree path:<worktree_path> --title "totsuka <task_id>" --command "exec env … <tool_launch>"` → `worktree set --display-name "<repo>: <title>"`（identity、best-effort）→ `terminal split`（`layout.shell` のときのみ）→ `terminal wait --for tui-idle` → `terminal show` で `agentIdentity` が出るまで待つ（最大 30 秒）→ `terminal send --text <prompt> --enter --wait-submit 60` → `terminal rename --title "totsuka <task_id>"`。`session_id` = 端末 handle。途中で失敗したらタブを閉じてから失敗を返す |
 | `task/cancel` | `terminal close --tab`（`terminal_handle_stale` は成功扱い）。**worktree は消さない** — Orchestrator のもの |
 | `session/attach` | `terminal show` の `connected` → 生存。state は `worktree ps` のその worktree の `status`、無ければ `running` |
-| `session/release` | `terminal show` で `expect_cwd` / `expect_label` を照合 → `terminal close --tab`。handle 消失は `gone`、終了済み（`connected: false`）は残ったタブを片付けて `gone`、不一致は `session/list` に同じ worktree の端末があれば `refused` |
+| `session/release` | `terminal show` で `expect_cwd` / `expect_label` を照合 → `terminal close --tab`。終了済み（`connected: false`）は残ったタブを片付けて `gone`。handle 消失と不一致のときは、`session/list` に**別の handle で**同じ worktree（`expect_cwd`）か同じラベル（`expect_label` — `doctor` はこちらだけを送る）の端末があれば `refused`、無ければ `gone` |
 | `session/list` | `terminal list` のうちタブタイトルが `totsuka ` で始まるもの。分割したシェルはタイトルを持たないので 1 タスク 1 行 |
 | `session/focus` | `terminal switch`（`terminal_exited` / stale は `focused: false`） |
 | `diagnostics/snapshot` | `terminal read --screen`、描画できなければ（`source: screen-unavailable`）`terminal read --limit 200`。失敗は `text: None` |

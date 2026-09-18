@@ -11,6 +11,8 @@ status: stable
 
 Accepted — 2026-07-23（[#211](https://github.com/tomoya-k31/totsuka/issues/211)。[ADR-0010](/decisions/adr-0010-worktree-cleanup-pane-release.md) の後続）
 
+ただし「orca は `session/list` を呼ばれない」は [ADR-0081](/decisions/adr-0081-orca-herdr-parity.md) が置き換えた。orca もタブタイトル `totsuka {task_id}` で所有端末を列挙する。
+
 # Context
 
 #210（ADR-0010）で「worktree を削除するときに pane も閉じる」連動を導入したが、この連動は破れる経路が複数ある: 運用ガイドが案内する手動 `git worktree remove`（totsuka が関与せず pane が残る）、`session/release` の同一性検証不一致による skip（degrade 規則）、プラグインのクラッシュ、#210 以前に完了したタスクの残骸（実機で複数確認済み）。

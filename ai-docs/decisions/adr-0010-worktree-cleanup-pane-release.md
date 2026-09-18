@@ -25,6 +25,8 @@ sources:
 Accepted — 2026-07-22（[#210](https://github.com/tomoya-k31/totsuka/issues/210)）。
 doctor による孤児 pane 検出は [#211](https://github.com/tomoya-k31/totsuka/issues/211) に分離（本 ADR の `session/release` を解放手段として再利用するため、本件マージ後に着手）。
 
+ただし「orca は `pane_control` 非宣言のため release は呼ばれない」は [ADR-0081](/decisions/adr-0081-orca-herdr-parity.md) が置き換えた。orca も宣言し、release は端末のタブを閉じる（worktree は Orchestrator が消す）。
+
 # Context
 
 protocol 0.2.0 の Slack 実機検証で、完了したタスクの herdr pane が残り続けることが判明した。`pane.close` に至る経路は `cancel()`（`totsuka task cancel`）と `abandon()`（dispatch 失敗、workspace ごと close）だけで、**正常完了（done）時に pane を閉じる経路が存在しない**。worktree は `plan_cleanup = "immediate"` に従って消えるのに pane の寿命は掃除ポリシーと連動しておらず、検証を繰り返すと pane が単調増加する。

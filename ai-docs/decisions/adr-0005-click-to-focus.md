@@ -32,6 +32,8 @@ sources:
 
 Accepted — 2026-07-18（[#155](https://github.com/tomoya-k31/totsuka/issues/155)、段階実装 PR 1〜5）
 
+ただし「orca へは `session/focus` を送らない」は [ADR-0081](/decisions/adr-0081-orca-herdr-parity.md) が置き換えた。orca も `pane_control` を宣言し、`orca terminal switch` でタブを前面化する。
+
 # Context
 
 中間イベント（`waiting_input` / `escalated` / `verification_pending` / `failed`）は notifier のみへ配送され（R-08/D-07）、本人へ push で気づかせる設計だが、通知に気づいても**どの pane で待っているのかへ即座に飛べない**。手で Alacritty を前面化し herdr のタブ/ペインを探す必要があり、タスク並走時の負担が大きい。
