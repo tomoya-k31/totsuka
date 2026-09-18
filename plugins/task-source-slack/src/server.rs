@@ -56,6 +56,7 @@ pub trait TransportFactory {
 /// add a key here in the same edit that teaches the reader to read it.
 const TRIGGER_KEYS: &[&str] = &[
     "mention",
+    "to_group",
     "reaction",
     "from_bot",
     "channel",
@@ -187,6 +188,16 @@ fn workflow_reactions(
                 // fails whatever this says; `false` keeps the workflow out of
                 // the mention slot rather than guessing it into one.
                 mention: mention.unwrap_or(false),
+                to_group: parse_to_group(t, &mut errors).unwrap_or_default(),
+                // `repo` belongs to two trigger kinds now: a channel watch
+                // reads it through the SDK, a mention route through here. The
+                // watch path never reaches this function (filtered above), so
+                // there is no double reader.
+                repo: t
+                    .trigger
+                    .get("repo")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string),
             })
         })
         .collect();
@@ -258,6 +269,87 @@ fn parse_mention(
             Err(())
         }
     }
+}
+
+/// Parse one workflow's `trigger.to_group` — the user groups whose mentions
+/// select this workflow instead of the catch-all (ADR-0081).
+///
+/// Absent is `Ok(vec![])`, the catch-all. `Err(())` means the value was
+/// written wrong and an error has been recorded.
+///
+/// **Shape only.** Whether the operator actually belongs to these groups is a
+/// live fact (`usergroups.list`), so it is checked in `initialize` beside the
+/// TokenGuard rather than here — which is also why `config/validate`, which is
+/// deliberately offline, cannot catch a group you have left.
+///
+/// An empty array is refused rather than read as the catch-all. Writing
+/// `to_group = []` says "only these groups" and names none, so read as the
+/// default it would silently widen the workflow to *every* mention — the
+/// opposite of what was written. Same reasoning as `from_bot = []`.
+fn parse_to_group(
+    workflow: &plugin_protocol::methods::WorkflowInfo,
+    errors: &mut Vec<String>,
+) -> Result<Vec<String>, ()> {
+    let Some(value) = workflow.trigger.get("to_group") else {
+        return Ok(Vec::new());
+    };
+    if workflow.trigger.get("mention").and_then(Value::as_bool) != Some(true) {
+        errors.push(format!(
+            "workflow `{}` has `trigger.to_group` but not `mention = true` → `to_group` \
+             narrows which mentions reach a workflow, so without a mention trigger nothing \
+             reads it; add `mention = true`, or drop `to_group`",
+            workflow.workflow
+        ));
+        return Err(());
+    }
+    let Some(items) = value.as_array() else {
+        errors.push(format!(
+            "workflow `{}` has a `trigger.to_group` of {value}, which is not an array → write \
+             the user group ids as a list of strings, e.g. `to_group = [\"S0123ABC\"]`",
+            workflow.workflow
+        ));
+        return Err(());
+    };
+    if items.is_empty() {
+        errors.push(format!(
+            "workflow `{}` has `trigger.to_group = []` → an empty list names no group, so read \
+             as the default it would widen this workflow to every mention; drop the key to \
+             answer all of them, or name the groups it should answer",
+            workflow.workflow
+        ));
+        return Err(());
+    }
+    let mut ids = Vec::with_capacity(items.len());
+    let mut ok = true;
+    for item in items {
+        match item.as_str().map(str::trim) {
+            Some(id) if is_group_id(id) => ids.push(id.to_string()),
+            _ => {
+                errors.push(format!(
+                    "workflow `{}` has {item} inside `trigger.to_group`, which is not a user \
+                     group id → write Slack's `S…` ids as strings, e.g. \
+                     `to_group = [\"S0123ABC\"]` (the id in the group's URL — not its handle, \
+                     and not a `U…` user id)",
+                    workflow.workflow
+                ));
+                ok = false;
+            }
+        }
+    }
+    if ok { Ok(ids) } else { Err(()) }
+}
+
+/// Whether `id` has the shape Slack gives a user group id: `S` and then
+/// alphanumerics.
+///
+/// Checking the shape is what makes the rest of this worth anything, for the
+/// same reason it is on `from_bot`: a handle (`@oncall`) or a `U…` user id is
+/// a perfectly good non-empty string, so it would pass startup and then never
+/// equal any id in a `<!subteam^…>` tag. The membership check in `initialize`
+/// catches those too, but only when the scope is there to ask with.
+fn is_group_id(id: &str) -> bool {
+    let mut chars = id.chars();
+    chars.next() == Some('S') && id.len() > 1 && chars.all(|c| c.is_ascii_alphanumeric())
 }
 
 /// Refuse a trigger that names no kind of trigger, and one that names two.
@@ -617,12 +709,44 @@ where
         // `config/validate` so the two cannot disagree.
         let (reaction_triggers, mut trigger_errors) = resolve_trigger_shape(&init.workflows);
         errors.append(&mut trigger_errors);
+        // A mention route's `repo` is checked here rather than by the SDK,
+        // which only knows the watch shape.
+        let repo_names: Vec<&str> = config.repos.iter().map(|r| r.name.as_str()).collect();
+        for route in reaction_triggers.mention_routes() {
+            let Some(repo) = route.repo.as_deref() else {
+                continue;
+            };
+            if !repo_names.contains(&repo) {
+                errors.push(format!(
+                    "workflow `{}` pins mentions to repo `{repo}`, which is not in \
+                     `[[repositories]]` → configured repositories: {}",
+                    route.workflow,
+                    if repo_names.is_empty() {
+                        "(none)".to_string()
+                    } else {
+                        repo_names.join(", ")
+                    }
+                ));
+            }
+        }
         // Channel watch triggers, on the same call (#617). Resolved against
         // the *merged* repository list above, so `trigger.repo` is checked
         // against whatever the plugin will actually resolve tasks to.
-        let repo_names: Vec<&str> = config.repos.iter().map(|r| r.name.as_str()).collect();
+        //
+        // **Mention workflows are held back.** The SDK reads `repo` as a
+        // watch key, so a mention route that pins one would be refused as a
+        // watch missing its `channel` (`plugin_sdk::watch`: "a companion key
+        // without `channel` is a broken watch"). A mention is not a watch, so
+        // it does not belong in that resolver at all — and a trigger naming
+        // both kinds is already refused by `check_trigger_kind`.
+        let watch_candidates: Vec<plugin_protocol::methods::WorkflowInfo> = init
+            .workflows
+            .iter()
+            .filter(|w| w.trigger.get("mention").and_then(Value::as_bool) != Some(true))
+            .cloned()
+            .collect();
         let watch_triggers = match plugin_sdk::resolve_watch_triggers(
-            &init.workflows,
+            &watch_candidates,
             &repo_names,
             Some(&config.target_user_id),
             "target_user_id",
@@ -682,6 +806,79 @@ where
             };
             return Reply::respond(Response::error(id, Error::new(code, e.to_string())));
         }
+
+        // `to_group` membership, which only a live `usergroups.list` can
+        // settle (ADR-0081 decisions 4 and 9).
+        //
+        // **Here rather than in `resolve_trigger_shape`**, and therefore not
+        // in `config/validate`: that call is deliberately offline, so it can
+        // no more check a group you have left than it can check a revoked
+        // token. This sits beside the TokenGuard for exactly that reason.
+        //
+        // Resolved once and handed to the pipeline, which would otherwise ask
+        // again for an answer that cannot have changed in between.
+        let claimed: Vec<&str> = reaction_triggers.claimed_groups().collect();
+        let subteams = if claimed.is_empty() {
+            None
+        } else {
+            match api.usergroups_for_user(&config.target_user_id).await {
+                Ok(groups) => {
+                    // A group named here that the operator has left would
+                    // match nothing, for ever, with the config still reading
+                    // as though it routes. That is the shape ADR-0080 set out
+                    // to stop, so it is refused rather than warned about.
+                    let missing: Vec<&str> = claimed
+                        .iter()
+                        .copied()
+                        .filter(|g| !groups.iter().any(|mine| mine == g))
+                        .collect();
+                    if !missing.is_empty() {
+                        return Reply::respond(Response::error(
+                            id,
+                            Error::new(
+                                error_code::CONFIG_INVALID,
+                                format!(
+                                    "`trigger.to_group` names user group(s) {} that `{}` does not belong to \
+                                     → a mention of a group you are not in never reaches \
+                                     this plugin, so the workflow could never run. Your \
+                                     groups: {}",
+                                    missing.join(", "),
+                                    config.target_user_id,
+                                    if groups.is_empty() {
+                                        "(none)".to_string()
+                                    } else {
+                                        groups.join(", ")
+                                    }
+                                ),
+                            ),
+                        ));
+                    }
+                    Some(groups)
+                }
+                Err(e) => {
+                    // Without the scope this is unanswerable, and an
+                    // unanswerable `to_group` is a workflow that silently
+                    // never fires. Writing `to_group` is what makes the scope
+                    // required; a config without one keeps the old warning.
+                    return Reply::respond(Response::error(
+                        id,
+                        Error::new(
+                            error_code::CONFIG_INVALID,
+                            format!(
+                                "a workflow uses `trigger.to_group`, but the operator's user groups \
+                                 could not be resolved ({e}) → `to_group` is checked \
+                                 against your live membership, and group mentions \
+                                 cannot be routed without it. The usual cause is a \
+                                 user token without the `usergroups:read` scope: \
+                                 update the app with the current manifest, Reinstall \
+                                 to Workspace, then store the NEW `xoxp-` and `xoxb-` \
+                                 tokens — a reinstall reissues both"
+                            ),
+                        ),
+                    ));
+                }
+            }
+        };
 
         // The draft store persists across restarts (#122) so approval
         // buttons survive a `run --watch` restart. When no state directory
@@ -758,6 +955,7 @@ where
                 reaction_triggers,
                 watch_triggers,
                 backfill_limits,
+                subteams,
                 events,
                 state.clone(),
                 self.submit.clone(),
@@ -1239,6 +1437,8 @@ mod tests {
                 task_id_prefix: None,
                 instructions_kind: None,
                 from_bot: Vec::new(),
+                to_group: Vec::new(),
+                repo: None,
                 mention: false,
             })
             .collect();
@@ -1369,6 +1569,59 @@ mod tests {
             "channel": "C1", "channel_name": "dev", "repo": "web-app"
         }));
         workflow_reactions(std::slice::from_ref(&wf)).expect("a watch is a kind");
+    }
+
+    /// `to_group` narrows a mention route; every refusal below is a shape
+    /// that would otherwise leave a workflow nothing ever reaches.
+    #[test]
+    fn to_group_shapes_that_are_refused() {
+        for (trigger, needle) in [
+            // Without `mention = true` nothing reads the key at all.
+            (
+                serde_json::json!({ "to_group": ["S0ABC"] }),
+                "not `mention = true`",
+            ),
+            // Read as the default, `[]` would widen to every mention —
+            // the opposite of what "only these groups" says.
+            (
+                serde_json::json!({ "mention": true, "to_group": [] }),
+                "names no group",
+            ),
+            (
+                serde_json::json!({ "mention": true, "to_group": "S0ABC" }),
+                "not an array",
+            ),
+            // A handle or a user id is a fine non-empty string that would
+            // never equal an id in a `<!subteam^…>` tag.
+            (
+                serde_json::json!({ "mention": true, "to_group": ["@oncall"] }),
+                "not a user group id",
+            ),
+            (
+                serde_json::json!({ "mention": true, "to_group": ["U0123ABC"] }),
+                "not a user group id",
+            ),
+        ] {
+            let wf = wf_with(trigger);
+            let errors = workflow_reactions(std::slice::from_ref(&wf)).unwrap_err();
+            assert!(
+                errors.iter().any(|e| e.contains(needle)),
+                "expected {needle:?} in {errors:?}"
+            );
+        }
+    }
+
+    /// The accepted shape reaches the resolved trigger verbatim, `repo` and
+    /// all.
+    #[test]
+    fn a_group_route_reaches_the_resolved_trigger() {
+        let wf = wf_with(serde_json::json!({
+            "mention": true, "to_group": ["S0ONCALL"], "repo": "web-app"
+        }));
+        let triggers = workflow_reactions(std::slice::from_ref(&wf)).expect("valid");
+        assert_eq!(triggers[0].to_group, vec!["S0ONCALL".to_string()]);
+        assert_eq!(triggers[0].repo.as_deref(), Some("web-app"));
+        assert!(triggers[0].mention);
     }
 
     /// The shape ADR-0079 adds: an emoji that may also be used on one bot's

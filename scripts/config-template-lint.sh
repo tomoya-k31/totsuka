@@ -57,6 +57,7 @@ TEMPLATE_EXEMPT=""
 # ---------------------------------------------------------------------------
 OPAQUE_ALLOWED="
 mention=[[workflows]].trigger。slack のメンショントリガの宣言そのもの（ADR-0080）
+to_group=[[workflows]].trigger。メンションを宛先グループごとに別 workflow へ振り分ける（ADR-0081）
 reaction=[[workflows]].trigger。slack が絵文字でワークフローを選ぶ（ADR-0025）
 from_bot=[[workflows]].trigger。その絵文字を使ってよい bot 投稿の許可リスト（ADR-0079）
 channel=[[workflows]].trigger。チャンネル監視トリガの宣言そのもの（ADR-0068）

@@ -183,6 +183,8 @@
 # Trigger shapes other than `status`:
 #
 # trigger = { mention = true }                     # slack: mentions addressed to you
+# trigger = { mention = true, to_group = ["S0000000000"] }     # slack: only mentions of that user group
+#                                                 #   (must be a group you belong to; add repo = "…" to pin one)
 # trigger = { reaction = "hammer" }                # slack: you react with :hammer:
 # trigger = { reaction = "mag", from_bot = ["B0000000000"] }   # slack: that emoji also works on posts by those bots
 # trigger = { assignee = ["@me", "@none"] }        # the ingest assignee gate; this is the default

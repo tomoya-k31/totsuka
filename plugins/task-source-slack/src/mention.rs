@@ -22,6 +22,7 @@ use std::collections::{HashSet, VecDeque};
 use serde_json::Value;
 
 use crate::gateway_contract::{MentionTags, extract_subteam_ids};
+use crate::reaction::MentionRoute;
 use crate::slack_api::{SlackFile, parse_files};
 
 /// Bound on the processed-id set. Old entries fall out FIFO; a redelivery
@@ -69,13 +70,23 @@ pub struct Mention {
     /// `None` means no workflow claims this mention, and the task is dropped
     /// rather than submitted somewhere arbitrary.
     pub workflow: Option<String>,
-    /// The repository this task is pinned to by a channel watch trigger
-    /// (`trigger.repo`, #617). `Some` short-circuits the whole resolution
-    /// path — no `task/lookup`, no classifier, no in-thread picker — because
-    /// a watched channel's repository is settled in config, not per message.
+    /// The repository this task is pinned to by its trigger (`trigger.repo`):
+    /// a channel watch (#617), or a group-scoped mention route (ADR-0081).
+    /// `Some` short-circuits the whole resolution path — no `task/lookup`, no
+    /// classifier, no in-thread picker — because the repository is settled in
+    /// config, not per message.
     ///
-    /// Always `None` on the mention and reaction paths, which resolve.
+    /// `None` on the catch-all mention and reaction paths, which resolve.
     pub repo_pin: Option<String>,
+    /// Whether the result is posted by the bot rather than as the operator.
+    ///
+    /// **Carried separately from [`repo_pin`](Self::repo_pin) on purpose.**
+    /// It used to be derived from it, on the reasoning that "only a watch
+    /// pins a repository" — true until a group mention route could pin one
+    /// too (ADR-0081). Left derived, adding `repo` to a mention route would
+    /// have silently moved that route's replies from the operator's name to
+    /// the bot's, which is the one thing this plugin exists not to do.
+    pub post_as_bot: bool,
     /// Files attached to the message, **metadata only** ([`SlackFile`]): the
     /// plugin has no `files:read` scope, so it names them and hands over the
     /// permalink rather than the content. That link is not a dead end — an
@@ -157,23 +168,28 @@ pub struct MentionFilter {
     /// mentions keep working and a startup warning says group ones will not.
     subteams: HashSet<String>,
     self_dm_channel: Option<String>,
-    /// The workflow a plain mention belongs to (0.6.0, #554). `None` means
-    /// none is configured, and mentions are dropped rather than submitted to
-    /// a workflow nobody named.
-    mention_workflow: Option<String>,
+    /// Where a mention goes, in the order the routes are tried (ADR-0081).
+    /// Empty means no workflow answers mentions, and they are dropped rather
+    /// than submitted to a workflow nobody named.
+    ///
+    /// The list arrives pre-ordered from
+    /// [`ReactionTriggers::resolve`](crate::reaction::ReactionTriggers::resolve),
+    /// so this module does not re-implement "specific wins, ties by
+    /// definition order" — it walks the list.
+    mention_routes: Vec<MentionRoute>,
     processed: HashSet<String>,
     processed_order: VecDeque<String>,
 }
 
 impl MentionFilter {
     /// A filter for mentions of `target_user_id`.
-    pub fn new(target_user_id: &str, mention_workflow: Option<String>) -> Self {
+    pub fn new(target_user_id: &str, mention_routes: Vec<MentionRoute>) -> Self {
         Self {
             target_user_id: target_user_id.to_string(),
             tags: MentionTags::new(target_user_id),
             subteams: HashSet::new(),
             self_dm_channel: None,
-            mention_workflow,
+            mention_routes,
             processed: HashSet::new(),
             processed_order: VecDeque::new(),
         }
@@ -220,19 +236,25 @@ impl MentionFilter {
         self.processed.contains(key)
     }
 
-    /// Whether `text` names a user group the operator belongs to.
+    /// The user groups `text` names that the operator belongs to, in the
+    /// order the text names them.
+    ///
+    /// **Which ones, not whether** (ADR-0081): the answer picks the route and
+    /// then rides into the task id, so collapsing it to a bool here would
+    /// throw away the only thing that tells `@oncall` from `@design`.
     ///
     /// The extraction is shared with the Event Gateway's pre-filter
     /// ([`crate::gateway_contract::extract_subteam_ids`]) so the two cannot
     /// disagree about what counts as a group tag — the gateway publishes on
     /// *any* group id, and this decides which of those are the operator's.
-    fn names_my_subteam(&self, text: &str) -> bool {
+    fn my_subteams_in(&self, text: &str) -> Vec<String> {
         if self.subteams.is_empty() {
-            return false;
+            return Vec::new();
         }
         extract_subteam_ids(text)
-            .iter()
-            .any(|id| self.subteams.contains(id))
+            .into_iter()
+            .filter(|id| self.subteams.contains(id))
+            .collect()
     }
 
     /// Run one raw `message` event through the filter table. `Some` means a
@@ -263,9 +285,21 @@ impl MentionFilter {
         // name, and turning them into tasks makes noise dominant. Nothing here
         // matches them: neither predicate looks at a broadcast tag.
         let text = text_of("text").unwrap_or("");
-        if !self.tags.matches(text) && !self.names_my_subteam(text) {
+        let named_groups = self.my_subteams_in(text);
+        if !self.tags.matches(text) && named_groups.is_empty() {
             return None;
         }
+        // 4b. which workflow this mention belongs to (ADR-0081).
+        //
+        // The routes are pre-ordered, so first-match here *is* "the more
+        // specific route wins, ties by definition order". A personal mention
+        // naming no group has an empty `named_groups`, which only the
+        // catch-all claims.
+        let route = self
+            .mention_routes
+            .iter()
+            .find(|r| r.claims(&named_groups))
+            .cloned();
         // 5. no workflow answers mentions.
         //
         // **Before the dedup key is spent**, because spending it here would
@@ -275,16 +309,18 @@ impl MentionFilter {
         // it cannot rank one that does not exist. Reposting would not help
         // either — the key is `{channel}:{ts}`, so the burnt key belongs to
         // that message forever.
-        if self.mention_workflow.is_none() {
+        let Some(route) = route else {
             tracing::warn!(
                 channel,
                 ts,
-                "a mention arrived but no workflow answers mentions → add a `[[workflows]]` \
-                 entry whose `projects` resolve to slack, with `trigger = {{ mention = true }}`. \
-                 Leaving it for a channel watch if one covers this channel"
+                groups = named_groups.join(","),
+                "a mention arrived but no workflow claims it → add a `[[workflows]]` entry \
+                 whose `projects` resolve to slack, with `trigger = {{ mention = true }}` (add \
+                 `to_group` to answer only some groups). Leaving it for a channel watch if one \
+                 covers this channel"
             );
             return None;
-        }
+        };
         // 6. redelivery dedup
         if !self.remember(format!("{channel}:{ts}")) {
             return None;
@@ -297,20 +333,27 @@ impl MentionFilter {
             ts: ts.to_string(),
             thread_ts: text_of("thread_ts").map(str::to_string),
             // A mention never carries one: the label is what routes a task to
-            // a `reaction`-triggered workflow, and a mention belongs to the
+            // a `reaction`-triggered workflow, and a mention belongs to a
             // `mention = true` workflow.
             reaction: None,
-            // …and that workflow is `answer`, whose task *is* the conversation
-            // (ADR-0015). A prefix here would open a second task per message.
-            task_id_prefix: None,
-            // The mention workflow carries no `instructions_kind` — it is
-            // `answer`, and `None` selects the reply instructions, which is
-            // what that wants.
-            instructions_kind: None,
-            workflow: self.mention_workflow.clone(),
-            // A mention resolves its repository; only a channel watch pins
-            // one (#617).
-            repo_pin: None,
+            // The catch-all keeps `None`, so its task **is** the conversation
+            // (ADR-0015) and a second message in the thread continues it. A
+            // group route carries the matched group id, which makes its task
+            // a per-message sibling instead — the same shape a reaction
+            // produces, and the reason a mid-run group mention is not lost to
+            // a hand-over (ADR-0081).
+            task_id_prefix: route.task_id_prefix_for(route.claimed_group(&named_groups)),
+            instructions_kind: route.instructions_kind.clone(),
+            workflow: Some(route.workflow.clone()),
+            // A route may pin its repository (`trigger.repo`), which skips
+            // resolution entirely — no `task/lookup`, no classifier, no
+            // picker. Absent, the mention resolves as it always did.
+            repo_pin: route.repo.clone(),
+            // …but a pinned repository no longer implies the bot posts the
+            // result. Only a channel watch does (ADR-0081 decision 7); a
+            // group mention is still answered as the operator, which is the
+            // whole premise of this plugin.
+            post_as_bot: false,
             files: parse_files(event),
         })
     }
@@ -343,6 +386,7 @@ mod tests {
         Mention {
             workflow: Some("slack-reply".into()),
             repo_pin: None,
+            post_as_bot: false,
             channel: "C1".into(),
             user: "U_OTHER".into(),
             text: "方針はこれでいこう".into(),
@@ -397,7 +441,7 @@ mod tests {
     use serde_json::json;
 
     fn filter() -> MentionFilter {
-        let mut f = MentionFilter::new("U_ME", Some("slack-reply".into()));
+        let mut f = MentionFilter::new("U_ME", vec![MentionRoute::catch_all("slack-reply")]);
         f.set_self_dm_channel("D_SELF".to_string());
         f
     }
@@ -411,6 +455,117 @@ mod tests {
             "ts": "100.1",
             "thread_ts": "100.0"
         })
+    }
+
+    /// A filter routing `S0ONCALL` to its own workflow, everything else to
+    /// the catch-all. The operator belongs to both groups.
+    fn routed_filter() -> MentionFilter {
+        let mut f = MentionFilter::new(
+            "U_ME",
+            vec![
+                MentionRoute {
+                    workflow: "slack-oncall".into(),
+                    to_group: vec!["S0ONCALL".into()],
+                    task_id_prefix: Some("books".into()),
+                    instructions_kind: Some("triage".into()),
+                    repo: Some("web-app".into()),
+                },
+                MentionRoute::catch_all("slack-reply"),
+            ],
+        );
+        f.set_subteams(["S0ONCALL".to_string(), "S0GUILD".to_string()]);
+        f
+    }
+
+    fn group_event(text: &str, ts: &str) -> Value {
+        json!({
+            "type": "message", "channel": "C1", "user": "U_OTHER",
+            "text": text, "ts": ts
+        })
+    }
+
+    /// A claimed group takes its own workflow, and carries that route's
+    /// profile-derived fields and pinned repository with it.
+    #[test]
+    fn a_claimed_group_mention_takes_its_own_workflow() {
+        let m = routed_filter()
+            .assess(&group_event("<!subteam^S0ONCALL> 障害です", "200.1"))
+            .expect("a claimed group mention is a task");
+        assert_eq!(m.workflow.as_deref(), Some("slack-oncall"));
+        assert_eq!(m.instructions_kind.as_deref(), Some("triage"));
+        assert_eq!(m.repo_pin.as_deref(), Some("web-app"));
+        // The prefix carries the group, so this task is a sibling of the
+        // conversation rather than the conversation itself.
+        assert_eq!(m.task_id(), "books:S0ONCALL:C1:200.1");
+    }
+
+    /// **A pinned repository must not change who answers.** Before ADR-0081
+    /// `post_as` was derived from `repo_pin`, so this route would have started
+    /// replying as the bot because it names a repo.
+    #[test]
+    fn a_pinned_route_is_still_answered_as_the_operator() {
+        let m = routed_filter()
+            .assess(&group_event("<!subteam^S0ONCALL> 見て", "200.2"))
+            .expect("a task");
+        assert!(
+            !m.post_as_bot,
+            "a group mention is answered as the operator"
+        );
+    }
+
+    /// A group the operator is in but no route claims falls to the catch-all
+    /// — adding one route must not silently stop the other groups.
+    #[test]
+    fn an_unclaimed_group_still_reaches_the_catch_all() {
+        let m = routed_filter()
+            .assess(&group_event("<!subteam^S0GUILD> 相談です", "200.3"))
+            .expect("a task");
+        assert_eq!(m.workflow.as_deref(), Some("slack-reply"));
+        // The catch-all keeps the conversation id: no prefix, no pin.
+        assert_eq!(m.task_id(), "C1:200.3");
+        assert_eq!(m.repo_pin, None);
+    }
+
+    /// A personal mention names no group, so it reaches the catch-all even
+    /// when group routes are configured.
+    #[test]
+    fn a_personal_mention_is_unaffected_by_group_routes() {
+        let m = routed_filter()
+            .assess(&group_event("<@U_ME> これどう思う", "200.4"))
+            .expect("a task");
+        assert_eq!(m.workflow.as_deref(), Some("slack-reply"));
+        assert_eq!(m.task_id(), "C1:200.4");
+    }
+
+    /// Naming the operator *and* a claimed group takes the group route: the
+    /// more specific one wins (ADR-0081 decision 2).
+    #[test]
+    fn a_group_route_outranks_a_personal_mention_in_the_same_message() {
+        let m = routed_filter()
+            .assess(&group_event("<@U_ME> <!subteam^S0ONCALL> 緊急", "200.5"))
+            .expect("a task");
+        assert_eq!(m.workflow.as_deref(), Some("slack-oncall"));
+    }
+
+    /// A group the operator does **not** belong to claims nothing, even when
+    /// a route names it — membership is the outer gate and stays that way.
+    #[test]
+    fn a_group_the_operator_is_not_in_is_still_ignored() {
+        let mut f = MentionFilter::new(
+            "U_ME",
+            vec![MentionRoute {
+                workflow: "slack-oncall".into(),
+                to_group: vec!["S0OUTSIDE".into()],
+                task_id_prefix: None,
+                instructions_kind: None,
+                repo: None,
+            }],
+        );
+        f.set_subteams(["S0ONCALL".to_string()]);
+        assert!(
+            f.assess(&group_event("<!subteam^S0OUTSIDE> よろしく", "200.6"))
+                .is_none()
+        );
     }
 
     /// A filter that knows the operator belongs to one group.

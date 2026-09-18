@@ -363,6 +363,13 @@ pub fn spawn<T, C, S>(
     // watches, already checked against `[[repositories]]`.
     watch_triggers: crate::watch::WatchTriggers,
     backfill: plugin_sdk::BackfillLimits,
+    // The operator's user groups, when `initialize` already had to resolve
+    // them: a `to_group` route makes membership a **config** question
+    // (ADR-0081), so the answer is needed before `initialize` can return, and
+    // asking twice would spend a second `usergroups.list` on a fact that
+    // cannot have changed in between. `None` means no route claimed a group,
+    // and this resolves them itself below, non-fatally, as it always did.
+    subteams: Option<Vec<String>>,
     mut events: mpsc::UnboundedReceiver<SocketEvent>,
     state: SharedState,
     submitter: S,
@@ -376,7 +383,7 @@ where
     tokio::spawn(async move {
         let mut filter = MentionFilter::new(
             &config.target_user_id,
-            trigger_reactions.mention_workflow().map(str::to_string),
+            trigger_reactions.mention_routes().to_vec(),
         );
         // Resolve the operator's own DM channel up front, for filter row 3.
         // Failure is not fatal: row 2 (own posts) already breaks reply loops.
@@ -403,33 +410,41 @@ where
         // operator may not be using yet — the same call `check_scopes` makes.
         // The warning has to be loud, though: the symptom otherwise is group
         // mentions quietly never becoming tasks.
-        match api.usergroups_for_user(&config.target_user_id).await {
-            Ok(subteams) => {
-                if subteams.is_empty() {
-                    tracing::info!(concat!(
-                        "the operator belongs to no Slack user groups; only personal ",
-                        "mentions will become tasks",
-                    ));
-                } else {
-                    tracing::info!(
-                        groups = subteams.len(),
-                        "resolved the operator's Slack user groups"
+        if let Some(resolved) = subteams {
+            tracing::info!(
+                groups = resolved.len(),
+                "using the user groups resolved during initialize"
+            );
+            filter.set_subteams(resolved);
+        } else {
+            match api.usergroups_for_user(&config.target_user_id).await {
+                Ok(subteams) => {
+                    if subteams.is_empty() {
+                        tracing::info!(concat!(
+                            "the operator belongs to no Slack user groups; only personal ",
+                            "mentions will become tasks",
+                        ));
+                    } else {
+                        tracing::info!(
+                            groups = subteams.len(),
+                            "resolved the operator's Slack user groups"
+                        );
+                    }
+                    filter.set_subteams(subteams);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        concat!(
+                            "could not resolve the operator's Slack user groups → GROUP MENTIONS ",
+                            "WILL NOT BECOME TASKS this run (personal mentions are unaffected). ",
+                            "The usual cause is a user token without the `usergroups:read` scope: ",
+                            "update the app with the current manifest, Reinstall to Workspace, ",
+                            "then store the NEW `xoxp-` and `xoxb-` tokens — a reinstall reissues ",
+                            "both",
+                        )
                     );
                 }
-                filter.set_subteams(subteams);
-            }
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    concat!(
-                        "could not resolve the operator's Slack user groups → GROUP MENTIONS ",
-                        "WILL NOT BECOME TASKS this run (personal mentions are unaffected). ",
-                        "The usual cause is a user token without the `usergroups:read` scope: ",
-                        "update the app with the current manifest, Reinstall to Workspace, ",
-                        "then store the NEW `xoxp-` and `xoxb-` tokens — a reinstall reissues ",
-                        "both",
-                    )
-                );
             }
         }
         // Resolve the bot↔operator DM the notification nudges go to (#305).
@@ -1504,9 +1519,13 @@ fn build_task(
         permalink: enriched.permalink.clone(),
         // Filled in by `submit`, which is where the workflow is known.
         workflow: String::new(),
-        // A watched channel pins the repository, and it is the same fact that
-        // makes the result the bot's: only a watch sets `repo_pin`.
-        post_as: if mention.repo_pin.is_some() {
+        // Stated by the trigger, not inferred from `repo_pin` (ADR-0081).
+        // The old form read "only a watch pins a repository, and a watch
+        // result is the bot's" — true until a group mention route could pin
+        // one too, at which point adding `repo` to that route would have
+        // moved its replies to the bot's name with nothing in the config
+        // saying so.
+        post_as: if mention.post_as_bot {
             crate::approval::PostAs::Bot
         } else {
             crate::approval::PostAs::Operator
@@ -1765,6 +1784,7 @@ mod tests {
         Mention {
             workflow: Some("slack-reply".into()),
             repo_pin: None,
+            post_as_bot: false,
             channel: "C1".into(),
             user: "U_ME".into(),
             text: "やろう".into(),
@@ -1782,6 +1802,7 @@ mod tests {
         Mention {
             workflow: Some("slack-reply".into()),
             repo_pin: None,
+            post_as_bot: false,
             channel: "C1".into(),
             user: "U_OTHER".into(),
             text: "<@U_ME> hi".into(),
@@ -2116,6 +2137,7 @@ mod tests {
             mention: Mention {
                 workflow: Some("slack-reply".into()),
                 repo_pin: None,
+                post_as_bot: false,
                 channel: "C1".into(),
                 user: "U_OTHER".into(),
                 text: "<@U_ME> hi".into(),
@@ -2513,5 +2535,29 @@ mod tests {
         // Overwriting must not duplicate the key either, or the index would
         // evict a live entry while a stale name for it lingers.
         assert_eq!(state.pending.lock().unwrap().entries.len(), 2);
+    }
+    /// `post_as` follows the trigger, not the pinned repository (ADR-0081).
+    ///
+    /// Both directions, because the failure is silent either way: a watch
+    /// that stopped posting as the bot would answer as the operator in a
+    /// channel they never wrote in, and a group mention route that started
+    /// posting as the bot would take the operator's name off their own reply.
+    #[test]
+    fn post_as_follows_the_trigger_not_the_pinned_repo() {
+        let mut watch = enriched("300.1");
+        watch.mention.repo_pin = Some("docs".into());
+        watch.mention.post_as_bot = true;
+        let (_, pending) = build_task(&small_limit_config(), &watch, None);
+        assert_eq!(pending.post_as, crate::approval::PostAs::Bot);
+
+        let mut route = enriched("300.2");
+        route.mention.repo_pin = Some("docs".into());
+        route.mention.post_as_bot = false;
+        let (_, pending) = build_task(&small_limit_config(), &route, None);
+        assert_eq!(
+            pending.post_as,
+            crate::approval::PostAs::Operator,
+            "a pinned repository must not move the reply off the operator's name"
+        );
     }
 }

@@ -23,6 +23,7 @@ use task_source_slack::gateway_contract::{
     Endpoint, GatewayRecord, Projection, Registration, Topic, project,
 };
 use task_source_slack::mention::MentionFilter;
+use task_source_slack::reaction::MentionRoute;
 
 /// The registered operator every case is judged against.
 const CONFORMANCE_USER_ID: &str = "U_ME";
@@ -359,7 +360,10 @@ fn the_gateway_never_drops_what_the_filter_would_accept() {
             continue;
         }
 
-        let mut filter = MentionFilter::new(CONFORMANCE_USER_ID, Some("slack-reply".into()));
+        let mut filter = MentionFilter::new(
+            CONFORMANCE_USER_ID,
+            vec![MentionRoute::catch_all("slack-reply")],
+        );
         filter.set_subteams(OPERATOR_GROUPS.iter().map(|g| (*g).to_string()));
         let accepted = filter.assess(event).is_some();
         let published = !expectations(&case).is_empty();
@@ -398,7 +402,10 @@ fn subteam_records_name_groups_the_filter_can_match() {
                 .expect("a subteam record comes from a message event");
 
             // A member of the named group is mentioned…
-            let mut member = MentionFilter::new(CONFORMANCE_USER_ID, Some("slack-reply".into()));
+            let mut member = MentionFilter::new(
+                CONFORMANCE_USER_ID,
+                vec![MentionRoute::catch_all("slack-reply")],
+            );
             member.set_subteams(record.subteam_ids.clone());
             assert!(
                 member.assess(event).is_some(),
@@ -408,7 +415,10 @@ fn subteam_records_name_groups_the_filter_can_match() {
             );
 
             // …and a non-member is not, unless they were also named directly.
-            let mut outsider = MentionFilter::new(CONFORMANCE_USER_ID, Some("slack-reply".into()));
+            let mut outsider = MentionFilter::new(
+                CONFORMANCE_USER_ID,
+                vec![MentionRoute::catch_all("slack-reply")],
+            );
             outsider.set_subteams(["S0NOT_MINE".to_string()]);
             assert_eq!(
                 outsider.assess(event).is_some(),
