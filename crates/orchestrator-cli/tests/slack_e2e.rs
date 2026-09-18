@@ -504,7 +504,7 @@ output = "none"
 [[workflows]]
 name = "reply"
 projects = ["slack"]
-trigger = {{}}
+trigger = {{ mention = true }}
 mode = "plan"
 agent = "mock_agent"
 output = "source"

@@ -4,7 +4,7 @@ title: 設定リファレンス（config.toml）
 description: "config.toml の全キー・デフォルト値・意味の一覧。設定ファイルは 1 本で、プラグイン個別設定もトップレベルの [<name>] テーブルに入る。シークレット参照、設定スキーマのバージョニング方針、[[projects]] の domain 宣言とワークフローからの参照、プラグインが定義する追加プロパティ、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-github の [github]、task-source-notion の [notion]、task-source-slack の [slack]、agent-ide-herdr の [herdr] を含む。"
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
 tags: [config, reference, toml, secrets, workflow, worktree, github, notion, slack, hooks, versioning]
-generated: { by: claude-code/opus-5, at: 2026-09-17T18:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-19T12:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -187,7 +187,7 @@ project = "tomo-prj"
 |---|---|---|---|
 | `name` | string | 必須 | ワークフロー名 |
 | `projects` | 文字列配列 | 必須 | このワークフローが**タスクを引く先**の `[[projects]].name`（#626、[ADR-0069](/decisions/adr-0069-workflow-projects.md)）。**タスクソースは書かない** —— 名指した domain の所有者として導出される。空配列はエラー（配る先が無い）。複数書くのは「**これらの domain は同じレーン語彙を共有する**」という主張で、`source` が全ボードを暗黙に含んでいたのを列挙に変えたもの。異なる source の domain を混ぜるのはエラー（下記の引き取り規則が claimant を一意に決められない）。スカラーの `[[repositories]].project` と arity が違うので**キー名が複数形**である |
-| `trigger` | テーブル | `{}` | トリガー条件。**中身を解釈してタスクを選ぶのはプラグインである**（#554）。ただし `status` は **core 所有のキー**で（#575、[ADR-0062](/decisions/adr-0062-status-vocabulary.md)）、Orchestrator が閉路検査の列グラフを組むために読む —— `on_*` の書き戻し先と文字列を突き合わせるだけで、タスクの照合には使わない。受理するかは各ソースの自由（状態列を持たない slack は未知キーとして拒否する）。プラグインが `initialize` の `workflows` として受け取り、first-match を走らせる。github の `status` トリガーは**列への入場がリクエスト**（#556）: 完了後でも人間がカードをトリガー列へ差し戻せば同じワークフローが再実行される（誰が再実行するかは assignee と claim が決める）。**別のワークフローのトリガー列へ入った場合は、その会話がそのワークフローへ引き渡される**（#565、列パイプライン）— worktree とエージェントのセッションを保ったまま次の段が始まる。引き渡しは**完了済みの会話だけ**。実行中に別ワークフローの列へ移された配送は見送られ、**ポーリング型のソース（github / notion）なら次の tick で運び直されて引き渡しが成立する**が、ack を先に返す Slack は再配送しないのでそのトリガーは失われる（実行が終わってから付け直すこと）。**この表の未知キーは `initialize` の硬い失敗になる**（#574）。トリガーの解釈は `.get("…")` なので、読み手の居ないキーは黙って捨てられ、条件が 1 つ減る —— つまりタイポはトリガーを**狭めず広げる**（`assinee` と書くと「条件なし」になり、除外したかったタスクにこそ発火する）。エラーはそのソースが読む有効キーを列挙するので、改名からの移行案内も兼ねる。`trigger = {}`（catch-all）はキーが無いので常に有効 **`from_bot` はリアクショントリガの許可リスト**（[ADR-0079](/decisions/adr-0079-reaction-on-bot-posts.md)）で、`reaction` と併記したときだけ意味を持つ（bot 投稿にもその絵文字を効かせる）。`reaction` 抜き・`channel` との併記・空配列はいずれも `CONFIG_INVALID` で弾かれる。 **`channel` はチャンネル監視トリガ**（#617、[ADR-0068](/decisions/adr-0068-channel-watch-trigger.md)）で、`channel_name`（照合用・必須）/ `repo`（固定するリポジトリ・必須）/ `from`（起動を許す投稿者の追加、既定は操作者本人のみ）を伴う。`reaction` との併記は拒否され、`channel` 抜きで他の 3 つだけ書くのも拒否される（これらは有効キーなので未知キー検査では捕まらない）。監視ワークフローはメンションの catch-all 候補には**数えられない** **`assignee` は取り込みの assignee ゲートそのものである**（#572、[ADR-0063](/decisions/adr-0063-trigger-assignee.md)）。`"@me"` / `"@none"` / `"@any"` / ログイン名 / それらの配列（OR）で、**省略時は `["@me", "@none"]`** —— これは #572 以前のプラグイン全体のゲートと同一である。旧ゲートは削除したので**二重にはならない**（書いた条件を書いていない条件が上書きすることが構造的に起きない）。`@` はログイン名に使えない文字なので、`me` / `none` / `any` という実在しうるログイン名と衝突しない。**`@any` は他人のタスクも取り込む**ので、書くときは意図的であること。**`@any` だけは assignee を読まない**ので、notion で `property_map.assignee` が未マップでも書ける（#582）—— 「assignee で絞り込まない」と明示する唯一の書き方である。他の値は未マップだと `initialize` で落ちる。何と突き合わせるかはソース固有で、github は Issue 組み込みの assignee と `github_login`、notion は `property_map.assignee` が名指すプロパティと `notion_user_id` を使う。`assignee` を単独で書く（`status` を併記しない）と配送に lane identity が付かず **1 タスク 1 回**になるので、起動時に警告が 1 行出る |
+| `trigger` | テーブル | `{}` | トリガー条件。**中身を解釈してタスクを選ぶのはプラグインである**（#554）。ただし `status` は **core 所有のキー**で（#575、[ADR-0062](/decisions/adr-0062-status-vocabulary.md)）、Orchestrator が閉路検査の列グラフを組むために読む —— `on_*` の書き戻し先と文字列を突き合わせるだけで、タスクの照合には使わない。受理するかは各ソースの自由（状態列を持たない slack は未知キーとして拒否する）。プラグインが `initialize` の `workflows` として受け取り、first-match を走らせる。github の `status` トリガーは**列への入場がリクエスト**（#556）: 完了後でも人間がカードをトリガー列へ差し戻せば同じワークフローが再実行される（誰が再実行するかは assignee と claim が決める）。**別のワークフローのトリガー列へ入った場合は、その会話がそのワークフローへ引き渡される**（#565、列パイプライン）— worktree とエージェントのセッションを保ったまま次の段が始まる。引き渡しは**完了済みの会話だけ**。実行中に別ワークフローの列へ移された配送は見送られ、**ポーリング型のソース（github / notion）なら次の tick で運び直されて引き渡しが成立する**が、ack を先に返す Slack は再配送しないのでそのトリガーは失われる（実行が終わってから付け直すこと）。**この表の未知キーは `initialize` の硬い失敗になる**（#574）。トリガーの解釈は `.get("…")` なので、読み手の居ないキーは黙って捨てられ、条件が 1 つ減る —— つまりタイポはトリガーを**狭めず広げる**（`assinee` と書くと「条件なし」になり、除外したかったタスクにこそ発火する）。エラーはそのソースが読む有効キーを列挙するので、改名からの移行案内も兼ねる。`trigger = {}` はキーが無いので未知キー検査は常に通る —— ただし**それが「全マッチ」を意味するかはソース次第**で、slack は「起動条件が 1 つも無い」として `CONFIG_INVALID` にする（[ADR-0080](/decisions/adr-0080-slack-mention-trigger-marker.md)）。 **`mention` はメンショントリガ**（slack のみ、[ADR-0080](/decisions/adr-0080-slack-mention-trigger-marker.md)）で、`mention = true` を書いた workflow が自分宛メンションの行き先になる。**宛先 ID は持たない** —— 誰宛が「自分宛」かは `[slack] target_user_id` と `usergroups.list` が解決した所属ユーザーグループで、trigger に書き写さないので実態とずれない。`reaction` / `channel` との併記は拒否される（起動する種別が 2 つになり、設定からどちらか読めない）。`mention = false` は真偽値として素直に読むので `reaction` の横に書いてよいが、**`mention = false` だけの trigger は起動条件が無い**ので拒否される。 **`from_bot` はリアクショントリガの許可リスト**（[ADR-0079](/decisions/adr-0079-reaction-on-bot-posts.md)）で、`reaction` と併記したときだけ意味を持つ（bot 投稿にもその絵文字を効かせる）。`reaction` 抜き・`channel` との併記・空配列はいずれも `CONFIG_INVALID` で弾かれる。 **`channel` はチャンネル監視トリガ**（#617、[ADR-0068](/decisions/adr-0068-channel-watch-trigger.md)）で、`channel_name`（照合用・必須）/ `repo`（固定するリポジトリ・必須）/ `from`（起動を許す投稿者の追加、既定は操作者本人のみ）を伴う。`reaction` との併記は拒否され、`channel` 抜きで他の 3 つだけ書くのも拒否される（これらは有効キーなので未知キー検査では捕まらない）。監視ワークフローはそれ自体が 1 つの種別なので、`mention = true` を書く必要は無い（書くと併記として拒否される） **`assignee` は取り込みの assignee ゲートそのものである**（#572、[ADR-0063](/decisions/adr-0063-trigger-assignee.md)）。`"@me"` / `"@none"` / `"@any"` / ログイン名 / それらの配列（OR）で、**省略時は `["@me", "@none"]`** —— これは #572 以前のプラグイン全体のゲートと同一である。旧ゲートは削除したので**二重にはならない**（書いた条件を書いていない条件が上書きすることが構造的に起きない）。`@` はログイン名に使えない文字なので、`me` / `none` / `any` という実在しうるログイン名と衝突しない。**`@any` は他人のタスクも取り込む**ので、書くときは意図的であること。**`@any` だけは assignee を読まない**ので、notion で `property_map.assignee` が未マップでも書ける（#582）—— 「assignee で絞り込まない」と明示する唯一の書き方である。他の値は未マップだと `initialize` で落ちる。何と突き合わせるかはソース固有で、github は Issue 組み込みの assignee と `github_login`、notion は `property_map.assignee` が名指すプロパティと `notion_user_id` を使う。`assignee` を単独で書く（`status` を併記しない）と配送に lane identity が付かず **1 タスク 1 回**になるので、起動時に警告が 1 行出る |
 | `profile` | enum? | なし | 4 原型のいずれか（`answer` / `triage` / `design` / `implement`）。`mode` / `output` / `verification` の 3 つをまとめて決める。うち `mode` / `verification` は併記不可、`output` は併記すればそちらが勝つ（下記） |
 | `mode` | enum | `profile` が無ければ必須 | `plan`（設計・起案。worktree は作るが push・PR は**想定していない** — F-82。ただし**強制はされていない**、下記）/ `implement` |
 | `agent` | string | 必須 | agent_ide インスタンス名 |
@@ -250,16 +250,16 @@ profile = "implement"
 agent = "herdr"
 
 [[workflows]]
-name = "slack-reply"                  # メンション: catch-all（順序は無関係）
+name = "slack-reply"                  # メンション（順序は無関係）
 projects = ["slack"]
-trigger = {}
+trigger = { mention = true }
 profile = "answer"
 agent = "herdr"
 ```
 
 - 絵文字名は Slack が報告する形（コロン無し）の**文字列**。`":eyes:"` と書いても剥がされる。👀 は `eyes`、👁 は `eye` で別物
 - **同一絵文字を 2 つの workflow に書くと `CONFIG_INVALID`**。first-match で片方が黙って勝つのを許さない
-- **リアクションを持たない workflow（= メンション）が 2 つあっても `CONFIG_INVALID`**（#554）。同じ理由
+- **`mention = true` の workflow が 2 つあっても `CONFIG_INVALID`**（#554）。同じ理由
 - 本人限定の不変条件は不変（他人のリアクションでは起動しない、→ [ADR-0025](/decisions/adr-0025-reaction-task-trigger.md)）
 
 #### `from_bot` — その絵文字を bot 投稿にも効かせる（[ADR-0079](/decisions/adr-0079-reaction-on-bot-posts.md)）
@@ -436,9 +436,9 @@ output = "source"                 # PR の URL をスレッドへ返すため（
 agent = "herdr"
 
 [[workflows]]
-name = "slack-reply"              # catch-all（順序は無関係）
+name = "slack-reply"              # メンション（順序は無関係）
 projects = ["slack"]
-trigger = {}
+trigger = { mention = true }
 profile = "answer"
 agent = "herdr"
 ```

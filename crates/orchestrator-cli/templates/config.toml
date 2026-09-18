@@ -182,7 +182,7 @@
 
 # Trigger shapes other than `status`:
 #
-# trigger = {}                                     # catch-all (slack: the mention workflow)
+# trigger = { mention = true }                     # slack: mentions addressed to you
 # trigger = { reaction = "hammer" }                # slack: you react with :hammer:
 # trigger = { reaction = "mag", from_bot = ["B0000000000"] }   # slack: that emoji also works on posts by those bots
 # trigger = { assignee = ["@me", "@none"] }        # the ingest assignee gate; this is the default
@@ -536,7 +536,7 @@
 # [[workflows]]
 # name = "slack-reply"
 # projects = ["slack"]
-# trigger = {}                              # catch-all: any mention
+# trigger = { mention = true }              # mentions addressed to you
 # profile = "answer"
 # agent = "herdr"
 #

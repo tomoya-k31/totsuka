@@ -64,7 +64,7 @@ fn init_params() -> Value {
     json!({
         "protocol_version": "0.1.0",
         "config": init_config(),
-        "workflows": [{ "workflow": "slack-reply", "trigger": {} }],
+        "workflows": [{ "workflow": "slack-reply", "trigger": { "mention": true } }],
     })
 }
 
@@ -341,7 +341,7 @@ fn init_params_with_repos(config: Value, repositories: Value) -> Value {
         "protocol_version": "0.1.1",
         "config": config,
         "repositories": repositories,
-        "workflows": [{ "workflow": "slack-reply", "trigger": {} }],
+        "workflows": [{ "workflow": "slack-reply", "trigger": { "mention": true } }],
     })
 }
 
@@ -458,7 +458,7 @@ fn init_params_with_llm(config: Value, repositories: Value, llm: Value) -> Value
         "config": config,
         "repositories": repositories,
         "llm": llm,
-        "workflows": [{ "workflow": "slack-reply", "trigger": {} }],
+        "workflows": [{ "workflow": "slack-reply", "trigger": { "mention": true } }],
     })
 }
 
@@ -821,7 +821,7 @@ fn init_params_watching(config: Value, overrides: Value) -> Value {
         "protocol_version": "0.1.0",
         "config": config,
         "workflows": [
-            { "workflow": "slack-reply", "trigger": {} },
+            { "workflow": "slack-reply", "trigger": { "mention": true } },
             { "workflow": "clip", "trigger": trigger, "task_id_prefix": "impl",
               "instructions_kind": "implement" },
         ],

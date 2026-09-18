@@ -1,7 +1,7 @@
 > 🌐 [English](slack-setup.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/slack-quickstart.md sha256:1b342f8e23767f790ef9367dc16c7d69dda7aa5d65b57b58d76dfa1349b76250 -->
+<!-- generated-from: ai-docs/operations/slack-quickstart.md sha256:78a381535749c3945f0c47c6fa90d5cf7e5f3656f5b70d67763464e1b5b7beaa -->
 
 # Slack ソースのセットアップ
 
@@ -169,7 +169,7 @@ output = "source"
 [[workflows]]
 name = "slack-reply"
 projects = ["slack"]
-trigger = {}
+trigger = { mention = true }   # 自分宛メンションで起動
 mode = "plan"            # 返信の起案に push も PR も要らない
 agent = "herdr"
 output = "source"        # 結果は承認フローへ渡る

@@ -1,5 +1,9 @@
 # Bundle Update Log
 
+## 2026-09-19
+
+* **Change**: [task-source-slack](/components/task-source-slack.md)（[ADR-0080](/decisions/adr-0080-slack-mention-trigger-marker.md)、**破壊的**）。メンションの行き先を `trigger = { mention = true }` の**宣言**で決めるようにした。これまでは「`trigger` に `reaction` が無い workflow」という**不在**で選んでいて、設定上は `trigger = {}` と書く。読めないことより、機械的な壊れ方が問題だった: `WorkflowConfig::trigger` は `#[serde(default)]` なので **`trigger` を書き忘れた workflow は `{}` と区別がつかず、黙ってメンションの行き先になっていた**。#574 の未知キー検査が存在したのも、綴り間違いで条件が 1 つ消えた trigger が catch-all に**化ける**からで、つまり「不在で決まる」設計を無関係な検査が支えていた。検査の基準は「テーブルが空か」ではなく**「種別キー（`mention = true` / `reaction` / `channel`）を 1 つでも名指すか」**にしたので、`trigger = {}`・`trigger` の書き忘れ・`mention = false` 単独がすべて同じ 1 つの `CONFIG_INVALID` になる。**移行期間は置かない** —— [ADR-0034](/decisions/adr-0034-protocol-0-4-0-removals.md) が記録したとおり期限付きの非推奨は誰も参照しないので、エラー文に直し方を書く方（`REMOVED_KEYS` の作法）を採った。`mention` は bool として素直に読み、`mention = false` は「メンションには答えない」という真の表明として `reaction` の横に書ける（非 bool は hard error）。その帰結として**種別キーの定数 `VALUED_TRIGGER_KIND_KEYS` に `mention` は入れていない**: `mention` の種別性は存在ではなく**値**なので、`trigger.get("mention").is_some()` で数えると `mention = false` が種別を名乗り、この検査が捕まえるべきまさにその形を素通りさせる（実装中に一度踏み、`mention_false_alone_names_no_kind` が捕まえた）。検査は Slack プラグインに置き SDK へは上げていない —— `unknown_trigger_keys` が SDK にあるのは 4 ソースが同じ失敗を持っていたからで、種別 / 修飾の区別を要るのは今のところ slack だけ。`workflow_infos` が解決済みソースで workflow を絞るため、この拒否が github / notion に届くことは構造的に無く、**`trigger = {}` が catch-all であることは [plugin-sdk](/components/plugin-sdk.md) の契約として残る**（一枚岩の規則を 1 つ失ったのがこの決定の実コスト）。当初案の「宛先 ID を `to_user` / `to_group` として trigger に列挙する」は採らなかった: 挙動同一が前提である以上 ID は情報を増やさず、`[slack] target_user_id` と `usergroups.list` に対する二重管理とドリフト（グループ加入で設定が黙って古くなる）だけを増やすため。
+
 ## 2026-09-18
 
 * **Creation**: bot が投稿したメッセージへのリアクションでタスクを起こす決定を [ADR-0079](/decisions/adr-0079-reaction-on-bot-posts.md) に追加。緩めるのは反応先の投稿者だけで、起動のジェスチャは操作者本人のリアクションのまま。許可は workflow の trigger 単位の `from_bot` で宣言し、Gateway と wire schema は据え置く。

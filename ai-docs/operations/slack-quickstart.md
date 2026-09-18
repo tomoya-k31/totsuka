@@ -4,7 +4,7 @@ title: Slack セットアップ Quickstart（task-source-slack）
 description: 受信方式（Socket Mode / Event Gateway）の選択から始まり、manifest からの Slack アプリ作成 → トークン発行 → トークン保管 → totsuka setup → config.toml の編集 → doctor → run --watch までの導入手順と、手で書く場合のフォールバック、トークン失効・スコープ変更時の対処。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-slack
 tags: [slack, setup, runbook, secrets, doctor]
-generated: { by: claude-code/opus-5, at: 2026-09-17T12:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-19T12:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -186,7 +186,7 @@ output = "source"
 [[workflows]]
 name = "slack-reply"
 projects = ["slack"]
-trigger = {}
+trigger = { mention = true }   # 自分宛メンションで起動
 mode = "plan"            # 返信起案は plan（push/PR なし）で十分
 agent = "herdr"
 output = "source"        # result/publish → 承認フローへ
