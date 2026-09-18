@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](click-to-focus-setup.ja.md)
 
-<!-- generated-from: ai-docs/operations/click-to-focus-setup.md sha256:249a4afe70b35be017281ed4507c45195d52c5273a9a90e70659f153425bb99d -->
+<!-- generated-from: ai-docs/operations/click-to-focus-setup.md sha256:6605ee8853b108567de3b15c2264ae6fc07ac326fab77a9e72b1ae6fd328e74f -->
 
 # Click a notification to open the task's pane
 

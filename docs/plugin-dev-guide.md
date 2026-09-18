@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](plugin-dev-guide.ja.md)
 
-<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:c691e4d30e2bd022618c23b4ede9f6fa95d7ede0aefb566ac50b1c91fa2a0d77 -->
+<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:580159a8cc545fb488925633260bf5cd5f91b84a26c9d6d98d3ce9ee2b9a75d5 -->
 
 # Plugin development guide
 
@@ -59,7 +59,7 @@ In 0.6.0 every bundled plugin ended up at `>=0.6.0`, but that is because they al
 
 0.7.0 is the counter-example in the same release. It added the field that tells a workflow which of a source's domains to scan, and only the two plugins that serve several domains — github and notion — moved to `>=0.7.0`: a build that predates the field ignores it and scans **every** board it owns, so a narrowing an operator wrote silently does not happen. A source with one domain filters an identity, and agents and notifiers never read the field, so those five kept `>=0.6.0` and only widened the ceiling.
 
-The cases that *don't* line up show the rule better. In 0.4.0 only the herdr plugin was raised, to `>=0.2.3`, because 0.2.3 is where the field it needs to launch tools was added and it no longer has a fallback that builds the command line itself — refusing older orchestrators is what makes that removed fallback **unreachable** rather than merely deprecated. The orca plugin is the same kind and stayed at `>=0.1.0`, because it drives the `orca` CLI and never reads that field; raising its lower bound would reject orchestrators it works with perfectly well.
+The cases that *don't* line up show the rule better. In 0.4.0 only the herdr plugin was raised, to `>=0.2.3`, because 0.2.3 is where the field it needs to launch tools was added and it no longer has a fallback that builds the command line itself — refusing older orchestrators is what makes that removed fallback **unreachable** rather than merely deprecated. The orca plugin is the same kind and stayed at `>=0.1.0`, because it drives the `orca` CLI and never reads that field; raising its lower bound would reject orchestrators it works with perfectly well. (The orca plugin has since been rebuilt to launch that same field, so it now depends on it for the same reason herdr does; its lower bound is 0.6.0, which already includes 0.2.3.)
 
 ## Methods
 

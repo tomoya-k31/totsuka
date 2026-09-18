@@ -3,7 +3,7 @@
 //!
 //! Every tool totsuka drives wants a name for what it creates — herdr names
 //! the agent, the Orchestrator names the worktree directory (and orca named
-//! a worktree of its own until ADR-0080) — and each imposes its own alphabet, its own length, and its own
+//! a worktree of its own until ADR-0081) — and each imposes its own alphabet, its own length, and its own
 //! rule about the first character. The **constraints differ; the procedure
 //! does not**, so the constraints are declared per tool by implementing
 //! [`IdentifierPolicy`] and the procedure lives here, once.
@@ -385,7 +385,7 @@ mod tests {
     }
 
     /// A policy with no length limit — orca's `worktree create --name`, as it
-    /// was declared before ADR-0080 stopped the plugin creating worktrees.
+    /// was declared before ADR-0081 stopped the plugin creating worktrees.
     /// Kept as the fixture for the unlimited shape.
     struct Orca;
     impl IdentifierPolicy for Orca {

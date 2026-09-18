@@ -84,7 +84,7 @@ done = true
 | 症状 | 原因候補 | 対処 |
 |---|---|---|
 | 通知は出るがクリックしても何も起きない | `backend` が既定の `osascript` のまま | `[macos]` に `backend = "terminal_notifier"` を設定 |
-| クリックでアプリは前面化するが pane が変わらない | Orchestrator 停止中（`totsuka focus` は静かに no-op）/ pane が既に閉じている / agent が `pane_control` 非宣言（orca 等） | `totsuka focus <task-id>` を手で実行し理由を確認（`focus skipped: …` / `pane not focused — …` が原因を表示） |
+| クリックでアプリは前面化するが pane が変わらない | Orchestrator 停止中（`totsuka focus` は静かに no-op）/ pane が既に閉じている / agent が `pane_control` 非宣言（mock 等。orca は宣言している） | `totsuka focus <task-id>` を手で実行し理由を確認（`focus skipped: …` / `pane not focused — …` が原因を表示） |
 | クリックでコマンドは走るがアプリが前面化しない | `activate_bundle_id` 未設定 or bundle id が誤り | 手順 2 で正しい id を確認して設定 |
 | `config validate` が terminal-notifier のエラーを出す | 未導入 / PATH 外 / `terminal_notifier_bin` が誤り | `brew install terminal-notifier` するか絶対パスを設定。導入せず使う場合は `backend = "osascript"` に戻す（通知は出るがクリック不可） |
 | terminal-notifier 未導入のまま run している | 送信単位で osascript へ自動フォールバック（警告ログあり） | 通知自体は届く。click-to-focus が要るなら導入する |

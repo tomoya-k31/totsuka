@@ -511,7 +511,7 @@ notion では `property_map.assignee` が必須で、`@me` を使うなら `noti
 **すべき。**未設定でもフック POST は受理されるが、その場合の防御は 0600 の UDS パーミッションのみになる。
 
 未設定はツール側が検出する（#209）。判定材料は agent プラグインのマニフェストで、`hook_completion` を宣言していれば
-「フック対応 agent」とみなす（herdr が該当。orca / mock は非該当）。**0.5.0 より前は
+「フック対応 agent」とみなす（herdr と orca が該当。mock は非該当。orca は [ADR-0081](/decisions/adr-0081-orca-herdr-parity.md) から）。**0.5.0 より前は
 `resume_session || diagnostics_snapshot` という de-facto の OR だった**が、
 `diagnostics_snapshot` は `diagnostics/snapshot` に応答できることしか言っておらず、
 フック対応を含意しない（[ADR-0052](/decisions/adr-0052-declaration-consumed.md)）:

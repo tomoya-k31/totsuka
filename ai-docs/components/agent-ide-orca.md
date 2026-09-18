@@ -1,62 +1,82 @@
 ---
 type: Component
 title: agent-ide-orca プラグイン
-description: orca を Agent IDE として接続する公式 agent_ide プラグイン。プロトコル面は herdr プラグインと同一で、orca 固有の起動・状態取得を orca CLI（--json）ラップとして隠蔽する。pane_control は非宣言（capability を正直に宣言）。
+description: orca を Agent IDE として接続する公式 agent_ide プラグイン。herdr プラグインと同じ契約（tool_launch をそのまま起動・hook で完了報告・exit の deadman・pane_control・diagnostics_snapshot）を、orca CLI（--json）の端末操作で実現する。セッションは Orchestrator の worktree に開いた orca 端末。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/agent-ide-orca
-tags: [rust, crate, plugin, agent-ide, orca, cli, worktree]
-generated: { by: claude-code/opus-5, at: 2026-09-13T00:20:00+09:00 }
+tags: [rust, crate, plugin, agent-ide, orca, cli, terminal, hooks]
+generated: { by: claude-code/opus-5, at: 2026-09-19T04:00:00+09:00 }
+verified:
+  - { by: claude-code/opus-5, at: 2026-09-19T03:46:00+09:00 }
+stale_after: 2027-03-19
 status: stable
 owner: tomoya-k31
 ---
 
 # 責務
 
-orca を totsuka の Agent IDE として接続する公式プラグイン（F-30〜F-38）。[plugin-protocol](/components/plugin-protocol.md) を実装する単体バイナリで、Orchestrator 側のプロトコルは [agent-ide-herdr](/components/agent-ide-herdr.md) と同一。orca 固有の起動・状態取得手段をプラグイン内に隠蔽する（F-32）。詳細設計は一次情報ミラー [orca CLI 制御サーフェス](/references/orca-cli-control.md) に準拠する。
+orca を totsuka の Agent IDE として接続する公式プラグイン（F-30〜F-38）。[plugin-protocol](/components/plugin-protocol.md) を実装する単体バイナリで、**Orchestrator から見た契約は [agent-ide-herdr](/components/agent-ide-herdr.md) と同じ** — 同じメソッド・同じ capability・同じ完了経路（hook）を持つ。orca 固有の手段はプラグイン内に閉じる（F-32）。設計の根拠は [ADR-0081](/decisions/adr-0081-orca-herdr-parity.md)、orca 側の事実は [orca CLI 制御サーフェス](/references/orca-cli-control.md) の実測節。
 
-orca は公開 REST/ソケット API を持たず、**`orca` CLI（`--json`）ラップが公式推奨**。実行単位は git worktree、エージェントは worktree 端末で TUI プロセスとして起動する。JSON-RPC は stdout、診断ログは stderr。
+orca は公開 REST/ソケット API を持たず、**`orca` CLI（`--json`）ラップが公式推奨**。JSON-RPC は stdout、診断ログは stderr。
+
+**前提: 対象リポジトリが orca に登録されていること**（`orca repo add --path <repository>`）。orca は登録済みリポジトリの git worktree を自分で見つけるので、Orchestrator が切った worktree もそのまま `path:` で引ける。未登録なら dispatch はその旨のエラーで失敗する。
 
 # モジュール構成
 
 | モジュール | 内容 |
 |---|---|
-| `config` | `[orca]`（= `InitializeParams.config`）を型付け。`orca_bin` / `agent`（既定 claude）/ `setup`（run\|skip\|inherit）/ `repo_selector`（未設定時は dispatch の worktree_path を `path:` セレクタ化）/ `plan_prompt_prefix`（plan モードでプロンプト前置, F-36）/ `poll_interval_ms`。`WorktreeName`（`IdentifierPolicy`）が `worktree create --name` の制約を宣言する（`totsuka-` 前置・長さ上限なし・大小保持・`[-_]`）。**#645 ([ADR-0071](/decisions/adr-0071-task-identifier-naming.md)) で生成手順は `plugin-protocol` の `identifier` へ移り**、名前は `totsuka-<task 番号>[-<handle>]-<hash8>` になった（`handle` は #646 でソースが付ける短い名前。GitHub なら `web-app-42`、Slack / Discord はチャンネル名、Notion は無し）。**`case` が `Case::Lower` なのは orca の要求ではなく**、小文字しか受け付けない herdr と core を一致させるためである — 揃っていないと `Web-App-42` のような handle がツールごとに違って見え、「1 回の grep で 3 つとも引ける」という D-1 の利点が消える。**orca は `--name` の文字種・長さ・重複時の挙動を一切公開していない**（herdr の `invalid_agent_name` に当たる報告経路も無く、拒否されれば汎用の `CliFailed` になる）ので、宣言は意図的に狭く取ってある。名前は書き捨てで、`create` 以降は `id:<worktree_id>` で参照する。`deny_unknown_fields`。**#317: プロンプト文の組み込みデフォルトは Rust の文字列リテラルではなく `plugins/agent-ide-orca/src/defaults.toml`（`include_str!` で埋め込み、`LazyLock` で初回参照時に parse）に置く** — 文言調整をコード変更ではなくデータファイルの編集にするため（エピック [#311](https://github.com/tomoya-k31/totsuka/issues/311)）。上書き口は従来どおり `[orca]` の `plan_prompt_prefix` で、キーもシグネチャも `compose_prompt` の挙動も不変。orca は claude の `--permission-mode plan` や codex の `--sandbox read-only` に相当する構造的な plan API を持たないため、**この前置きテキストが plan 意図の唯一の強制手段**である点に注意（末尾の空行は後続のタスクプロンプトとの区切りとして意味を持つ） |
-| `state` | orca の粗い3値状態（OSC state dots 由来）→ totsuka 正規化状態の写像（`working→running`・`waiting→waiting_input`・`done`/`idle`(tui-idle)→`done`・異常終了/timeout→`failed`・不明は前値維持, F-32）、`blocked` 時の terminal 出力からの質問 best-effort 抽出（F-35） |
-| `cli` | `OrcaCli` trait（`run(args)→JSON`）＋ `ProcessCli`（`orca` サブプロセスを spawn し `--json` を parse）。ロジックを fake orca でテストするための seam |
-| `agent` | `OrcaAgent<C: OrcaCli>`。`dispatch`（`worktree create --agent … --prompt … --json`→worktree id を session_id に, F-31/F-37）/ `attach`（`worktree show` で生存確認・消失は `attached:false`, 弱い吸収）/ `cancel`（`worktree rm --force`, 冪等）/ `start_state_stream`（`worktree ps` を poll し state dot を写像、`terminal wait --for tui-idle` で pacing, F-38） |
-| `server` | JSON-RPC ディスパッチ `Server<F: CliFactory>`。応答と push 通知（`state/notification`）を mpsc ラインチャネルへ。未初期化メソッドは拒否 |
-| `main` | `#[tokio::main]`。専用 writer タスクが stdout を直列化。`ProcessFactory`（設定の orca_bin から `ProcessCli`）を配線 |
+| `cli` | `OrcaCli` trait（`run(args) → result`）＋ `ProcessCli`。orca の `--json` envelope（`{id, ok, result}` / `{id, ok: false, error: {code, message}}`）を剥がし、`ok: false` は `OrcaError::Orca { code }` にする。**トップレベルの `id` は CLI リクエストの id** で、変更前のプラグインはこれを worktree id と取り違えていた。1 回の呼び出しは `request_timeout_secs` で打ち切り（`kill_on_drop`）、`--timeout-ms` を持つ `terminal wait` にはその値＋10 秒を与える |
+| `error` | `OrcaError`。orca のエラーコードで判定する: `is_missing`（`terminal_handle_stale` / `*_not_found`）・`is_exited`（`terminal_exited`）・`is_gone`（どちらか）・`is_wait_timeout`（`timeout`）。`WorktreeUnknown`（repo 未登録の案内）・`MissingToolLaunch`・`SessionUnresumable` |
+| `launch` | `tool_launch` を `terminal create --command` の文字列にする: `exec env 'K=V' … 'program' 'arg' …`。orca は `--command` をログインシェルに**打ち込む**ので全語を単一引用符でクォートし、`exec` でシェルを置き換えて端末の寿命をエージェントに一致させる。クォートは実際の `sh` で読み戻すテストで固定 |
+| `config` | `[orca]` = `orca_bin` / `request_timeout_secs`（既定 30）/ `[orca.layout]`（`shell` 既定 **false**・`direction`）/ `[orca.identity]`（`enabled` 既定 true）。`deny_unknown_fields`。廃止キー（`agent` / `setup` / `repo_selector` / `plan_prompt_prefix` / `poll_interval_ms`）は `removed_keys_in` が名指しで代替を案内する |
+| `state` | orca の worktree `status`（state dots 由来）→ `AgentState`。**`session/attach` 専用**で、完了判定には使わない。`active` など不明値は呼び出し側が渡す前値（`running`）を保つ |
+| `agent` | `OrcaAgent<C: OrcaCli>`。下のメソッド写像のすべて |
+| `server` | JSON-RPC ディスパッチ `Server<F: CliFactory>`。herdr と同じメソッド集合。`SessionUnresumable` → `SESSION_UNRESUMABLE`、`MissingToolLaunch` → `INVALID_PARAMS` |
+| `main` | `#[tokio::main]`。専用 writer タスクが stdout を直列化 |
 
-# メソッド写像（F-32）
+# メソッド写像
 
-- `task/dispatch` → `orca worktree create --repo <sel> --name <n> --agent claude --prompt "…" --setup <mode> --json`（作成＋起動＋初回プロンプトを1コマンド）。plan モードは orca に構造化 API が無いため、プロンプト前置で意図を伝える（縮退可）
-- `task/cancel` → `orca worktree rm --worktree id:<id> --force --json`
-- `session/attach` → `orca worktree show --worktree id:<id> --json`（弱い吸収。orca が Agent Session History と `claude --resume` を保持するため内部対応表は最小）
-- `state/subscribe` → `orca worktree ps --json` の state dot を poll・写像し、`orca terminal wait --for tui-idle` で pacing。「承認待ち idle」は `waiting` state で `done` と切り分ける
+| メソッド | orca CLI |
+|---|---|
+| `task/dispatch` | `terminal create --worktree path:<worktree_path> --title "totsuka <task_id>" --command "exec env … <tool_launch>"` → `worktree set --display-name "<repo>: <title>"`（identity、best-effort）→ `terminal split`（`layout.shell` のときのみ）→ `terminal wait --for tui-idle` → `terminal show` で `agentIdentity` が出るまで待つ（最大 30 秒）→ `terminal send --text <prompt> --enter --wait-submit 60` → `terminal rename --title "totsuka <task_id>"`。`session_id` = 端末 handle。途中で失敗したらタブを閉じてから失敗を返す |
+| `task/cancel` | `terminal close --tab`（`terminal_handle_stale` は成功扱い）。**worktree は消さない** — Orchestrator のもの |
+| `session/attach` | `terminal show` の `connected` → 生存。state は `worktree ps` のその worktree の `status`、無ければ `running` |
+| `session/release` | `terminal show` で `expect_cwd` / `expect_label` を照合 → `terminal close --tab`。handle 消失は `gone`、終了済み（`connected: false`）は残ったタブを片付けて `gone`、不一致は `session/list` に同じ worktree の端末があれば `refused` |
+| `session/list` | `terminal list` のうちタブタイトルが `totsuka ` で始まるもの。分割したシェルはタイトルを持たないので 1 タスク 1 行 |
+| `session/focus` | `terminal switch`（`terminal_exited` / stale は `focused: false`） |
+| `diagnostics/snapshot` | `terminal read --screen`、描画できなければ（`source: screen-unavailable`）`terminal read --limit 200`。失敗は `text: None` |
+| `state/subscribe` | `terminal wait --for exit` を繰り返す deadman。満たされたら／handle が消えたら `failed` を 1 回送って終了。orca の `timeout` は再試行、それ以外の失敗が 5 回続いたら `failed` |
+
+## プロンプトを「認識後」に送る理由
+
+`tui-idle` だけでは Claude の入力受付に間に合わない。実測で、`tui-idle` が満たされた瞬間（起動約 4 秒）に送ったプロンプトは `provider: "unsupported"` の生キー入力として出て行き、**Claude に届かなかった**。`agentIdentity` が出てから送ると `provider: "claude"`・`stages: [input_accepted, turn_started]` で、複数行の本文が 1 ターンとして届く。orca が統合を持たないツールは認識されないので、30 秒で諦めて送る（警告のみ）。
+
+## 所有マーカーを rename で付ける理由
+
+`terminal create --title` は初期値で、Claude の OSC タイトル（`✳ Claude Code`）に数秒で置き換わる。`terminal rename` の値は保たれる。ただし orca は `agentIdentity` をエージェント自身のタイトルから出すので、rename は**プロンプト送信の後**。
+
+## deadman がすべての終了を `failed` にする理由
+
+orca の `exitCode` は実際の終了コードを反映しない（`exit 3` が `exitCode: 0`・`exitCause: unknown` と報告された）。herdr のように「0 なら正常」とは言えない。対話型エージェントは完了しても終了しないし、hook が完了させたタスクへの `failed` は Orchestrator が無視する。
 
 # capability negotiation（F-33）
 
-orca CLI で確実に対応できる `state_stream` のみを宣言し、**`pane_control` も `hook_completion` も宣言しない**（pane 制御サーフェスを持たず、完了は state stream で報告する）（orca は pane 制御サーフェスを持たない）。かつては `design_preview` も非宣言だったが、その capability 自体がプロトコル 0.4.0 で削除された（#411、[ADR-0034](/decisions/adr-0034-protocol-0-4-0-removals.md)）。Orchestrator は宣言された機能のみ要求するため、未対応機能があってもワークフローは成立する。`pane_control` 非宣言のため、0.1.4 の `session/focus` に加え **0.2.1 の `session/release`（worktree 掃除時の pane 解放, #210, [ADR-0010](/decisions/adr-0010-worktree-cleanup-pane-release.md)）も 0.2.2 の `session/list`（doctor 孤児 pane 検出, #211, [ADR-0013](/decisions/adr-0013-orphan-pane-detection.md)）も呼ばれない** — Orchestrator は pane 解放をスキップして worktree だけ削除し、doctor の pane チェックも本プラグインには行わない（本プラグイン変更なし）。
-
-# Claude Code / orca 固有の制約
-
-状態は Orca 注入の status-line hook が発行する OSC state dots 由来の粗い3値で native な権威報告ではない。native な `failed` は無く端末異常終了・timeout から導出。結果は構造化ペイロードで返らないため、成果物は worktree 実体ファイルを直接読むのが堅牢（端末 scrollback パースより）。無人実行は orca の Yolo（Claude は `--dangerously-skip-permissions`）前提で使い捨て worktree に依存。詳細は [orca CLI 制御サーフェス リファレンス](/references/orca-cli-control.md) 参照。
+herdr と同じ `pane_control` / `state_stream` / `hook_completion` / `diagnostics_snapshot` を宣言する（`plugin.toml` と `capabilities_result` の一致は結合テストが検査）。`hook_completion` により Orchestrator は `job_id` と hook 設定入りの `tool_launch` を渡し、完了は Claude Code の Stop/SessionEnd hook が報告する。`pane_control` により worktree 掃除時の `session/release`（[ADR-0010](/decisions/adr-0010-worktree-cleanup-pane-release.md)）・`doctor` の孤児検出（[ADR-0013](/decisions/adr-0013-orphan-pane-detection.md)）・通知クリックの `session/focus`（[ADR-0005](/decisions/adr-0005-click-to-focus.md)）が orca にも届く。
 
 # テスト
 
-- 状態写像（3値＋異常→failed・大小無視・不明は前値維持）・repo セレクタ・plan プロンプト前置・質問抽出は単体テスト。worktree 名は **宣言した制約が狭いままであること**だけを固定する（生成手順の性質検査は `plugin-protocol` 側に 1 本ある → [ADR-0071](/decisions/adr-0071-task-identifier-naming.md) D-5）。
-- **fake orca CLI**（サブコマンド別レスポンス）に対して initialize→dispatch→state/subscribe→状態ストリーム（`running`→`waiting_input`（質問付き）→`done`、異常 state→`failed`）を結合テスト（`tests/integration.rs`）。session/attach 成功・worktree 消失（`attached:false`）、cancel の冪等、capability 宣言（`pane_control` 非宣言）、`config/validate`（`orca status` 疎通）を検証。
-- 実バイナリを stdio で fake `orca` スクリプトに接続して疎通確認済み。
-- **実機との手動疎通チェックリストは issue #61 のコメントに整理**（状態が OSC state dots 由来である前提での遅延・取りこぼし・「承認待ち idle」誤検知の観点を含む）。
+- 単体: envelope の解釈（`id` を漏らさない・`ok: false` のコード・envelope 無しの失敗）、`terminal wait` の打ち切り時間、エラー分類、`exec env` の組み立てと `sh` による読み戻し、廃止キーの案内、状態写像、表示名の文字境界での切り詰め、`resume_failure` の狭さ。
+- 結合（`tests/integration.rs`、fake orca CLI に実測の応答形を返させる）: capability 宣言と `plugin.toml` の一致、dispatch の引数（`path:` セレクタ・`exec env`・タイトル・`--wait-submit`）と**呼び出し順**（`tui-idle` → `show` → `send` → `rename`）、`worktree create` / `worktree rm` を呼ばないこと、`tool_launch` 欠落、repo 未登録、resume 失敗の `SESSION_UNRESUMABLE` と後片付け、認識されないエージェント（一時停止クロックで 30 秒）、deadman、attach / cancel / release（一致・消失・終了済み・不一致）/ list / focus / snapshot、`config/validate`（`runtime.reachable`）。
+- **実機（orca 1.4.205 + Claude Code 2.1.277）**: ビルドしたバイナリを stdio で駆動し、dispatch → プロンプトが 1 ターンとして届き応答 → `session/list` に出る → `diagnostics/snapshot` → `session/release` で閉じる → deadman が `failed` → attach が `attached: false`、まで通した。**Orchestrator を含む通し（hook による完了報告）は未実施**で、[live-e2e](/quality/release-checklist.md) の orca 節で確認する。
 
 # 依存
 
-- `plugin-protocol`（プラグイン境界）、`tokio`（`process`/`io-std`）、`serde` / `serde_json` / `semver` / `thiserror` / `tracing`。
-- `toml`（#317）— 埋め込みの `src/defaults.toml`（プロンプトのデフォルト）を読むためだけに使う。プラグインが受け取る実際の設定は `initialize` 経由の JSON のままで、この依存はバイナリに焼き込まれたフォールバック用。ワークスペースに既にある crate（`plugin-protocol` 等が使用）なので新しいライセンス面・監査面は増えない。
+- `plugin-protocol`（プラグイン境界）、`plugin-sdk`（tracing 初期化のみ）、`tokio`（`process` / `io-std`、dev では `test-util`）、`serde` / `serde_json` / `semver` / `thiserror` / `tracing`。
+- `toml` は外した（プロンプト既定値の `defaults.toml` を読むためだけの依存だったが、`plan_prompt_prefix` ごと廃止した）。
 
 # 関連
 
-- [plugin-protocol](/components/plugin-protocol.md)
-- [agent-ide-herdr](/components/agent-ide-herdr.md)（プロトコル面が同一の対プラグイン）
+- [ADR-0081 orca プラグインを herdr と同じ契約で駆動する](/decisions/adr-0081-orca-herdr-parity.md)
+- [agent-ide-herdr](/components/agent-ide-herdr.md)（同じ契約の対プラグイン）
 - [orca CLI 制御サーフェス / エージェント capability（外部一次情報ミラー）](/references/orca-cli-control.md)
+- [plugin-protocol](/components/plugin-protocol.md)
 - [Spec §4.3 Agent IDE 連携 / F-30〜F-38](/product/orchestrator-spec.ja.md)
-- [ADR-0002 Rust workspace 構成と CI 品質ゲート](/decisions/adr-0002-rust-workspace-ci.md)
