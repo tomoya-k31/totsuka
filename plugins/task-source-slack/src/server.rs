@@ -118,6 +118,21 @@ fn workflow_reactions(
         .map(|t| {
             let mention = parse_mention(t, &mut errors).ok();
             check_trigger_kind(t, mention, &mut errors);
+            // **Before the channel filter below**, which is the only place
+            // `to_group` would otherwise be looked at. A channel watch is
+            // dropped from that iterator, so a `to_group` written on one has
+            // no reader at all: the watch starts and the group restriction
+            // silently goes away. `unknown_trigger_keys` cannot catch it
+            // either — `to_group` is a valid key, just not for this kind.
+            if mention != Some(true) && t.trigger.get("to_group").is_some() {
+                errors.push(format!(
+                    "workflow `{}` has `to_group` without `mention = true` → `to_group` \
+                     narrows which **mentions** reach a workflow, and nothing else reads it; \
+                     a channel watch takes `from` instead. Drop it, or make this a mention \
+                     route",
+                    t.workflow
+                ));
+            }
             mention
         })
         .collect();
@@ -189,15 +204,7 @@ fn workflow_reactions(
                 // the mention slot rather than guessing it into one.
                 mention: mention.unwrap_or(false),
                 to_group: parse_to_group(t, &mut errors).unwrap_or_default(),
-                // `repo` belongs to two trigger kinds now: a channel watch
-                // reads it through the SDK, a mention route through here. The
-                // watch path never reaches this function (filtered above), so
-                // there is no double reader.
-                repo: t
-                    .trigger
-                    .get("repo")
-                    .and_then(|v| v.as_str())
-                    .map(str::to_string),
+                repo: parse_route_repo(t, &mut errors).unwrap_or_default(),
             })
         })
         .collect();
@@ -277,6 +284,10 @@ fn parse_mention(
 /// Absent is `Ok(vec![])`, the catch-all. `Err(())` means the value was
 /// written wrong and an error has been recorded.
 ///
+/// Whether `mention = true` is there at all is checked by the caller, once,
+/// for **every** workflow — this one only ever sees the non-watch ones, and a
+/// `to_group` on a watch needs refusing just as much.
+///
 /// **Shape only.** Whether the operator actually belongs to these groups is a
 /// live fact (`usergroups.list`), so it is checked in `initialize` beside the
 /// TokenGuard rather than here — which is also why `config/validate`, which is
@@ -293,15 +304,6 @@ fn parse_to_group(
     let Some(value) = workflow.trigger.get("to_group") else {
         return Ok(Vec::new());
     };
-    if workflow.trigger.get("mention").and_then(Value::as_bool) != Some(true) {
-        errors.push(format!(
-            "workflow `{}` has `trigger.to_group` but not `mention = true` → `to_group` \
-             narrows which mentions reach a workflow, so without a mention trigger nothing \
-             reads it; add `mention = true`, or drop `to_group`",
-            workflow.workflow
-        ));
-        return Err(());
-    }
     let Some(items) = value.as_array() else {
         errors.push(format!(
             "workflow `{}` has a `trigger.to_group` of {value}, which is not an array → write \
@@ -337,6 +339,40 @@ fn parse_to_group(
         }
     }
     if ok { Ok(ids) } else { Err(()) }
+}
+
+/// Parse one mention route's `trigger.repo` — the repository its tasks are
+/// pinned to (ADR-0081).
+///
+/// `repo` belongs to two trigger kinds now: a channel watch reads it through
+/// the SDK, a mention route through here. The watch path never reaches this
+/// function (mention workflows are the only ones that get here), so there is
+/// no double reader.
+///
+/// **A present-but-unreadable value cannot be read as absent.** Absent means
+/// "resolve the repository normally", so `repo = 123` would quietly widen the
+/// route from one pinned repository to whatever the classifier picks — a
+/// trigger doing more than it says, which is the hazard this whole surface is
+/// built against. The watch parser refuses the same shape.
+fn parse_route_repo(
+    workflow: &plugin_protocol::methods::WorkflowInfo,
+    errors: &mut Vec<String>,
+) -> Result<Option<String>, ()> {
+    let Some(value) = workflow.trigger.get("repo") else {
+        return Ok(None);
+    };
+    match value.as_str().map(str::trim) {
+        Some(repo) if !repo.is_empty() => Ok(Some(repo.to_string())),
+        _ => {
+            errors.push(format!(
+                "workflow `{}` has `trigger.repo = {value}`, which is not a repository name → \
+                 write it as a non-empty string naming one of your `[[repositories]]`, or drop \
+                 the key to resolve the repository per mention",
+                workflow.workflow
+            ));
+            Err(())
+        }
+    }
 }
 
 /// Whether `id` has the shape Slack gives a user group id: `S` and then
@@ -877,10 +913,27 @@ where
                     // unanswerable `to_group` is a workflow that silently
                     // never fires. Writing `to_group` is what makes the scope
                     // required; a config without one keeps the old warning.
+                    //
+                    // **A transient failure is not a bad config.** A
+                    // transport error, a timeout, a 429 or a 5xx says Slack
+                    // was unreachable for a moment; reporting that as
+                    // `CONFIG_INVALID` sends the operator to edit a file that
+                    // is correct. Everything else — `missing_scope` above all
+                    // — is theirs to fix.
+                    //
+                    // `is_retryable` rather than `is_credential`: the latter
+                    // is the TokenGuard's vocabulary (`Auth` /
+                    // `IdentityMismatch`) and does not cover the API-level
+                    // `missing_scope` this call actually returns.
+                    let code = if e.is_retryable() {
+                        error_code::INTERNAL_ERROR
+                    } else {
+                        error_code::CONFIG_INVALID
+                    };
                     return Reply::respond(Response::error(
                         id,
                         Error::new(
-                            error_code::CONFIG_INVALID,
+                            code,
                             format!(
                                 "a workflow uses `trigger.to_group`, but the operator's user groups \
                                  could not be resolved ({e}) → `to_group` is checked \
@@ -1596,7 +1649,7 @@ mod tests {
             // Without `mention = true` nothing reads the key at all.
             (
                 serde_json::json!({ "to_group": ["S0ABC"] }),
-                "not `mention = true`",
+                "without `mention = true`",
             ),
             // Read as the default, `[]` would widen to every mention —
             // the opposite of what "only these groups" says.
@@ -1660,6 +1713,43 @@ mod tests {
         let errors = ReactionTriggers::resolve(&triggers).unwrap_err();
         assert!(errors[0].contains("twice"), "{}", errors[0]);
         assert!(!errors[0].contains("workflows `"), "{}", errors[0]);
+    }
+
+    /// `to_group` on a channel watch has no reader at all: watches are
+    /// filtered out before `parse_to_group` runs, so the watch would start and
+    /// the group restriction would simply go away. `unknown_trigger_keys`
+    /// cannot catch it — the key is valid, just not for this kind.
+    #[test]
+    fn to_group_on_a_channel_watch_is_refused() {
+        let wf = wf_with(serde_json::json!({
+            "channel": "C1", "channel_name": "dev", "repo": "web-app",
+            "to_group": ["S0ABC"]
+        }));
+        let errors = workflow_reactions(std::slice::from_ref(&wf)).unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("without `mention = true`")),
+            "{errors:?}"
+        );
+    }
+
+    /// A present-but-unreadable `repo` must not read as absent: absent means
+    /// "resolve normally", so it would widen the route instead of refusing it.
+    #[test]
+    fn a_non_string_route_repo_is_refused() {
+        for bad in [
+            serde_json::json!(123),
+            serde_json::json!(""),
+            serde_json::json!(["a"]),
+        ] {
+            let wf = wf_with(serde_json::json!({ "mention": true, "repo": bad }));
+            let errors = workflow_reactions(std::slice::from_ref(&wf)).unwrap_err();
+            assert!(
+                errors.iter().any(|e| e.contains("not a repository name")),
+                "{bad}: {errors:?}"
+            );
+        }
     }
 
     /// The accepted shape reaches the resolved trigger verbatim, `repo` and

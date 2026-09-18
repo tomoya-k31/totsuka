@@ -106,6 +106,8 @@ group route を 1 つ足しても、**名指しされていない所属グルー
 
 スコープが無いと所属を解決できず、group route は**永久に一致しない**うえ決定 4 の検証もできない。設定は正しく見えるのに黙って死ぬので拒否する。`to_group` を書いていない設定は従来どおり警告のままで、既存への影響はない。
 
+**一時障害は設定エラーではない。** スコープ不足・所属外・その他 API 由来の失敗は `CONFIG_INVALID` だが、transport / timeout / 429 / 5xx は `INTERNAL_ERROR` にする。Slack が一瞬落ちていただけの起動失敗を「設定が悪い」と報告すると、正しいファイルを編集しに行かせることになる。判定は `is_retryable` で行う —— `is_credential` は TokenGuard の語彙（`Auth` / `IdentityMismatch`）で、この呼び出しが実際に返す API レベルの `missing_scope` を含まない。
+
 ## 10. 所属の照合は `initialize` だけができる
 
 `config/validate` は**意図的にオフライン**（ライブなトークン検証は `initialize` の TokenGuard の仕事）なので、`usergroups.list` を要する決定 4・9 はそこに置けない。**`totsuka config validate` は「あなたが抜けたグループ」を検出できない** —— 失効したトークンを検出できないのと同じ区分である。形（配列か・`S…` か・空でないか・`mention = true` があるか・同じグループを 2 つの workflow が claim していないか）は両方の経路で検査する。
@@ -123,6 +125,8 @@ catch-all は prefix を持たない（タスクが会話そのものだから�
 - **`repo_pin` から `post_as` を導出していた潜在バグが 1 つ消えた。** 「`repo_pin` を立てるのは watch だけ」という暗黙の前提を守る仕組みはコード上どこにも無かった
 - **mention workflow は watch リゾルバに渡さなくなった。** SDK は `channel` の無い `repo` を「壊れた watch」として拒否するので、渡したままだと group route の `repo` が弾かれる。mention は watch ではないので所有境界としても正しい
 - **「操作者本人のタグを引用本文から外すか」も `post_as_bot` に移した。** #632 の処理は `repo_pin` から同じ推論をしていたので、pin を持つ group route では**本人名義で答えるのに本人のタグがエージェントに渡る**ところだった。スレッド文脈の行は `sanitize_reply` を通らないので、そちらには後段の網も無い
+- **`to_group` を mention 以外の trigger に書いたら拒否する。** 種別の検査と同じループで全 workflow を見る。channel watch は `workflow_reactions` の中で早くに除外されるので、そこに書かれた `to_group` には**読み手が 1 つも無く**、watch は起動して絞り込みだけが黙って消えていた。`to_group` は有効なキーなので `unknown_trigger_keys` でも捕まらない
+- **`trigger.repo` の値も検査する。** 非文字列・空文字を「キーが無い」と読むと、pin されるはずのルートが通常解決に落ちて**書いたより広く**マッチする
 - **`channel_name` / `from` を mention workflow に書いたら拒否する。** mention workflow を watch リゾルバに渡さなくした副作用で、SDK の orphan 検査が効かなくなった 2 キーを自前で拾う
 - **`config validate` と `initialize` の検査範囲が非対称になった。** 決定 10 のとおり避けられないが、ADR-0080 で「両者が食い違えないように」`resolve_trigger_shape` へ集約した直後に、意図的な非対称を 1 つ足したことになる。形は共有し、ライブな事実だけが `initialize` 側にある
 

@@ -752,6 +752,34 @@ async fn initialize_refuses_to_group_when_the_groups_cannot_be_resolved() {
     assert!(message.contains("usergroups:read"), "{message}");
 }
 
+/// A Slack outage during startup is not a bad config.
+///
+/// Every `usergroups.list` failure used to map to `CONFIG_INVALID`, which
+/// would send the operator to edit a file that is correct. Only a
+/// credential/permission failure is the config's fault — the same split the
+/// TokenGuard makes.
+#[tokio::test]
+async fn a_transient_usergroups_failure_is_not_a_config_error() {
+    let shared = Shared::default();
+    push_guard_ok(&shared);
+    shared.push(Canned::Network);
+    let (mut srv, _harness) = server(&shared);
+
+    let params = json!({
+        "protocol_version": "0.1.0",
+        "config": init_config(),
+        "workflows": [{ "workflow": "slack-oncall",
+                        "trigger": { "mention": true, "to_group": ["S0MINE"] } }],
+    });
+    let resp = call(&mut srv, 1, "initialize", params).await;
+    let (code, message) = error_of(&resp);
+    assert_eq!(
+        code,
+        plugin_protocol::error_code::INTERNAL_ERROR,
+        "a transient failure must not read as a bad config: {message}"
+    );
+}
+
 /// A config with no `to_group` must not start asking for user groups at
 /// `initialize` — that would turn a missing scope into a startup failure for
 /// everyone who never opted in.
