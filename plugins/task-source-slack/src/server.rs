@@ -197,6 +197,38 @@ fn workflow_reactions(
     }
 }
 
+/// Every `[[workflows]].trigger` error this source can report with no network
+/// and no live state, plus the resolved trigger set (empty when there are
+/// errors, which the caller is about to fail on anyway).
+///
+/// **`initialize` and `config/validate` both go through here so they cannot
+/// disagree about what a valid trigger is.** They did disagree: `config/validate`
+/// checked the `[slack]` table and nothing else, so the kind check above passed
+/// there and failed at startup — on exactly the command an operator runs to
+/// find that out *before* upgrading, and with no deprecation period to cushion
+/// it. Adding a check to one path and not the other is the failure this
+/// function exists to make impossible.
+///
+/// Unknown keys are checked first, deliberately. Trigger keys are this
+/// plugin's vocabulary, so this is the only place that can tell a typo from a
+/// condition (#574) — and a misspelled key leaves a trigger that also names no
+/// kind, where naming the misspelling is more use than saying the workflow has
+/// no trigger at all.
+fn resolve_trigger_shape(
+    workflows: &[plugin_protocol::methods::WorkflowInfo],
+) -> (ReactionTriggers, Vec<String>) {
+    let mut errors = unknown_trigger_keys(workflows, TRIGGER_KEYS);
+    let triggers = match workflow_reactions(workflows).and_then(|ws| ReactionTriggers::resolve(&ws))
+    {
+        Ok(t) => t,
+        Err(mut e) => {
+            errors.append(&mut e);
+            ReactionTriggers::default()
+        }
+    };
+    (triggers, errors)
+}
+
 /// Parse one workflow's `trigger.mention` — whether mentions addressed to the
 /// operator start this workflow.
 ///
@@ -272,8 +304,9 @@ fn check_trigger_kind(
     errors.push(format!(
         "workflow `{}` names no trigger kind, so nothing would ever start it → write \
          `mention = true` to answer mentions addressed to you, `reaction = \"<emoji>\"` to \
-         start on a reaction, or `channel = \"C…\"` to watch a channel. An omitted or empty \
-         `trigger` used to mean \"mentions\"; it has to say so now",
+         start on a reaction, or `channel = \"C…\"` with its required `channel_name` and \
+         `repo` to watch a channel. An omitted or empty `trigger` used to mean \"mentions\"; \
+         it has to say so now",
         workflow.workflow
     ));
 }
@@ -579,24 +612,11 @@ where
                     .into(),
             );
         }
-        // Trigger keys are this plugin's vocabulary, so this is the only place
-        // that can tell a typo from a condition (#574). Without it an unread
-        // key is dropped and the trigger matches *more* than written. It runs
-        // before `workflow_reactions`: a misspelled key makes a trigger that
-        // names no kind, and naming the misspelling is more use than saying
-        // the workflow has no trigger.
-        errors.extend(unknown_trigger_keys(&init.workflows, TRIGGER_KEYS));
         // Reaction triggers arrive on this call as `[[workflows]].trigger.reaction`
-        // (#396), so this is where they are resolved.
-        let reaction_triggers = match workflow_reactions(&init.workflows)
-            .and_then(|ws| ReactionTriggers::resolve(&ws))
-        {
-            Ok(t) => t,
-            Err(mut e) => {
-                errors.append(&mut e);
-                ReactionTriggers::default()
-            }
-        };
+        // (#396), so this is where they are resolved — shared with
+        // `config/validate` so the two cannot disagree.
+        let (reaction_triggers, mut trigger_errors) = resolve_trigger_shape(&init.workflows);
+        errors.append(&mut trigger_errors);
         // Channel watch triggers, on the same call (#617). Resolved against
         // the *merged* repository list above, so `trigger.repo` is checked
         // against whatever the plugin will actually resolve tasks to.
@@ -783,7 +803,14 @@ where
         // — whether this deployment has ever actually received anything
         // (#662).
         let warnings = gateway::config_warnings(&config, std::time::SystemTime::now());
-        ok_validate(id, static_config_errors(&config), warnings)
+        // The trigger shape, on the same terms as `initialize` (ADR-0080).
+        // `ConfigValidateParams.workflows` is documented as the same list
+        // `initialize` gets, so there is nothing to stop this — and every
+        // check here is a pure function of that list, so it stays offline.
+        let mut errors = static_config_errors(&config);
+        let (_, trigger_errors) = resolve_trigger_shape(&parsed.workflows);
+        errors.extend(trigger_errors);
+        ok_validate(id, errors, warnings)
     }
 
     /// `task/update_status`: accepted and ignored — Slack has no status

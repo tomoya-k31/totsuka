@@ -394,7 +394,7 @@ PR の URL を Slack 返信に載せたい場合は、エージェントの最�
 
 ## `[[workflows]].trigger` — マッチ条件
 
-省略または `{}` は**全タスクにマッチ**する。定義順の first-match だが、**その判定を走らせるのはソースプラグインである**（#554）。Orchestrator は `trigger` の中身を一切解釈せず、`initialize` でプラグインへ渡すだけになった。
+省略または `{}` の意味は**ソースプラグインが決める**（#554）。github / notion では**全タスクにマッチ**する catch-all だが、**slack は「起動条件が 1 つも無い」として拒否する**（[ADR-0080](/decisions/adr-0080-slack-mention-trigger-marker.md)）。定義順の first-match も、その判定を走らせるのはプラグインである。Orchestrator は `trigger` の中身を一切解釈せず、`initialize` でプラグインへ渡すだけになった。
 
 ### 絵文字でワークフローを選ぶ（#396）
 
@@ -423,7 +423,8 @@ agent = "herdr"
 | やりがちな間違い | どうなるか |
 |---|---|
 | 同じ絵文字を 2 つの workflow に書く | `CONFIG_INVALID` |
-| リアクションを持たない workflow（= メンション）を 2 つ書く | `CONFIG_INVALID`（#554） |
+| `mention = true` の workflow を 2 つ書く | `CONFIG_INVALID`（#554） |
+| 起動条件（`mention` / `reaction` / `channel`）を 1 つも書かない（`trigger = {}`、`trigger` の書き忘れ） | `CONFIG_INVALID`（ADR-0080） |
 
 本人限定の不変条件（他人のリアクションでは起動しない）は緩和できない。
 

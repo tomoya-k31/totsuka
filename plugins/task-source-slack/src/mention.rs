@@ -63,7 +63,9 @@ pub struct Mention {
     /// `task/submit`.
     ///
     /// Filled from the reaction's trigger, or — on the mention path — from
-    /// the first workflow the Orchestrator listed that requires no reaction.
+    /// the workflow that declared `trigger = { mention = true }` (ADR-0080;
+    /// before that it was the first workflow requiring no reaction, which a
+    /// workflow could become by omission).
     /// `None` means no workflow claims this mention, and the task is dropped
     /// rather than submitted somewhere arbitrary.
     pub workflow: Option<String>,

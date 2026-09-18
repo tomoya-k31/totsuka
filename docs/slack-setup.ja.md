@@ -1,7 +1,7 @@
 > 🌐 [English](slack-setup.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/slack-quickstart.md sha256:78a381535749c3945f0c47c6fa90d5cf7e5f3656f5b70d67763464e1b5b7beaa -->
+<!-- generated-from: ai-docs/operations/slack-quickstart.md sha256:8c75052ce93b9713938c22aa470061429551319fae65edf9d1ea5ff944cbbfe0 -->
 
 # Slack ソースのセットアップ
 
@@ -148,10 +148,11 @@ kind = "task_source"
 
 # 任意: 自分が :eyes: を付けるとメッセージがタスクになる。
 # どの workflow が選ばれるかはプラグインが決める: リアクションは絵文字が
-# 一致する workflow、素のメンションは `reaction` トリガを持たない唯一の
-# workflow へ行く —— このファイル内の並び順は関係ない。同じ絵文字を
-# 2 つの workflow に書く／reaction 無しの workflow を 2 つ書くと、起動時
-#（と `totsuka config validate`）に拒否される。
+# 一致する workflow、素のメンションは `trigger = { mention = true }` を
+# 宣言した唯一の workflow へ行く —— このファイル内の並び順は関係ない。
+# 同じ絵文字を 2 つの workflow に書く／`mention = true` を 2 つ書く／
+# 起動条件（`mention`・`reaction`・`channel`）を 1 つも書かないと、起動時
+# と `totsuka config validate` の両方で拒否される。
 # 他人が付けても起動せず、それを緩和する設定は無い。
 # 名前はコロン有無どちらでもよい。👀 は `eyes`、👁 は `eye` で別の絵文字。
 [[projects]]

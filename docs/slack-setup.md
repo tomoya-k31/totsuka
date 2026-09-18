@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](slack-setup.ja.md)
 
-<!-- generated-from: ai-docs/operations/slack-quickstart.md sha256:78a381535749c3945f0c47c6fa90d5cf7e5f3656f5b70d67763464e1b5b7beaa -->
+<!-- generated-from: ai-docs/operations/slack-quickstart.md sha256:8c75052ce93b9713938c22aa470061429551319fae65edf9d1ea5ff944cbbfe0 -->
 
 # Setting up the Slack source
 
@@ -158,10 +158,11 @@ kind = "task_source"
 # Optional: reacting with :eyes: yourself turns a message into a task.
 # The plugin decides which workflow each event selects: a reaction picks
 # the workflow with the matching emoji, a plain mention goes to the one
-# workflow WITHOUT a `reaction` trigger — order in this file does not
-# matter. Writing the same emoji on two workflows, or two workflows
-# without a reaction, is rejected at startup (and by
-# `totsuka config validate`).
+# workflow declaring `trigger = { mention = true }` — order in this file
+# does not matter. Writing the same emoji on two workflows, writing
+# `mention = true` on two, or naming no trigger kind at all (`mention`,
+# `reaction` or `channel`) is rejected at startup and by
+# `totsuka config validate`.
 # Someone else reacting does not start anything, and there is no setting
 # that relaxes this. Names take or omit the colons; 👀 is `eyes` and
 # 👁 is `eye`, which are different emoji.

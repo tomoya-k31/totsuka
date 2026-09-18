@@ -166,9 +166,10 @@ kind = "task_source"
 
 # 任意: 自分が :eyes: を付けたらタスクにする（#396）。どの workflow が
 # 選ばれるかはプラグインが決める（0.6.0 / #554）: リアクションは絵文字で、
-# メンションは「reaction を持たない workflow」で選ぶ。並び順は関係ない。
-# 同じ絵文字を 2 つの workflow に書く／reaction 無しの workflow を 2 つ書くと
-# `initialize`（= `totsuka config validate` の online パート）が拒否する。
+# メンションは `trigger = { mention = true }` の宣言で選ぶ（ADR-0080）。
+# 並び順は関係ない。同じ絵文字を 2 つの workflow に書く／`mention = true` を
+# 2 つ書く／起動条件（mention・reaction・channel）を 1 つも書かないと、
+# `initialize` と `totsuka config validate` のどちらもが拒否する。
 # 他人が同じ絵文字を付けても起動しない（緩和する設定は無い）。
 # 名前はコロン有無どちらでも可。👀 は eyes、👁 は eye で別物。
 [[projects]]
