@@ -41,10 +41,31 @@ pub struct LayoutConfig {
     /// one click away. The split also takes orca's focus into the new pane.
     #[serde(default)]
     pub shell: bool,
-    /// `terminal split --direction` (`horizontal` / `vertical`), passed
-    /// through untouched. Unset leaves orca's default.
+    /// `terminal split --direction`. Unset leaves orca's default. A closed
+    /// set, so a typo fails `initialize` instead of silently leaving the tab
+    /// unsplit (the split itself is best-effort).
     #[serde(default)]
-    pub direction: Option<String>,
+    pub direction: Option<SplitDirection>,
+}
+
+/// orca's `terminal split --direction` vocabulary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SplitDirection {
+    /// `horizontal`.
+    Horizontal,
+    /// `vertical`.
+    Vertical,
+}
+
+impl SplitDirection {
+    /// The value `--direction` takes.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SplitDirection::Horizontal => "horizontal",
+            SplitDirection::Vertical => "vertical",
+        }
+    }
 }
 
 /// `[orca.identity]`: what the dispatch tells orca about the task.
@@ -150,8 +171,17 @@ mod tests {
             "identity": { "enabled": false },
         }));
         assert!(cfg.layout.shell);
-        assert_eq!(cfg.layout.direction.as_deref(), Some("vertical"));
+        assert_eq!(cfg.layout.direction, Some(SplitDirection::Vertical));
         assert!(!cfg.identity.enabled);
+    }
+
+    #[test]
+    fn a_misspelt_direction_is_rejected() {
+        let err = serde_json::from_value::<OrcaConfig>(
+            serde_json::json!({ "layout": { "direction": "vertial" } }),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("vertial"), "got {err}");
     }
 
     #[test]

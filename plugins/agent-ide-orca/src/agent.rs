@@ -147,14 +147,20 @@ impl<C: OrcaCli> OrcaAgent<C> {
                     e
                 }
             })?;
-        let handle = created
+        let Some(handle) = created
             .get("terminal")
             .and_then(|t| t.get("handle"))
             .and_then(Value::as_str)
-            .ok_or_else(|| {
-                OrcaError::InvalidResponse("`terminal create` returned no terminal handle".into())
-            })?
-            .to_string();
+            .map(str::to_string)
+        else {
+            // The terminal may exist all the same, with an agent starting in
+            // it, and a failed dispatch leaves the Orchestrator no id to
+            // cancel it with. Find it by the title it was created with.
+            self.abandon_untracked(&params).await;
+            return Err(OrcaError::InvalidResponse(
+                "`terminal create` returned no terminal handle".into(),
+            ));
+        };
 
         // From here on the terminal exists, so every failure has to take it
         // back down: a failed dispatch reports no session id, which leaves the
@@ -229,6 +235,19 @@ impl<C: OrcaCli> OrcaAgent<C> {
             ]))
             .await
             .map_err(|e| resume_failure(params, e))?;
+        // A refusal can come back inside a successful envelope. Nothing was
+        // typed, so the dispatch fails and its terminal is closed.
+        if sent
+            .get("send")
+            .and_then(|s| s.get("accepted"))
+            .and_then(Value::as_bool)
+            == Some(false)
+        {
+            return Err(OrcaError::InvalidResponse(
+                "orca did not accept the task prompt (`terminal send` answered accepted: false)"
+                    .into(),
+            ));
+        }
         let prompt_report = sent.get("send").and_then(|s| s.get("prompt"));
         let stages: Vec<&str> = prompt_report
             .and_then(|p| p.get("stages"))
@@ -367,11 +386,45 @@ impl<C: OrcaCli> OrcaAgent<C> {
         }
         let mut argv = args(["terminal", "split", "--terminal", handle]);
         if let Some(direction) = &self.config.layout.direction {
-            argv.extend(args(["--direction", direction]));
+            argv.extend(args(["--direction", direction.as_str()]));
         }
         argv.push("--json".into());
         if let Err(e) = self.cli.run(argv).await {
             tracing::warn!(error = %e, "could not split a companion shell off the agent");
+        }
+    }
+
+    /// Close the terminals a `terminal create` without a handle may have left:
+    /// those in the task's worktree still carrying the initial title.
+    /// Best-effort, like [`abandon`](Self::abandon).
+    async fn abandon_untracked(&self, params: &TaskDispatchParams) {
+        let title = owned_title(params);
+        let listed = match self
+            .cli
+            .run(args([
+                "terminal",
+                "list",
+                "--worktree",
+                &format!("path:{}", params.worktree_path),
+                "--json",
+            ]))
+            .await
+        {
+            Ok(listed) => listed,
+            Err(e) => {
+                tracing::warn!(error = %e, "could not look for a terminal created without a handle");
+                return;
+            }
+        };
+        let handles = listed
+            .get("terminals")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|t| t.get("title").and_then(Value::as_str) == Some(title.as_str()))
+            .filter_map(|t| t.get("handle").and_then(Value::as_str));
+        for handle in handles {
+            self.abandon(handle).await;
         }
     }
 
@@ -441,7 +494,9 @@ impl<C: OrcaCli> OrcaAgent<C> {
     pub async fn cancel(&self, session_id: &str) -> Result<(), OrcaError> {
         match close_tab(&self.cli, session_id).await {
             Ok(()) => Ok(()),
-            Err(e) if e.is_missing() => Ok(()),
+            // `is_gone`, not `is_missing`: a close that races the agent's own
+            // exit has nothing left to cancel either.
+            Err(e) if e.is_gone() => Ok(()),
             Err(e) => Err(e),
         }
     }
@@ -457,7 +512,12 @@ impl<C: OrcaCli> OrcaAgent<C> {
     ) -> Result<SessionReleaseResult, OrcaError> {
         let terminal = match show_terminal(&self.cli, &params.session_id).await {
             Ok(t) => t,
-            Err(e) if e.is_missing() => return Ok(not_released(NotReleased::Gone)),
+            // Nothing at that handle. The task may still hold a live terminal
+            // under another one (a later dispatch), which is the case
+            // `refused` exists for — so look, as herdr does.
+            Err(e) if e.is_missing() => {
+                return Ok(not_released(self.classify_unreleased(params).await));
+            }
             Err(e) => return Err(e),
         };
         let cwd_mismatch = matches!(
@@ -498,18 +558,26 @@ impl<C: OrcaCli> OrcaAgent<C> {
     }
 
     /// Whether the task still holds a live terminal of ours, when the recorded
-    /// handle did not resolve to it (0.4.2, #485) — by the worktree path, the
-    /// same evidence herdr uses second. No evidence degrades to `Gone`.
+    /// handle did not resolve to it (0.4.2, #485). Two pieces of evidence,
+    /// either of which is enough: a live owned terminal in the expected
+    /// worktree (`expect_cwd`, what the worktree cleanup sends), or one
+    /// carrying the expected label (`expect_label`, what `doctor` sends — its
+    /// `totsuka {task_id}` is exactly the tab title). No evidence degrades to
+    /// `Gone`.
     async fn classify_unreleased(&self, params: &SessionReleaseParams) -> NotReleased {
-        let Some(cwd) = params.expect_cwd.as_deref() else {
+        let cwd = params.expect_cwd.as_deref();
+        let label = params.expect_label.as_deref();
+        if cwd.is_none() && label.is_none() {
             return NotReleased::Gone;
-        };
+        }
         match self.list_sessions().await {
             Ok(list)
-                if list
-                    .sessions
-                    .iter()
-                    .any(|s| s.cwd.as_deref().is_some_and(|c| same_path(c, cwd))) =>
+                if list.sessions.iter().any(|s| {
+                    s.session_id != params.session_id
+                        && (cwd
+                            .is_some_and(|cwd| s.cwd.as_deref().is_some_and(|c| same_path(c, cwd)))
+                            || (label.is_some() && s.label.as_deref() == label))
+                }) =>
             {
                 NotReleased::Refused
             }

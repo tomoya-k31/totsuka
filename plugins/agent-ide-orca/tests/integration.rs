@@ -649,6 +649,92 @@ async fn release_refuses_a_terminal_in_another_worktree() {
     assert!(cli.calls_to("terminal close").is_empty());
 }
 
+/// `doctor` releases with `expect_label` and no cwd. A stale handle whose task
+/// still has a live terminal under another handle must answer `refused`,
+/// found by that label — not `gone`.
+#[tokio::test]
+async fn a_stale_handle_whose_task_lives_on_is_refused_by_label() {
+    let cli = FakeCli::default();
+    cli.on("terminal show", vec![Canned::Err("terminal_handle_stale")]);
+    cli.on(
+        "terminal list",
+        vec![Canned::Ok(json!({ "terminals": [
+            { "handle": "term_2", "title": "totsuka T-1", "worktreePath": WORKTREE, "connected": true }
+        ]}))],
+    );
+    let mut d = Driver::new(cli.clone());
+    d.init().await;
+    let r = d
+        .call(
+            "session/release",
+            json!({ "session_id": HANDLE, "expect_label": "totsuka T-1" }),
+        )
+        .await;
+    assert_eq!(r["result"]["released"], false);
+    assert_eq!(r["result"]["not_released"], "refused", "{r}");
+    assert!(cli.calls_to("terminal close").is_empty());
+}
+
+#[tokio::test]
+async fn a_prompt_orca_refuses_fails_the_dispatch_and_closes_the_tab() {
+    let cli = FakeCli::default();
+    cli.on("terminal create", vec![created()]);
+    cli.on("terminal show", vec![agent_shown()]);
+    cli.on(
+        "terminal send",
+        vec![Canned::Ok(json!({ "send": { "accepted": false } }))],
+    );
+    let mut d = Driver::new(cli.clone());
+    d.init().await;
+    let disp = d.call("task/dispatch", dispatch_params(None)).await;
+    assert!(
+        disp["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("accepted"),
+        "{disp}"
+    );
+    assert_eq!(cli.calls_to("terminal close").len(), 1);
+    assert!(cli.calls_to("terminal rename").is_empty());
+}
+
+/// A `terminal create` that succeeds without a handle may still have started
+/// an agent. It is found by its initial title and closed.
+#[tokio::test]
+async fn a_create_without_a_handle_closes_what_it_may_have_started() {
+    let cli = FakeCli::default();
+    cli.on(
+        "terminal create",
+        vec![Canned::Ok(json!({ "terminal": {} }))],
+    );
+    cli.on(
+        "terminal list",
+        vec![Canned::Ok(json!({ "terminals": [
+            { "handle": "term_x", "title": "totsuka T-1", "worktreePath": WORKTREE },
+            { "handle": "term_human", "title": "Terminal 1", "worktreePath": WORKTREE },
+        ]}))],
+    );
+    let mut d = Driver::new(cli.clone());
+    d.init().await;
+    let disp = d.call("task/dispatch", dispatch_params(None)).await;
+    assert!(disp["error"].is_object(), "{disp}");
+    let list = &cli.calls_to("terminal list")[0];
+    assert_eq!(flag_value(list, "--worktree"), Some("path:/wt/agent-1"));
+    let closes = cli.calls_to("terminal close");
+    assert_eq!(closes.len(), 1, "only the task's terminal: {closes:?}");
+    assert_eq!(flag_value(&closes[0], "--terminal"), Some("term_x"));
+}
+
+#[tokio::test]
+async fn cancel_of_an_already_exited_terminal_succeeds() {
+    let cli = FakeCli::default();
+    cli.on("terminal close", vec![Canned::Err("terminal_exited")]);
+    let mut d = Driver::new(cli);
+    d.init().await;
+    let r = d.call("task/cancel", json!({ "session_id": HANDLE })).await;
+    assert!(r["error"].is_null(), "{r}");
+}
+
 #[tokio::test]
 async fn list_returns_only_totsuka_terminals() {
     let cli = FakeCli::default();

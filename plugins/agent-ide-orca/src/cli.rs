@@ -43,8 +43,8 @@ pub struct ProcessCli {
     timeout: Duration,
 }
 
-/// Extra time a blocking `terminal wait` is given beyond its own
-/// `--timeout-ms`, so orca's own `timeout` answer arrives before ours fires.
+/// Extra time a command that blocks on purpose is given beyond its own
+/// timeout, so orca's own answer arrives before ours fires.
 const WAIT_MARGIN: Duration = Duration::from_secs(10);
 
 impl ProcessCli {
@@ -58,15 +58,20 @@ impl ProcessCli {
     }
 
     /// The deadline for one invocation: the configured timeout, stretched for
-    /// a command that blocks on purpose (`--timeout-ms`, i.e. `terminal wait`)
-    /// so the plugin never cuts short a wait it asked for.
+    /// a command that blocks on purpose so the plugin never cuts short a wait
+    /// it asked for — `terminal wait --timeout-ms <ms>` and
+    /// `terminal send --wait-submit <seconds>`.
     fn deadline_for(&self, args: &[String]) -> Duration {
-        let asked = args
-            .iter()
-            .position(|a| a == "--timeout-ms")
-            .and_then(|i| args.get(i + 1))
-            .and_then(|ms| ms.parse::<u64>().ok())
-            .map(|ms| Duration::from_millis(ms) + WAIT_MARGIN);
+        let value = |flag: &str| {
+            args.iter()
+                .position(|a| a == flag)
+                .and_then(|i| args.get(i + 1))
+                .and_then(|v| v.parse::<u64>().ok())
+        };
+        let asked = value("--timeout-ms")
+            .map(Duration::from_millis)
+            .or_else(|| value("--wait-submit").map(Duration::from_secs))
+            .map(|d| d + WAIT_MARGIN);
         match asked {
             Some(asked) => asked.max(self.timeout),
             None => self.timeout,
@@ -188,6 +193,12 @@ mod tests {
             .map(String::from)
             .to_vec();
         assert_eq!(cli.deadline_for(&wait), Duration::from_secs(130));
+        // `--wait-submit` is in seconds, and a prompt that takes longer than
+        // `request_timeout_secs` to start a turn must not be killed mid-wait.
+        let send: Vec<String> = ["terminal", "send", "--wait-submit", "60"]
+            .map(String::from)
+            .to_vec();
+        assert_eq!(cli.deadline_for(&send), Duration::from_secs(70));
         let show: Vec<String> = ["terminal", "show"].map(String::from).to_vec();
         assert_eq!(cli.deadline_for(&show), Duration::from_secs(30));
     }
