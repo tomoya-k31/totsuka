@@ -2857,9 +2857,14 @@ async fn initialize_accepts_a_prerelease_of_the_floor() {
     assert!(resp["error"].is_null(), "must not refuse: {resp}");
 }
 
-/// A herdr newer than anything this plugin was built against passes. Totsuka
-/// must never be the reason an operator cannot run the current herdr (#517):
-/// the floor has no ceiling above it.
+/// A herdr well above the floor passes. Totsuka must never be the reason an
+/// operator cannot run the current herdr (#517): the floor has no ceiling
+/// above it.
+///
+/// The version here is deliberately *not* tied to `wire::NEWEST_CHECKED` — the
+/// point is that nothing above `FLOOR` is refused, and pinning the assertion to
+/// the newest checked slice would mean re-editing this test on every schema
+/// import (it went stale exactly that way when `NEWEST_CHECKED` moved past it).
 #[tokio::test]
 async fn initialize_accepts_a_herdr_newer_than_the_floor() {
     let (socket, _) = FakeHerdr {

@@ -70,7 +70,7 @@ Socket API の版ではない。7 版を実測すると、**両方向に外れ�
 | 0.8.2 → 0.9.0 | 20 → **22** | メソッドの増減 0。任意プロパティの追加のみ（`workspace.close` の params が `WorkspaceTarget` → `WorkspaceCloseParams` に差し替わり `close_group` が増えた・`workspace.create` に `source_workspace_id`・`ping` の capabilities に 3 つ） |
 | 0.9.0 → 0.9.1 | 22 → **22** | **変化 0**。スライスは `sliced_from` のメタを除いてバイト単位で同一 |
 
-- **上がっても壊れていない**: 17 → 22 の 4 回の bump で、22 メソッドの request
+- **上がっても壊れていない**: 17 → 19 → 20 → 22 の 3 回の bump で、22 メソッドの request
   形状の変更 0 件・result 型の削除 0 件・`required` の追加 0 件。protocol が 2 つ
   上がった 0.9.0 でさえ増えたのは任意プロパティだけで、params の `$ref` が別の def
   に差し替わった `workspace.close` も `workspace_id` 必須は同じ（totsuka が送る形は
