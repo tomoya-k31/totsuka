@@ -240,6 +240,113 @@ async fn enrichment_failures_degrade_the_task_instead_of_dropping_it() {
 /// Two-repo config with a channel rule that does NOT match the test channel,
 /// so resolution reaches stage ② (LLM) and, when that is inconclusive, stage
 /// ③ (the ephemeral picker).
+/// Two mention routes: `S0ONCALL` to its own workflow, everything else to the
+/// catch-all. The operator belongs to that group.
+fn init_params_with_group_route() -> Value {
+    let mut params = init_params();
+    params["workflows"] = json!([
+        { "workflow": "slack-oncall",
+          "trigger": { "mention": true, "to_group": ["S0ONCALL"], "repo": "web-app" },
+          "task_id_prefix": "books", "instructions_kind": "triage" },
+        { "workflow": "slack-reply", "trigger": { "mention": true } },
+    ]);
+    params
+}
+
+/// A message naming a user group rather than the operator personally.
+fn group_mention_envelope(envelope_id: &str, ts: &str) -> Value {
+    json!({
+        "type": "events_api",
+        "envelope_id": envelope_id,
+        "payload": { "event": {
+            "type": "message",
+            "channel": "C1",
+            "user": "U_OTHER",
+            "text": "<!subteam^S0ONCALL> 本番が落ちています",
+            "ts": ts,
+        }}
+    })
+}
+
+/// **The live wiring of the route table**, end to end: a real `message` event
+/// over the socket, through `pipeline::spawn`'s `MentionFilter`, out as a
+/// submitted task.
+///
+/// The unit tests resolve routes and the `initialize` tests validate them, but
+/// both would stay green if `mention_routes` were never handed to the filter —
+/// the feature would be fully configured and completely inert. This is the
+/// test that fails in that case.
+#[tokio::test]
+async fn a_group_mention_reaches_its_own_workflow_end_to_end() {
+    let (listener, url) = ws_listener().await;
+    let shared = Shared::default();
+    canned_web_api(&shared, &url);
+    shared.push_for(
+        "usergroups.list",
+        Canned::Data(json!({
+            "ok": true,
+            "usergroups": [{ "id": "S0ONCALL", "users": ["U_ME"] }]
+        })),
+    );
+    let (mut srv, mut harness) = server(&shared);
+
+    call(&mut srv, 1, "initialize", init_params_with_group_route()).await;
+    let mut ws = accept_with_hello(&listener).await;
+    send_and_await_ack(&mut ws, group_mention_envelope("g1", "500.1")).await;
+
+    let submit = harness.next_submit().await;
+    assert_eq!(submit["workflow"], "slack-oncall", "{submit}");
+    let task = &submit["task"];
+    // The group id is in the id, so this task is a sibling of the
+    // conversation rather than the conversation itself (ADR-0081).
+    assert_eq!(task["id"], "books:S0ONCALL:C1:500.1", "{task}");
+    // `trigger.repo` pinned it, so no classifier ran.
+    assert_eq!(task["repo_hint"], "web-app", "{task}");
+    assert!(
+        !shared
+            .requests()
+            .iter()
+            .any(|r| r.method.contains("chat/completions")),
+        "a pinned route must not call the classifier"
+    );
+    // …and the route's profile picked the instruction set, not the
+    // catch-all's reply directive.
+    assert!(
+        task["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("file it as a GitHub issue"),
+        "{task}"
+    );
+}
+
+/// …and a personal mention in the same config still reaches the catch-all,
+/// with the conversation id it always had.
+#[tokio::test]
+async fn a_personal_mention_still_reaches_the_catch_all_end_to_end() {
+    let (listener, url) = ws_listener().await;
+    let shared = Shared::default();
+    canned_web_api(&shared, &url);
+    shared.push_for(
+        "usergroups.list",
+        Canned::Data(json!({
+            "ok": true,
+            "usergroups": [{ "id": "S0ONCALL", "users": ["U_ME"] }]
+        })),
+    );
+    let (mut srv, mut harness) = server(&shared);
+
+    call(&mut srv, 1, "initialize", init_params_with_group_route()).await;
+    let mut ws = accept_with_hello(&listener).await;
+    send_and_await_ack(&mut ws, mention_envelope("p1", "100.2")).await;
+
+    let submit = harness.next_submit().await;
+    assert_eq!(submit["workflow"], "slack-reply", "{submit}");
+    // The conversation id, unprefixed: a group route beside it changes
+    // nothing for a personal mention.
+    assert_eq!(submit["task"]["id"], "C1:100.0", "{submit}");
+}
+
 fn init_params_multi_repo() -> Value {
     json!({
         "workflows": [{ "workflow": "slack-reply", "trigger": { "mention": true } }],
