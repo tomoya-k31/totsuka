@@ -4,7 +4,7 @@ title: 設定例集（config.toml）
 description: そのまま貼って動く config.toml の完全版注釈付き例と、選択肢を持つキー（kind・mode・output・verification・cleanup・trigger・シークレット参照・並列上限）の選び分け基準、TOTSUKA_* 環境変数オーバーライドの対応表、および最小構成／GitHub Projects／Slack／設計→実装ハンドオフのシナリオ別レシピ。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-cli/templates/config.toml
 tags: [config, toml, examples, recipes, workflow, secrets, slack, github, herdr, environment]
-generated: { by: claude-code/opus-5, at: 2026-09-17T19:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-19T12:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -394,7 +394,7 @@ PR の URL を Slack 返信に載せたい場合は、エージェントの最�
 
 ## `[[workflows]].trigger` — マッチ条件
 
-省略または `{}` は**全タスクにマッチ**する。定義順の first-match だが、**その判定を走らせるのはソースプラグインである**（#554）。Orchestrator は `trigger` の中身を一切解釈せず、`initialize` でプラグインへ渡すだけになった。
+省略または `{}` の意味は**ソースプラグインが決める**（#554）。github / notion では**全タスクにマッチ**する catch-all だが、**slack は「起動条件が 1 つも無い」として拒否する**（[ADR-0080](/decisions/adr-0080-slack-mention-trigger-marker.md)）。定義順の first-match も、その判定を走らせるのはプラグインである。Orchestrator は `trigger` の中身を一切解釈せず、`initialize` でプラグインへ渡すだけになった。
 
 ### 絵文字でワークフローを選ぶ（#396）
 
@@ -413,9 +413,9 @@ profile = "implement"
 agent = "herdr"
 
 [[workflows]]
-name = "slack-reply"                # メンション。catch-all（順序は無関係）
+name = "slack-reply"                # メンション（順序は無関係）
 projects = ["slack"]
-trigger = {}
+trigger = { mention = true }
 profile = "answer"
 agent = "herdr"
 ```
@@ -423,7 +423,8 @@ agent = "herdr"
 | やりがちな間違い | どうなるか |
 |---|---|
 | 同じ絵文字を 2 つの workflow に書く | `CONFIG_INVALID` |
-| リアクションを持たない workflow（= メンション）を 2 つ書く | `CONFIG_INVALID`（#554） |
+| `mention = true` の workflow を 2 つ書く | `CONFIG_INVALID`（#554） |
+| 起動条件（`mention` / `reaction` / `channel`）を 1 つも書かない（`trigger = {}`、`trigger` の書き忘れ） | `CONFIG_INVALID`（ADR-0080） |
 
 本人限定の不変条件（他人のリアクションでは起動しない）は緩和できない。
 

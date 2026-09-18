@@ -52,10 +52,10 @@ pub trait TransportFactory {
 /// The `[[workflows]].trigger` keys this source reads (#574).
 ///
 /// Kept beside `workflow_reactions` because that is what makes them true.
-/// `initialize` rejects every other key, so a typo cannot silently turn a
-/// reaction workflow into the plain-mention catch-all — add a key here in the
-/// same edit that teaches the reader to read it.
+/// `initialize` rejects every other key, so a typo cannot drop a condition —
+/// add a key here in the same edit that teaches the reader to read it.
 const TRIGGER_KEYS: &[&str] = &[
+    "mention",
     "reaction",
     "from_bot",
     "channel",
@@ -64,22 +64,62 @@ const TRIGGER_KEYS: &[&str] = &[
     "from",
 ];
 
-/// `(workflow name, its `trigger.reaction`)` for every workflow the
-/// Orchestrator sent, in definition order (#396).
+/// The subset of [`TRIGGER_KEYS`] that names a **kind** of trigger by being
+/// present, as opposed to modifying one.
+///
+/// A workflow naming no kind has no starting condition at all, which
+/// [`check_trigger_kind`] refuses. The split is what that check is: `repo` and
+/// `channel_name` describe a channel watch but cannot start one, and `from` /
+/// `from_bot` widen who may fire a trigger something else declared.
+///
+/// **`mention` is the third kind and is deliberately not in this list**, so
+/// that nothing can reach for it through `trigger.get("mention").is_some()`.
+/// It names its kind by its *value*: `reaction` and `channel` carry what the
+/// trigger matches on, while a mention's targets live in `[slack]
+/// target_user_id` plus the operator's user groups, leaving the key nothing to
+/// carry but a bare `true`. So `mention = false` is a present key that names
+/// no kind — the exact shape an operator writes while turning a mention
+/// workflow off, and the one this check has to catch.
+const VALUED_TRIGGER_KIND_KEYS: &[&str] = &["reaction", "channel"];
+
+/// Every workflow the Orchestrator sent, in definition order (#396), with its
+/// trigger parsed into a [`WorkflowTrigger`].
+///
+/// The name is narrower than the job: it started as "the reactions" and now
+/// also carries `mention` and validates that a trigger names a kind at all.
 ///
 /// The trigger is an opaque `serde_json::Value` (a TOML inline table converted
 /// to JSON), so a non-string `reaction` cannot be turned into an emoji here.
 ///
 /// **A present-but-unreadable value is a hard `initialize` error.** Reading it
-/// as "no reaction" would silently re-classify the workflow as the mention
-/// catch-all — a trigger behaving weaker than it reads, the exact hazard #396
-/// existed to stop. The Orchestrator's own value-type check went away with
-/// `Trigger::matches` (#554), so this plugin is the only place left that can
-/// refuse it.
+/// as "no reaction" would leave a workflow whose only trigger key the plugin
+/// cannot act on — a trigger behaving weaker than it reads, the exact hazard
+/// #396 existed to stop. The Orchestrator's own value-type check went away
+/// with `Trigger::matches` (#554), so this plugin is the only place left that
+/// can refuse it. Since `mention = true` became the mention workflow's
+/// declaration, such a workflow no longer *becomes* the mention catch-all on
+/// the way down — it names no kind at all, and [`check_trigger_kind`] says
+/// so.
 fn workflow_reactions(
     workflows: &[plugin_protocol::methods::WorkflowInfo],
 ) -> Result<Vec<WorkflowTrigger>, Vec<String>> {
     let mut errors = Vec::new();
+    // `mention`, and the "does this trigger name a kind at all" check that key
+    // made possible. Parsed once, here, because the value is needed twice and
+    // a second parse would report the same bad value twice.
+    //
+    // Only this source's own workflows reach `initialize` (`workflow_infos`
+    // filters by resolved source), so refusing a kind-less trigger here cannot
+    // reach a github or notion workflow, where `trigger = {}` is still the
+    // catch-all the SDK documents.
+    let mentions: Vec<Option<bool>> = workflows
+        .iter()
+        .map(|t| {
+            let mention = parse_mention(t, &mut errors).ok();
+            check_trigger_kind(t, mention, &mut errors);
+            mention
+        })
+        .collect();
     // `from_bot` is a reaction trigger's key and nothing else's. Both misuses
     // below are written with **valid** keys, so `unknown_trigger_keys` cannot
     // catch either, and both fail silently without this check: a channel watch
@@ -108,13 +148,13 @@ fn workflow_reactions(
     }
     let triggers = workflows
         .iter()
+        .zip(&mentions)
         // A channel watch is its own trigger kind (#617), so it is neither a
-        // reaction workflow nor a candidate for the plain-mention catch-all.
-        // Without this, adding a watch to a config that already has a mention
-        // workflow is refused as "two workflows trigger on a plain mention" —
-        // it has no `reaction` key, so it otherwise reads as one.
-        .filter(|t| t.trigger.get("channel").is_none())
-        .filter_map(|t| {
+        // reaction workflow nor a mention workflow. It is dropped here rather
+        // than carried and ignored, so that the watch's own keys never reach
+        // the reaction parsing below.
+        .filter(|(t, _)| t.trigger.get("channel").is_none())
+        .filter_map(|(t, mention)| {
             let from_bot = match parse_from_bot(t, &mut errors) {
                 Ok(ids) => ids,
                 Err(()) => return None,
@@ -143,6 +183,10 @@ fn workflow_reactions(
                 task_id_prefix: t.task_id_prefix.clone(),
                 instructions_kind: t.instructions_kind.clone(),
                 from_bot,
+                // A failed parse already produced an error, so `initialize`
+                // fails whatever this says; `false` keeps the workflow out of
+                // the mention slot rather than guessing it into one.
+                mention: mention.unwrap_or(false),
             })
         })
         .collect();
@@ -151,6 +195,120 @@ fn workflow_reactions(
     } else {
         Err(errors)
     }
+}
+
+/// Every `[[workflows]].trigger` error this source can report with no network
+/// and no live state, plus the resolved trigger set (empty when there are
+/// errors, which the caller is about to fail on anyway).
+///
+/// **`initialize` and `config/validate` both go through here so they cannot
+/// disagree about what a valid trigger is.** They did disagree: `config/validate`
+/// checked the `[slack]` table and nothing else, so the kind check above passed
+/// there and failed at startup — on exactly the command an operator runs to
+/// find that out *before* upgrading, and with no deprecation period to cushion
+/// it. Adding a check to one path and not the other is the failure this
+/// function exists to make impossible.
+///
+/// Unknown keys are checked first, deliberately. Trigger keys are this
+/// plugin's vocabulary, so this is the only place that can tell a typo from a
+/// condition (#574) — and a misspelled key leaves a trigger that also names no
+/// kind, where naming the misspelling is more use than saying the workflow has
+/// no trigger at all.
+fn resolve_trigger_shape(
+    workflows: &[plugin_protocol::methods::WorkflowInfo],
+) -> (ReactionTriggers, Vec<String>) {
+    let mut errors = unknown_trigger_keys(workflows, TRIGGER_KEYS);
+    let triggers = match workflow_reactions(workflows).and_then(|ws| ReactionTriggers::resolve(&ws))
+    {
+        Ok(t) => t,
+        Err(mut e) => {
+            errors.append(&mut e);
+            ReactionTriggers::default()
+        }
+    };
+    (triggers, errors)
+}
+
+/// Parse one workflow's `trigger.mention` — whether mentions addressed to the
+/// operator start this workflow.
+///
+/// Absent is `Ok(false)`. `Err(())` means the value was written wrong and an
+/// error has been recorded; the caller stops treating the key as answered,
+/// which keeps [`check_trigger_kind`] from reporting the same key twice.
+///
+/// **A present-but-unreadable value cannot be read as `false`.** That would
+/// turn the one workflow meant to answer mentions into a workflow nothing
+/// starts, and the config would say the opposite — the same hazard that makes
+/// a non-string `reaction` a hard error in [`workflow_reactions`].
+fn parse_mention(
+    workflow: &plugin_protocol::methods::WorkflowInfo,
+    errors: &mut Vec<String>,
+) -> Result<bool, ()> {
+    let Some(value) = workflow.trigger.get("mention") else {
+        return Ok(false);
+    };
+    match value.as_bool() {
+        Some(mention) => Ok(mention),
+        None => {
+            errors.push(format!(
+                "workflow `{}` has `trigger = {{ mention = {value} }}`, which is not a boolean \
+                 → write `mention = true` to answer mentions addressed to you, or drop the key",
+                workflow.workflow
+            ));
+            Err(())
+        }
+    }
+}
+
+/// Refuse a trigger that names no kind of trigger, and one that names two.
+///
+/// `mention` is the already-parsed [`parse_mention`] result; `None` means it
+/// failed to parse and has been reported, so this says nothing more about it.
+///
+/// **This is the check that replaced "an empty trigger means mentions".** That
+/// reading made two mistakes indistinguishable from a working config: a
+/// `trigger` left out entirely is `{}` (`WorkflowConfig::trigger` is
+/// `#[serde(default)]`), and so is one whose only key was misspelled past
+/// [`unknown_trigger_keys`]. Both used to become the mention workflow —
+/// quietly, and in the misspelling's case *instead of* the reaction workflow
+/// the operator wrote. A mention workflow now has to say `mention = true`, so
+/// the remaining empty trigger is what it looks like: nothing.
+fn check_trigger_kind(
+    workflow: &plugin_protocol::methods::WorkflowInfo,
+    mention: Option<bool>,
+    errors: &mut Vec<String>,
+) {
+    let has = |key: &str| workflow.trigger.get(key).is_some();
+    let Some(mention) = mention else { return };
+    if mention {
+        // `mention = false` beside a `reaction` is not this error: it states
+        // something true about a reaction workflow (it does not answer
+        // mentions), and refusing a true statement would make the key
+        // unreadable as the boolean it is.
+        for other in VALUED_TRIGGER_KIND_KEYS {
+            if has(other) {
+                errors.push(format!(
+                    "workflow `{}` has both `mention = true` and `{other}` in its trigger → a \
+                     workflow starts on one kind of event, so one of the two would decide and \
+                     the config would not say which; split it into two workflows, or drop the \
+                     trigger you did not mean",
+                    workflow.workflow
+                ));
+            }
+        }
+        return;
+    }
+    if VALUED_TRIGGER_KIND_KEYS.iter().any(|k| has(k)) {
+        return;
+    }
+    errors.push(format!(
+        "workflow `{}` names no trigger kind, so nothing would ever start it → write \
+         `mention = true` to answer mentions addressed to you, `reaction = \"<emoji>\"` to \
+         start on a reaction, or `channel = \"C…\"` with its required `channel_name` and \
+         `repo` to watch a channel. An omitted or empty `trigger` used to mean \"mentions\"; \
+         it has to say so now",
+        workflow.workflow
+    ));
 }
 
 /// Parse one workflow's `trigger.from_bot` — the bot ids whose posts this
@@ -454,23 +612,11 @@ where
                     .into(),
             );
         }
-        // Trigger keys are this plugin's vocabulary, so this is the only place
-        // that can tell a typo from a condition (#574). Without it an unread
-        // key is dropped and the trigger matches *more* than written — for
-        // Slack that means a workflow silently becoming the plain-mention
-        // catch-all.
-        errors.extend(unknown_trigger_keys(&init.workflows, TRIGGER_KEYS));
         // Reaction triggers arrive on this call as `[[workflows]].trigger.reaction`
-        // (#396), so this is where they are resolved.
-        let reaction_triggers = match workflow_reactions(&init.workflows)
-            .and_then(|ws| ReactionTriggers::resolve(&ws))
-        {
-            Ok(t) => t,
-            Err(mut e) => {
-                errors.append(&mut e);
-                ReactionTriggers::default()
-            }
-        };
+        // (#396), so this is where they are resolved — shared with
+        // `config/validate` so the two cannot disagree.
+        let (reaction_triggers, mut trigger_errors) = resolve_trigger_shape(&init.workflows);
+        errors.append(&mut trigger_errors);
         // Channel watch triggers, on the same call (#617). Resolved against
         // the *merged* repository list above, so `trigger.repo` is checked
         // against whatever the plugin will actually resolve tasks to.
@@ -657,7 +803,14 @@ where
         // — whether this deployment has ever actually received anything
         // (#662).
         let warnings = gateway::config_warnings(&config, std::time::SystemTime::now());
-        ok_validate(id, static_config_errors(&config), warnings)
+        // The trigger shape, on the same terms as `initialize` (ADR-0080).
+        // `ConfigValidateParams.workflows` is documented as the same list
+        // `initialize` gets, so there is nothing to stop this — and every
+        // check here is a pure function of that list, so it stays offline.
+        let mut errors = static_config_errors(&config);
+        let (_, trigger_errors) = resolve_trigger_shape(&parsed.workflows);
+        errors.extend(trigger_errors);
+        ok_validate(id, errors, warnings)
     }
 
     /// `task/update_status`: accepted and ignored — Slack has no status
@@ -1086,6 +1239,7 @@ mod tests {
                 task_id_prefix: None,
                 instructions_kind: None,
                 from_bot: Vec::new(),
+                mention: false,
             })
             .collect();
         ReactionTriggers::resolve(&workflows).expect("valid")
@@ -1125,6 +1279,96 @@ mod tests {
             task_id_prefix: None,
             options: serde_json::Map::new(),
         }
+    }
+
+    /// `mention = true` is what puts a workflow in the mention slot, and it is
+    /// the *only* thing that does.
+    #[test]
+    fn mention_true_declares_the_mention_workflow() {
+        let wf = wf_with(serde_json::json!({ "mention": true }));
+        let triggers = workflow_reactions(std::slice::from_ref(&wf)).expect("valid");
+        assert_eq!(triggers.len(), 1);
+        assert!(triggers[0].mention);
+        assert_eq!(triggers[0].reaction, None);
+    }
+
+    /// An empty trigger used to mean "mentions". It now means nothing, which
+    /// is a startup error rather than a workflow that silently answers every
+    /// mention — the reason the marker exists at all.
+    ///
+    /// `trigger` is `#[serde(default)]` in the core schema, so this is also
+    /// the case of forgetting the key entirely.
+    #[test]
+    fn an_empty_trigger_is_no_longer_the_mention_catch_all() {
+        let wf = wf_with(serde_json::json!({}));
+        let errors = workflow_reactions(std::slice::from_ref(&wf)).unwrap_err();
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("names no trigger kind"), "{}", errors[0]);
+        assert!(errors[0].contains("mention = true"), "{}", errors[0]);
+    }
+
+    /// `mention = false` is a true statement for a reaction workflow, so it is
+    /// accepted there — the key reads as the boolean it is (ADR-0080).
+    #[test]
+    fn mention_false_beside_a_reaction_is_accepted() {
+        let wf = wf_with(serde_json::json!({ "mention": false, "reaction": "eyes" }));
+        let triggers = workflow_reactions(std::slice::from_ref(&wf)).expect("valid");
+        assert!(!triggers[0].mention);
+        assert_eq!(triggers[0].reaction.as_deref(), Some("eyes"));
+    }
+
+    /// …but alone it names no kind, so it fails the same way an empty trigger
+    /// does. The check is "is there a starting condition", not "is the table
+    /// empty".
+    #[test]
+    fn mention_false_alone_names_no_kind() {
+        let wf = wf_with(serde_json::json!({ "mention": false }));
+        let errors = workflow_reactions(std::slice::from_ref(&wf)).unwrap_err();
+        assert!(errors[0].contains("names no trigger kind"), "{}", errors[0]);
+    }
+
+    /// Two kinds in one trigger: whichever the plugin happened to read first
+    /// would decide, and the config would not say which.
+    #[test]
+    fn mention_true_beside_another_kind_is_refused() {
+        for other in [
+            serde_json::json!({ "mention": true, "reaction": "eyes" }),
+            serde_json::json!({ "mention": true, "channel": "C1", "channel_name": "dev",
+                                "repo": "web-app" }),
+        ] {
+            let wf = wf_with(other);
+            let errors = workflow_reactions(std::slice::from_ref(&wf)).unwrap_err();
+            assert!(
+                errors
+                    .iter()
+                    .any(|e| e.contains("starts on one kind of event")),
+                "{errors:?}"
+            );
+        }
+    }
+
+    /// A non-boolean `mention` is refused rather than read as `false`.
+    ///
+    /// Reading it as `false` would leave the operator with a config that says
+    /// "answer mentions" and a plugin that answers none — and, because the
+    /// workflow then names no kind, the *second* error would be about a key
+    /// they did write. One error, about the value they got wrong.
+    #[test]
+    fn a_non_boolean_mention_is_refused() {
+        let wf = wf_with(serde_json::json!({ "mention": "yes" }));
+        let errors = workflow_reactions(std::slice::from_ref(&wf)).unwrap_err();
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("not a boolean"), "{}", errors[0]);
+    }
+
+    /// A channel watch names its own kind, so it needs no `mention` key and
+    /// must not be asked for one (#617).
+    #[test]
+    fn a_channel_watch_names_a_kind_of_its_own() {
+        let wf = wf_with(serde_json::json!({
+            "channel": "C1", "channel_name": "dev", "repo": "web-app"
+        }));
+        workflow_reactions(std::slice::from_ref(&wf)).expect("a watch is a kind");
     }
 
     /// The shape ADR-0079 adds: an emoji that may also be used on one bot's

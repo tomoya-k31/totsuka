@@ -95,7 +95,7 @@ output = "source"
 [[workflows]]
 name = "slack-reply"
 projects = ["slack"]
-trigger = {}
+trigger = { mention = true }
 mode = "plan"
 agent = "herdr"
 output = "source"

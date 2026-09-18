@@ -99,6 +99,9 @@ impl ReactionTriggers {
             task_id_prefix,
             instructions_kind,
             from_bot,
+            // Read below, once, to pick the single mention workflow — this
+            // loop only builds the emoji table.
+            mention: _,
         } in triggers
         {
             let Some(raw) = reaction else { continue };
@@ -135,19 +138,24 @@ impl ReactionTriggers {
             return Err(errors);
         }
 
-        // The workflows that do **not** require a reaction: that is where a
-        // plain mention goes. Two of them is the same failure as two workflows
+        // The workflows that declare `mention = true`: that is where a plain
+        // mention goes. Two of them is the same failure as two workflows
         // claiming one emoji — first-match would pick one and say nothing —
         // so it is refused rather than resolved.
+        //
+        // The candidates are *declared* rather than inferred from the absence
+        // of a `reaction` (server.rs `check_trigger_kind`), so a workflow can
+        // no longer arrive here by omission.
         let mention_candidates: Vec<&String> = triggers
             .iter()
-            .filter(|t| t.reaction.is_none())
+            .filter(|t| t.mention)
             .map(|t| &t.workflow)
             .collect();
         if mention_candidates.len() > 1 {
             errors.push(format!(
-                "workflows {} all trigger on a plain mention → a mention selects \
-                 one workflow; give the others a `reaction` trigger or merge them",
+                "workflows {} all have `trigger = {{ mention = true }}` → a mention selects \
+                 one workflow; leave it on the one that should answer mentions and give the \
+                 others a `reaction` trigger, or merge them",
                 mention_candidates
                     .iter()
                     .map(|w| format!("`{w}`"))
@@ -203,6 +211,19 @@ pub struct WorkflowTrigger {
     /// would open *every* emoji to that bot at once, so adding one automated
     /// entry point would quietly change what the operator's existing emoji do.
     pub from_bot: Vec<String>,
+    /// `trigger.mention`: whether a mention addressed to the operator starts
+    /// this workflow.
+    ///
+    /// **This is a declaration, not a description of the trigger's shape.**
+    /// The mention workflow used to be "the one with no `reaction`", which
+    /// meant a workflow could become it by omission — including by a
+    /// misspelling that left its real trigger empty. Reading a key the
+    /// operator wrote is the whole point of the change.
+    ///
+    /// Who counts as a mention target is unchanged and lives elsewhere:
+    /// `[slack] target_user_id` and the user groups `usergroups.list` resolves
+    /// for them. The key carries no ids, so it cannot drift from either.
+    pub mention: bool,
 }
 
 /// Where a reaction points: the coordinates needed to re-fetch the message.
@@ -395,6 +416,7 @@ mod tests {
                 task_id_prefix: None,
                 instructions_kind: None,
                 from_bot: Vec::new(),
+                mention: true,
             },
             WorkflowTrigger {
                 workflow: "slack-other".into(),
@@ -402,6 +424,7 @@ mod tests {
                 task_id_prefix: None,
                 instructions_kind: None,
                 from_bot: Vec::new(),
+                mention: true,
             },
         ])
         .expect_err("two mention workflows must be refused");
@@ -422,6 +445,7 @@ mod tests {
                 task_id_prefix: Some("impl".into()),
                 instructions_kind: Some("implement".into()),
                 from_bot: Vec::new(),
+                mention: false,
             },
             WorkflowTrigger {
                 workflow: "slack-reply".into(),
@@ -429,6 +453,7 @@ mod tests {
                 task_id_prefix: None,
                 instructions_kind: None,
                 from_bot: Vec::new(),
+                mention: true,
             },
         ])
         .expect("one of each is the intended shape");
@@ -447,6 +472,7 @@ mod tests {
             task_id_prefix: None,
             instructions_kind: None,
             from_bot: Vec::new(),
+            mention: false,
         }])
         .expect("valid")
     }
@@ -496,6 +522,7 @@ mod tests {
             task_id_prefix: Some("impl".into()),
             instructions_kind: None,
             from_bot: Vec::new(),
+            mention: false,
         }])
         .expect("valid");
         let target = reaction_target(&event("U_ME", "hammer", "message"), "U_ME", &triggers)
@@ -524,6 +551,7 @@ mod tests {
                 task_id_prefix: None,
                 instructions_kind: None,
                 from_bot: Vec::new(),
+                mention: false,
             },
             WorkflowTrigger {
                 workflow: "slack-implement".into(),
@@ -531,6 +559,7 @@ mod tests {
                 task_id_prefix: Some("impl".into()),
                 instructions_kind: None,
                 from_bot: Vec::new(),
+                mention: false,
             },
         ])
         .expect("valid");
@@ -586,6 +615,7 @@ mod tests {
             task_id_prefix: None,
             instructions_kind: None,
             from_bot: Vec::new(),
+            mention: false,
         }])
         .expect("valid");
         assert!(reaction_target(&event("U_ME", "eyes", "message"), "U_ME", &triggers).is_some());
@@ -602,6 +632,7 @@ mod tests {
                 task_id_prefix: None,
                 instructions_kind: None,
                 from_bot: Vec::new(),
+                mention: false,
             },
             WorkflowTrigger {
                 workflow: "b".into(),
@@ -609,6 +640,7 @@ mod tests {
                 task_id_prefix: None,
                 instructions_kind: None,
                 from_bot: Vec::new(),
+                mention: false,
             },
         ])
         .expect_err("duplicate emoji must be rejected");
@@ -627,6 +659,7 @@ mod tests {
             task_id_prefix: None,
             instructions_kind: None,
             from_bot: Vec::new(),
+            mention: false,
         }])
         .expect_err("a non-name must be rejected");
         assert!(errors[0].contains("wf"), "{errors:?}");
@@ -634,14 +667,15 @@ mod tests {
 
     #[test]
     fn workflows_without_a_reaction_trigger_leave_the_feature_off() {
-        // The mention catch-all (`trigger = {}`) and status-triggered
-        // workflows must not switch the reaction path on.
+        // The mention workflow (`trigger = { mention = true }`) and
+        // status-triggered workflows must not switch the reaction path on.
         let triggers = ReactionTriggers::resolve(&[WorkflowTrigger {
             workflow: "catch-all".into(),
             reaction: None,
             task_id_prefix: None,
             instructions_kind: None,
             from_bot: Vec::new(),
+            mention: true,
         }])
         .unwrap();
         assert!(triggers.is_empty());
@@ -870,6 +904,7 @@ mod tests {
             task_id_prefix: None,
             instructions_kind: None,
             from_bot: vec!["B_APPROVALS".to_string()],
+            mention: false,
         }])
         .expect("valid");
         let target = reaction_target(&event("U_ME", "eyes", "message"), "U_ME", &triggers)

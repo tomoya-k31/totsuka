@@ -957,8 +957,8 @@ async fn submit<S: Submitter>(
         tracing::warn!(
             task_id,
             "no workflow claims this task → configure a `[[workflows]]` entry \
-             with source = \"slack\" (a mention needs one without a `reaction` \
-             trigger); dropping"
+             whose `projects` resolve to slack (a mention needs one declaring \
+             `trigger = {{ mention = true }}`); dropping"
         );
         return;
     };

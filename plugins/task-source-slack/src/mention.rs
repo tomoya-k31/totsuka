@@ -44,8 +44,8 @@ pub struct Mention {
     pub thread_ts: Option<String>,
     /// The emoji that started this task, when a reaction did (#396). Always
     /// `None` on the mention path — a mention-derived task must carry no
-    /// `reaction:` label, or it stops matching the catch-all workflow that is
-    /// meant to handle it.
+    /// `reaction:` label, or it stops matching the `mention = true` workflow
+    /// that is meant to handle it.
     pub reaction: Option<String>,
     /// The task-id prefix the matched workflow's profile asks for (#397).
     ///
@@ -63,7 +63,9 @@ pub struct Mention {
     /// `task/submit`.
     ///
     /// Filled from the reaction's trigger, or — on the mention path — from
-    /// the first workflow the Orchestrator listed that requires no reaction.
+    /// the workflow that declared `trigger = { mention = true }` (ADR-0080;
+    /// before that it was the first workflow requiring no reaction, which a
+    /// workflow could become by omission).
     /// `None` means no workflow claims this mention, and the task is dropped
     /// rather than submitted somewhere arbitrary.
     pub workflow: Option<String>,
@@ -278,8 +280,8 @@ impl MentionFilter {
                 channel,
                 ts,
                 "a mention arrived but no workflow answers mentions → add a `[[workflows]]` \
-                 entry with source = \"slack\" and no `reaction`/`channel` trigger. Leaving it \
-                 for a channel watch if one covers this channel"
+                 entry whose `projects` resolve to slack, with `trigger = {{ mention = true }}`. \
+                 Leaving it for a channel watch if one covers this channel"
             );
             return None;
         }
@@ -296,14 +298,14 @@ impl MentionFilter {
             thread_ts: text_of("thread_ts").map(str::to_string),
             // A mention never carries one: the label is what routes a task to
             // a `reaction`-triggered workflow, and a mention belongs to the
-            // catch-all.
+            // `mention = true` workflow.
             reaction: None,
-            // …and the catch-all is `answer`, whose task *is* the conversation
+            // …and that workflow is `answer`, whose task *is* the conversation
             // (ADR-0015). A prefix here would open a second task per message.
             task_id_prefix: None,
             // The mention workflow carries no `instructions_kind` — it is
-            // the catch-all `answer`, and `None` selects the reply
-            // instructions, which is what that wants.
+            // `answer`, and `None` selects the reply instructions, which is
+            // what that wants.
             instructions_kind: None,
             workflow: self.mention_workflow.clone(),
             // A mention resolves its repository; only a channel watch pins

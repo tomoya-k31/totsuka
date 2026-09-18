@@ -4,7 +4,7 @@ title: Slack セットアップ Quickstart（task-source-slack）
 description: 受信方式（Socket Mode / Event Gateway）の選択から始まり、manifest からの Slack アプリ作成 → トークン発行 → トークン保管 → totsuka setup → config.toml の編集 → doctor → run --watch までの導入手順と、手で書く場合のフォールバック、トークン失効・スコープ変更時の対処。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-slack
 tags: [slack, setup, runbook, secrets, doctor]
-generated: { by: claude-code/opus-5, at: 2026-09-17T12:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-19T12:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -166,9 +166,10 @@ kind = "task_source"
 
 # 任意: 自分が :eyes: を付けたらタスクにする（#396）。どの workflow が
 # 選ばれるかはプラグインが決める（0.6.0 / #554）: リアクションは絵文字で、
-# メンションは「reaction を持たない workflow」で選ぶ。並び順は関係ない。
-# 同じ絵文字を 2 つの workflow に書く／reaction 無しの workflow を 2 つ書くと
-# `initialize`（= `totsuka config validate` の online パート）が拒否する。
+# メンションは `trigger = { mention = true }` の宣言で選ぶ（ADR-0080）。
+# 並び順は関係ない。同じ絵文字を 2 つの workflow に書く／`mention = true` を
+# 2 つ書く／起動条件（mention・reaction・channel）を 1 つも書かないと、
+# `initialize` と `totsuka config validate` のどちらもが拒否する。
 # 他人が同じ絵文字を付けても起動しない（緩和する設定は無い）。
 # 名前はコロン有無どちらでも可。👀 は eyes、👁 は eye で別物。
 [[projects]]
@@ -186,7 +187,7 @@ output = "source"
 [[workflows]]
 name = "slack-reply"
 projects = ["slack"]
-trigger = {}
+trigger = { mention = true }   # 自分宛メンションで起動
 mode = "plan"            # 返信起案は plan（push/PR なし）で十分
 agent = "herdr"
 output = "source"        # result/publish → 承認フローへ

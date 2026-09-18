@@ -64,7 +64,7 @@ fn init_params() -> Value {
     json!({
         "protocol_version": "0.1.0",
         "config": init_config(),
-        "workflows": [{ "workflow": "slack-reply", "trigger": {} }],
+        "workflows": [{ "workflow": "slack-reply", "trigger": { "mention": true } }],
     })
 }
 
@@ -341,7 +341,7 @@ fn init_params_with_repos(config: Value, repositories: Value) -> Value {
         "protocol_version": "0.1.1",
         "config": config,
         "repositories": repositories,
-        "workflows": [{ "workflow": "slack-reply", "trigger": {} }],
+        "workflows": [{ "workflow": "slack-reply", "trigger": { "mention": true } }],
     })
 }
 
@@ -458,7 +458,7 @@ fn init_params_with_llm(config: Value, repositories: Value, llm: Value) -> Value
         "config": config,
         "repositories": repositories,
         "llm": llm,
-        "workflows": [{ "workflow": "slack-reply", "trigger": {} }],
+        "workflows": [{ "workflow": "slack-reply", "trigger": { "mention": true } }],
     })
 }
 
@@ -660,6 +660,53 @@ async fn config_validate_accepts_a_valid_config_without_network() {
     assert!(shared.requests().is_empty());
 }
 
+/// `config validate` must refuse the same trigger `initialize` refuses.
+///
+/// This is the command an operator runs to check a config *before* upgrading,
+/// and ADR-0080's break has no deprecation period — so a clean bill of health
+/// here, followed by a failure at startup, is the one outcome that makes the
+/// break expensive. Both paths go through `resolve_trigger_shape`; this pins
+/// that they are actually wired to it.
+#[tokio::test]
+async fn config_validate_refuses_a_trigger_initialize_would_refuse() {
+    let shared = Shared::default();
+    let (mut srv, _harness) = server(&shared);
+
+    let params = json!({
+        "config": init_config(),
+        // The pre-ADR-0080 spelling of the mention workflow.
+        "workflows": [{ "workflow": "slack-reply", "trigger": {} }],
+    });
+    let result = result_of(call(&mut srv, 1, "config/validate", params).await);
+    assert_eq!(result["valid"], json!(false), "{result}");
+    let all = result["errors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e.as_str().unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(all.contains("names no trigger kind"), "{all}");
+    assert!(all.contains("mention = true"), "{all}");
+    // Still offline: nothing about this needed the network.
+    assert!(shared.requests().is_empty());
+}
+
+/// …and the valid spelling passes there, so the check above is not just
+/// "config validate always fails once workflows are supplied".
+#[tokio::test]
+async fn config_validate_accepts_the_mention_marker() {
+    let shared = Shared::default();
+    let (mut srv, _harness) = server(&shared);
+
+    let params = json!({
+        "config": init_config(),
+        "workflows": [{ "workflow": "slack-reply", "trigger": { "mention": true } }],
+    });
+    let result = result_of(call(&mut srv, 1, "config/validate", params).await);
+    assert_eq!(result["valid"], json!(true), "{result}");
+}
+
 #[tokio::test]
 async fn config_validate_reports_static_errors() {
     let shared = Shared::default();
@@ -821,7 +868,7 @@ fn init_params_watching(config: Value, overrides: Value) -> Value {
         "protocol_version": "0.1.0",
         "config": config,
         "workflows": [
-            { "workflow": "slack-reply", "trigger": {} },
+            { "workflow": "slack-reply", "trigger": { "mention": true } },
             { "workflow": "clip", "trigger": trigger, "task_id_prefix": "impl",
               "instructions_kind": "implement" },
         ],
