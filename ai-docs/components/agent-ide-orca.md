@@ -18,7 +18,7 @@ orca を totsuka の Agent IDE として接続する公式プラグイン（F-30
 
 orca は公開 REST/ソケット API を持たず、**`orca` CLI（`--json`）ラップが公式推奨**。JSON-RPC は stdout、診断ログは stderr。
 
-**前提: 対象リポジトリが orca に登録されていること**（`orca repo add --path <repository>`）。orca は登録済みリポジトリの git worktree を自分で見つけるので、Orchestrator が切った worktree もそのまま `path:` で引ける。未登録なら dispatch はその旨のエラーで失敗する。
+**前提: 対象リポジトリが orca に登録されていること**（`orca repo add --path <repository>`）。orca は登録済みリポジトリの git worktree を自分で見つけるので、Orchestrator が切った worktree もそのまま `path:` で引ける。未登録なら dispatch はその旨のエラーで失敗する。こうした worktree は orca から見ると external worktree で、リポジトリ設定 `externalWorktreeVisibility` が `show` なら GUI のサイドバーでプロジェクト配下に `{repo}: {title}` の名前で表示され、選べばエージェントのタブが見える（GUI で確認済み）。
 
 # モジュール構成
 

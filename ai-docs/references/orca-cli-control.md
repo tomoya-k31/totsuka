@@ -146,6 +146,10 @@ orca は**登録済みリポジトリの git worktree を自分で見つける**
 `orca worktree show --worktree path:<dir>` で引け、`terminal create --worktree path:<dir>` も通る（`worktreeId` は `<repoId>::<path>`）。
 リポジトリが未登録なら `selector_not_found`。
 
+orca の外で作った worktree は **external worktree** として扱われる。リポジトリ設定 `externalWorktreeVisibility`（`orca repo show --json` で見える。今回の環境は `show`）が `show` なら、**GUI のサイドバーでプロジェクト配下に表示され**、選ぶとそこで開いた端末タブ（`terminal create` の応答は `surface: visible`）がそのまま見える。Claude の対話画面も普通に表示・操作できることを GUI で確認した。
+
+CLI の一覧では見え方が分かれる。`orca worktree list --repo <sel>` には出る（`creatorProvenance` は無い）が、`--repo` を付けない `worktree list` と `worktree ps` には出なかった。一方、`orca worktree set --display-name` は効き、サイドバーの表示名になる。
+
 ## 端末
 
 | 操作 | 実測 |
