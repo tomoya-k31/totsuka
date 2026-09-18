@@ -4,7 +4,7 @@ title: agent-ide-herdr プラグイン
 description: herdr を Agent IDE として接続する公式 agent_ide プラグイン（v1 参照実装）。Orchestrator の JSON-RPC ↔ herdr Socket API（NDJSON）のアダプタで、dispatch/セッション管理/状態ストリーム/plan モード/pane レイアウトを担う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/agent-ide-herdr
 tags: [rust, crate, plugin, agent-ide, herdr, socket-api, streaming, hook, deadman, layout]
-generated: { by: claude-code/opus-5, at: 2026-09-18T12:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-18T10:05:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -54,6 +54,10 @@ owner: tomoya-k31
 **閉じた issue も突き合わせる**（`--state all`）。人が「この版は見送る」と閉じたものが
 翌日また立たないようにするため。取り込めばスライスの存在検査で早期 return するので、
 閉じた版を催促し続ける必要はない。
+
+**`herdr-schema` ラベルとマーカーは両方揃って初めて効く。** 一覧を先にラベルで絞るので、
+ラベルの無い issue はマーカーを持っていてもガードから見えない。ジョブが自分で立てた issue には
+両方付くが、**人が手で立てた・ラベルを外した issue は素通りされる**。
 
 重複ガードは「未取り込みの版が 2 日連続で検知された日」にしか走らず、壊れていても数週間
 気づけない。`workflow_dispatch` の `dry_run` 入力が、起票せずにこの経路だけを踏むための口である。
