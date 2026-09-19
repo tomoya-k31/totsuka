@@ -11,9 +11,8 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
 
-use task_source_slack::config::LlmConfig;
+use repo_classifier::{ClassifyError, HttpRequest, HttpTransport};
 use task_source_slack::error::SlackError;
-use task_source_slack::llm::{ChatError, ChatTransport};
 use task_source_slack::server::TransportFactory;
 use task_source_slack::transport::{SlackTransport, TokenKind, TransportSettings};
 
@@ -51,7 +50,7 @@ pub struct Shared {
     keyed: Arc<Mutex<std::collections::HashMap<String, VecDeque<Canned>>>>,
     requests: Arc<Mutex<Vec<Recorded>>>,
     posted_urls: Arc<Mutex<Vec<PostedUrl>>>,
-    chat_responses: Arc<Mutex<VecDeque<Result<Value, ChatError>>>>,
+    chat_responses: Arc<Mutex<VecDeque<Result<Value, ClassifyError>>>>,
     chat_requests: Arc<Mutex<Vec<Value>>>,
     /// What `granted_scopes` reports. `None` (the default) is the real
     /// transport-cannot-see-headers case, which the scope check must ignore.
@@ -104,7 +103,7 @@ impl Shared {
         self.posted_urls.lock().unwrap().clone()
     }
     /// Queue one chat-completion outcome for the repo classifier.
-    pub fn push_chat(&self, outcome: Result<Value, ChatError>) {
+    pub fn push_chat(&self, outcome: Result<Value, ClassifyError>) {
         self.chat_responses.lock().unwrap().push_back(outcome);
     }
     pub fn chat_requests(&self) -> Vec<Value> {
@@ -182,20 +181,25 @@ impl TransportFactory for FakeFactory {
     }
 }
 
-/// A [`ChatTransport`] answering from the shared canned queue.
+/// An [`HttpTransport`] answering from the shared canned queue.
 pub struct FakeChat {
     pub shared: Shared,
 }
 
-impl ChatTransport for FakeChat {
-    fn complete(
+impl HttpTransport for FakeChat {
+    fn post_json(
         &self,
-        _config: &LlmConfig,
-        body: Value,
-    ) -> impl Future<Output = Result<Value, ChatError>> + Send {
-        self.shared.chat_requests.lock().unwrap().push(body);
+        request: HttpRequest<'_>,
+    ) -> impl Future<Output = Result<Value, ClassifyError>> + Send {
+        self.shared
+            .chat_requests
+            .lock()
+            .unwrap()
+            .push(request.body.clone());
         let next = self.shared.chat_responses.lock().unwrap().pop_front();
-        async move { next.unwrap_or_else(|| Err(ChatError::transport("no canned chat response"))) }
+        async move {
+            next.unwrap_or_else(|| Err(ClassifyError::Transport("no canned chat response".into())))
+        }
     }
 }
 

@@ -20,7 +20,7 @@ use std::time::Duration;
 use orchestrator_core::adapters::StateDb;
 use orchestrator_core::adapters::clock::ManualClock;
 use orchestrator_core::adapters::git::SystemGitRunner;
-use orchestrator_core::adapters::llm::OpenAiRouter;
+use orchestrator_core::adapters::llm::GatewayClassifier;
 use orchestrator_core::adapters::plugin_host::{Plugin, PluginSpec};
 use orchestrator_core::config::RootConfig;
 use orchestrator_core::domain::state::TaskState;
@@ -213,7 +213,7 @@ async fn plugin_set_with_source(
 }
 
 /// No LLM in tests: repo selection resolves via the single-candidate rule.
-fn no_llm() -> Option<OpenAiRouter> {
+fn no_llm() -> Option<GatewayClassifier> {
     None
 }
 
@@ -1663,7 +1663,7 @@ async fn missing_workflow_at_finalize_keeps_worktree_not_deletes() {
 /// their own schedule, so tests wait on observable state instead of relying
 /// on one-shot settling.
 async fn run_watch_until(
-    engine: &mut Engine<SystemGitRunner, OpenAiRouter>,
+    engine: &mut Engine<SystemGitRunner, GatewayClassifier>,
     cond: impl Fn() -> bool,
 ) -> orchestrator_core::run::RunSummary {
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();

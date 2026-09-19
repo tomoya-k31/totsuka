@@ -7,7 +7,6 @@
 //! the Keychain — its tokens arrive already resolved in `initialize` config
 //! (F-65).
 
-use task_source_slack::llm::ReqwestChat;
 use task_source_slack::server::{Server, TransportFactory};
 use task_source_slack::transport::{ReqwestTransport, TransportSettings};
 
@@ -16,12 +15,12 @@ struct ReqwestFactory;
 
 impl TransportFactory for ReqwestFactory {
     type Transport = ReqwestTransport;
-    type Chat = ReqwestChat;
+    type Chat = repo_classifier::ReqwestTransport;
     fn build(&self, settings: TransportSettings<'_>) -> Self::Transport {
         ReqwestTransport::new(settings)
     }
     fn build_chat(&self) -> Self::Chat {
-        ReqwestChat::new()
+        repo_classifier::ReqwestTransport::new()
     }
 }
 

@@ -1,0 +1,24 @@
+[package]
+name = "repo-classifier"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Repository classification for totsuka: which configured repository a task belongs to, over an OpenAI-compatible chat gateway."
+# Internal crate, shared by orchestrator-core and the task_source plugins.
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }

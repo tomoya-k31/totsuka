@@ -1,14 +1,17 @@
-//! The plugin's own repository classifier: one OpenAI-compatible
-//! `/chat/completions` call deciding which candidate repository a mention
-//! concerns. Independent of the orchestrator's `[llm]` — resolution happens
-//! entirely inside this plugin so the submitted task always carries a final
-//! `repo_hint` (F-10 decides instantly, never falling back to core LLM
+//! The plugin's own repository classification: which candidate repository a
+//! mention concerns. Independent of the orchestrator's `[llm]` — resolution
+//! happens entirely inside this plugin so the submitted task always carries a
+//! final `repo_hint` (F-10 decides instantly, never falling back to core
 //! selection).
+//!
+//! The classifier itself is the shared `repo-classifier` crate. What stays
+//! here is Slack's side of it: the configurable prompt templates, reading
+//! candidate READMEs, and the confidence threshold.
 
-use std::future::Future;
-
-use serde::Deserialize;
-use serde_json::{Value, json};
+use repo_classifier::{
+    ApiKey, Candidate, ChatClassifier, ChatOutput, ChatPrompt, ChatSettings, Classification,
+    ClassifyRequest, HttpTransport, RepoClassifier, RetryPolicy,
+};
 
 use crate::config::{LlmConfig, RepoInfo, SlackPrompts};
 use crate::template;
@@ -16,82 +19,8 @@ use crate::template;
 /// How much of a candidate's README is offered to the classifier.
 const README_HEAD_LINES: usize = 30;
 
-/// A classification verdict from the LLM.
-#[derive(Debug, Clone, Deserialize)]
-pub struct Classification {
-    /// The chosen repository name (must be one of the candidates).
-    pub repo: String,
-    /// The model's self-reported confidence, 0.0–1.0.
-    pub confidence: f64,
-    /// One-line reasoning (logged, not shown to Slack).
-    #[serde(default)]
-    pub reason: String,
-}
-
-/// How much of a non-2xx response body is kept in the error message.
-const ERROR_BODY_HEAD_CHARS: usize = 300;
-
-/// A failed chat-completion call.
-///
-/// `status` is the HTTP status when the provider answered at all; it is
-/// `None` for transport-level failures (DNS, refused connection, timeout,
-/// unparseable body), which say nothing about the credentials. Keeping the
-/// status as a field rather than baking it into a string is what lets
-/// callers separate "the key is rejected" from "the answer was
-/// inconclusive" (#267).
-#[derive(Debug, Clone, thiserror::Error)]
-#[error("{message}")]
-pub struct ChatError {
-    /// The HTTP status, when the provider answered.
-    pub status: Option<u16>,
-    /// Human-readable detail; the body head for a non-2xx.
-    pub message: String,
-}
-
-impl ChatError {
-    /// A transport-level failure with no HTTP status to attribute it to.
-    pub fn transport(message: impl Into<String>) -> Self {
-        Self {
-            status: None,
-            message: message.into(),
-        }
-    }
-
-    /// The provider answered with a non-success `status`.
-    ///
-    /// The body is not carried verbatim when it parses as the standard
-    /// OpenAI-compatible error envelope — only `error.message` survives.
-    /// This error is logged, and #267 raised the auth case to `warn!`; the
-    /// plugin has no redacting layer of its own (the workspace boundary
-    /// keeps `orchestrator_core::logging` out of reach of plugins), so a
-    /// gateway that echoes the offending credential back in a 401 body
-    /// would put it straight in the log. Narrowing to the provider's own
-    /// sentence closes the likely path without losing the diagnosis. An
-    /// unrecognised shape still falls back to the truncated raw body —
-    /// that is precisely when the operator needs to see it.
-    pub fn http(status: u16, body: &str) -> Self {
-        let detail = provider_message(body)
-            .unwrap_or_else(|| body.chars().take(ERROR_BODY_HEAD_CHARS).collect());
-        Self {
-            status: Some(status),
-            message: format!("HTTP {status}: {detail}"),
-        }
-    }
-
-    /// Whether the provider rejected our credentials (401/403).
-    pub fn is_auth_failure(&self) -> bool {
-        matches!(self.status, Some(401 | 403))
-    }
-}
-
-/// `error.message` out of an OpenAI-compatible error envelope, truncated.
-/// `None` when the body is not that shape (HTML error page, bare text, a
-/// proxy's own format), leaving the caller to decide on a fallback.
-fn provider_message(body: &str) -> Option<String> {
-    let envelope: Value = serde_json::from_str(body).ok()?;
-    let message = envelope.get("error")?.get("message")?.as_str()?;
-    Some(message.chars().take(ERROR_BODY_HEAD_CHARS).collect())
-}
+/// How long one classification request may take.
+const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Why classification did not produce a usable verdict; every variant falls
 /// through to the ephemeral picker (stage ③).
@@ -99,9 +28,9 @@ fn provider_message(body: &str) -> Option<String> {
 pub enum ClassifyError {
     /// The HTTP call failed (network, non-2xx, timeout).
     #[error("LLM request failed: {0}")]
-    Request(ChatError),
-    /// The response did not contain the JSON verdict we asked for, even
-    /// after the retry.
+    Request(repo_classifier::ClassifyError),
+    /// The response did not contain a readable verdict, even after the
+    /// correction retry.
     #[error("LLM returned an unusable response: {0}")]
     InvalidResponse(String),
     /// The verdict named a repository that is not among the candidates.
@@ -129,70 +58,25 @@ impl ClassifyError {
     }
 }
 
-/// Sends one chat-completion request. Seam for tests; production is
-/// [`ReqwestChat`].
-pub trait ChatTransport: Send + Sync {
-    /// POST `body` to `{base_url}/chat/completions` with the API key,
-    /// returning the parsed response JSON.
-    fn complete(
-        &self,
-        config: &LlmConfig,
-        body: Value,
-    ) -> impl Future<Output = Result<Value, ChatError>> + Send;
-}
-
-/// Production transport over reqwest.
-pub struct ReqwestChat {
-    client: reqwest::Client,
-}
-
-impl ReqwestChat {
-    /// A transport with its own connection pool.
-    pub fn new() -> Self {
-        Self {
-            client: reqwest::Client::new(),
+impl From<repo_classifier::ClassifyError> for ClassifyError {
+    fn from(e: repo_classifier::ClassifyError) -> Self {
+        match e {
+            repo_classifier::ClassifyError::InvalidResponse(why) => Self::InvalidResponse(why),
+            repo_classifier::ClassifyError::UnknownRepo(repo) => Self::UnknownRepo(repo),
+            request => Self::Request(request),
         }
     }
 }
 
-impl Default for ReqwestChat {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl ChatTransport for ReqwestChat {
-    async fn complete(&self, config: &LlmConfig, body: Value) -> Result<Value, ChatError> {
-        let url = format!("{}/chat/completions", config.base_url.trim_end_matches('/'));
-        let response = self
-            .client
-            .post(&url)
-            .bearer_auth(&config.api_key)
-            .json(&body)
-            .timeout(std::time::Duration::from_secs(60))
-            .send()
-            .await
-            .map_err(|e| ChatError::transport(e.to_string()))?;
-        let status = response.status();
-        let text = response
-            .text()
-            .await
-            .map_err(|e| ChatError::transport(e.to_string()))?;
-        if !status.is_success() {
-            return Err(ChatError::http(status.as_u16(), &text));
-        }
-        serde_json::from_str(&text).map_err(|e| ChatError::transport(e.to_string()))
-    }
-}
-
-/// Classify which of `candidates` the mention concerns. One retry on a
-/// malformed verdict — with the malformed answer echoed back and a
-/// corrective instruction appended, since resending an identical body at
-/// temperature 0 to a deterministic provider would only repeat the failure.
-/// Any terminal failure is a [`ClassifyError`] and the caller falls through
-/// to the ephemeral picker.
-pub async fn classify<C: ChatTransport>(
-    chat: &C,
+/// Classify which of `candidates` the mention concerns.
+///
+/// An unreadable verdict is retried once with a correction — the malformed
+/// answer echoed back and [`SlackPrompts::classifier_correction`] appended —
+/// since resending an identical body at temperature 0 to a deterministic
+/// provider would only repeat the failure. Any terminal failure is a
+/// [`ClassifyError`] and the caller falls through to the ephemeral picker.
+pub async fn classify<T: HttpTransport>(
+    transport: &T,
     config: &LlmConfig,
     prompts: &SlackPrompts,
     mention_text: &str,
@@ -201,64 +85,25 @@ pub async fn classify<C: ChatTransport>(
 ) -> Result<Classification, ClassifyError> {
     // README reads are blocking filesystem I/O; keep them off the async
     // worker so a slow disk cannot stall the runtime.
-    let body = {
-        let config = config.clone();
+    let request = {
+        let prompts = prompts.clone();
         let mention = mention_text.to_string();
         let context = thread_context.to_string();
         let candidates = candidates.to_vec();
-        let prompts = prompts.clone();
         tokio::task::spawn_blocking(move || {
-            request_body(&config, &prompts, &mention, &context, &candidates)
+            classify_request(&prompts, &mention, &context, &candidates)
         })
         .await
         .map_err(|e| {
-            ClassifyError::Request(ChatError::transport(format!("request build failed: {e}")))
+            ClassifyError::Request(repo_classifier::ClassifyError::Transport(format!(
+                "request build failed: {e}"
+            )))
         })?
     };
 
-    let response = chat
-        .complete(config, body.clone())
-        .await
-        .map_err(ClassifyError::Request)?;
-    let (content, first_error) = match parse_verdict(&response) {
-        Ok(verdict) => return validate(verdict, config, candidates),
-        Err((content, error)) => (content, error),
-    };
-
-    tracing::info!(
-        error = first_error,
-        "LLM verdict malformed; retrying with a correction"
-    );
-    let retry_body = with_correction(body, &content, &prompts.classifier_correction);
-    let response = chat
-        .complete(config, retry_body)
-        .await
-        .map_err(ClassifyError::Request)?;
-    match parse_verdict(&response) {
-        Ok(verdict) => validate(verdict, config, candidates),
-        Err((_, error)) => Err(ClassifyError::InvalidResponse(error)),
-    }
-}
-
-/// The retry request: the original conversation plus the model's malformed
-/// answer and an instruction to answer again with only the JSON object.
-fn with_correction(mut body: Value, previous_answer: &str, correction: &str) -> Value {
-    if let Some(messages) = body.get_mut("messages").and_then(Value::as_array_mut) {
-        messages.push(json!({ "role": "assistant", "content": previous_answer }));
-        messages.push(json!({ "role": "user", "content": correction }));
-    }
-    body
-}
-
-/// Check the verdict names a real candidate and clears the threshold.
-fn validate(
-    verdict: Classification,
-    config: &LlmConfig,
-    candidates: &[RepoInfo],
-) -> Result<Classification, ClassifyError> {
-    if !candidates.iter().any(|r| r.name == verdict.repo) {
-        return Err(ClassifyError::UnknownRepo(verdict.repo));
-    }
+    let verdict = ChatClassifier::new(transport, chat_settings(config))
+        .classify(&request)
+        .await?;
     if verdict.confidence < config.confidence_threshold {
         return Err(ClassifyError::LowConfidence {
             confidence: verdict.confidence,
@@ -268,29 +113,53 @@ fn validate(
     Ok(verdict)
 }
 
-/// Build the chat-completion request: a system prompt fixing the JSON output
-/// contract, and a user message carrying the mention, context, and candidate
-/// material (summary + README head when a path is configured).
-fn request_body(
-    config: &LlmConfig,
+/// The plugin's call shape: the prompt asks for JSON in prose (no
+/// `response_format`, which not every model accepts), temperature 0, one
+/// attempt with a generous timeout.
+fn chat_settings(config: &LlmConfig) -> ChatSettings {
+    let mut settings = ChatSettings::new(
+        &config.base_url,
+        &config.model,
+        ApiKey::new(config.api_key.as_str()),
+    );
+    settings.output = ChatOutput::Prose;
+    settings.temperature = Some(0.0);
+    settings.timeout = REQUEST_TIMEOUT;
+    settings.retry = RetryPolicy::NONE;
+    settings
+}
+
+/// The classification question: the mention and its thread as the subject,
+/// each candidate with its summary and README head, and the operator's
+/// templates rendered into the chat prompt.
+fn classify_request(
     prompts: &SlackPrompts,
     mention_text: &str,
     thread_context: &str,
-    candidates: &[RepoInfo],
-) -> Value {
+    repos: &[RepoInfo],
+) -> ClassifyRequest {
+    let candidates: Vec<Candidate> = repos
+        .iter()
+        .map(|repo| Candidate {
+            name: repo.name.clone(),
+            summary: repo.summary.clone(),
+            readme_head: repo.path.as_deref().and_then(readme_head),
+        })
+        .collect();
+
     let mut catalog = String::new();
-    for repo in candidates {
-        catalog.push_str(&format!("### {}\n", repo.name));
-        if let Some(summary) = &repo.summary {
+    for c in &candidates {
+        catalog.push_str(&format!("### {}\n", c.name));
+        if let Some(summary) = &c.summary {
             catalog.push_str(&format!("summary: {summary}\n"));
         }
-        if let Some(head) = repo.path.as_deref().and_then(readme_head) {
+        if let Some(head) = &c.readme_head {
             catalog.push_str(&format!("README (head):\n{head}\n"));
         }
         catalog.push('\n');
     }
 
-    let names: Vec<&str> = candidates.iter().map(|r| r.name.as_str()).collect();
+    let names: Vec<&str> = candidates.iter().map(|c| c.name.as_str()).collect();
     let system = template::render(
         &prompts.classifier_system,
         &[("repo_names", names.join(", ").as_str())],
@@ -307,14 +176,19 @@ fn request_body(
         ],
     );
 
-    json!({
-        "model": config.model,
-        "messages": [
-            { "role": "system", "content": system },
-            { "role": "user", "content": user },
-        ],
-        "temperature": 0,
-    })
+    let mut subject = vec![("Mention".to_string(), mention_text.to_string())];
+    if !thread_context.is_empty() {
+        subject.push(("Thread context".to_string(), thread_context.to_string()));
+    }
+    ClassifyRequest {
+        subject,
+        candidates,
+        chat_prompt: Some(ChatPrompt {
+            system,
+            user,
+            correction: Some(prompts.classifier_correction.clone()),
+        }),
+    }
 }
 
 /// The first `README_HEAD_LINES` lines of `{path}/README.md`; `None` when
@@ -329,74 +203,13 @@ fn readme_head(path: &str) -> Option<String> {
     )
 }
 
-/// Extract the verdict object from a chat-completion response, tolerating
-/// code fences and surrounding prose (models add them despite instructions).
-/// The error side carries the raw content so the retry can echo it back.
-fn parse_verdict(response: &Value) -> Result<Classification, (String, String)> {
-    let Some(content) = response
-        .get("choices")
-        .and_then(|c| c.get(0))
-        .and_then(|c| c.get("message"))
-        .and_then(|m| m.get("content"))
-        .and_then(Value::as_str)
-    else {
-        return Err((
-            String::new(),
-            "response has no choices[0].message.content".to_string(),
-        ));
-    };
-    extract_verdict(content).ok_or_else(|| {
-        (
-            content.to_string(),
-            format!("no JSON verdict in content: {content:.200}"),
-        )
-    })
-}
-
-/// Try every `{` in `text` as the start of a balanced JSON object and return
-/// the first one that deserializes as a [`Classification`]. Anchoring on the
-/// *first* brace only would let prose like `the {Button} component` shadow a
-/// perfectly valid verdict later in the answer.
-fn extract_verdict(text: &str) -> Option<Classification> {
-    for (start, _) in text.char_indices().filter(|(_, c)| *c == '{') {
-        if let Some(candidate) = balanced_object(&text[start..])
-            && let Ok(verdict) = serde_json::from_str::<Classification>(candidate)
-        {
-            return Some(verdict);
-        }
-    }
-    None
-}
-
-/// The balanced `{…}` block at the start of `text`, if any.
-fn balanced_object(text: &str) -> Option<&str> {
-    let mut depth = 0usize;
-    let mut in_string = false;
-    let mut escaped = false;
-    for (i, c) in text.char_indices() {
-        if escaped {
-            escaped = false;
-            continue;
-        }
-        match c {
-            '\\' if in_string => escaped = true,
-            '"' => in_string = !in_string,
-            '{' if !in_string => depth += 1,
-            '}' if !in_string => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(&text[..=i]);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use repo_classifier::HttpRequest;
+    use serde_json::{Value, json};
+
+    type WireError = repo_classifier::ClassifyError;
 
     fn repo(name: &str) -> RepoInfo {
         RepoInfo {
@@ -423,30 +236,49 @@ mod tests {
         json!({ "choices": [{ "message": { "role": "assistant", "content": content } }] })
     }
 
-    /// A ChatTransport answering from a queue; records request bodies.
+    /// A transport answering from a queue; records URLs and request bodies.
     struct FakeChat {
-        responses: std::sync::Mutex<std::collections::VecDeque<Result<Value, ChatError>>>,
-        requests: std::sync::Mutex<Vec<Value>>,
+        responses: std::sync::Mutex<std::collections::VecDeque<Result<Value, WireError>>>,
+        requests: std::sync::Mutex<Vec<(String, Value)>>,
     }
 
     impl FakeChat {
-        fn new(responses: Vec<Result<Value, ChatError>>) -> Self {
+        fn new(responses: Vec<Result<Value, WireError>>) -> Self {
             Self {
                 responses: std::sync::Mutex::new(responses.into()),
                 requests: std::sync::Mutex::new(Vec::new()),
             }
         }
+
+        fn bodies(&self) -> Vec<Value> {
+            self.requests
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|(_, body)| body.clone())
+                .collect()
+        }
     }
 
-    impl ChatTransport for FakeChat {
-        async fn complete(&self, _config: &LlmConfig, body: Value) -> Result<Value, ChatError> {
-            self.requests.lock().unwrap().push(body);
+    impl HttpTransport for FakeChat {
+        async fn post_json(&self, request: HttpRequest<'_>) -> Result<Value, WireError> {
+            self.requests
+                .lock()
+                .unwrap()
+                .push((request.url.to_string(), request.body.clone()));
             self.responses
                 .lock()
                 .unwrap()
                 .pop_front()
-                .unwrap_or_else(|| Err(ChatError::transport("no canned response")))
+                .unwrap_or_else(|| Err(WireError::Transport("no canned response".into())))
         }
+    }
+
+    async fn run(
+        chat: &FakeChat,
+        candidates: &[RepoInfo],
+    ) -> Result<Classification, ClassifyError> {
+        classify(chat, &config(), &prompts(), "m", "", candidates).await
     }
 
     #[tokio::test]
@@ -471,37 +303,37 @@ mod tests {
         // The request carried the model, the contract, and the candidates.
         let requests = chat.requests.lock().unwrap();
         assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0]["model"], "test-model");
-        assert_eq!(requests[0]["temperature"], 0);
-        let system = requests[0]["messages"][0]["content"].as_str().unwrap();
+        let (url, body) = &requests[0];
+        assert_eq!(url, "https://llm.test/v1/chat/completions");
+        assert_eq!(body["model"], "test-model");
+        assert_eq!(body["temperature"], 0.0);
+        assert!(
+            body.get("response_format").is_none(),
+            "the plugin asks for JSON in prose, not via a schema"
+        );
+        let system = body["messages"][0]["content"].as_str().unwrap();
         assert!(system.contains("web-app, design-system"), "{system}");
-        let user = requests[0]["messages"][1]["content"].as_str().unwrap();
+        let user = body["messages"][1]["content"].as_str().unwrap();
         assert!(user.contains("the button is broken"), "{user}");
         assert!(user.contains("web-app summary"), "{user}");
     }
 
     #[tokio::test]
     async fn code_fenced_verdict_is_tolerated() {
-        let candidates = [repo("web-app")];
         let chat = FakeChat::new(vec![Ok(chat_response(
             "Sure! Here you go:\n```json\n{\"repo\": \"web-app\", \"confidence\": 0.8, \
              \"reason\": \"x\"}\n```",
         ))]);
-        let verdict = classify(&chat, &config(), &prompts(), "m", "", &candidates)
-            .await
-            .unwrap();
+        let verdict = run(&chat, &[repo("web-app")]).await.unwrap();
         assert_eq!(verdict.repo, "web-app");
     }
 
     #[tokio::test]
     async fn low_confidence_is_reported_as_such() {
-        let candidates = [repo("web-app")];
         let chat = FakeChat::new(vec![Ok(chat_response(
             r#"{"repo": "web-app", "confidence": 0.3, "reason": "unsure"}"#,
         ))]);
-        let err = classify(&chat, &config(), &prompts(), "m", "", &candidates)
-            .await
-            .unwrap_err();
+        let err = run(&chat, &[repo("web-app")]).await.unwrap_err();
         assert!(matches!(
             err,
             ClassifyError::LowConfidence { confidence, .. } if (confidence - 0.3).abs() < 1e-9
@@ -510,30 +342,24 @@ mod tests {
 
     #[tokio::test]
     async fn malformed_verdict_retries_once_then_fails() {
-        let candidates = [repo("web-app")];
         let chat = FakeChat::new(vec![
             Ok(chat_response("I think it's the web app.")),
             Ok(chat_response("still prose")),
         ]);
-        let err = classify(&chat, &config(), &prompts(), "m", "", &candidates)
-            .await
-            .unwrap_err();
+        let err = run(&chat, &[repo("web-app")]).await.unwrap_err();
         assert!(matches!(err, ClassifyError::InvalidResponse(_)), "{err}");
-        assert_eq!(chat.requests.lock().unwrap().len(), 2, "exactly one retry");
+        assert_eq!(chat.bodies().len(), 2, "exactly one retry");
     }
 
     #[tokio::test]
     async fn malformed_then_valid_verdict_succeeds_on_retry() {
-        let candidates = [repo("web-app")];
         let chat = FakeChat::new(vec![
             Ok(chat_response("prose")),
             Ok(chat_response(
                 r#"{"repo": "web-app", "confidence": 0.9, "reason": "ok"}"#,
             )),
         ]);
-        let verdict = classify(&chat, &config(), &prompts(), "m", "", &candidates)
-            .await
-            .unwrap();
+        let verdict = run(&chat, &[repo("web-app")]).await.unwrap();
         assert_eq!(verdict.repo, "web-app");
     }
 
@@ -544,149 +370,72 @@ mod tests {
         let chat = FakeChat::new(vec![Ok(chat_response(
             r#"{"repo": "ghost", "confidence": 0.9, "reason": "x"}"#,
         ))]);
-        let err = classify(&chat, &config(), &prompts(), "m", "", &candidates)
-            .await
-            .unwrap_err();
+        let err = run(&chat, &candidates).await.unwrap_err();
         assert!(
             matches!(err, ClassifyError::UnknownRepo(ref r) if r == "ghost"),
             "{err}"
         );
 
-        let chat = FakeChat::new(vec![Err(ChatError::transport("connection refused"))]);
-        let err = classify(&chat, &config(), &prompts(), "m", "", &candidates)
-            .await
-            .unwrap_err();
+        let chat = FakeChat::new(vec![Err(WireError::Transport("connection refused".into()))]);
+        let err = run(&chat, &candidates).await.unwrap_err();
         assert!(matches!(err, ClassifyError::Request(_)), "{err}");
         // A transport failure carries no status, so it is not an auth failure.
         assert!(!err.is_auth_failure(), "{err}");
+        assert_eq!(
+            chat.bodies().len(),
+            1,
+            "the plugin does not retry transport failures"
+        );
     }
 
     #[tokio::test]
     async fn rejected_api_key_is_flagged_as_an_auth_failure() {
-        let candidates = [repo("web-app")];
         for status in [401, 403] {
-            let chat = FakeChat::new(vec![Err(ChatError::http(
+            let chat = FakeChat::new(vec![Err(WireError::status(
                 status,
-                r#"{"error":{"message":"User not found.","code":401}}"#,
+                r#"{"error":{"message":"User not found.","code":401},"request":{"api_key":"sk-live-should-not-be-logged"}}"#,
             ))]);
-            let err = classify(&chat, &config(), &prompts(), "m", "", &candidates)
-                .await
-                .unwrap_err();
+            let err = run(&chat, &[repo("web-app")]).await.unwrap_err();
             assert!(err.is_auth_failure(), "{status}: {err}");
-            // The body head survives into the message the operator reads.
+            // The provider's sentence survives into the message the operator
+            // reads; the rest of the body — where a gateway may echo the
+            // credential — does not, since the plugin has no redacting layer.
             assert!(err.to_string().contains("User not found."), "{err}");
+            assert!(!err.to_string().contains("sk-live"), "{err}");
         }
     }
 
     #[tokio::test]
     async fn other_http_failures_are_not_auth_failures() {
-        let candidates = [repo("web-app")];
         // 429 and 5xx are the provider being busy or broken, not a bad key.
         for status in [429, 500, 503] {
-            let chat = FakeChat::new(vec![Err(ChatError::http(status, "busy"))]);
-            let err = classify(&chat, &config(), &prompts(), "m", "", &candidates)
-                .await
-                .unwrap_err();
+            let chat = FakeChat::new(vec![Err(WireError::status(status, "busy"))]);
+            let err = run(&chat, &[repo("web-app")]).await.unwrap_err();
             assert!(!err.is_auth_failure(), "{status}: {err}");
         }
         // Neither is a verdict we simply could not use.
         let chat = FakeChat::new(vec![Ok(chat_response(
             r#"{"repo": "web-app", "confidence": 0.1, "reason": "unsure"}"#,
         ))]);
-        let err = classify(&chat, &config(), &prompts(), "m", "", &candidates)
-            .await
-            .unwrap_err();
+        let err = run(&chat, &[repo("web-app")]).await.unwrap_err();
         assert!(!err.is_auth_failure(), "{err}");
-    }
-
-    #[test]
-    fn error_body_is_truncated() {
-        let err = ChatError::http(401, &"x".repeat(ERROR_BODY_HEAD_CHARS + 50));
-        // "HTTP 401: " prefix plus exactly the head of the body.
-        assert_eq!(
-            err.message.len(),
-            "HTTP 401: ".len() + ERROR_BODY_HEAD_CHARS
-        );
-        assert_eq!(err.status, Some(401));
-    }
-
-    /// A recognised error envelope is narrowed to the provider's own
-    /// sentence: the rest of the body never reaches the log, where the
-    /// plugin has no redacting layer to catch an echoed credential.
-    #[test]
-    fn a_recognised_error_envelope_keeps_only_the_provider_message() {
-        let err = ChatError::http(
-            401,
-            r#"{"error":{"message":"User not found.","code":401},"request":{"api_key":"sk-live-should-not-be-logged"}}"#,
-        );
-        assert_eq!(err.message, "HTTP 401: User not found.");
-        assert!(!err.message.contains("sk-live"), "{err}");
-
-        // Truncation still applies to a very long provider message.
-        let long = format!(
-            r#"{{"error":{{"message":"{}"}}}}"#,
-            "y".repeat(ERROR_BODY_HEAD_CHARS + 50)
-        );
-        assert_eq!(
-            ChatError::http(500, &long).message.len(),
-            "HTTP 500: ".len() + ERROR_BODY_HEAD_CHARS
-        );
-
-        // Shapes we do not recognise fall back to the raw body — an
-        // unexpected format is exactly when the operator needs to see it.
-        for body in [
-            "<html>502 Bad Gateway</html>",
-            r#"{"detail":"nope"}"#,
-            r#"{"error":"a bare string"}"#,
-            "not json at all",
-        ] {
-            assert_eq!(
-                ChatError::http(502, body).message,
-                format!("HTTP 502: {body}"),
-                "{body}"
-            );
-        }
-    }
-
-    #[test]
-    fn balanced_object_handles_nesting_and_strings() {
-        assert_eq!(
-            balanced_object(r#"{"a": {"b": "}"}} tail"#),
-            Some(r#"{"a": {"b": "}"}}"#)
-        );
-        assert!(balanced_object("{unbalanced").is_none());
-    }
-
-    #[test]
-    fn extraction_skips_prose_braces_before_the_verdict() {
-        // A brace in prose before the verdict must not shadow it.
-        let verdict = extract_verdict(
-            r#"The {Button} component belongs there. {"repo": "web-app", "confidence": 0.9, "reason": "x"}"#,
-        )
-        .expect("the trailing verdict parses");
-        assert_eq!(verdict.repo, "web-app");
-        assert!(extract_verdict("no json here").is_none());
-        assert!(extract_verdict("{unbalanced").is_none());
     }
 
     #[tokio::test]
     async fn retry_carries_a_correction_message() {
-        let candidates = [repo("web-app")];
         let chat = FakeChat::new(vec![
             Ok(chat_response("just prose")),
             Ok(chat_response(
                 r#"{"repo": "web-app", "confidence": 0.9, "reason": "ok"}"#,
             )),
         ]);
-        classify(&chat, &config(), &prompts(), "m", "", &candidates)
-            .await
-            .unwrap();
+        run(&chat, &[repo("web-app")]).await.unwrap();
 
-        let requests = chat.requests.lock().unwrap();
-        assert_eq!(requests.len(), 2);
+        let bodies = chat.bodies();
+        assert_eq!(bodies.len(), 2);
         // The retry is not a byte-identical resend: it echoes the malformed
         // answer and appends the corrective instruction.
-        let retry_messages = requests[1]["messages"].as_array().unwrap();
+        let retry_messages = bodies[1]["messages"].as_array().unwrap();
         assert_eq!(retry_messages.len(), 4, "{retry_messages:?}");
         assert_eq!(retry_messages[2]["role"], "assistant");
         assert_eq!(retry_messages[2]["content"], "just prose");
@@ -696,5 +445,32 @@ mod tests {
                 .unwrap()
                 .contains("ONLY the JSON object")
         );
+    }
+
+    #[test]
+    fn the_request_carries_the_mention_and_every_candidate() {
+        let request = classify_request(
+            &prompts(),
+            "the button is broken",
+            "earlier: it was fine yesterday",
+            &[repo("web-app"), repo("design-system")],
+        );
+        assert_eq!(
+            request.subject,
+            vec![
+                ("Mention".to_string(), "the button is broken".to_string()),
+                (
+                    "Thread context".to_string(),
+                    "earlier: it was fine yesterday".to_string()
+                ),
+            ]
+        );
+        let names: Vec<&str> = request.candidates.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["web-app", "design-system"]);
+        let prompt = request
+            .chat_prompt
+            .expect("the plugin renders its own prompt");
+        assert!(prompt.user.contains("### design-system"), "{}", prompt.user);
+        assert!(prompt.correction.is_some());
     }
 }

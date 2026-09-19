@@ -72,6 +72,12 @@ pub enum ValidationError {
     #[error("duplicate repository name `{0}` → repository names must be unique")]
     DuplicateRepo(String),
 
+    /// `[llm].confidence_threshold` outside `0.0..=1.0`.
+    #[error(
+        "`[llm].confidence_threshold` is {0} → use a value between 0.0 and 1.0 (it is compared against the classifier's confidence)"
+    )]
+    LlmConfidenceThresholdOutOfRange(String),
+
     /// Two workflows share a name.
     #[error("duplicate workflow name `{0}` → workflow names must be unique")]
     DuplicateWorkflow(String),
@@ -433,6 +439,14 @@ where
                 project: project.clone(),
             });
         }
+    }
+
+    if let Some(threshold) = cfg.llm.as_ref().and_then(|l| l.confidence_threshold)
+        && !(0.0..=1.0).contains(&threshold)
+    {
+        errors.push(ValidationError::LlmConfidenceThresholdOutOfRange(
+            threshold.to_string(),
+        ));
     }
 
     // Repositories: unique names + path existence.
@@ -2368,6 +2382,26 @@ location = "/tmp/{{repo-name}}"
                 .any(|f| f.message.contains("rubric") || f.message.contains("prompt")),
             "got {findings:?}"
         );
+    }
+
+    #[test]
+    fn llm_confidence_threshold_must_be_a_probability() {
+        let with = |threshold: &str| {
+            let cfg = RootConfig::from_toml_str(&format!(
+                "[llm]\nbase_url = \"https://gw.example/v1\"\nmodel = \"m\"\nconfidence_threshold = {threshold}\n"
+            ))
+            .unwrap();
+            validate_static(&cfg, &env_from(&[]))
+                .iter()
+                .map(ToString::to_string)
+                .filter(|e| e.contains("confidence_threshold"))
+                .count()
+        };
+        assert_eq!(with("1.5"), 1);
+        assert_eq!(with("-0.1"), 1);
+        for ok in ["0.0", "0.6", "1.0"] {
+            assert_eq!(with(ok), 0, "{ok}");
+        }
     }
 
     #[test]

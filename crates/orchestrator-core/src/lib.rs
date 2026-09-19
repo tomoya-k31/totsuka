@@ -3,7 +3,7 @@
 //! Hexagonal architecture skeleton. The crate is split into three layers:
 //!
 //! - [`domain`]: pure domain types and the task state machine.
-//! - [`ports`]: trait boundaries (`TaskSource`, `AgentIde`, `LlmRouter`,
+//! - [`ports`]: trait boundaries (`TaskSource`, `AgentIde`, `RepoClassifier`,
 //!   `SecretStore`, ...) that adapters implement.
 //! - [`adapters`]: concrete implementations (JSON-RPC plugin bridge, SQLite,
 //!   Keychain, ...).

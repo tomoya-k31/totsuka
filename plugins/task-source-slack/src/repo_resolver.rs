@@ -16,7 +16,8 @@
 //! never involved.
 
 use crate::config::{RepoInfo, SlackConfig};
-use crate::llm::{ChatTransport, classify};
+use crate::llm::classify;
+use repo_classifier::HttpTransport;
 
 /// The outcome of stages ① + ②.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -115,7 +116,7 @@ fn unmatched_candidates(config: &SlackConfig, channel_name: &str) -> Vec<RepoInf
 /// Run stages ① and ② for one mention. Never errors: every failure mode of
 /// stage ② (low confidence, malformed verdict after retry, API failure,
 /// missing `[llm]` table) degrades to [`Resolution::NeedsSelection`].
-pub async fn resolve<C: ChatTransport>(
+pub async fn resolve<C: HttpTransport>(
     chat: &C,
     config: &SlackConfig,
     channel_name: &str,
@@ -199,15 +200,14 @@ mod tests {
         candidates.into_iter().map(|r| r.name).collect()
     }
 
-    /// A [`ChatTransport`] that always fails the same way.
-    struct FailingChat(crate::llm::ChatError);
+    /// A transport that always fails the same way.
+    struct FailingChat(repo_classifier::ClassifyError);
 
-    impl ChatTransport for FailingChat {
-        async fn complete(
+    impl HttpTransport for FailingChat {
+        async fn post_json(
             &self,
-            _config: &crate::config::LlmConfig,
-            _body: serde_json::Value,
-        ) -> Result<serde_json::Value, crate::llm::ChatError> {
+            _request: repo_classifier::HttpRequest<'_>,
+        ) -> Result<serde_json::Value, repo_classifier::ClassifyError> {
             Err(self.0.clone())
         }
     }
@@ -231,8 +231,11 @@ mod tests {
         // guesses at the mention.
         let config = config_with_llm();
         for error in [
-            crate::llm::ChatError::http(401, r#"{"error":{"message":"User not found."}}"#),
-            crate::llm::ChatError::transport("connection refused"),
+            repo_classifier::ClassifyError::status(
+                401,
+                r#"{"error":{"message":"User not found."}}"#,
+            ),
+            repo_classifier::ClassifyError::Transport("connection refused".into()),
         ] {
             let chat = FailingChat(error);
             assert_eq!(
@@ -437,7 +440,9 @@ mod tests {
         // skipped — which is what makes the fallback cost nothing.
         let mut config = config_with_llm();
         config.fallback_repo = Some("backend-api".into());
-        let chat = FailingChat(crate::llm::ChatError::transport("must not be called"));
+        let chat = FailingChat(repo_classifier::ClassifyError::Transport(
+            "must not be called".into(),
+        ));
         assert_eq!(
             resolve(&chat, &config, "random-talk", "who owns onboarding?", "").await,
             Resolution::Resolved("backend-api".to_string())

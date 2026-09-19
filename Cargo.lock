@@ -1000,7 +1000,7 @@ dependencies = [
  "libc",
  "plugin-protocol",
  "regex",
- "reqwest",
+ "repo-classifier",
  "rusqlite",
  "semver",
  "serde",
@@ -1144,6 +1144,18 @@ name = "regex-syntax"
 version = "0.8.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
+
+[[package]]
+name = "repo-classifier"
+version = "0.7.11"
+dependencies = [
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "reqwest"
@@ -1528,6 +1540,7 @@ dependencies = [
  "futures-util",
  "plugin-protocol",
  "plugin-sdk",
+ "repo-classifier",
  "reqwest",
  "semver",
  "serde",

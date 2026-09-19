@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::time::Duration;
 
 use orchestrator_core::adapters::git::SystemGitRunner;
-use orchestrator_core::adapters::llm::{OpenAiConfig, OpenAiRouter};
+use orchestrator_core::adapters::llm::gateway_classifier;
 use orchestrator_core::adapters::plugin_host::Plugin;
 use orchestrator_core::adapters::{RunLock, StateDb};
 use orchestrator_core::config::{self, PluginKind, RootConfig, secret_resolver};
@@ -119,18 +119,14 @@ async fn run_async(cx: &Cx, args: RunArgs) -> Result<(), CliError> {
     let db = StateDb::open(&paths.state_dir().join("state.db"))?;
     let plugins = launch_plugins(cx, &cfg, &env).await?;
 
-    // AI Gateway router (F-12), if configured.
+    // Repository classifier (F-12), if configured.
     let llm = match &cfg.llm {
         Some(llm_cfg) => {
-            let mut openai = OpenAiConfig::new(&llm_cfg.base_url, &llm_cfg.model);
-            if let Some(secs) = llm_cfg.timeout_secs {
-                openai.timeout = Duration::from_secs(secs);
-            }
             let api_key = match &llm_cfg.api_key_ref {
                 Some(reference) => secret_resolver(&env).resolve(reference)?,
                 None => SecretString::new(""),
             };
-            Some(OpenAiRouter::new(openai, api_key))
+            Some(gateway_classifier(llm_cfg, api_key))
         }
         None => None,
     };

@@ -131,6 +131,10 @@ const OVERRIDES: &[(&str, Applier)] = &[
         llm(cfg)?.api_key_ref = Some(v.to_string());
         Ok(())
     }),
+    ("TOTSUKA_LLM_CONFIDENCE_THRESHOLD", |cfg, v| {
+        llm(cfg)?.confidence_threshold = Some(parse::<f64>(v, "a number between 0.0 and 1.0")?);
+        Ok(())
+    }),
 ];
 
 /// Every variable name the whitelist recognizes, in table order. Used by
@@ -284,6 +288,7 @@ block_retry_limit = 3
                 ("TOTSUKA_LLM_MAX_TOKENS", "512"),
                 ("TOTSUKA_LLM_TIMEOUT_SECS", "30"),
                 ("TOTSUKA_LLM_API_KEY_REF", "${ENV_KEY}"),
+                ("TOTSUKA_LLM_CONFIDENCE_THRESHOLD", "0.75"),
             ],
         )
         .unwrap();
@@ -294,6 +299,7 @@ block_retry_limit = 3
         assert_eq!(llm.max_tokens, Some(512));
         assert_eq!(llm.timeout_secs, Some(30));
         assert_eq!(llm.api_key_ref.as_deref(), Some("${ENV_KEY}"));
+        assert_eq!(llm.confidence_threshold, Some(0.75));
     }
 
     #[test]

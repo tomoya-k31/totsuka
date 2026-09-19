@@ -63,11 +63,13 @@ use crate::paths::Paths;
 use crate::ports::agent_session::AttachOutcome;
 use crate::ports::clock::Clock;
 use crate::ports::git::GitRunner;
-use crate::ports::llm::{ChatRequest, LlmError, LlmRouter};
+use crate::ports::llm::{
+    Candidate, Classification, ClassifyError, ClassifyRequest, RepoClassifier,
+};
 use crate::ports::secret::SecretString;
 use crate::ports::signal_ingress::FocusOutcome;
 use crate::recovery::{self, RecoveryReport, RetryPlan};
-use crate::repo_select::{ReadmeCache, RepoCandidate, RepoDecision, SelectConfig, select_repo};
+use crate::repo_select::{ReadmeCache, RepoDecision, SelectConfig, select_repo};
 use crate::scheduler::{Limits, ReadyTask, SlotManager, counts_toward_slot, plan_dispatch};
 use crate::tool::{LaunchInputs, ToolProfile};
 use crate::worktree::{
@@ -270,14 +272,14 @@ impl IngestOutcome {
     }
 }
 
-/// A router used when no `[llm]` is configured: repo selection that would need
+/// The classifier used when no `[llm]` is configured: repo selection that would need
 /// the LLM deterministically falls back to `pending` (F-14) with an actionable
 /// reason instead of failing the task.
-pub(crate) struct NoLlmRouter;
+pub(crate) struct NoClassifier;
 
-impl LlmRouter for NoLlmRouter {
-    async fn chat_json(&self, _request: &ChatRequest) -> Result<Value, LlmError> {
-        Err(LlmError::InvalidResponse(
+impl RepoClassifier for NoClassifier {
+    async fn classify(&self, _request: &ClassifyRequest) -> Result<Classification, ClassifyError> {
+        Err(ClassifyError::InvalidResponse(
             "no [llm] configured → set [llm] in config.toml, add a repo hint to the task, \
              or register a single repository"
                 .to_string(),
@@ -304,7 +306,7 @@ enum HookReceiver {
 /// `L: 'static` because the liveness probe (F-111) runs on a spawned task
 /// holding an `Arc` of the router, so the loop never blocks on a gateway
 /// that takes its whole timeout to not answer.
-pub struct Engine<G: GitRunner, L: LlmRouter + 'static> {
+pub struct Engine<G: GitRunner, L: RepoClassifier + 'static> {
     db: StateDb,
     settings: EngineSettings,
     plugins: PluginSet,
@@ -312,7 +314,7 @@ pub struct Engine<G: GitRunner, L: LlmRouter + 'static> {
     /// The LLM router, wrapped so every call and probe updates
     /// [`LlmHealth`] (F-110 / F-111). Shared, because the probe runs on a
     /// spawned task.
-    llm: Option<Arc<crate::adapters::llm::LlmHealthRouter<L>>>,
+    llm: Option<Arc<crate::adapters::llm::MonitoredClassifier<L>>>,
     /// The record that wrapper writes; `None` when no LLM is configured.
     llm_health: Option<Arc<crate::adapters::llm::LlmHealth>>,
     /// The liveness probe in flight, if any — at most one at a time, so an
@@ -391,7 +393,7 @@ pub struct Engine<G: GitRunner, L: LlmRouter + 'static> {
     stats: RunStats,
 }
 
-impl<G: GitRunner, L: LlmRouter + 'static> Engine<G, L> {
+impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// Where a new project item goes, per repository (#542).
     ///
     /// Rebuilt on each call from the live plugin set rather than cached at
@@ -482,7 +484,7 @@ impl<G: GitRunner, L: LlmRouter + 'static> Engine<G, L> {
         }
         let slots = SlotManager::new(settings.limits.clone());
         let readme_cache = settings.readme_cache_dir.clone().map(ReadmeCache::new);
-        let llm = llm.map(|l| Arc::new(crate::adapters::llm::LlmHealthRouter::new(l)));
+        let llm = llm.map(|l| Arc::new(crate::adapters::llm::MonitoredClassifier::new(l)));
         let llm_health = llm.as_ref().map(|l| l.health());
         Self {
             agent_tools: crate::agent_tools::ToolCache::default(),
@@ -1118,14 +1120,14 @@ fn state_event(plugin: &str, note: Notification) -> Option<PluginEvent> {
 /// is the sweep-throttle bookkeeping.
 pub(crate) async fn test_engine(
     interval: Duration,
-) -> Engine<crate::adapters::git::SystemGitRunner, NoLlmRouter> {
+) -> Engine<crate::adapters::git::SystemGitRunner, NoClassifier> {
     test_engine_with(interval, None, Arc::new(SystemClock)).await
 }
 
 #[cfg(test)]
 /// [`test_engine`] with an LLM router and a clock of the caller's choosing —
 /// the two seams the liveness tests (F-111) drive.
-pub(crate) async fn test_engine_with<L: LlmRouter + 'static>(
+pub(crate) async fn test_engine_with<L: RepoClassifier + 'static>(
     interval: Duration,
     llm: Option<L>,
     clock: Arc<dyn Clock>,
@@ -1171,7 +1173,7 @@ mod health_tests {
     /// pointed at `dir` too so the spool signal is reachable.
     async fn engine_with_health(
         dir: &std::path::Path,
-    ) -> Engine<crate::adapters::git::SystemGitRunner, NoLlmRouter> {
+    ) -> Engine<crate::adapters::git::SystemGitRunner, NoClassifier> {
         let mut engine = test_engine(Duration::from_secs(3600)).await;
         engine.settings.health_path = Some(run_health::path_in(dir));
         engine.settings.hook = Some(crate::run::settings::HookRuntime {
@@ -1267,10 +1269,7 @@ mod health_tests {
         let dir = test_support::scratch("health_llm");
         let mut engine = engine_with_health(&dir).await;
         let health = Arc::new(crate::adapters::llm::LlmHealth::default());
-        health.record::<()>(&Err(LlmError::Status {
-            status: 401,
-            body: String::new(),
-        }));
+        health.record::<()>(&Err(ClassifyError::status(401, "")));
         engine.llm_health = Some(Arc::clone(&health));
 
         engine.cycle().await.unwrap();
@@ -1289,7 +1288,7 @@ mod health_tests {
         let dir = test_support::scratch("health_llm_unreachable");
         let mut engine = engine_with_health(&dir).await;
         let health = Arc::new(crate::adapters::llm::LlmHealth::default());
-        health.record::<()>(&Err(LlmError::Timeout(30)));
+        health.record::<()>(&Err(ClassifyError::Timeout(30)));
         engine.llm_health = Some(Arc::clone(&health));
 
         engine.cycle().await.unwrap();
@@ -1372,7 +1371,7 @@ mod liveness_tests {
     /// A router whose probes are scripted and counted. It is never asked to
     /// classify anything — these tests have no tasks.
     struct ProbeScript {
-        answers: std::sync::Mutex<Vec<Result<(), LlmError>>>,
+        answers: std::sync::Mutex<Vec<Result<(), ClassifyError>>>,
         probes: Arc<AtomicUsize>,
         resets: Arc<AtomicUsize>,
         /// When set, every probe parks on `gate` before answering — a gateway
@@ -1381,13 +1380,16 @@ mod liveness_tests {
         gate: Arc<tokio::sync::Notify>,
     }
 
-    impl LlmRouter for ProbeScript {
-        async fn chat_json(&self, _request: &ChatRequest) -> Result<Value, LlmError> {
-            Err(LlmError::InvalidResponse("not under test".into()))
+    impl RepoClassifier for ProbeScript {
+        async fn classify(
+            &self,
+            _request: &ClassifyRequest,
+        ) -> Result<Classification, ClassifyError> {
+            Err(ClassifyError::InvalidResponse("not under test".into()))
         }
 
         /// Scripted answers first; once they run out, every probe succeeds.
-        async fn probe(&self) -> Result<(), LlmError> {
+        async fn probe(&self) -> Result<(), ClassifyError> {
             self.probes.fetch_add(1, Ordering::SeqCst);
             if self.hang.load(Ordering::SeqCst) {
                 self.gate.notified().await;
@@ -1417,7 +1419,7 @@ mod liveness_tests {
     impl Rig {
         /// Both intervals start at an hour, so nothing is probed for being
         /// *old* unless a test lowers one — only for never having been asked.
-        async fn new(name: &str, answers: Vec<Result<(), LlmError>>) -> Self {
+        async fn new(name: &str, answers: Vec<Result<(), ClassifyError>>) -> Self {
             let dir = test_support::scratch(name);
             let probes = Arc::new(AtomicUsize::new(0));
             let resets = Arc::new(AtomicUsize::new(0));
@@ -1469,8 +1471,8 @@ mod liveness_tests {
         }
     }
 
-    fn refused() -> LlmError {
-        LlmError::Transport("connection refused".into())
+    fn refused() -> ClassifyError {
+        ClassifyError::Transport("connection refused".into())
     }
 
     /// Startup: nothing has been heard from the gateway, so the very first
@@ -1525,7 +1527,7 @@ mod liveness_tests {
     /// so the shorter interval applies until it answers again.
     #[tokio::test]
     async fn an_unreachable_gateway_is_re_asked_on_the_shorter_interval() {
-        let mut rig = Rig::new("liveness_recovery", vec![Err(LlmError::Timeout(30))]).await;
+        let mut rig = Rig::new("liveness_recovery", vec![Err(ClassifyError::Timeout(30))]).await;
         rig.engine.settings.llm_probe_interval_while_unreachable = Duration::ZERO;
 
         rig.cycle_and_settle().await;

@@ -23,7 +23,7 @@ use std::time::Duration;
 
 use orchestrator_core::adapters::StateDb;
 use orchestrator_core::adapters::git::SystemGitRunner;
-use orchestrator_core::adapters::llm::OpenAiRouter;
+use orchestrator_core::adapters::llm::GatewayClassifier;
 use orchestrator_core::adapters::plugin_host::{Plugin, PluginSpec};
 use orchestrator_core::config::RootConfig;
 use orchestrator_core::domain::state::TaskState;
@@ -72,7 +72,7 @@ protocol_version = ">=0.6.0, <0.8"
     .expect("launch mock plugin")
 }
 
-fn no_llm() -> Option<OpenAiRouter> {
+fn no_llm() -> Option<GatewayClassifier> {
     None
 }
 
@@ -225,7 +225,10 @@ async fn plugins(
 /// schedule, so `cond` observes durable state (e.g. re-opening the state DB)
 /// rather than borrowing `engine`, which `run` holds mutably for the loop's
 /// duration.
-async fn run_until(engine: &mut Engine<SystemGitRunner, OpenAiRouter>, cond: impl Fn() -> bool) {
+async fn run_until(
+    engine: &mut Engine<SystemGitRunner, GatewayClassifier>,
+    cond: impl Fn() -> bool,
+) {
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
     let mut stop_tx = Some(stop_tx);
     let run_fut = engine.run(true, async move {

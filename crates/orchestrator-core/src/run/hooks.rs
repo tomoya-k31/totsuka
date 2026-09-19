@@ -31,10 +31,10 @@ use crate::config::{DEFAULT_BLOCK_RETRY_LIMIT, DEFAULT_WORKFLOW_TIMEOUT_SECS, Ve
 use crate::domain::signal::{AgentSignal, SignalEvent, StopStatus};
 use crate::domain::state::{TaskEvent, TaskState};
 use crate::ports::git::GitRunner;
-use crate::ports::llm::LlmRouter;
+use crate::ports::llm::RepoClassifier;
 use crate::ports::signal_ingress::FocusOutcome;
 
-impl<G: GitRunner, L: LlmRouter + 'static> Engine<G, L> {
+impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// Interpret one normalized hook signal (#138): resolve its task, record it
     /// idempotently, then drive the state machine per the signal's event.
     ///

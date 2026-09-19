@@ -690,6 +690,10 @@ pub struct LlmConfig {
     /// Secret reference to the API key (`${ENV}` or `keychain:`).
     #[serde(default)]
     pub api_key_ref: Option<String>,
+    /// Minimum classifier confidence to select a repository without asking
+    /// (F-14), `0.0..=1.0`. Default 0.6.
+    #[serde(default)]
+    pub confidence_threshold: Option<f64>,
 }
 
 /// worktree placement defaults (F-22) and cleanup policies (F-23, F-85).
