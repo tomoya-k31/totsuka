@@ -11,6 +11,43 @@ Note: the plugin protocol is versioned independently of the application (see
 `crates/plugin-protocol`); a totsuka release does not imply a protocol-version
 change.
 
+## [0.8.0](https://github.com/tomoya-k31/totsuka/compare/v0.7.11...v0.8.0) (2026-09-19)
+
+
+### ⚠ BREAKING CHANGES
+
+* **agent-ide-orca:** herdr と同じ契約で orca を駆動する ([#718](https://github.com/tomoya-k31/totsuka/issues/718))
+* **task-source-slack:** slack source の workflow で `trigger = {}`（および trigger の書き忘れ）は `CONFIG_INVALID` になる。`trigger = { mention = true }` へ 書き換えること。検査の基準は「テーブルが空か」ではなく「種別キー （mention = true / reaction / channel）を 1 つでも名指すか」。移行期間は 置かない（ADR-0034 の教訓: 期限付き非推奨は誰も参照しない）。
+* **cli:** totsuka init を廃止した。対話を外すと setup と 「非対話でディレクトリと config.toml を作る」まで同じになるため統合した。 setup の --answers / --save-answers / --yes も削除し、代わりに --plugins <csv>（all / none も可）と --secret-backend を追加した。 別マシンへ運ぶのは回答ファイルではなく config.toml そのものになる。
+
+### Features
+
+* **agent-ide-orca:** herdr と同じ契約で orca を駆動する ([#718](https://github.com/tomoya-k31/totsuka/issues/718)) ([4cb506b](https://github.com/tomoya-k31/totsuka/commit/4cb506b100020f5117df28e9ad5d50380ff497db))
+* **cli:** config.toml 雛形に全設定パターンを載せ、網羅性検査を CI に組み込む ([#707](https://github.com/tomoya-k31/totsuka/issues/707)) ([30d4f34](https://github.com/tomoya-k31/totsuka/commit/30d4f34cc6bcef108f6ead8927e548f55d84dab3)), closes [#705](https://github.com/tomoya-k31/totsuka/issues/705)
+* **cli:** setup ウィザードと導入手順に Bitwarden を追加する ([#702](https://github.com/tomoya-k31/totsuka/issues/702)) ([6dcdd67](https://github.com/tomoya-k31/totsuka/commit/6dcdd6711c7c8c8aa0799b405d97cc1b39011c33)), closes [#699](https://github.com/tomoya-k31/totsuka/issues/699)
+* **cli:** setup から対話を廃止し、全設定パターンを書いた config.toml を生成する ([#708](https://github.com/tomoya-k31/totsuka/issues/708)) ([70a2ca2](https://github.com/tomoya-k31/totsuka/commit/70a2ca2bcf308761f873d50a051d351d7bded097)), closes [#705](https://github.com/tomoya-k31/totsuka/issues/705)
+* **core:** シークレット参照に Bitwarden (bw:) バックエンドを追加する ([#701](https://github.com/tomoya-k31/totsuka/issues/701)) ([7a926cb](https://github.com/tomoya-k31/totsuka/commit/7a926cbdb4132b510b622869783bb673ba22a82c)), closes [#699](https://github.com/tomoya-k31/totsuka/issues/699)
+* **live-e2e:** orca 版の実機 E2E スキルを追加し、既存を herdr 版に改名する ([#722](https://github.com/tomoya-k31/totsuka/issues/722)) ([dcd8683](https://github.com/tomoya-k31/totsuka/commit/dcd8683630dd92ae18aeefc0e177df4f018e42fb))
+* **repo-select:** [llm].api = "decisions" で TypeSafe Jev による分類を選べるようにする ([#725](https://github.com/tomoya-k31/totsuka/issues/725)) ([acf4ef1](https://github.com/tomoya-k31/totsuka/commit/acf4ef1ac864955c74e2f48313d6349fb65781af)), closes [#723](https://github.com/tomoya-k31/totsuka/issues/723)
+* **task-source-slack:** グループメンションを宛先ごとに別 workflow へ振り分ける ([#719](https://github.com/tomoya-k31/totsuka/issues/719)) ([837844e](https://github.com/tomoya-k31/totsuka/commit/837844e490a9b4332644f8daa924ac043e5204cb))
+* **task-source-slack:** リアクショントリガに from_bot を足し、名指しした bot の投稿を対象にする ([#713](https://github.com/tomoya-k31/totsuka/issues/713)) ([ab54119](https://github.com/tomoya-k31/totsuka/commit/ab54119dabfb8ec401b470d4bdde8d21edad428f))
+
+
+### Bug Fixes
+
+* **ci:** herdr-schema-watch の重複ガードを検索から一覧クエリへ移す ([#715](https://github.com/tomoya-k31/totsuka/issues/715)) ([4d14a05](https://github.com/tomoya-k31/totsuka/commit/4d14a0567248fffe5e863410bd9d80daeb6e40be))
+* **cli:** 雛形のチャンネル監視の例が起動しないのを直す ([#720](https://github.com/tomoya-k31/totsuka/issues/720)) ([aa6cf9d](https://github.com/tomoya-k31/totsuka/commit/aa6cf9d4047809bc85ed5621d969647771015519))
+* **task-source-slack:** 再開された会話の返信先座標を publish で消費しない ([#711](https://github.com/tomoya-k31/totsuka/issues/711)) ([b0773dc](https://github.com/tomoya-k31/totsuka/commit/b0773dcee8bb997e1017f8bc107733b006be24bf))
+* **task-source-slack:** 承認・却下の押下でエフェメラルを削除する ([#712](https://github.com/tomoya-k31/totsuka/issues/712)) ([fe75382](https://github.com/tomoya-k31/totsuka/commit/fe75382ff91d7d79023c68a0b3f468cfeac01acf))
+
+
+### Refactors
+
+* **cli:** config.toml 雛形を実ファイル化し、網羅性の Fitness Function を追加する ([#706](https://github.com/tomoya-k31/totsuka/issues/706)) ([420a832](https://github.com/tomoya-k31/totsuka/commit/420a832ec9d24bfd832aa5c57d86464cc5201c4e)), closes [#705](https://github.com/tomoya-k31/totsuka/issues/705)
+* **cli:** doctor の非対話ゲートをスキーム非依存に畳む ([#700](https://github.com/tomoya-k31/totsuka/issues/700)) ([2230a26](https://github.com/tomoya-k31/totsuka/commit/2230a269d710aa75a052287c8bd4392fa75f6f75)), closes [#699](https://github.com/tomoya-k31/totsuka/issues/699)
+* **repo-select:** リポジトリ分類を共有クレート repo-classifier の RepoClassifier に切り直す ([#724](https://github.com/tomoya-k31/totsuka/issues/724)) ([122949d](https://github.com/tomoya-k31/totsuka/commit/122949d6547d09e1eea99e78de768910cf10c9b0)), closes [#723](https://github.com/tomoya-k31/totsuka/issues/723)
+* **task-source-slack:** メンショントリガを trigger = { mention = true } で宣言する ([#717](https://github.com/tomoya-k31/totsuka/issues/717)) ([a1d934a](https://github.com/tomoya-k31/totsuka/commit/a1d934a2628472416d7ffdea07fe5f39dddf598a))
+
 ## [0.7.11](https://github.com/tomoya-k31/totsuka/compare/v0.7.10...v0.7.11) (2026-09-16)
 
 
