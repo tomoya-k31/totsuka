@@ -1,0 +1,1 @@
+* **Update**: [repo-classifier](/components/repo-classifier.md) に実機検証（`tests/live_openrouter.rs`、`#[ignore]`）の手順と 2026-09-19 の結果を追記し、`verified` を付けた（#723）。decisions の分類・none・疎通確認が本物の OpenRouter Decisions API で通り、`doctor --online` も decisions の endpoint で鍵を受理した。

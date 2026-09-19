@@ -71,6 +71,11 @@ auth_token_ref = "${E2E_HOOK_TOKEN}"
 base_url = "https://openrouter.ai/api/v1"
 model = "anthropic/claude-haiku-4.5"
 api_key_ref = "op://Dev/Openrouter/api_key"
+# S10（#723）では decisions モデルに差し替える。base_url は書くと読み込みエラーになる:
+#[llm]
+#api = "decisions"
+#model = "~typesafe/jev-latest"
+#api_key_ref = "op://Dev/Openrouter/api_key"
 
 [worktree]
 location = "${E2E_HOME}/wt/{repo_name}/{worktree_name}"

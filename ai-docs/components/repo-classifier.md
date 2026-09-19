@@ -4,7 +4,9 @@ title: repo-classifier
 description: リポジトリ分類（タスク・メンションが設定済みリポジトリのどれに属するか）の共有クレート。RepoClassifier trait と検証済みの Classification（候補 or どれも当てはまらない）、HTTP の 1 往復を抽象した HttpTransport（本番は reqwest）、指数バックオフの RetryPolicy、OpenAI 互換 /chat/completions の ChatClassifier、判定専用モデル（TypeSafe Jev）の DecisionsClassifier、設定で選ぶ ConfiguredClassifier を持つ。orchestrator-core と task_source プラグインの双方が使う leaf クレート。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/repo-classifier
 tags: [rust, crate, llm, repo-select, classifier, http, shared]
-generated: { by: claude-code/opus-5, at: 2026-09-19T22:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-19T23:30:00+09:00 }
+verified:
+  - { by: human:tomoya-k31, at: 2026-09-19T23:30:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -37,3 +39,14 @@ owner: tomoya-k31
 | `scrub_urls` | URL の資格情報とクエリを落とす。core の `LlmHealth` も健全性の理由文で使う |
 | `DecisionsClassifier<T>` / `DecisionsSettings` | 判定専用モデル（TypeSafe Jev）。`endpoint`（**完全な URL**。既定 `DecisionsSettings::OPENROUTER_ENDPOINT` = OpenRouter の `POST /api/alpha/decisions`、alpha）に `{model, state, questions}` を送る。`state` は subject をラベル付きオブジェクトにしたもの、質問は `choice` 1 つで、`criteria` のキーは候補名そのまま（`/` `.` `_` を含む名前が通ることを実キーで確認済み）、値は summary + README 先頭（無ければ `null`）。**`none` の選択肢を必ず足す**（候補名と衝突したら `_` を前置して一意にする）。回答は `answers.repo.choice`。`none` なら `NoneFits`、それ以外は **`probabilities[choice]` を confidence とし**、無ければ `confidence` で代用、両方無ければ `InvalidResponse`。理由文は分布から組み立てる（`<model>: totsuka p=0.84 (next: dotfiles 0.15)`）。質問文は固定（設定不可）。`probe` は 1 語の state に `noul` 質問 1 つ（約 270 入力トークン） |
 | `ConfiguredClassifier<T>` | `Chat` / `Decisions` のどちらか。trait が dyn にできないので、設定で方式を選ぶ呼び出し側はこれを持つ。`endpoint()` は `doctor` が表示する呼び出し先 |
+
+# 実機検証
+
+`tests/live_openrouter.rs` は本物の OpenRouter Decisions API に当てる検査で、`#[ignore]` 付き（実キーと費用が要るので CI では回さない）。decisions 実装や OpenRouter の alpha endpoint が変わった可能性があるときに回す:
+
+```bash
+OPENROUTER_API_KEY="$(op read 'op://Dev/Openrouter/api_key')" \
+  cargo test -p repo-classifier --test live_openrouter -- --ignored --test-threads=1 --nocapture
+```
+
+2026-09-19 に 3 件とも通過した（#723）。明確なタスクは `tomoya-k31/totsuka` が p=1.00、無関係なタスク（歯医者の予約）は `NoneFits`（none p=0.78）、疎通確認は本物の鍵で成功・でたらめな鍵で `is_auth_failure`。あわせて `[llm].api = "decisions"` の設定で `totsuka doctor --online` が `https://openrouter.ai/api/alpha/decisions accepted the API key` を返すこと（core の設定読み込み → `gateway_classifier` → `probe` の経路）も確認した。手順は live-e2e の S10 にある。
