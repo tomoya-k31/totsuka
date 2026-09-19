@@ -230,12 +230,16 @@ pub fn upsert_workflow(config_toml: &str, draft: &WorkflowDraft) -> Result<Strin
     Ok(doc.to_string())
 }
 
-/// Write the `[llm]` table.
+/// Write the `[llm]` table in its chat form.
 ///
 /// The schema treats `[llm]` as all-or-nothing (`base_url` + `model` are both
 /// required), so this writes the complete table rather than individual keys.
 /// `api_key_ref: None` removes the key — a backend that injects the key through
 /// the environment needs the stale reference gone, not merely unmentioned.
+///
+/// Writing chat means **removing `api` and `endpoint`** (#723): left over from
+/// a decisions table, `api = "decisions"` next to the new `base_url` would be
+/// a config that no longer loads.
 pub fn set_llm(
     config_toml: &str,
     base_url: &str,
@@ -244,6 +248,8 @@ pub fn set_llm(
 ) -> Result<String, EditError> {
     let mut doc: DocumentMut = config_toml.parse()?;
     let llm = table_at(&mut doc, "llm")?;
+    put_value(llm, "api", None::<&str>);
+    put_value(llm, "endpoint", None::<&str>);
     set_value(llm, "base_url", base_url);
     set_value(llm, "model", model);
     put_value(llm, "api_key_ref", api_key_ref);
@@ -977,6 +983,14 @@ path = "/dotfiles"
         let llm = set_llm("", "https://x/v1", "m", Some("keychain:totsuka/k")).unwrap();
         let llm = set_llm(&llm, "https://x/v1", "m", None).unwrap();
         assert!(!llm.contains("api_key_ref"), "{llm}");
+
+        // A decisions table rewritten as chat must still load (#723).
+        let decisions = "[llm]\napi = \"decisions\"\nmodel = \"~typesafe/jev-latest\"\n\
+                         endpoint = \"https://gw/decisions\"\n";
+        let chat = set_llm(decisions, "https://x/v1", "m", None).unwrap();
+        let parsed = crate::config::RootConfig::from_toml_str(&chat)
+            .unwrap_or_else(|e| panic!("{e}\n{chat}"));
+        assert_eq!(parsed.llm.unwrap().api.name(), "chat");
 
         let tool = set_tool("", "t", "claude", Some("/bin/claude")).unwrap();
         let tool = set_tool(&tool, "t", "claude", None).unwrap();

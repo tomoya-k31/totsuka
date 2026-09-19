@@ -23,11 +23,16 @@ use crate::{
 /// The question id in `questions` / `answers`.
 const QUESTION: &str = "repo";
 
-/// What the model is asked. Fixed on purpose: the answer set carries the
-/// meaning, and a configurable wording would only be one more way to make the
-/// question disagree with its options.
-const INSTRUCTIONS: &str = "Which repository should this work be done in? \
-                            Choose `none` only when no repository fits.";
+/// What the model is asked, naming the "nothing fits" option by its actual
+/// key (see [`none_key`]). Fixed wording on purpose: the answer set carries
+/// the meaning, and a configurable question would only be one more way to make
+/// it disagree with its options.
+fn instructions(none: &str) -> String {
+    format!(
+        "Which repository should this work be done in? \
+         Choose `{none}` only when no repository fits."
+    )
+}
 
 /// The description of the "nothing fits" option.
 const NONE_FITS: &str = "None of the repositories fits this work";
@@ -104,7 +109,7 @@ impl<T: HttpTransport> RepoClassifier for DecisionsClassifier<T> {
             "questions": {
                 QUESTION: {
                     "type": "choice",
-                    "instructions": INSTRUCTIONS,
+                    "instructions": instructions(&none),
                     "criteria": criteria(&request.candidates, &none),
                 },
             },
@@ -205,6 +210,15 @@ fn verdict(
 ) -> Result<Classification, ClassifyError> {
     let invalid = |why: String| ClassifyError::InvalidResponse(why);
     let answer = &response["answers"][QUESTION];
+    // `type` is optional to read but, when present, must be the question we
+    // asked: a `noul` or `score` answer has no `choice` to trust.
+    if let Some(kind) = answer["type"].as_str()
+        && kind != "choice"
+    {
+        return Err(invalid(format!(
+            "`answers.{QUESTION}` is a `{kind}` answer, not a `choice`"
+        )));
+    }
     let choice = answer["choice"]
         .as_str()
         .ok_or_else(|| invalid(format!("no `answers.{QUESTION}.choice` in the response")))?;
@@ -429,6 +443,43 @@ mod tests {
         ));
         let c = classifier(vec![Ok(json!({ "answers": {} }))]);
         assert!(c.classify(&request()).await.unwrap_err().is_bad_answer());
+    }
+
+    /// When a repository is literally called `none`, the question must point
+    /// at the renamed option, not at that repository.
+    #[tokio::test]
+    async fn the_question_names_the_actual_none_option() {
+        let mut req = request();
+        req.candidates
+            .push(candidate("none", Some("a real repository"), None));
+        let c = classifier(vec![answer("_none", json!({ "_none": 1 }), 1.0)]);
+        assert!(matches!(
+            c.classify(&req).await.unwrap(),
+            Classification::NoneFits { .. }
+        ));
+        let body = c.transport.requests.lock().unwrap()[0].1.clone();
+        let question = &body["questions"]["repo"];
+        assert!(
+            question["instructions"]
+                .as_str()
+                .unwrap()
+                .contains("`_none`"),
+            "{question}"
+        );
+        assert_eq!(question["criteria"]["none"], "a real repository");
+        assert_eq!(question["criteria"]["_none"], NONE_FITS);
+    }
+
+    #[tokio::test]
+    async fn an_answer_of_another_type_is_a_bad_answer() {
+        let c = classifier(vec![Ok(json!({
+            "answers": { "repo": { "type": "noul", "noul": 0.9, "choice": "bare" } },
+        }))]);
+        let err = c.classify(&request()).await.unwrap_err();
+        assert!(
+            err.is_bad_answer() && err.to_string().contains("noul"),
+            "{err}"
+        );
     }
 
     #[test]
