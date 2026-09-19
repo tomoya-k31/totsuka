@@ -2,8 +2,8 @@
 # GitHub トークンの必要権限を**実測**する（#514）。docs の権限表はこれまで
 # 導出であって実測ではなかった。
 #
-#   bash .claude/skills/live-e2e/scripts/github-permissions.sh probe
-#   bash .claude/skills/live-e2e/scripts/github-permissions.sh probe --write
+#   bash .claude/skills/live-e2e-herdr/scripts/github-permissions.sh probe
+#   bash .claude/skills/live-e2e-herdr/scripts/github-permissions.sh probe --write
 #   GH_PROBE_TOKEN='ghp_…' bash .../github-permissions.sh probe --write
 #
 # 既定のトークンは `.env` の `E2E_GH_TOKEN`。`GH_PROBE_TOKEN` を渡すとそちらを

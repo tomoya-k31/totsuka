@@ -17,7 +17,8 @@
 * [agent-ide-herdr](agent-ide-herdr.md) - herdr を Agent IDE として接続する公式 agent_ide プラグイン（v1 参照実装）。Orchestrator の JSON-RPC ↔ herdr Socket API（NDJSON）のアダプタで、dispatch/セッション管理/状態ストリーム/plan モード/pane レイアウトを担う。
 * [agent-ide-orca](agent-ide-orca.md) - orca を Agent IDE として接続する公式 agent_ide プラグイン。herdr プラグインと同じ契約（tool_launch をそのまま起動・hook で完了報告・exit の deadman・pane_control・diagnostics_snapshot）を、orca CLI（--json）の端末操作で実現する。セッションは Orchestrator の worktree に開いた orca 端末。
 * [notifier-macos](notifier-macos.md) - Orchestrator のイベント（waiting_input / done / failed / pending / escalated / verification_pending）を macOS 通知センターへ配送する公式 notifier プラグイン。バックエンド選択（osascript / terminal-notifier click-to-focus）、ワークフロー×イベント別フィルタ、fire-and-forget 配送。
-* [live-e2e スキル](live-e2e.md) - 実 Slack / 実 GitHub / 実 herdr + 実 Claude Code に対して totsuka を通しで動かす実機検証の手順・設定雛形・駆動スクリプト一式。自動／手動／目視の区分と、別環境での一からの構築手順を含む。
+* [live-e2e-herdr スキル](live-e2e.md) - 実 Slack / 実 GitHub / 実 herdr + 実 Claude Code に対して totsuka を通しで動かす実機検証の手順・設定雛形・駆動スクリプト一式（herdr 版、旧名 live-e2e）。自動／手動／目視の区分と、別環境での一からの構築手順を含む。GitHub / Slack の駆動スクリプトと $E2E_HOME は orca 版の live-e2e-orca と共用する。
+* [live-e2e-orca スキル](live-e2e-orca.md) - 実 Slack / 実 GitHub / 実 orca + 実 Claude Code に対して totsuka を通しで動かす実機検証の手順と、orca 側の準備・観測スクリプト（orca 版）。GitHub / Slack の駆動・$E2E_HOME・サンドボックスは live-e2e-herdr のものを共用し、orca 固有の前提（repo 登録・external worktree 表示・プラグインの入れ直し・agent の切り替え）とシナリオ O1〜O6・症状表だけを持つ。
 * [task-source-discord プラグイン](task-source-discord.md) - Discord のチャンネル監視をタスクソースとして接続する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。Gateway WebSocket で MESSAGE_CREATE を受け、監視チャンネルへのトップレベル投稿を Task へ正規化し、結果を bot 名義でその投稿のスレッドへ返す。self-bot 禁止により本人名義投稿・承認フローは持たない薄い設計。
 * [slack-event-gateway](slack-event-gateway.md) - Slack の配信を HTTPS で受け、署名を検証し、本文を保存せずに座標へ射影して Pub/Sub へ publish する常駐しないサービス。event_source = "gateway" のときだけ経路に入る。同一リポジトリの workspace 外に置き、適合テストスイートだけを totsuka と共有する。公式イメージは ghcr.io にリリースごとに公開する。
 <!-- okf:index:end -->

@@ -170,6 +170,7 @@ CLI の一覧では見え方が分かれる。`orca worktree list --repo <sel>` 
 | `terminal rename --title <t>` | **作業中のエージェントには 5 秒以内に上書きされる**（Claude の OSC タイトル `◑ …` → `✳ …`）。アイドルの Claude に付けたときは次のターン後も残ったので、保たれるかどうかはエージェントがタイトルを更新するかで決まる。rename 中は `agentIdentity` が `null` になる（タイトル由来の表示と思われる）が、送信側の Claude 判定は変わらない |
 | `terminal wait --for tui-idle` | Claude 起動から約 4 秒で `satisfied: true, status: running`。**この時点ではまだ `agentIdentity` が `null`** |
 | `terminal send --text … --enter --wait-submit <s>` | orca が Claude と認識している端末では `provider: "claude"`・bracketed paste・`stages: [input_accepted, turn_started]`。認識前に送ると `provider: "unsupported"` の生キー入力になり、**Claude には届かなかった**。複数行テキストは認識後なら 1 ターンとして届く |
+| `terminal wait --for exit`（生きている端末） | **間欠的に `terminal_handle_stale` を返す**。実機 e2e で 3 回（dispatch の 5 秒後・35 秒後・55 秒後）、いずれも直後の `terminal show` は `connected: true` で、エージェントは作業を続けていた。原因は未特定。終了の判定を `wait` の 1 回の応答に頼らないこと |
 | `terminal wait --for exit` | `satisfied: true, status: exited`。ただし **`exitCode` は信頼できない**: `exit 3` したプロセスが `exitCode: 0`・`exitCause: {kind: unknown, reason: host_status_unavailable}`、`close` で殺した端末は `exitCode: -1`・`stop_unverified` |
 | `terminal show`（終了済み） | 記録は残り `connected: false`。`terminal list` からは消える |
 | `terminal switch`（終了済み） | `terminal_exited` |

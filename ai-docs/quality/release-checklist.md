@@ -35,7 +35,7 @@ CI（[テスト戦略](/quality/test-strategy.md)）は実 mock プラグイン�
 
 # agent_ide（orca）
 
-前提: 対象リポジトリを `orca repo add --path <repository>` で登録しておき、そのリポジトリ設定で external worktree を表示にしておく（`orca repo show --json` の `externalWorktreeVisibility` が `show`）（[ADR-0082](/decisions/adr-0082-orca-herdr-parity.md)）。
+手順と観測スクリプトは [live-e2e-orca スキル](/components/live-e2e-orca.md) にある。前提: 対象リポジトリを `orca repo add --path <repository>` で登録しておき、そのリポジトリ設定で external worktree を表示にしておく（`orca repo show --json` の `externalWorktreeVisibility` が `show`）（[ADR-0082](/decisions/adr-0082-orca-herdr-parity.md)）。
 
 - [ ] dispatch で Orchestrator の worktree に orca の端末タブが開き、タスク本文が 1 ターンとして Claude に届く（`orca worktree create` による 2 本目の worktree が**できない**こと）
 - [ ] タスクの worktree の orca comment が `totsuka <task_id>`（所有マーカー。タブタイトルは Claude が書き換えるので見ない）。`totsuka doctor` の pane チェックがその worktree の端末を所有 pane として数える

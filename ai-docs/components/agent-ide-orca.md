@@ -68,7 +68,7 @@ herdr と同じ `pane_control` / `state_stream` / `hook_completion` / `diagnosti
 
 - 単体: envelope の解釈（`id` を漏らさない・`ok: false` のコード・envelope 無しの失敗）、`terminal wait` の打ち切り時間、エラー分類、`exec env` の組み立てと `sh` による読み戻し、廃止キーの案内、状態写像、表示名の文字境界での切り詰め、`resume_failure` の狭さ。
 - 結合（`tests/integration.rs`、fake orca CLI に実測の応答形を返させる）: capability 宣言と `plugin.toml` の一致、dispatch の引数（`path:` セレクタ・`exec env`・タイトル・`--wait-submit`）と**呼び出し順**（`tui-idle` → `show` → `send`、rename はしない）、`worktree create` / `worktree rm` を呼ばないこと、`tool_launch` 欠落、repo 未登録、resume 失敗の `SESSION_UNRESUMABLE` と後片付け、認識されないエージェント（一時停止クロックで 30 秒）、deadman、attach / cancel / release（一致・消失・終了済み・不一致）/ list / focus / snapshot、`config/validate`（`runtime.reachable`）。
-- **実機（orca 1.4.205 + Claude Code 2.1.277）**: ビルドしたバイナリを stdio で駆動し、dispatch → プロンプトが 1 ターンとして届き応答 → `session/list` に出る → `diagnostics/snapshot` → `session/release` で閉じる → deadman が `failed` → attach が `attached: false`、まで通した。**Orchestrator を含む通し（hook による完了報告）は未実施**で、[live-e2e](/quality/release-checklist.md) の orca 節で確認する。
+- **実機（orca 1.4.205 + Claude Code 2.1.277）**: ビルドしたバイナリを stdio で駆動し、dispatch → プロンプトが 1 ターンとして届き応答 → `session/list` に出る → `diagnostics/snapshot` → `session/release` で閉じる → deadman が `failed` → attach が `attached: false`、まで通した。**Orchestrator を含む通し（hook による完了報告）は未実施**で、[live-e2e-orca スキル](/components/live-e2e-orca.md) の O1〜O6 で確認する。
 
 # 依存
 

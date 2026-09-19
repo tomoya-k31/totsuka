@@ -8,7 +8,7 @@
 //! The rule was never wrong, and it is not reliably forgotten either — the
 //! 0.4.0 bump (#413) moved all seven manifests, including the one outside
 //! `plugins/`. The 0.5.0 bump (#501) moved six, and
-//! `.claude/skills/live-e2e/assets/cfg/mock-agent.plugin.toml` was left at
+//! `.claude/skills/live-e2e-herdr/assets/cfg/mock-agent.plugin.toml` was left at
 //! `<0.5` while `PROTOCOL_VERSION` reached 0.5.0 (#526).
 //!
 //! That is the case for automating it rather than restating it: an obligation
@@ -130,7 +130,7 @@ fn every_bundled_manifest_accepts_the_current_protocol_version() {
             )
         })
         .collect();
-    expected.push(".claude/skills/live-e2e/assets/cfg/mock-agent.plugin.toml".to_string());
+    expected.push(".claude/skills/live-e2e-herdr/assets/cfg/mock-agent.plugin.toml".to_string());
     expected.sort();
 
     let discovered: Vec<String> = manifests.iter().map(|p| rel(&root, p)).collect();

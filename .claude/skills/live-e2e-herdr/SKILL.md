@@ -1,9 +1,14 @@
 ---
-name: live-e2e
-description: totsuka を実機（実 Slack / 実 GitHub / 実 herdr + 実 Claude Code）で通しで動かし、結果を検証する手順。トリガー: 「実機で試したい」「実機検証」「e2e を回して」「本物の Slack で確認」「herdr で動かして」「リリース前チェック」、および herdr / Slack / GitHub 連携に手を入れた PR の検証。CI は mock プラグインまでしか検証しないので、agent_ide・task_source の実接続に関わる変更を出したら必ずこのスキルで確かめること。実機で初めて出る不具合はここでしか捕まらない。
+name: live-e2e-herdr
+description: totsuka を実機（実 Slack / 実 GitHub / 実 herdr + 実 Claude Code）で通しで動かし、結果を検証する手順（herdr 版）。トリガー: 「実機で試したい」「実機検証」「e2e を回して」「本物の Slack で確認」「herdr で動かして」「リリース前チェック」、および herdr / Slack / GitHub 連携に手を入れた PR の検証。CI は mock プラグインまでしか検証しないので、agent_ide・task_source の実接続に関わる変更を出したら必ずこのスキルで確かめること。実機で初めて出る不具合はここでしか捕まらない。エージェントが orca の場合は live-e2e-orca を使う（GitHub / Slack の駆動スクリプトはこのスキルのものを共用する）。
 ---
 
-# 実機 E2E 検証
+# 実機 E2E 検証（herdr 版）
+
+> **エージェントを orca で動かすなら [live-e2e-orca](../live-e2e-orca/SKILL.md) を使う。**
+> このスキルの `scripts/`（GitHub / Slack の駆動・観測）と `$E2E_HOME` はそちらでも共用する
+> ので、スクリプトを変えるときは両方のシナリオが壊れないことを確かめる。
+> データ置き場の `$E2E_HOME/state/live-e2e/` は名前を変えていない（両スキルで共有するキャッシュ）。
 
 CI（`slack_e2e.rs` 等）は**モック**に対して全経路を通す。実機でしか出ない不具合はそこを素通りするので、
 このスキルで実 Slack / 実 GitHub / 実 herdr + 実 Claude Code に対して通す。
@@ -113,8 +118,8 @@ install を「古い」と誤判定もする。
 られない（LLM・herdr・worktree が同時に動く）。その隙間を埋める:
 
 ```bash
-bash .claude/skills/live-e2e/scripts/github-permissions.sh probe          # read の 3 操作
-bash .claude/skills/live-e2e/scripts/github-permissions.sh probe --write  # + カード移動
+bash .claude/skills/live-e2e-herdr/scripts/github-permissions.sh probe          # read の 3 操作
+bash .claude/skills/live-e2e-herdr/scripts/github-permissions.sh probe --write  # + カード移動
 GH_PROBE_TOKEN='ghp_…' bash .../github-permissions.sh probe --write       # 権限を削った PAT を試す
 ```
 
@@ -151,7 +156,7 @@ issue にエージェントを走らせる。
 ## 3. 結果を報告する
 
 ```bash
-bash .claude/skills/live-e2e/scripts/report.sh
+bash .claude/skills/live-e2e-herdr/scripts/report.sh
 ```
 
 自動で判定できるものは pass/fail が出る。**目視項目は「未確認」として残る**ので、
@@ -220,7 +225,7 @@ gh api graphql -f query='{ rateLimit { remaining limit } }' --jq .data.rateLimit
 **既定は「残す」。** 次の検証で state DB とタスク履歴が手掛かりになる。片付けるときは:
 
 ```bash
-bash .claude/skills/live-e2e/scripts/report.sh --cleanup-hints
+bash .claude/skills/live-e2e-herdr/scripts/report.sh --cleanup-hints
 ```
 
 worktree・herdr workspace・サンドボックスのブランチ/PR が列挙される。
