@@ -3,7 +3,7 @@ type: Spec
 title: totsuka — Local AI-Agent Orchestrator Requirements (v1)
 description: Requirements specification for the totsuka orchestrator CLI — task-source/agent-IDE/notifier plugins, git-worktree lifecycle, workflows, parallel execution control, and v1 scope.
 tags: [orchestrator, requirements, plugin, worktree, cli, rust]
-generated: { by: claude-code/opus-5, at: 2026-09-19T12:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-19T22:00:00+09:00 }
 status: draft
 owner: tomoya-k31
 ---
@@ -98,9 +98,9 @@ Priorities use MoSCoW (M: Must / S: Should / C: Could / W: Won't in v1).
 |---|---|---|
 | F-10 | If the task specifies a repo (Notion property / the Issue's repository, etc.), that takes precedence | M |
 | F-11 | Otherwise, classify with an LLM using the configured repository summaries + the head N lines of each repository root README | M |
-| F-12 | LLM calls use an OpenAI-compatible API; swapping `base_url` selects an AI gateway such as OpenRouter / LiteLLM | M |
-| F-13 | Model name, max_tokens, and timeout configurable (cheap models assumed, e.g. haiku-class) | M |
-| F-14 | The LLM returns `{repo, confidence, reason}` via structured output. Confidence is treated as a self-reported reference value; below `[llm].confidence_threshold` (default 0.6), or when multiple candidates are close, ask a human (put the task into pending) | S |
+| F-12 | LLM calls use an OpenAI-compatible API; swapping `base_url` selects an AI gateway such as OpenRouter / LiteLLM. Alternatively `[llm].api = "decisions"` classifies with a decisions model (TypeSafe Jev), which picks one candidate — or "none fits" — and returns a probability for every candidate; its endpoint defaults to OpenRouter's Decisions API (alpha) and can be overridden | M |
+| F-13 | Model name, max_tokens (chat only), and timeout configurable (cheap models assumed, e.g. haiku-class) | M |
+| F-14 | The LLM returns `{repo, confidence, reason}` via structured output (a decisions model: the chosen candidate's probability is the confidence). Confidence is treated as a reference value; below `[llm].confidence_threshold` (default 0.6), when multiple candidates are close, or when a decisions model answers "none fits", ask a human (put the task into pending) | S |
 | F-15 | Cache README summaries (XDG_CACHE_HOME); regenerate only when the README hash changes | C |
 
 ### 4.3 Worktree management

@@ -4,7 +4,7 @@ title: 設定例集（config.toml）
 description: そのまま貼って動く config.toml の完全版注釈付き例と、選択肢を持つキー（kind・mode・output・verification・cleanup・trigger・シークレット参照・並列上限）の選び分け基準、TOTSUKA_* 環境変数オーバーライドの対応表、および最小構成／GitHub Projects／Slack／設計→実装ハンドオフのシナリオ別レシピ。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-cli/templates/config.toml
 tags: [config, toml, examples, recipes, workflow, secrets, slack, github, herdr, environment]
-generated: { by: claude-code/opus-5, at: 2026-09-19T20:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-19T22:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -70,15 +70,18 @@ owner: tomoya-k31
 | `TOTSUKA_HOOKS_SOCKET_PATH` | `[hooks].socket_path` | 文字列 |
 | `TOTSUKA_HOOKS_SPOOL_DIR` | `[hooks].spool_dir` | 文字列 |
 | `TOTSUKA_HOOKS_BLOCK_RETRY_LIMIT` | `[hooks].block_retry_limit` | 非負整数 |
-| `TOTSUKA_LLM_BASE_URL` | `[llm].base_url` | 文字列 ※ |
+| `TOTSUKA_LLM_BASE_URL` | `[llm].base_url` | 文字列 ※（`api = "chat"` のときだけ） |
 | `TOTSUKA_LLM_MODEL` | `[llm].model` | 文字列 ※ |
-| `TOTSUKA_LLM_MAX_TOKENS` | `[llm].max_tokens` | 非負整数 ※ |
+| `TOTSUKA_LLM_MAX_TOKENS` | `[llm].max_tokens` | 非負整数 ※（`api = "chat"` のときだけ） |
+| `TOTSUKA_LLM_ENDPOINT` | `[llm].endpoint` | 文字列 ※（`api = "decisions"` のときだけ） |
 | `TOTSUKA_LLM_TIMEOUT_SECS` | `[llm].timeout_secs` | 非負整数 ※ |
 | `TOTSUKA_LLM_API_KEY_REF` | `[llm].api_key_ref` | 文字列（シークレット参照）※ |
 | `TOTSUKA_LLM_CONFIDENCE_THRESHOLD` | `[llm].confidence_threshold` | 数値（0.0〜1.0）※ |
 
 ※ `[llm]` は `base_url` + `model` が必須のテーブルなので、**env だけからは合成しない**。
 `config.toml` に `[llm]` が無い状態で `TOTSUKA_LLM_*` を設定すると起動エラーになる（黙って無視はしない）。
+同じ理由で、`[llm].api` に合わないキー（decisions に `TOTSUKA_LLM_BASE_URL` など）も起動エラーになる。
+**`[llm].api` 自体を切り替える変数は無い** —— 切り替えると必須キーが変わり、env だけでは正しいテーブルを作れないため。
 
 **スコープ外**: 配列・動的キー（`[[repositories]]` / `[[workflows]]` / `[plugins.{name}]`）は
 環境変数名で一意に指し示せないため対象外。`[<name>]` の中身も Orchestrator が解釈しない

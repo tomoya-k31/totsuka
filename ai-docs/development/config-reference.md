@@ -4,7 +4,7 @@ title: 設定リファレンス（config.toml）
 description: "config.toml の全キー・デフォルト値・意味の一覧。設定ファイルは 1 本で、プラグイン個別設定もトップレベルの [<name>] テーブルに入る。シークレット参照、設定スキーマのバージョニング方針、[[projects]] の domain 宣言とワークフローからの参照、プラグインが定義する追加プロパティ、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-github の [github]、task-source-notion の [notion]、task-source-slack の [slack]、agent-ide-herdr の [herdr] を含む。"
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
 tags: [config, reference, toml, secrets, workflow, worktree, github, notion, slack, hooks, versioning]
-generated: { by: claude-code/opus-5, at: 2026-09-19T20:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-19T22:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -56,7 +56,7 @@ owner: tomoya-k31
 | `[plugins.{name}]` | テーブル | — | プラグインのロスター + 共通項目（下記） |
 | `[<name>]` | テーブル | — | プラグイン自身の設定（下記）。`{name}` は `[plugins.*]` のロスターに居る名前だけ |
 | `[[workflows]]` | 配列 | — | ワークフロー定義（下記） |
-| `[llm]` | テーブル | なし | AI Gateway 設定（下記）。無い場合、LLM が必要なリポジトリ選択は `pending` にフォールバック |
+| `[llm]` | テーブル | なし | リポジトリ分類の設定（下記。chat 形式の LLM か decisions モデル）。無い場合、分類が必要なリポジトリ選択は `pending` にフォールバック |
 | `[worktree]` | テーブル | — | worktree 配置・掃除（下記） |
 | `[log]` | テーブル | — | ログ設定（下記） |
 | `[hooks]` | テーブル | — | エージェント CLI フックイベント受信の設定（下記、#131） |
@@ -708,18 +708,45 @@ verification = "llm"
 rubric = "返信案が質問に直接答えているか、根拠が示されているかを検証してください。"
 ```
 
-# `[llm]`（AI Gateway）
+# `[llm]`（リポジトリ分類）
 
-OpenAI 互換 `/chat/completions` を前提。repo_hint を持たないタスクのリポジトリ選択（F-11）に使うほか、**task_source プラグインへ initialize 時に分類用 default として供給される**（#119、protocol 0.1.2。`api_key_ref` は解決済みの値で渡る。プラグイン自身の LLM 設定が常に優先）。
+repo_hint を持たないタスクのリポジトリ選択（F-11）に使うほか、**task_source プラグインへ initialize 時に分類用 default として供給される**（#119、protocol 0.1.2。`api_key_ref` は解決済みの値で渡る。プラグイン自身の LLM 設定が常に優先）。
+
+呼び出す API の種類を `api` で選ぶ（#723）。
+
+- **`chat`**（既定）: OpenAI 互換の `/chat/completions`。`base_url` の先を OpenRouter / LiteLLM などに向ける。モデルに `{repo, confidence, reason}` を structured output で返させる
+- **`decisions`**: TypeSafe Jev のような**判定専用モデル**。文章を生成せず、候補（＋「どれも当てはまらない」）から 1 つを選び、全候補の確率分布を返す。候補外の答えは構造上返らない。**既定の呼び出し先は OpenRouter の Decisions API（`https://openrouter.ai/api/alpha/decisions`）で、これは OpenRouter 側で alpha 扱い**のため、仕様が変わったときや TypeSafe の API を直接使うとき（`https://api.typesafe.ai/v1/systemone`）は `endpoint` で差し替える。認証は OpenRouter の API キーをそのまま使える
 
 | キー | 型 | 既定 | 意味 |
 |---|---|---|---|
-| `base_url` | string | 必須 | ベース URL（例 `https://openrouter.ai/api/v1`） |
-| `model` | string | 必須 | モデル名 |
-| `max_tokens` | int? | なし | 分類呼び出しの最大トークン。省略時は送らない（プロバイダの既定） |
+| `api` | string? | `"chat"` | `"chat"` / `"decisions"` |
+| `model` | string | 必須 | モデル名。decisions なら `~typesafe/jev-latest`（常に最新版）や `typesafe/jev-1.13`（版固定） |
+| `base_url` | string | chat では必須 | ベース URL（例 `https://openrouter.ai/api/v1`）。`/chat/completions` を付けて呼ぶ。**decisions では書くとエラー** |
+| `max_tokens` | int? | なし | 分類呼び出しの最大トークン。省略時は送らない（プロバイダの既定）。**chat 専用**（decisions では書くとエラー） |
+| `endpoint` | string? | OpenRouter の Decisions API | Decisions API の**完全な URL**（ベース URL ではない。ゲートウェイごとにパスが違うため）。**decisions 専用**（chat では書くとエラー） |
 | `timeout_secs` | int? | 30 | リクエストタイムアウト |
 | `api_key_ref` | string? | なし | API キーのシークレット参照 |
 | `confidence_threshold` | float? | 0.6 | この確信度未満の分類結果は採用せず、タスクを `pending` にして人間に確認を求める（F-14）。`0.0`〜`1.0`、範囲外は起動時検証でエラー。task_source プラグインへ供給される default には含まれない（プラグインは自分の閾値を持つ） |
+
+`api` に合わないキー（decisions の `base_url` / `max_tokens`、chat の `endpoint`）は、黙って無視せず設定の読み込みエラーにする。
+
+**decisions で閾値と比べる値**は、選ばれた候補の**確率**（例: `totsuka` が 0.84）である。chat のモデルが自己申告する confidence と同じ読み方ができる。API が別に返す `confidence`（分布がどれだけ一点に集中しているか。確率 0.84 でも 0.6 になりうる）は、確率が返らなかったときの代わりにだけ使う。確率は**小数第 2 位に丸めて返る**ので、閾値も 0.01 刻みでしか意味を持たない。「どれも当てはまらない」が選ばれたタスクは、確率によらず `pending` になる。
+
+```toml
+# chat（既定）
+[llm]
+base_url = "https://openrouter.ai/api/v1"
+model = "anthropic/claude-haiku-4-5"
+api_key_ref = "keychain:totsuka/openrouter"
+
+# decisions（TypeSafe Jev を OpenRouter 経由で。キーは chat と同じものでよい）
+[llm]
+api = "decisions"
+model = "~typesafe/jev-latest"
+api_key_ref = "keychain:totsuka/openrouter"
+# endpoint = "https://openrouter.ai/api/alpha/decisions"   # 既定。alpha のため差し替え可能にしてある
+confidence_threshold = 0.7
+```
 
 # `[worktree]`
 
@@ -1048,7 +1075,7 @@ kind = "task_source"
 | `[[repos]]` | 配列 | なし（省略可、#109） | リポジトリ候補。`name`（config.toml の `[[repositories]].name` と一致必須）/ `summary`?（LLM 分類の材料）/ `path`?（README 先頭を分類材料に追加）。**省略時は config.toml の `[[repositories]]`（name/summary/path）がそのまま候補になる**ため通常は書かなくてよい。明示した場合はそちらが優先（候補の絞り込み・summary の上書きに使う） |
 | `[[channel_groups]]` | 配列 | なし | チャンネル名 prefix → 候補 repos の絞り込みルール（定義順 first-match）。`prefix` / `repos`（`[[repos]]` に存在する名前のみ）。マッチは**前方一致だけ**で、`*` はリテラル文字として扱われる（glob・正規表現は無い）。`prefix` は**文字列と文字列配列のどちらでも書ける**（`prefix = "dev-"` / `prefix = ["dev-", "team-"]`）。配列にすると 1 本の `repos` を複数 prefix で共有でき、prefix ごとに同じ `repos` を書き写す必要がなくなる —— 書き写しは片方だけ古くなったときに設定エラーではなく無言の誤ルーティングになるので、共有できるならしたほうがよい。配列内はどれか 1 つ当たれば hit で、**外側の定義順 first-match は変わらない**。**空文字は単体でも配列内でも拒否される**（`prefix = ""` も `prefix = ["dev-", ""]` も）。空文字は全チャンネルに当たるので、そのグループが黙って catch-all になってしまうため。空配列 `[]` も拒否される（何も名指していない死んだ設定）。配列内の空文字は**見つかった全件が一度に報告される** —— 1 件ずつだと修正のたびに再起動が要り、しかも直すと残りの番号がずれる。したがって**全チャンネルに当てる catch-all はここには書けない** —— それは `fallback_repo` の仕事 |
 | `fallback_repo` | string? | なし | `[[channel_groups]]` がどれもマッチしないチャンネルの行き先リポジトリ（`[[repos]]` に存在する名前）。**候補 1 件になるので LLM 分類を経由せず即確定**する。組織横断の質問のように特定のコードリポジトリに属さないメンションの受け口を 1 つ決めるためのキー。**省略時は従来どおり全リポジトリが候補**になり分類 LLM に渡る（候補が多いと精度もトークンも悪化する）。マッチしたグループが候補ゼロに縮んだ場合（`repos` が空／存在しない名前だけ）も「マッチしなかった」扱いでここへ落ちる。**このキーを置いても `[llm]` は省略できない** —— 必須判定は**宣言された候補数の素朴なカウント**（`config.repos.len() > 1`）で、このキーも `[[channel_groups]]` も読まない。したがって「全グループが 1 件ずつ挙げ、かつこのキーも設定済み」のように**分類器に到達しえない構成でも必須判定は成立する**。緩めるには到達可能な経路の証明が必要になるので、判定は意図的にそれより粗い。**存在しない名前を指すと起動しない** —— `initialize` がマージ後の候補一覧に対して検査するので `CONFIG_INVALID` になる（`[[channel_groups]]` の参照整合と同じ扱い）。`config validate` も同じ検査を持つが、`[[repos]]` 省略時は候補が確定しないため initialize まで保留される。空文字も拒否される（「フォールバックを置いたつもり」を黙って無効にしないため） |
-| `[llm]` | テーブル | なし（省略可、#119） | リポジトリ分類用 OpenAI 互換 LLM。`base_url` / `model` / `api_key` / `confidence_threshold`（既定 0.6、未満はエフェメラル選択へ）。**省略時は config.toml の `[llm]`（initialize で供給）が default になる**（`api_key_ref` 必須 — キーなし供給は採用されない。`confidence_threshold` は既定 0.6）。明示した場合はそちらが優先。候補 2 件以上でどちらにも無ければ initialize が `CONFIG_INVALID` |
+| `[llm]` | テーブル | なし（省略可、#119） | リポジトリ分類。`api`（`"chat"` 既定 / `"decisions"`、#723）/ `base_url`（chat）/ `endpoint`（decisions。省略時は OpenRouter の Decisions API）/ `model` / `api_key` / `confidence_threshold`（既定 0.6、未満はエフェメラル選択へ。decisions で「どれも当てはまらない」が選ばれたときもエフェメラル選択へ）。**省略時は config.toml の `[llm]`（initialize で供給）が default になる**（`api_key_ref` 必須 — キーなし供給は採用されない。`confidence_threshold` は既定 0.6）。明示した場合はそちらが優先。候補 2 件以上でどちらにも無ければ initialize が `CONFIG_INVALID` |
 | `api_url` | string | `https://slack.com/api` | Web API ベース URL（テスト用上書き） |
 | `max_retries` | int | 3 | リトライ可能な API 失敗の最大再試行回数。**ただし 1 回の呼び出しで眠れる合計は 90 秒**で、次の待ち時間がそれを超えるなら再試行せず本当の原因を返す（スロットルの `retry-after` が長いときに「ハングしたように見える」のを避けるため）。したがって `max_retries` を大きくしても待ち時間の合計はこの予算で頭打ちになる |
 
