@@ -25,7 +25,7 @@ sources:
 Accepted — 2026-07-22（[#210](https://github.com/tomoya-k31/totsuka/issues/210)）。
 doctor による孤児 pane 検出は [#211](https://github.com/tomoya-k31/totsuka/issues/211) に分離（本 ADR の `session/release` を解放手段として再利用するため、本件マージ後に着手）。
 
-ただし「orca は `pane_control` 非宣言のため release は呼ばれない」は [ADR-0081](/decisions/adr-0081-orca-herdr-parity.md) が置き換えた。orca も宣言し、release は端末のタブを閉じる（worktree は Orchestrator が消す）。
+ただし「orca は `pane_control` 非宣言のため release は呼ばれない」は [ADR-0082](/decisions/adr-0082-orca-herdr-parity.md) が置き換えた。orca も宣言し、release は端末のタブを閉じる（worktree は Orchestrator が消す）。
 
 # Context
 

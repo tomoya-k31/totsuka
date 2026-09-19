@@ -32,7 +32,7 @@ sources:
 
 Accepted — 2026-07-18（[#155](https://github.com/tomoya-k31/totsuka/issues/155)、段階実装 PR 1〜5）
 
-ただし「orca へは `session/focus` を送らない」は [ADR-0081](/decisions/adr-0081-orca-herdr-parity.md) が置き換えた。orca も `pane_control` を宣言し、`orca terminal switch` でタブを前面化する。
+ただし「orca へは `session/focus` を送らない」は [ADR-0082](/decisions/adr-0082-orca-herdr-parity.md) が置き換えた。orca も `pane_control` を宣言し、`orca terminal switch` でタブを前面化する。
 
 # Context
 

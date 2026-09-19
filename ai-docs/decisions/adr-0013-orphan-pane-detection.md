@@ -11,7 +11,7 @@ status: stable
 
 Accepted — 2026-07-23（[#211](https://github.com/tomoya-k31/totsuka/issues/211)。[ADR-0010](/decisions/adr-0010-worktree-cleanup-pane-release.md) の後続）
 
-ただし「orca は `session/list` を呼ばれない」は [ADR-0081](/decisions/adr-0081-orca-herdr-parity.md) が置き換えた。orca もタブタイトル `totsuka {task_id}` で所有端末を列挙する。
+ただし「orca は `session/list` を呼ばれない」は [ADR-0082](/decisions/adr-0082-orca-herdr-parity.md) が置き換えた。orca もタブタイトル `totsuka {task_id}` で所有端末を列挙する。
 
 # Context
 

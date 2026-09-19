@@ -125,7 +125,7 @@ Yolo は各 CLI の permission-bypass フラグを**事前入力**する — **C
 # 実測（orca 1.4.205、2026-09-19）
 
 公式ドキュメントに書かれていない、あるいは書かれていると読み違えやすい挙動。[agent-ide-orca](/components/agent-ide-orca.md) の実装は
-すべてここに依存する（[ADR-0081](/decisions/adr-0081-orca-herdr-parity.md)）。**日次リリースなので、バージョンを上げたら読み直すこと。**[^measured-1-4-205]
+すべてここに依存する（[ADR-0082](/decisions/adr-0082-orca-herdr-parity.md)）。**日次リリースなので、バージョンを上げたら読み直すこと。**[^measured-1-4-205]
 
 ## `--json` の envelope
 
@@ -180,7 +180,7 @@ CLI の一覧では見え方が分かれる。`orca worktree list --repo <sel>` 
 # 設計上の注意点（#61 反映用サマリ）
 
 > ⚠️ 以下は #61 当時（`worktree create` で worktree を作り、state dot で完了を判定する設計）のサマリ。
-> 現在の設計は [ADR-0081](/decisions/adr-0081-orca-herdr-parity.md)（Orchestrator の worktree に端末を開き、完了は hook）で、
+> 現在の設計は [ADR-0082](/decisions/adr-0082-orca-herdr-parity.md)（Orchestrator の worktree に端末を開き、完了は hook）で、
 > 冪等性・クリーンアップ・完了検知の行はもう当てはまらない。
 
 | 項目 | 内容 |

@@ -926,7 +926,7 @@ impl<G: GitRunner, L: LlmRouter + 'static> Engine<G, L> {
             job_id: job_id.clone(),
             // 0.7.1 (#645): unconditional, where `job_id` above is not — an
             // agent that declares no `hook_completion` (the mock; orca too before
-            // ADR-0081) never receives one, and the plugin still has to name what it creates after
+            // ADR-0082) never receives one, and the plugin still has to name what it creates after
             // *something* an operator can carry back to `totsuka status`.
             task_number: Some(record.id),
             tool_launch: tool_profile.launch_spec(&LaunchInputs {

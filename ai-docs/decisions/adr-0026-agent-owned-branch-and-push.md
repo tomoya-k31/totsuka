@@ -18,7 +18,7 @@ stable。[#338](https://github.com/tomoya-k31/totsuka/pull/338) /
 [ADR-0010](/decisions/adr-0010-worktree-cleanup-pane-release.md) の掃除判定に分岐を 1 つ足し、
 [ADR-0024](/decisions/adr-0024-agent-instruction-layers.md) の安全表を 1 行降格させる。
 
-ただし「orca（非 hook エージェント）には core のプロンプトが届かない」は [ADR-0081](/decisions/adr-0081-orca-herdr-parity.md) で解消した。orca も `tool_launch` を起動し hook に乗る。
+ただし「orca（非 hook エージェント）には core のプロンプトが届かない」は [ADR-0082](/decisions/adr-0082-orca-herdr-parity.md) で解消した。orca も `tool_launch` を起動し hook に乗る。
 
 **実機検収済み**（2026-07-31、Slack → herdr → claude）。plan / implement 両モードを
 それぞれ本物の Slack メンションで通した。確認できたことは下表のとおり。

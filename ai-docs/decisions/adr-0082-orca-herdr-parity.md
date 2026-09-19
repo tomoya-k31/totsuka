@@ -1,6 +1,6 @@
 ---
 type: Decision
-title: ADR-0081 orca プラグインを herdr と同じ契約で駆動する — totsuka の worktree に端末を開き、tool_launch をそのまま起動する
+title: ADR-0082 orca プラグインを herdr と同じ契約で駆動する — totsuka の worktree に端末を開き、tool_launch をそのまま起動する
 description: "orca プラグインが worktree を自前で作り（worktree create）、独自の --agent 起動と state dot の poll で完了を判定していたのをやめ、herdr と同じ契約（tool_launch をそのまま起動・hook で完了報告・exit の deadman・pane_control・diagnostics_snapshot）にそろえる決定。orca 端末をセッションとし、Orchestrator が切った worktree に terminal create で開く。起動は exec env … で端末の寿命をエージェントに一致させ、プロンプトは orca がエージェントを認識してから terminal send で送る。所有マーカーは worktree の orca comment（タブタイトルはエージェントに上書きされる）。すべて orca 1.4.205 の実測に基づく。"
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/agent-ide-orca
 tags: [decision, adr, orca, agent-ide, plugin, hooks, pane-control, tool-launch]

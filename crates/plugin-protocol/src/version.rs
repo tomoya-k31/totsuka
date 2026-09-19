@@ -118,7 +118,7 @@ use semver::{Version, VersionReq};
 /// itself and never read `tool_launch`, so raising its bound would have
 /// refused orchestrators it worked with perfectly well. task_source and
 /// notifier stayed put for the same reason. (orca launches `tool_launch`
-/// since ADR-0081, and its floor is 0.6.0 by then — the rule is unchanged.)
+/// since ADR-0082, and its floor is 0.6.0 by then — the rule is unchanged.)
 ///
 /// 0.4.1: [`TaskDispatchParams::repo_name`](crate::methods::TaskDispatchParams::repo_name)
 /// (#417) — the repository the task was routed to, named as the operator named
@@ -304,7 +304,7 @@ use semver::{Version, VersionReq};
 /// source with one domain filters an identity, and agents and notifiers never
 /// read the field, so requiring 0.7.0 there would strand orchestrators they
 /// work with — the floor states a dependency, not a generation (the same
-/// distinction orca's manifest drew against herdr's for #411, before ADR-0081
+/// distinction orca's manifest drew against herdr's for #411, before ADR-0082
 /// gave orca the same dependency).
 /// 0.7.1 (#645): [`TaskDispatchParams::task_number`](crate::methods::TaskDispatchParams::task_number)
 /// — the Orchestrator's own task number, sent on **every** dispatch, plus the
@@ -441,7 +441,7 @@ mod tests {
         assert!(is_compatible(&herdr, &Version::new(0, 2, 3)));
 
         // The floor tracks the dependency, not the kind: an agent_ide that
-        // reads no `tool_launch` (orca, until ADR-0081) keeps a wide floor and
+        // reads no `tool_launch` (orca, until ADR-0082) keeps a wide floor and
         // keeps working with all of them.
         let no_tool_launch = VersionReq::parse(">=0.1.0, <0.8").unwrap();
         assert!(is_compatible(&no_tool_launch, &Version::new(0, 1, 0)));

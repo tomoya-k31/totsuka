@@ -20,7 +20,7 @@ sources:
 
 stable（[#411](https://github.com/tomoya-k31/totsuka/issues/411)）。
 
-ただし「orca は `tool_launch` を読まないので下限を上げない」は [ADR-0081](/decisions/adr-0081-orca-herdr-parity.md) で前提が変わった。orca も `tool_launch` を起動する（下限はすでに 0.6.0 で 0.2.3 を含意する）。
+ただし「orca は `tool_launch` を読まないので下限を上げない」は [ADR-0082](/decisions/adr-0082-orca-herdr-parity.md) で前提が変わった。orca も `tool_launch` を起動する（下限はすでに 0.6.0 で 0.2.3 を含意する）。
 
 # Context
 

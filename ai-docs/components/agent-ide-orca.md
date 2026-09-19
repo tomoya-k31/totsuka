@@ -14,7 +14,7 @@ owner: tomoya-k31
 
 # 責務
 
-orca を totsuka の Agent IDE として接続する公式プラグイン（F-30〜F-38）。[plugin-protocol](/components/plugin-protocol.md) を実装する単体バイナリで、**Orchestrator から見た契約は [agent-ide-herdr](/components/agent-ide-herdr.md) と同じ** — 同じメソッド・同じ capability・同じ完了経路（hook）を持つ。orca 固有の手段はプラグイン内に閉じる（F-32）。設計の根拠は [ADR-0081](/decisions/adr-0081-orca-herdr-parity.md)、orca 側の事実は [orca CLI 制御サーフェス](/references/orca-cli-control.md) の実測節。
+orca を totsuka の Agent IDE として接続する公式プラグイン（F-30〜F-38）。[plugin-protocol](/components/plugin-protocol.md) を実装する単体バイナリで、**Orchestrator から見た契約は [agent-ide-herdr](/components/agent-ide-herdr.md) と同じ** — 同じメソッド・同じ capability・同じ完了経路（hook）を持つ。orca 固有の手段はプラグイン内に閉じる（F-32）。設計の根拠は [ADR-0082](/decisions/adr-0082-orca-herdr-parity.md)、orca 側の事実は [orca CLI 制御サーフェス](/references/orca-cli-control.md) の実測節。
 
 orca は公開 REST/ソケット API を持たず、**`orca` CLI（`--json`）ラップが公式推奨**。JSON-RPC は stdout、診断ログは stderr。
 
@@ -77,7 +77,7 @@ herdr と同じ `pane_control` / `state_stream` / `hook_completion` / `diagnosti
 
 # 関連
 
-- [ADR-0081 orca プラグインを herdr と同じ契約で駆動する](/decisions/adr-0081-orca-herdr-parity.md)
+- [ADR-0082 orca プラグインを herdr と同じ契約で駆動する](/decisions/adr-0082-orca-herdr-parity.md)
 - [agent-ide-herdr](/components/agent-ide-herdr.md)（同じ契約の対プラグイン）
 - [orca CLI 制御サーフェス / エージェント capability（外部一次情報ミラー）](/references/orca-cli-control.md)
 - [plugin-protocol](/components/plugin-protocol.md)
