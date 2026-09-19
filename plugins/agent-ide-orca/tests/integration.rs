@@ -181,6 +181,30 @@ fn agent_shown() -> Canned {
     }}))
 }
 
+const REPO_ID: &str = "repo1";
+
+/// A `terminal list` row in the shape orca 1.4.205 answers: the worktree is
+/// named by id (`<repoId>::<path>`), and the title is whatever the agent set.
+fn term_row(handle: &str, path: &str, agent: bool) -> Value {
+    let mut row = json!({
+        "handle": handle, "worktreeId": format!("{REPO_ID}::{path}"),
+        "worktreePath": path, "title": "✳ something the agent titled", "connected": true,
+    });
+    if agent {
+        row["agentIdentity"] = json!("claude");
+    }
+    row
+}
+
+/// A `worktree list --repo` answer: `(path, comment)` per worktree.
+fn worktrees(rows: &[(&str, &str)]) -> Canned {
+    Canned::Ok(
+        json!({ "worktrees": rows.iter().map(|(path, comment)| json!({
+        "id": format!("{REPO_ID}::{path}"), "path": path, "comment": comment,
+    })).collect::<Vec<_>>() }),
+    )
+}
+
 /// A dispatch request with a resolved launch.
 fn dispatch_params(resume: Option<&str>) -> Value {
     let mut p = json!({
@@ -300,8 +324,12 @@ async fn dispatch_launches_tool_launch_in_the_tasks_worktree_and_submits_the_pro
         Some("exec env 'TOTSUKA_JOB_ID=3.1' 'claude' '--settings' '/cfg/hooks settings.json'"),
     );
 
-    let identity = &cli.calls_to("worktree set")[0];
-    assert_eq!(flag_value(identity, "--display-name"), Some("web: Do it"));
+    // Ownership lives on the worktree, not the tab: the agent retitles the
+    // tab as soon as it works.
+    let mark = &cli.calls_to("worktree set")[0];
+    assert_eq!(flag_value(mark, "--worktree"), Some("path:/wt/agent-1"));
+    assert_eq!(flag_value(mark, "--comment"), Some("totsuka T-1"));
+    assert_eq!(flag_value(mark, "--display-name"), Some("web: Do it"));
 
     let wait = &cli.calls_to("terminal wait")[0];
     assert_eq!(flag_value(wait, "--for"), Some("tui-idle"));
@@ -312,16 +340,14 @@ async fn dispatch_launches_tool_launch_in_the_tasks_worktree_and_submits_the_pro
     assert!(send.iter().any(|a| a == "--enter"));
     assert!(flag_value(send, "--wait-submit").is_some());
 
-    // The ownership marker goes on with `rename` — `--title` is only the
-    // initial title, which the agent's own replaces — and only after the
-    // prompt, because orca shows the agent's identity off the agent's title.
-    let rename = &cli.calls_to("terminal rename")[0];
-    assert_eq!(flag_value(rename, "--title"), Some("totsuka T-1"));
+    // The tab is never retitled: a rename would be overwritten by the agent
+    // within seconds, and it would hide the title orca derives the agent's
+    // identity from.
     let keys = cli.keys();
+    assert!(!keys.contains(&"terminal rename".to_string()), "{keys:?}");
     let at = |k: &str| keys.iter().position(|x| x == k).unwrap();
     assert!(at("terminal wait") < at("terminal show"), "{keys:?}");
     assert!(at("terminal show") < at("terminal send"), "{keys:?}");
-    assert!(at("terminal send") < at("terminal rename"), "{keys:?}");
 
     // The plugin no longer owns worktrees: nothing is created or removed.
     assert!(!keys.contains(&"worktree create".to_string()), "{keys:?}");
@@ -343,7 +369,10 @@ async fn layout_shell_splits_a_companion_off_the_agent() {
     let split = &cli.calls_to("terminal split")[0];
     assert_eq!(flag_value(split, "--terminal"), Some(HANDLE));
     assert_eq!(flag_value(split, "--direction"), Some("vertical"));
-    assert!(cli.calls_to("worktree set").is_empty(), "identity is off");
+    // With identity off the worktree is still marked as ours, but not renamed.
+    let mark = &cli.calls_to("worktree set")[0];
+    assert_eq!(flag_value(mark, "--comment"), Some("totsuka T-1"));
+    assert_eq!(flag_value(mark, "--display-name"), None, "identity is off");
 }
 
 #[tokio::test]
@@ -677,9 +706,13 @@ async fn release_refuses_a_terminal_in_another_worktree() {
     // The task's own terminal is still alive under another handle.
     cli.on(
         "terminal list",
-        vec![Canned::Ok(json!({ "terminals": [
-            { "handle": "term_2", "title": "totsuka T-1", "worktreePath": WORKTREE, "connected": true }
-        ]}))],
+        vec![Canned::Ok(
+            json!({ "terminals": [term_row("term_2", WORKTREE, true)] }),
+        )],
+    );
+    cli.on(
+        "worktree list",
+        vec![worktrees(&[(WORKTREE, "totsuka T-1")])],
     );
     let mut d = Driver::new(cli.clone());
     d.init().await;
@@ -703,9 +736,13 @@ async fn a_stale_handle_whose_task_lives_on_is_refused_by_label() {
     cli.on("terminal show", vec![Canned::Err("terminal_handle_stale")]);
     cli.on(
         "terminal list",
-        vec![Canned::Ok(json!({ "terminals": [
-            { "handle": "term_2", "title": "totsuka T-1", "worktreePath": WORKTREE, "connected": true }
-        ]}))],
+        vec![Canned::Ok(
+            json!({ "terminals": [term_row("term_2", WORKTREE, true)] }),
+        )],
+    );
+    cli.on(
+        "worktree list",
+        vec![worktrees(&[(WORKTREE, "totsuka T-1")])],
     );
     let mut d = Driver::new(cli.clone());
     d.init().await;
@@ -780,25 +817,60 @@ async fn cancel_of_an_already_exited_terminal_succeeds() {
     assert!(r["error"].is_null(), "{r}");
 }
 
+/// Ownership is the worktree's comment, never the tab title: the agent
+/// retitles its tab for as long as it works. One session per worktree, and the
+/// terminal orca recognises an agent in wins over a shell listed before it.
 #[tokio::test]
-async fn list_returns_only_totsuka_terminals() {
+async fn list_returns_one_terminal_per_totsuka_worktree() {
     let cli = FakeCli::default();
     cli.on(
         "terminal list",
         vec![Canned::Ok(json!({ "terminals": [
-            { "handle": "term_a", "title": "totsuka T-1", "worktreePath": "/wt/a", "connected": true },
-            // A companion shell split off it: no title of its own.
-            { "handle": "term_b", "title": null, "worktreePath": "/wt/a", "connected": true },
-            { "handle": "term_c", "title": "Terminal 1", "worktreePath": "/repo", "connected": true },
+            // A companion shell listed first, then the agent in the same worktree.
+            term_row("term_shell", "/wt/a", false),
+            term_row("term_agent", "/wt/a", true),
+            // A human's terminal in their own checkout.
+            term_row("term_human", "/repo", false),
         ]}))],
     );
-    let mut d = Driver::new(cli);
+    cli.on(
+        "worktree list",
+        vec![worktrees(&[("/wt/a", "totsuka T-1"), ("/repo", "")])],
+    );
+    let mut d = Driver::new(cli.clone());
     d.init().await;
     let r = d.call("session/list", json!({})).await;
     assert_eq!(
         r["result"]["sessions"],
-        json!([{ "session_id": "term_a", "label": "totsuka T-1", "cwd": "/wt/a" }])
+        json!([{ "session_id": "term_agent", "label": "totsuka T-1", "cwd": "/wt/a" }])
     );
+    // External worktrees are only listed when scoped to their repository.
+    let list = &cli.calls_to("worktree list")[0];
+    assert_eq!(flag_value(list, "--repo"), Some("id:repo1"));
+}
+
+/// `release`'s label guard reads the worktree's comment, where the marker
+/// lives.
+#[tokio::test]
+async fn release_refuses_when_the_worktree_names_another_task() {
+    let cli = FakeCli::default();
+    cli.on("terminal show", vec![shown(true, WORKTREE)]);
+    cli.on(
+        "worktree show",
+        vec![Canned::Ok(
+            json!({ "worktree": { "path": WORKTREE, "comment": "totsuka T-2" } }),
+        )],
+    );
+    let mut d = Driver::new(cli.clone());
+    d.init().await;
+    let r = d
+        .call(
+            "session/release",
+            json!({ "session_id": HANDLE, "expect_label": "totsuka T-1" }),
+        )
+        .await;
+    assert_eq!(r["result"]["released"], false, "{r}");
+    assert!(cli.calls_to("terminal close").is_empty());
 }
 
 #[tokio::test]

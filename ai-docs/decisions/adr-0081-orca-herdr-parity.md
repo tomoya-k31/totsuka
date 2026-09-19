@@ -1,7 +1,7 @@
 ---
 type: Decision
 title: ADR-0081 orca プラグインを herdr と同じ契約で駆動する — totsuka の worktree に端末を開き、tool_launch をそのまま起動する
-description: "orca プラグインが worktree を自前で作り（worktree create）、独自の --agent 起動と state dot の poll で完了を判定していたのをやめ、herdr と同じ契約（tool_launch をそのまま起動・hook で完了報告・exit の deadman・pane_control・diagnostics_snapshot）にそろえる決定。orca 端末をセッションとし、Orchestrator が切った worktree に terminal create で開く。起動は exec env … で端末の寿命をエージェントに一致させ、プロンプトは orca がエージェントを認識してから terminal send で送る。所有マーカーは terminal rename で付けたタブタイトル。すべて orca 1.4.205 の実測に基づく。"
+description: "orca プラグインが worktree を自前で作り（worktree create）、独自の --agent 起動と state dot の poll で完了を判定していたのをやめ、herdr と同じ契約（tool_launch をそのまま起動・hook で完了報告・exit の deadman・pane_control・diagnostics_snapshot）にそろえる決定。orca 端末をセッションとし、Orchestrator が切った worktree に terminal create で開く。起動は exec env … で端末の寿命をエージェントに一致させ、プロンプトは orca がエージェントを認識してから terminal send で送る。所有マーカーは worktree の orca comment（タブタイトルはエージェントに上書きされる）。すべて orca 1.4.205 の実測に基づく。"
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/agent-ide-orca
 tags: [decision, adr, orca, agent-ide, plugin, hooks, pane-control, tool-launch]
 generated: { by: claude-code/opus-5, at: 2026-09-19T04:00:00+09:00 }
@@ -90,19 +90,27 @@ orca が統合を持たないツールは永久に認識されないので、30 
 起動失敗で、`resume_session_id` 付きなら `SESSION_UNRESUMABLE`（`claude --resume <無効 id>` は終了し、`exec` によって
 それが端末の終了になる）。
 
-## D-4. 所有マーカーは `terminal rename` で付けたタブタイトル `totsuka {task_id}`
+## D-4. 所有マーカーは worktree の orca comment `totsuka {task_id}`
 
-herdr の workspace ラベルと同じ文字列で、`doctor` はこの接頭辞を剥がして元タスクを引く。
+herdr の workspace ラベルと同じ文字列で、`doctor` はこの接頭辞を剥がして元タスクを引く。dispatch の直後に
+`worktree set --comment` で付ける（`[orca.identity]` が有効なら同じ呼び出しで表示名 `{repo}: {title}` も）。
+`session/list` は `terminal list` の `worktreeId`（`<repoId>::<path>`）を `worktree list --repo id:<repoId>` の
+comment と突き合わせ、comment が `totsuka ` で始まる worktree の端末を 1 worktree 1 行で返す（orca がエージェントを
+認識している端末を優先）。`--repo` を付けない `worktree list` は external worktree を返さないので、repo ごとに引く。
 
-`terminal create --title` は**初期値にすぎない**。実測で Claude 自身の OSC タイトル（`✳ Claude Code`）に数秒で
-置き換えられ、`session/list` は空を返した。`terminal rename` で付けた値は上書きとして保たれる（Claude のターン後も残る）。
+**当初はタブタイトルに付けていたが、実機 e2e で崩れた**（2026-09-19）:
 
-rename は**プロンプトを送った後**に行う。orca は `agentIdentity` をエージェント自身のタイトルから出しており、先に
-rename すると D-3 の認識待ちが成立しない。rename の失敗は警告に留める（このタスクが `session/list` に出ないだけで、
-動いているエージェントの dispatch を失敗させるほうが高くつく）。
+- `terminal create --title` は初期値にすぎず、Claude の OSC タイトルに数秒で置き換わる
+- `terminal rename` も、**作業中の** Claude には 5 秒以内に上書きされた（`◑ …` → `✳ …`）。
+  「rename は保たれる」という最初の実測は、Claude がタイトルを更新していない（アイドルの）ときに取ったもので、
+  一般化できなかった
+- rename はそのうえ、orca の `agentIdentity`（D-3 の認識待ちが読む）をタイトルと一緒に消していた
 
-分割したコンパニオンシェルにはタイトルが付かない（実測で `title: null`）ので、`session/list` はタスクごとに
-エージェントの handle を 1 つだけ返す。
+worktree のメタデータを書くのは orca の CLI と利用者だけで、worktree は Orchestrator がタスクごとに切るので、
+comment はその中で開くすべての端末の持ち主を表す。代償として、**人間が同じ worktree に開いた端末**も
+所有端末として数えうる（herdr でも companion shell が同じ扱いになるのと同じ種類の曖昧さ）。
+付けられなかったときは警告に留める（`session/list` に出ないだけで、動いているエージェントの dispatch を
+失敗させるほうが高くつく）。
 
 ## D-5. state stream は exit の deadman。**終了はすべて `failed`**
 
@@ -145,7 +153,7 @@ orca はサイドバーに worktree があり、端末はそこから 1 クリ�
 | `worktree create` を残し、Orchestrator の worktree を使わない | worktree が 2 本になり、Orchestrator の掃除・再試行・孤児検出がすべて届かない |
 | プロンプトを起動引数に入れる（`claude … "<prompt>"`） | シェルに打ち込まれるので、複数行の引数は継続行として解釈される。herdr でも同じ理由で不採用 |
 | `exec` を付けず、シェルの子として起動する | エージェントが終了してもシェルが残り、exit の deadman が機能しない |
-| 所有マーカーを worktree の comment にする | worktree は人間も端末を開く場所で、タスクの端末とそれ以外を区別できない。タブタイトルは端末単位 |
+| 所有マーカーをタブタイトルにする（当初案） | 作業中のエージェントが OSC で上書きし続ける。`rename` も 5 秒保たなかった（D-4） |
 | exit code 0 を正常終了として流す（herdr と同じ） | orca の `exitCode` が実際の終了コードを反映しない（実測） |
 
 # 関連

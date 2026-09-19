@@ -18,7 +18,8 @@
 //! - `task/cancel` / `session/release` → `orca terminal close --tab`
 //! - `session/attach` → `orca terminal show` (+ `worktree ps` for the state)
 //! - `session/focus`  → `orca terminal switch`
-//! - `session/list`   → `orca terminal list`, filtered on the `totsuka ` title
+//! - `session/list`   → `orca terminal list`, joined to the worktrees whose orca
+//!   comment carries the `totsuka ` marker (`orca worktree list --repo`)
 //! - `diagnostics/snapshot` → `orca terminal read --screen`
 //! - `state/subscribe` → an exit deadman on `orca terminal wait --for exit`
 //!

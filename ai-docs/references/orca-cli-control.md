@@ -148,6 +148,8 @@ orca は**登録済みリポジトリの git worktree を自分で見つける**
 
 orca の外で作った worktree は **external worktree** として扱われる。リポジトリ設定 `externalWorktreeVisibility`（`orca repo show --json` で見える。今回の環境は `show`）が `show` なら、**GUI のサイドバーでプロジェクト配下に表示され**、選ぶとそこで開いた端末タブ（`terminal create` の応答は `surface: visible`）がそのまま見える。Claude の対話画面も普通に表示・操作できることを GUI で確認した。
 
+worktree の `comment`（`worktree set --comment`）はエージェントに書き換えられないので、タスクの持ち主を示すのに使える（agent-ide-orca の所有マーカー）。
+
 CLI の一覧では見え方が分かれる。`orca worktree list --repo <sel>` には出る（`creatorProvenance` は無い）が、`--repo` を付けない `worktree list` と `worktree ps` には出なかった。一方、`orca worktree set --display-name` は効き、サイドバーの表示名になる。
 
 ## 端末
@@ -157,7 +159,7 @@ CLI の一覧では見え方が分かれる。`orca worktree list --repo <sel>` 
 | `terminal create --command <text>` | テキストは端末のログインシェル（利用者の zsh と rc ファイル）に**打ち込まれる**。exec されない。コマンド終了後もシェルが残る |
 | 同上で先頭に `exec` | シェルが置き換わり、プロセス終了＝端末終了になる |
 | `terminal create --title <t>` | **初期値にすぎない**。Claude Code の OSC タイトル（`✳ Claude Code`）に数秒で置き換わる |
-| `terminal rename --title <t>` | 上書きとして保たれる（Claude のターン後も残る）。ただし以後 `agentIdentity` は `null` になる（タイトル由来の表示と思われる）。送信側の Claude 判定は変わらない |
+| `terminal rename --title <t>` | **作業中のエージェントには 5 秒以内に上書きされる**（Claude の OSC タイトル `◑ …` → `✳ …`）。アイドルの Claude に付けたときは次のターン後も残ったので、保たれるかどうかはエージェントがタイトルを更新するかで決まる。rename 中は `agentIdentity` が `null` になる（タイトル由来の表示と思われる）が、送信側の Claude 判定は変わらない |
 | `terminal wait --for tui-idle` | Claude 起動から約 4 秒で `satisfied: true, status: running`。**この時点ではまだ `agentIdentity` が `null`** |
 | `terminal send --text … --enter --wait-submit <s>` | orca が Claude と認識している端末では `provider: "claude"`・bracketed paste・`stages: [input_accepted, turn_started]`。認識前に送ると `provider: "unsupported"` の生キー入力になり、**Claude には届かなかった**。複数行テキストは認識後なら 1 ターンとして届く |
 | `terminal wait --for exit` | `satisfied: true, status: exited`。ただし **`exitCode` は信頼できない**: `exit 3` したプロセスが `exitCode: 0`・`exitCause: {kind: unknown, reason: host_status_unavailable}`、`close` で殺した端末は `exitCode: -1`・`stop_unverified` |

@@ -37,11 +37,11 @@ orca は公開 REST/ソケット API を持たず、**`orca` CLI（`--json`）�
 
 | メソッド | orca CLI |
 |---|---|
-| `task/dispatch` | `terminal create --worktree path:<worktree_path> --title "totsuka <task_id>" --command "exec env … <tool_launch>"` → `worktree set --display-name "<repo>: <title>"`（identity、best-effort）→ `terminal split`（`layout.shell` のときのみ）→ `terminal wait --for tui-idle` → `terminal show` で `agentIdentity` が出るまで待つ（最大 30 秒）→ `terminal send --text <prompt> --enter --wait-submit 60` → `terminal rename --title "totsuka <task_id>"`。`session_id` = 端末 handle。途中で失敗したらタブを閉じてから失敗を返す |
+| `task/dispatch` | `terminal create --worktree path:<worktree_path> --title "totsuka <task_id>" --command "exec env … <tool_launch>"` → `worktree set --comment "totsuka <task_id>" [--display-name "<repo>: <title>"]`（所有マーカーと identity、best-effort）→ `terminal split`（`layout.shell` のときのみ）→ `terminal wait --for tui-idle` → `terminal show` で `agentIdentity` が出るまで待つ（最大 30 秒）→ `terminal send --text <prompt> --enter --wait-submit 60`。`session_id` = 端末 handle。途中で失敗したらタブを閉じてから失敗を返す |
 | `task/cancel` | `terminal close --tab`（`terminal_handle_stale` は成功扱い）。**worktree は消さない** — Orchestrator のもの |
 | `session/attach` | `terminal show` の `connected` → 生存。state は `worktree ps` のその worktree の `status`、無ければ `running` |
 | `session/release` | `terminal show` で `expect_cwd` / `expect_label` を照合 → `terminal close --tab`。終了済み（`connected: false`）は残ったタブを片付けて `gone`。handle 消失と不一致のときは、`session/list` に**別の handle で**同じ worktree（`expect_cwd`）か同じラベル（`expect_label` — `doctor` はこちらだけを送る）の端末があれば `refused`、無ければ `gone` |
-| `session/list` | `terminal list` のうちタブタイトルが `totsuka ` で始まるもの。分割したシェルはタイトルを持たないので 1 タスク 1 行 |
+| `session/list` | `terminal list` の各端末の `worktreeId` を `worktree list --repo id:<repoId>` の comment と突き合わせ、comment が `totsuka ` で始まる worktree の端末を 1 worktree 1 行（エージェントを認識している端末を優先）|
 | `session/focus` | `terminal switch`（`terminal_exited` / stale は `focused: false`） |
 | `diagnostics/snapshot` | `terminal read --screen`、描画できなければ（`source: screen-unavailable`）`terminal read --limit 200`。失敗は `text: None` |
 | `state/subscribe` | `terminal wait --for exit` を繰り返す deadman。満たされたら／handle が消えたら、**`terminal show` で裏を取ってから** `failed` を 1 回送って終了（`connected: true` なら誤報として待ち直す — 実機 e2e で `wait` が生きている端末を「消えた」と答え、動いていたタスクが 5 秒で `failed` にされた）。orca の `timeout` は再試行、それ以外の失敗が 5 回続いたら `failed` |
@@ -50,9 +50,11 @@ orca は公開 REST/ソケット API を持たず、**`orca` CLI（`--json`）�
 
 `tui-idle` だけでは Claude の入力受付に間に合わない。実測で、`tui-idle` が満たされた瞬間（起動約 4 秒）に送ったプロンプトは `provider: "unsupported"` の生キー入力として出て行き、**Claude に届かなかった**。`agentIdentity` が出てから送ると `provider: "claude"`・`stages: [input_accepted, turn_started]` で、複数行の本文が 1 ターンとして届く。orca が統合を持たないツールは認識されないので、30 秒で諦めて送る（警告のみ）。
 
-## 所有マーカーを rename で付ける理由
+## 所有マーカーを worktree の comment に置く理由
 
-`terminal create --title` は初期値で、Claude の OSC タイトル（`✳ Claude Code`）に数秒で置き換わる。`terminal rename` の値は保たれる。ただし orca は `agentIdentity` をエージェント自身のタイトルから出すので、rename は**プロンプト送信の後**。
+タブタイトルは作業中のエージェントが OSC で書き換え続ける。`terminal create --title` は数秒、`terminal rename` も
+5 秒保たなかった（実機 e2e、2026-09-19）。worktree の comment を書くのは orca の CLI と利用者だけで、worktree は
+タスクごとなので、そこに `totsuka <task_id>` を置く。代償は、人間が同じ worktree に開いた端末も所有端末に数えうること。
 
 ## deadman がすべての終了を `failed` にする理由
 
@@ -65,7 +67,7 @@ herdr と同じ `pane_control` / `state_stream` / `hook_completion` / `diagnosti
 # テスト
 
 - 単体: envelope の解釈（`id` を漏らさない・`ok: false` のコード・envelope 無しの失敗）、`terminal wait` の打ち切り時間、エラー分類、`exec env` の組み立てと `sh` による読み戻し、廃止キーの案内、状態写像、表示名の文字境界での切り詰め、`resume_failure` の狭さ。
-- 結合（`tests/integration.rs`、fake orca CLI に実測の応答形を返させる）: capability 宣言と `plugin.toml` の一致、dispatch の引数（`path:` セレクタ・`exec env`・タイトル・`--wait-submit`）と**呼び出し順**（`tui-idle` → `show` → `send` → `rename`）、`worktree create` / `worktree rm` を呼ばないこと、`tool_launch` 欠落、repo 未登録、resume 失敗の `SESSION_UNRESUMABLE` と後片付け、認識されないエージェント（一時停止クロックで 30 秒）、deadman、attach / cancel / release（一致・消失・終了済み・不一致）/ list / focus / snapshot、`config/validate`（`runtime.reachable`）。
+- 結合（`tests/integration.rs`、fake orca CLI に実測の応答形を返させる）: capability 宣言と `plugin.toml` の一致、dispatch の引数（`path:` セレクタ・`exec env`・タイトル・`--wait-submit`）と**呼び出し順**（`tui-idle` → `show` → `send`、rename はしない）、`worktree create` / `worktree rm` を呼ばないこと、`tool_launch` 欠落、repo 未登録、resume 失敗の `SESSION_UNRESUMABLE` と後片付け、認識されないエージェント（一時停止クロックで 30 秒）、deadman、attach / cancel / release（一致・消失・終了済み・不一致）/ list / focus / snapshot、`config/validate`（`runtime.reachable`）。
 - **実機（orca 1.4.205 + Claude Code 2.1.277）**: ビルドしたバイナリを stdio で駆動し、dispatch → プロンプトが 1 ターンとして届き応答 → `session/list` に出る → `diagnostics/snapshot` → `session/release` で閉じる → deadman が `failed` → attach が `attached: false`、まで通した。**Orchestrator を含む通し（hook による完了報告）は未実施**で、[live-e2e](/quality/release-checklist.md) の orca 節で確認する。
 
 # 依存

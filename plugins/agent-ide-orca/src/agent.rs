@@ -30,10 +30,10 @@
 //!   turn_started]`), and a multi-line prompt lands as one turn.
 //! - **The prompt waits for orca to recognise the agent**, not just for
 //!   `tui-idle`: sent any earlier it goes out as raw keystrokes and is lost.
-//! - **The tab title is the ownership marker** (`totsuka {task_id}`, the same
-//!   string herdr puts on its workspace label, which `doctor` strips to find
-//!   the task), set with `terminal rename` once the prompt is in — the only
-//!   title orca keeps against the agent's own.
+//! - **The ownership marker is the worktree's orca comment** (`totsuka
+//!   {task_id}`, the same string herdr puts on its workspace label, which
+//!   `doctor` strips to find the task). Not the tab title: a working agent
+//!   rewrites that through OSC within seconds, `terminal rename` included.
 
 use std::path::Path;
 use std::time::Duration;
@@ -52,9 +52,10 @@ use crate::error::OrcaError;
 use crate::launch::shell_command;
 use crate::state::map_orca_state;
 
-/// The marker that says an orca terminal belongs to totsuka, followed by the
-/// task's `source_task_id`. Set as the tab title (see `mark_owned`).
-const OWNED_TITLE_PREFIX: &str = "totsuka ";
+/// The marker that says an orca worktree — and so every terminal in it —
+/// belongs to totsuka, followed by the task's `source_task_id`. Set as the
+/// worktree's orca comment (see `mark_owned`).
+const OWNED_PREFIX: &str = "totsuka ";
 
 /// How long a freshly launched agent is given to reach `tui-idle` before the
 /// prompt is sent anyway, in milliseconds.
@@ -129,10 +130,11 @@ impl<C: OrcaCli> OrcaAgent<C> {
                 "create",
                 "--worktree",
                 &format!("path:{}", params.worktree_path),
-                // Only the initial title (see `mark_owned`), but it keeps the
-                // tab recognisable for the seconds before the agent draws.
+                // Only an initial title — the agent retitles the tab as soon
+                // as it works (see `mark_owned`) — but it names the tab for
+                // the seconds before that.
                 "--title",
-                &owned_title(&params),
+                &owned_label(&params),
                 "--command",
                 &command,
                 "--json",
@@ -165,13 +167,12 @@ impl<C: OrcaCli> OrcaAgent<C> {
         // From here on the terminal exists, so every failure has to take it
         // back down: a failed dispatch reports no session id, which leaves the
         // Orchestrator nothing to cancel with — and the agent would run on.
-        self.report_identity(&params).await;
+        self.mark_owned(&params).await;
         self.apply_layout(&handle).await;
         if let Err(e) = self.start(&params, &handle).await {
             self.abandon(&handle).await;
             return Err(e);
         }
-        self.mark_owned(&params, &handle).await;
         Ok(TaskDispatchResult { session_id: handle })
     }
 
@@ -321,60 +322,41 @@ impl<C: OrcaCli> OrcaAgent<C> {
         }
     }
 
-    /// Put the ownership marker on the agent's tab: `terminal rename` to
-    /// `totsuka {task_id}`.
+    /// Mark the task's worktree as ours: its orca **comment** becomes
+    /// `totsuka {task_id}` — the string herdr puts on its workspace label, which
+    /// `doctor` strips to find the task — and, with `[orca.identity]`, its
+    /// display name becomes `{repo}: {title}` (herdr's #417 identity report).
     ///
-    /// **Not `terminal create --title`**, which is only an initial title —
-    /// measured live, Claude's own OSC title (`✳ Claude Code`) replaced it
-    /// within seconds, and `session/list` found nothing. A title set with
-    /// `rename` is an override orca keeps across the agent's title updates.
+    /// # Why the worktree, not the tab title
     ///
-    /// It runs **after** the prompt is in: orca shows `agentIdentity` only
-    /// while the tab carries the agent's own title, and
-    /// [`wait_for_agent`](Self::wait_for_agent) reads exactly that.
+    /// The tab title is the agent's. Measured live, Claude rewrites it through
+    /// OSC for as long as it works (`◑ …` → `✳ …`): a `terminal create --title`
+    /// lasts seconds, and a `terminal rename` is overwritten within five
+    /// seconds of being set on a working agent — an earlier measurement that it
+    /// "sticks" was taken on an idle one. Nothing writes an orca worktree's
+    /// metadata but orca's own CLI and its user, and the worktree is
+    /// task-private (the Orchestrator cuts one per task), so the comment names
+    /// the task for the life of every terminal opened in it.
     ///
-    /// Best-effort. A tab without the marker costs `session/list` (and so
-    /// `doctor`'s orphan detection) this one task; failing a dispatch whose
-    /// agent is already working would cost far more.
-    async fn mark_owned(&self, params: &TaskDispatchParams, handle: &str) {
-        if let Err(e) = self
-            .cli
-            .run(args([
-                "terminal",
-                "rename",
-                "--terminal",
-                handle,
-                "--title",
-                &owned_title(params),
-                "--json",
-            ]))
-            .await
-        {
-            tracing::warn!(handle, error = %e, "could not title the agent's tab; session/list will not see it");
+    /// Best-effort, like herdr's identity report: a worktree without the marker
+    /// costs `session/list` (and so `doctor`'s orphan detection) this one task;
+    /// failing the dispatch would cost far more.
+    async fn mark_owned(&self, params: &TaskDispatchParams) {
+        let mut argv = args([
+            "worktree",
+            "set",
+            "--worktree",
+            &format!("path:{}", params.worktree_path),
+            "--comment",
+            &owned_label(params),
+        ]);
+        if self.config.identity.enabled {
+            let name = display_name(params.repo_name.as_deref(), &params.task.title);
+            argv.extend(args(["--display-name", &name]));
         }
-    }
-
-    /// Name the task's worktree `{repo}: {title}` in orca's sidebar (herdr's
-    /// #417 identity report). Best-effort: a refusal is logged and ignored.
-    async fn report_identity(&self, params: &TaskDispatchParams) {
-        if !self.config.identity.enabled {
-            return;
-        }
-        let name = display_name(params.repo_name.as_deref(), &params.task.title);
-        if let Err(e) = self
-            .cli
-            .run(args([
-                "worktree",
-                "set",
-                "--worktree",
-                &format!("path:{}", params.worktree_path),
-                "--display-name",
-                &name,
-                "--json",
-            ]))
-            .await
-        {
-            tracing::warn!(error = %e, "could not set the worktree's orca display name");
+        argv.push("--json".into());
+        if let Err(e) = self.cli.run(argv).await {
+            tracing::warn!(error = %e, "could not mark the task's worktree; session/list will not see it");
         }
     }
 
@@ -398,7 +380,7 @@ impl<C: OrcaCli> OrcaAgent<C> {
     /// those in the task's worktree still carrying the initial title.
     /// Best-effort, like [`abandon`](Self::abandon).
     async fn abandon_untracked(&self, params: &TaskDispatchParams) {
-        let title = owned_title(params);
+        let title = owned_label(params);
         let listed = match self
             .cli
             .run(args([
@@ -524,8 +506,17 @@ impl<C: OrcaCli> OrcaAgent<C> {
             (params.expect_cwd.as_deref(), terminal.worktree_path.as_deref()),
             (Some(expected), Some(actual)) if !same_path(expected, actual)
         );
+        // The label lives on the worktree (see `mark_owned`), so it is read
+        // only when there is one to compare against.
+        let label = match (
+            params.expect_label.as_deref(),
+            terminal.worktree_path.as_deref(),
+        ) {
+            (Some(_), Some(path)) => worktree_comment(&self.cli, path).await,
+            _ => None,
+        };
         let label_mismatch = matches!(
-            (params.expect_label.as_deref(), terminal.title.as_deref()),
+            (params.expect_label.as_deref(), label.as_deref()),
             (Some(expected), Some(actual)) if expected != actual
         );
         if cwd_mismatch || label_mismatch {
@@ -562,8 +553,8 @@ impl<C: OrcaCli> OrcaAgent<C> {
     /// either of which is enough: a live owned terminal in the expected
     /// worktree (`expect_cwd`, what the worktree cleanup sends), or one
     /// carrying the expected label (`expect_label`, what `doctor` sends — its
-    /// `totsuka {task_id}` is exactly the tab title). No evidence degrades to
-    /// `Gone`.
+    /// `totsuka {task_id}` is exactly the worktree comment). No evidence
+    /// degrades to `Gone`.
     async fn classify_unreleased(&self, params: &SessionReleaseParams) -> NotReleased {
         let cwd = params.expect_cwd.as_deref();
         let label = params.expect_label.as_deref();
@@ -590,9 +581,17 @@ impl<C: OrcaCli> OrcaAgent<C> {
     }
 
     /// Enumerate the live terminals this plugin owns (`session/list`, #211):
-    /// those whose tab title carries the `totsuka ` marker. A companion shell
-    /// split off the agent has no title of its own, so each task is listed
-    /// once, by its agent's handle.
+    /// those opened in a worktree whose orca comment carries the `totsuka `
+    /// marker (see `mark_owned`), one per worktree.
+    ///
+    /// `terminal list` names each terminal's worktree by id
+    /// (`<repoId>::<path>`) but carries no comment, so the comments come from
+    /// one `worktree list --repo id:<repoId>` per repository — the unscoped
+    /// `worktree list` leaves external worktrees (every one totsuka cuts) out.
+    ///
+    /// When a worktree holds more than one terminal — a companion shell, or a
+    /// human's — the one orca recognises an agent in wins, as herdr prefers
+    /// the pane that reports an agent; failing that, the first stands in.
     pub async fn list_sessions(&self) -> Result<SessionListResult, OrcaError> {
         let listed = self
             .cli
@@ -604,32 +603,93 @@ impl<C: OrcaCli> OrcaAgent<C> {
                 "--json",
             ]))
             .await?;
-        let sessions = listed
+        let terminals: Vec<&Value> = listed
             .get("terminals")
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
-            .filter_map(|t| {
-                let title = t.get("title").and_then(Value::as_str)?;
-                if !title.starts_with(OWNED_TITLE_PREFIX) {
-                    return None;
-                }
-                // `terminal list` shows live terminals only, but say so
-                // explicitly rather than depend on it.
-                if t.get("connected").and_then(Value::as_bool) == Some(false) {
-                    return None;
-                }
-                Some(SessionInfo {
-                    session_id: t.get("handle").and_then(Value::as_str)?.to_string(),
-                    label: Some(title.to_string()),
-                    cwd: t
-                        .get("worktreePath")
-                        .and_then(Value::as_str)
-                        .map(str::to_string),
-                })
-            })
+            // `terminal list` shows live terminals only, but say so
+            // explicitly rather than depend on it.
+            .filter(|t| t.get("connected").and_then(Value::as_bool) != Some(false))
             .collect();
-        Ok(SessionListResult { sessions })
+        let worktree_of = |t: &Value| {
+            t.get("worktreeId")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        };
+
+        let mut repos: Vec<String> = Vec::new();
+        for t in &terminals {
+            if let Some(repo) =
+                worktree_of(t).and_then(|w| w.split_once("::").map(|(r, _)| r.to_string()))
+                && !repos.contains(&repo)
+            {
+                repos.push(repo);
+            }
+        }
+        let mut owned: std::collections::HashMap<String, String> = Default::default();
+        for repo in repos {
+            let answer = self
+                .cli
+                .run(args([
+                    "worktree",
+                    "list",
+                    "--repo",
+                    &format!("id:{repo}"),
+                    "--limit",
+                    &LIST_LIMIT.to_string(),
+                    "--json",
+                ]))
+                .await?;
+            for w in answer
+                .get("worktrees")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                let (Some(id), Some(comment)) = (
+                    w.get("id").and_then(Value::as_str),
+                    w.get("comment").and_then(Value::as_str),
+                ) else {
+                    continue;
+                };
+                if comment.starts_with(OWNED_PREFIX) {
+                    owned.insert(id.to_string(), comment.to_string());
+                }
+            }
+        }
+
+        // `Vec`, not a map: `terminal list` order is the only stable ordering,
+        // and `doctor` prints these.
+        let mut chosen: Vec<(String, bool, SessionInfo)> = Vec::new();
+        for t in terminals {
+            let Some(worktree) = worktree_of(t) else {
+                continue;
+            };
+            let Some(label) = owned.get(&worktree) else {
+                continue;
+            };
+            let Some(handle) = t.get("handle").and_then(Value::as_str) else {
+                continue;
+            };
+            let is_agent = t.get("agentIdentity").and_then(Value::as_str).is_some();
+            let info = SessionInfo {
+                session_id: handle.to_string(),
+                label: Some(label.clone()),
+                cwd: t
+                    .get("worktreePath")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+            };
+            match chosen.iter().position(|(w, ..)| *w == worktree) {
+                Some(i) if is_agent && !chosen[i].1 => chosen[i] = (worktree, is_agent, info),
+                Some(_) => {}
+                None => chosen.push((worktree, is_agent, info)),
+            }
+        }
+        Ok(SessionListResult {
+            sessions: chosen.into_iter().map(|(.., info)| info).collect(),
+        })
     }
 
     /// Bring the session's terminal to the foreground (`session/focus`, F-94).
@@ -834,7 +894,6 @@ struct TerminalRecord {
     /// The agent orca recognises in the terminal (`claude`, …), if any.
     agent_identity: Option<String>,
     worktree_path: Option<String>,
-    title: Option<String>,
 }
 
 /// `terminal show` for `handle`.
@@ -860,7 +919,6 @@ async fn show_terminal<C: OrcaCli>(cli: &C, handle: &str) -> Result<TerminalReco
             .unwrap_or(true),
         agent_identity: text("agentIdentity"),
         worktree_path: text("worktreePath"),
-        title: text("title"),
     })
 }
 
@@ -976,9 +1034,28 @@ fn display_name(repo: Option<&str>, title: &str) -> String {
     format!("{cut}…")
 }
 
-/// The tab title that marks a terminal as this task's.
-fn owned_title(params: &TaskDispatchParams) -> String {
-    format!("{OWNED_TITLE_PREFIX}{}", params.task.id)
+/// The marker that names a worktree as this task's (see `mark_owned`).
+fn owned_label(params: &TaskDispatchParams) -> String {
+    format!("{OWNED_PREFIX}{}", params.task.id)
+}
+
+/// The orca comment of the worktree at `path`, if orca can say.
+async fn worktree_comment<C: OrcaCli>(cli: &C, path: &str) -> Option<String> {
+    let shown = cli
+        .run(args([
+            "worktree",
+            "show",
+            "--worktree",
+            &format!("path:{path}"),
+            "--json",
+        ]))
+        .await
+        .ok()?;
+    shown
+        .get("worktree")?
+        .get("comment")?
+        .as_str()
+        .map(str::to_string)
 }
 
 /// An owned argv from string slices.
