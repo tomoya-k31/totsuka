@@ -303,6 +303,57 @@ bw get item 'totsuka/e2e' >/dev/null 2>&1 || \
 > ターミナルから `tt run` を起動すること。1Password と同じく、常駐プロセスを
 > エージェント側から起動することはできない。
 
+## S10. decisions モデルでのリポジトリ分類（#723 / ADR-0084）🤖🙋
+
+**`[llm].api = "decisions"` の経路・`repo-classifier` の decisions 実装・OpenRouter の
+Decisions API（alpha）に手を入れたら回す。** CI は canned な応答までしか見ないので、
+**本物の OpenRouter が今もこの本文を受け付け、`probabilities` を返し、リポジトリ名を
+そのまま選択肢のキーとして通すか**はここでしか分からない。
+
+### 1. API 単体（実キー、Slack 不要）🤖
+
+鍵を読むので**本人のターミナル**から（`!` 付きで打ってもらえば出力が会話に戻る）:
+
+```bash
+OPENROUTER_API_KEY="$(op read 'op://Dev/Openrouter/api_key')" \
+  cargo test -p repo-classifier --test live_openrouter -- --ignored --test-threads=1 --nocapture
+```
+
+| 検証点 | 期待 |
+|---|---|
+| 明確なタスク | `tomoya-k31/totsuka` が p ≥ 0.6 で選ばれる。`/` `.` `_` を含む名前がそのまま通る |
+| 無関係なタスク（歯医者の予約） | `NoneFits` |
+| 疎通確認 | 本物の鍵で成功、でたらめな鍵で **`is_auth_failure`**（401/403）。**404 なら endpoint が変わった** —— alpha なので最初に疑う |
+
+### 2. doctor（本体の組み立て経路）🤖
+
+サンドボックスの `[llm]` を decisions に差し替える（`assets/cfg/config.toml` のコメントにある形）:
+
+```toml
+[llm]
+api = "decisions"
+model = "~typesafe/jev-latest"
+api_key_ref = "op://Dev/Openrouter/api_key"
+```
+
+```bash
+tt config validate          # base_url / max_tokens が残っていたら読み込みエラーになる（期待どおり）
+tt doctor --online          # llm-online: https://openrouter.ai/api/alpha/decisions accepted the API key
+```
+
+### 3. Slack メンション（S3 の分類段だけを decisions で）🙋
+
+`[slack.llm]` を書かずに走らせる —— orchestrator の decisions `[llm]` が initialize で
+供給され、プラグインが**それを採用する**ことがこの段の検証点である（protocol 0.7.4）。
+
+| # | やり方 | 期待 |
+|---|---|---|
+| 1 | S3 と同じ実装相談を打つ | ログに `repository resolved by the LLM classifier ... reason=typesafe/jev-…: <repo> p=0.xx (next: …)` |
+| 2 | リポジトリと無関係な雑談をメンションで打つ（「今日のランチどうする？」） | **エフェメラル picker が出る**（`NoneFits` → ③）。どれかのリポジトリで作業が始まったら不合格 |
+| 3 | 同梱より**古い** Slack プラグインのバイナリで起動する（任意） | decisions の `[llm]` を採用せず、`[slack.llm]` が無ければ「`[llm]` が必要」で `CONFIG_INVALID`。**`/chat/completions` に jev を投げていたら不合格** —— 空の `base_url` の仕掛けが効いていない |
+
+**終わったら `[llm]` を chat に戻す。** 他のシナリオは chat 前提の閾値で組んである。
+
 ## S6. 未検証（今回踏めていない領域）
 
 次の機会に足す。**「やっていない」ことを報告に明記する**こと:
