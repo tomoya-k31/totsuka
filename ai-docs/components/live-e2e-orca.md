@@ -42,9 +42,10 @@ external worktree の見え方）に依存する不具合はここでしか捕�
 
 # 検証状況
 
-作成時点（2026-09-19）で **Orchestrator を通したシナリオは未実施**。実機で確かめてあるのはプラグイン単体の駆動と
-GUI 表示まで（[ADR-0081](/decisions/adr-0081-orca-herdr-parity.md)）。`preflight` と `use` は実際の `$E2E_HOME` と
-その設定のコピーに対して動作を確かめた。
+2026-09-19 に Orchestrator を通して O1〜O5 を実施し、合格した（詳細はスキルの `references/scenarios.md` の
+「実機での実施状況」）。その過程で agent-ide-orca の不具合を 5 件見つけて直した — deadman の誤報、所有マーカーの
+上書き、worktree の発見の遅れ、解放済み端末の空パス、`exit-agent` の設計。**未実施**は生きている端末への
+`tt focus`、`tt doctor` の pane チェック、O6（GUI の見え方）。
 
 # 関連
 

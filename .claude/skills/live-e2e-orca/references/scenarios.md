@@ -129,14 +129,18 @@ herdr 版 S3 をそのまま回す（文面・承認の依頼の仕方もそち�
 
 ---
 
-## まだ実機で通していないもの
+## 実機での実施状況
 
-**このスキルの作成時点（2026-09-19）で、Orchestrator（`tt run`）を通した回は O1〜O6 のどれも未実施。**
-実機で確かめてあるのは次の 2 つだけで、どちらも Orchestrator を介していない:
+2026-09-19、orca 1.4.205 + Claude Code 2.1.277、Orchestrator（`tt run`）を通して実施:
 
-- プラグインのバイナリを stdio で直接駆動した dispatch → プロンプト到達 → list → snapshot → release →
-  deadman → attach（ADR-0081 の検証）
-- 同じ手順で開いた端末が GUI のサイドバー（プロジェクト配下）に出て、Claude の画面が見えること（O6 相当）
+| シナリオ | 結果 | 見つかった不具合（修正済み） |
+|---|---|---|
+| O1 | 合格（task 8・10。PR・Status 書き戻し・hook 完了・タブ解放・worktree 削除） | deadman が `terminal wait` の誤報（`terminal_handle_stale`）で動いているタスクを `failed` にした → `terminal show` で裏を取るようにした |
+| O2 `inspect` | 合格（task 12） | 所有マーカー（タブタイトル）が Claude に上書きされた → worktree の comment に移した |
+| O2 `tt focus` | 解放済みの端末に「既に閉じている」と正しく答えることのみ確認 | — |
+| O3 | 合格（task 12。SIGTERM から約 3 秒で `failed`、worktree は残る） | `/exit` の文字送信が完了確認の質問への回答になった → `exit-agent` を SIGTERM に変えた |
+| O4 | 合格（task 13。cancel 後の sweep がタブを解放） | 期待値の誤り（CLI の cancel は端末を閉じない）→ シナリオを訂正 |
+| O5 | 合格（task 14。メンション → 下書き → 承認 → 返信、追いメンション 2 回での resume） | 作り直した worktree を orca が約 10 秒認識せず dispatch が 2 回失敗 → 認識を待つようにした（再実施で 1 回目から通過）／解放済み端末の空パスを別端末と誤認 → 不明として扱うようにした |
 
-通したシナリオはここから消し、[agent-ide-orca](../../../../ai-docs/components/agent-ide-orca.md) の
-`verified` を更新する。
+**まだ通していないもの**: 生きている端末への `tt focus`、`tt doctor` の pane チェック（孤児の検出を含む）、O6（repo の
+`externalWorktreeVisibility` が `hide` のままだったため）。通したらこの表へ移す。
