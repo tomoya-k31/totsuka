@@ -182,7 +182,7 @@ EOF
 }
 
 # totsuka の端末: worktree の orca comment が "totsuka " で始まる worktree にある端末。
-# **タブタイトルでは判定しない** — 作業中のエージェントが OSC で書き換え続ける（ADR-0081 D-4）。
+# **タブタイトルでは判定しない** — 作業中のエージェントが OSC で書き換え続ける（ADR-0082 D-4）。
 cmd_sessions() {
   local terms
   terms="$(orca_json terminal list --limit 500)"
@@ -206,7 +206,7 @@ for t in owned:
 EOF
 }
 
-# タスクの端末と worktree を、ADR-0081 の契約に照らして判定する。
+# タスクの端末と worktree を、ADR-0082 の契約に照らして判定する。
 cmd_inspect() {
   local id="${1:?task id}" handle wt repo
   IFS=$'\t' read -r handle wt repo < <(task_session "$id")

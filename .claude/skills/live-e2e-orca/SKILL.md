@@ -10,7 +10,7 @@ task source 側（GitHub / Slack）の経路はエージェントに依存しな
 `$E2E_HOME`（`~/.totsuka-e2e`）、`.env`、サンドボックス repo、ProjectsV2 は**すべて herdr 版のものを使う**。
 このスキルが持つのは orca 固有の部分 —— 準備・シナリオ・観測（`scripts/orca.sh`）・症状表 —— だけである。
 
-プラグインの契約は [ADR-0081](../../../ai-docs/decisions/adr-0081-orca-herdr-parity.md)、orca 側の実測事実は
+プラグインの契約は [ADR-0082](../../../ai-docs/decisions/adr-0082-orca-herdr-parity.md)、orca 側の実測事実は
 [orca CLI 制御サーフェス](../../../ai-docs/references/orca-cli-control.md) の実測節にある。**症状の読み方は
 そこから来ている**ので、詰まったら先に [references/troubleshooting.md](references/troubleshooting.md) を見る。
 

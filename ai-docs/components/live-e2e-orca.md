@@ -50,6 +50,6 @@ external worktree の見え方）に依存する不具合はここでしか捕�
 # 関連
 
 - [live-e2e-herdr スキル](/components/live-e2e.md)（共用元）
-- [agent-ide-orca](/components/agent-ide-orca.md) / [ADR-0081](/decisions/adr-0081-orca-herdr-parity.md)
+- [agent-ide-orca](/components/agent-ide-orca.md) / [ADR-0082](/decisions/adr-0082-orca-herdr-parity.md)
 - [orca CLI 制御サーフェス](/references/orca-cli-control.md)
 - [リリース前チェックリスト](/quality/release-checklist.md)

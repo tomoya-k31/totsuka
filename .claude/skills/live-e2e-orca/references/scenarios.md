@@ -77,7 +77,7 @@ source .env && tt task show "$id"
 | 検証点 | 期待 |
 |---|---|
 | state stream の deadman（F-38） | `running → failed`。`log_chunk` に `the agent's terminal exited (orca reports exit code …)` |
-| 終了コード | **見ない。** orca の `exitCode` は実際の値を反映しない（ADR-0081 D-5）。0 でも `failed` が正しい |
+| 終了コード | **見ない。** orca の `exitCode` は実際の値を反映しない（ADR-0082 D-5）。0 でも `failed` が正しい |
 | worktree | 残る（`task retry` 用、F-44） |
 
 **完了済みのタスクには意味が無い** — Orchestrator は終わったタスクへの `failed` を無視する。
