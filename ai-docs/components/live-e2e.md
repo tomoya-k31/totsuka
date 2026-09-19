@@ -1,8 +1,8 @@
 ---
 type: Tool
-title: live-e2e スキル
-description: 実 Slack / 実 GitHub / 実 herdr + 実 Claude Code に対して totsuka を通しで動かす実機検証の手順・設定雛形・駆動スクリプト一式。自動／手動／目視の区分と、別環境での一からの構築手順を含む。
-resource: https://github.com/tomoya-k31/totsuka/tree/main/.claude/skills/live-e2e
+title: live-e2e-herdr スキル
+description: 実 Slack / 実 GitHub / 実 herdr + 実 Claude Code に対して totsuka を通しで動かす実機検証の手順・設定雛形・駆動スクリプト一式（herdr 版、旧名 live-e2e）。自動／手動／目視の区分と、別環境での一からの構築手順を含む。GitHub / Slack の駆動スクリプトと $E2E_HOME は orca 版の live-e2e-orca と共用する。
+resource: https://github.com/tomoya-k31/totsuka/tree/main/.claude/skills/live-e2e-herdr
 tags: [testing, e2e, skill, tooling, slack, github, herdr]
 generated: { by: claude-code/opus-5, at: 2026-08-23T00:00:00Z }
 status: stable
@@ -10,6 +10,11 @@ owner: tomoya-k31
 ---
 
 # 責務
+
+> 2026-09-19 に `.claude/skills/live-e2e` から **`live-e2e-herdr`** へ改名した。エージェントを orca で動かす版は
+> [live-e2e-orca スキル](/components/live-e2e-orca.md)。この頁のファイル名は、既存のリンクを壊さないために `live-e2e.md` のまま。
+> `scripts/`（GitHub / Slack の駆動）・`assets/`・`$E2E_HOME` は orca 版も使うので、変えるときは両方のシナリオを壊さないこと。
+> データ置き場 `$E2E_HOME/state/live-e2e/` は改名していない。
 
 [テスト戦略](/quality/test-strategy.md) が定める「自動化対象外」の領域 — 実機エージェント・
 実 Slack・実 GitHub との接続 — を、手順として実行可能にする。CI（`slack_e2e.rs` 等）は
