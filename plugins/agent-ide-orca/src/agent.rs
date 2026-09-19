@@ -705,7 +705,8 @@ impl<C: OrcaCli> OrcaAgent<C> {
     /// The state stream for a session (F-38), a **deadman** like herdr's
     /// since completion is reported by the agent's hooks (#131): block on
     /// `terminal wait --for exit` and report `failed` when the agent's process
-    /// goes away.
+    /// goes away — **confirmed by `terminal show`**, because `wait` has been
+    /// seen to answer "gone" for a terminal that was still running.
     ///
     /// **Every exit is a failure**, where herdr lets an explicit exit code 0
     /// pass silently. orca's `exitCode` cannot carry that distinction:
@@ -740,14 +741,25 @@ impl<C: OrcaCli> OrcaAgent<C> {
                         "--json",
                     ]))
                     .await;
-                match waited {
-                    Ok(wait) if wait_satisfied(&wait) => break exit_description(&wait),
-                    Ok(_) => consecutive_errors = 0,
-                    Err(e) if e.is_wait_timeout() => consecutive_errors = 0,
-                    Err(e) if e.is_gone() => {
-                        break "the agent's terminal is gone (closed, or its process exited)"
-                            .to_string();
+                // What `wait` says about the end is a claim, not a verdict:
+                // measured live, it answered "gone" for a terminal whose
+                // agent was still working (task 9 of the first orca e2e,
+                // 2026-09-19 — failed 5s into a run that went on to finish).
+                // So every "it ended" is checked against `terminal show`
+                // before it becomes `failed`.
+                let claim = match waited {
+                    Ok(wait) if wait_satisfied(&wait) => Some(exit_description(&wait)),
+                    Ok(_) => {
+                        consecutive_errors = 0;
+                        None
                     }
+                    Err(e) if e.is_wait_timeout() => {
+                        consecutive_errors = 0;
+                        None
+                    }
+                    Err(e) if e.is_gone() => Some(format!(
+                        "the agent's terminal is gone (closed, or its process exited): {e}"
+                    )),
                     Err(e) => {
                         consecutive_errors += 1;
                         tracing::warn!(error = %e, consecutive_errors, "terminal wait failed");
@@ -756,6 +768,30 @@ impl<C: OrcaCli> OrcaAgent<C> {
                                 "orca could not be asked about the agent's terminal after \
                                  {consecutive_errors} attempts: {e}"
                             );
+                        }
+                        tokio::time::sleep(ERROR_BACKOFF).await;
+                        None
+                    }
+                };
+                let Some(claim) = claim else { continue };
+                match confirm_ended(&cli, &session_id).await {
+                    Ended::Yes => break claim,
+                    Ended::No => {
+                        tracing::warn!(
+                            handle = %session_id,
+                            claim = %claim,
+                            "orca said the agent's terminal ended, but `terminal show` has it \
+                             connected; waiting again"
+                        );
+                        // Paced: a `wait` that keeps answering this at once
+                        // must not spin the CLI.
+                        tokio::time::sleep(ERROR_BACKOFF).await;
+                    }
+                    Ended::Unknown(e) => {
+                        consecutive_errors += 1;
+                        tracing::warn!(error = %e, consecutive_errors, "could not confirm the end");
+                        if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                            break format!("{claim} (unconfirmed: {e})");
                         }
                         tokio::time::sleep(ERROR_BACKOFF).await;
                     }
@@ -769,6 +805,26 @@ impl<C: OrcaCli> OrcaAgent<C> {
         });
 
         Ok(rx)
+    }
+}
+
+/// Whether a terminal that `wait` said had ended really has.
+enum Ended {
+    /// No record (`terminal_handle_stale`) or no process (`connected: false`).
+    Yes,
+    /// `terminal show` has it connected: the `wait` answer was spurious.
+    No,
+    /// `terminal show` itself failed; nothing can be concluded.
+    Unknown(OrcaError),
+}
+
+/// Ask `terminal show` whether the agent's terminal has ended.
+async fn confirm_ended<C: OrcaCli>(cli: &C, handle: &str) -> Ended {
+    match show_terminal(cli, handle).await {
+        Ok(t) if t.connected => Ended::No,
+        Ok(_) => Ended::Yes,
+        Err(e) if e.is_gone() => Ended::Yes,
+        Err(e) => Ended::Unknown(e),
     }
 }
 

@@ -487,6 +487,9 @@ async fn the_deadman_reports_failed_when_the_agent_exits() {
             }})),
         ],
     );
+    // `terminal show` confirms the exit (the deadman no longer trusts `wait`
+    // alone).
+    cli.on("terminal show", vec![shown(false, WORKTREE)]);
     let mut d = Driver::new(cli.clone());
     d.init().await;
     let ack = d
@@ -512,12 +515,54 @@ async fn the_deadman_reports_failed_when_the_agent_exits() {
 async fn the_deadman_reports_failed_when_the_terminal_is_gone() {
     let cli = FakeCli::default();
     cli.on("terminal wait", vec![Canned::Err("terminal_handle_stale")]);
+    cli.on("terminal show", vec![Canned::Err("terminal_handle_stale")]);
     let mut d = Driver::new(cli);
     d.init().await;
     d.call("state/subscribe", json!({ "session_id": HANDLE }))
         .await;
     let note = d.recv().await.expect("a notification");
     assert_eq!(note["params"]["state"], "failed");
+}
+
+/// The live failure this guards against (first orca e2e, task 9): `wait`
+/// answered "gone" for a terminal whose agent was still working, and the task
+/// was failed 5s into a run that went on to finish. A claim of the end is now
+/// checked against `terminal show`; a connected terminal means "wait again".
+///
+/// `start_paused` because the re-wait is paced by `ERROR_BACKOFF`.
+#[tokio::test(start_paused = true)]
+async fn a_spurious_end_from_wait_is_not_reported_as_failed() {
+    let cli = FakeCli::default();
+    cli.on(
+        "terminal wait",
+        vec![
+            Canned::Err("terminal_handle_stale"),
+            Canned::Ok(json!({ "wait": { "satisfied": true, "status": "exited" } })),
+            Canned::Ok(json!({ "wait": { "satisfied": true, "status": "exited", "exitCode": 0 } })),
+        ],
+    );
+    // The first two claims are spurious — the terminal is connected — and
+    // only the third is borne out.
+    cli.on(
+        "terminal show",
+        vec![
+            shown(true, WORKTREE),
+            shown(true, WORKTREE),
+            shown(false, WORKTREE),
+        ],
+    );
+    let mut d = Driver::new(cli.clone());
+    d.init().await;
+    d.call("state/subscribe", json!({ "session_id": HANDLE }))
+        .await;
+    let note = d.recv().await.expect("a notification");
+    assert_eq!(note["params"]["state"], "failed");
+    assert_eq!(
+        cli.calls_to("terminal wait").len(),
+        3,
+        "both spurious claims were waited through"
+    );
+    assert_eq!(cli.calls_to("terminal show").len(), 3);
 }
 
 #[tokio::test]

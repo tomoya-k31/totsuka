@@ -1,0 +1,1 @@
+* **Update**: [agent-ide-orca](/components/agent-ide-orca.md) の deadman が、`terminal wait` の「終了した／消えた」を `terminal show` で確認してから `failed` にするようにした。orca 版の初回実機 e2e で、`wait` がエージェントの動いている端末に対して「消えた」と答え、タスクが dispatch の 5 秒後に `failed` にされた（エージェントはそのまま作業を続けていた）。再現は間欠的で、orca 側の原因は未特定。誤報のときの orca の応答は warn ログに残す

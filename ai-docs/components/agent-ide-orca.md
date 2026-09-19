@@ -44,7 +44,7 @@ orca は公開 REST/ソケット API を持たず、**`orca` CLI（`--json`）�
 | `session/list` | `terminal list` のうちタブタイトルが `totsuka ` で始まるもの。分割したシェルはタイトルを持たないので 1 タスク 1 行 |
 | `session/focus` | `terminal switch`（`terminal_exited` / stale は `focused: false`） |
 | `diagnostics/snapshot` | `terminal read --screen`、描画できなければ（`source: screen-unavailable`）`terminal read --limit 200`。失敗は `text: None` |
-| `state/subscribe` | `terminal wait --for exit` を繰り返す deadman。満たされたら／handle が消えたら `failed` を 1 回送って終了。orca の `timeout` は再試行、それ以外の失敗が 5 回続いたら `failed` |
+| `state/subscribe` | `terminal wait --for exit` を繰り返す deadman。満たされたら／handle が消えたら、**`terminal show` で裏を取ってから** `failed` を 1 回送って終了（`connected: true` なら誤報として待ち直す — 実機 e2e で `wait` が生きている端末を「消えた」と答え、動いていたタスクが 5 秒で `failed` にされた）。orca の `timeout` は再試行、それ以外の失敗が 5 回続いたら `failed` |
 
 ## プロンプトを「認識後」に送る理由
 
