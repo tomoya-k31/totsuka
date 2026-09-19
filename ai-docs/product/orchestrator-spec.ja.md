@@ -3,7 +3,7 @@ type: Spec
 title: totsuka — ローカルAIエージェント Orchestrator 要件定義（v1）
 description: totsuka Orchestrator CLI の要件定義 — タスクソース/Agent IDE/Notifier プラグイン、git worktree ライフサイクル、ワークフロー、並列実行制御、v1 スコープ。
 tags: [orchestrator, requirements, plugin, worktree, cli, rust]
-generated: { by: claude-code/opus-5, at: 2026-09-17T19:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-19T12:00:00+09:00 }
 status: draft
 owner: tomoya-k31
 ---
@@ -101,7 +101,7 @@ Notion タスクや GitHub Projects に紐づく Issue などのタスク管理�
 | F-11 | 未指定の場合、設定内のリポジトリ概要 + リポジトリルートの README(先頭 N 行)を材料に LLM で分類する | M |
 | F-12 | LLM 呼び出しは OpenAI 互換 API とし、`base_url` を差し替えることで OpenRouter / LiteLLM 等の AI Gateway を指定できる | M |
 | F-13 | モデル名・max_tokens・タイムアウトを設定可能(安価モデル前提、例: haiku 級) | M |
-| F-14 | LLM には structured output で `{repo, confidence, reason}` を返させる。confidence は self-reported の参考値と割り切り、複数候補が拮抗した場合に人間へ確認を求める(タスクを pending 状態にする) | S |
+| F-14 | LLM には structured output で `{repo, confidence, reason}` を返させる。confidence は self-reported の参考値と割り切り、`[llm].confidence_threshold`(既定 0.6)を下回った場合や複数候補が拮抗した場合に人間へ確認を求める(タスクを pending 状態にする) | S |
 | F-15 | README 要約はキャッシュし(XDG_CACHE_HOME)、README の hash 変更時のみ再生成 | C |
 
 ### 4.3 worktree 管理
@@ -346,7 +346,7 @@ macOS のメニューバーのように**常時視界に入る面**へ状態を�
 | 言語 | Rust(edition 2024、stable toolchain) |
 | 主要クレート(案) | tokio, clap, serde, toml, toml_edit, tracing, rusqlite, reqwest, keyring |
 | 依存方針 | 最小主義は取らないが肥大化は避ける。差し替えが想定される箇所(JSON-RPC 層・永続化・シークレットストア)は必ず ports の trait 背後に置き、クレート選定を後から変更可能にする。JSON-RPC 層は serde_json + tokio による薄い自作から始め、要件次第でライブラリへ移行 |
-| アーキテクチャ | ヘキサゴナル。`core`(ドメイン・ステートマシン)/ `ports`(TaskSource, AgentIde, LlmRouter, SecretStore の trait)/ `adapters`(JSON-RPC プラグインブリッジ、SQLite、Keychain) |
+| アーキテクチャ | ヘキサゴナル。`core`(ドメイン・ステートマシン)/ `ports`(TaskSource, AgentIde, RepoClassifier, SecretStore の trait)/ `adapters`(JSON-RPC プラグインブリッジ、SQLite、Keychain) |
 | ワークスペース構成 | `orchestrator-core` / `orchestrator-cli` / `plugin-protocol`(プラグイン開発者向けに公開する型定義クレート)/ 各公式プラグイン crate |
 | プラグイン管理 | `$XDG_DATA_HOME/totsuka/plugins/{name}/` にバイナリ + manifest を配置。enable/disable は設定側のフラグ |
 | AI Gateway | OpenAI 互換 `/chat/completions` を前提とし `base_url` / `model` / `api_key_ref` を設定可能 |

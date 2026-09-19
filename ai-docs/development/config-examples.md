@@ -4,7 +4,7 @@ title: 設定例集（config.toml）
 description: そのまま貼って動く config.toml の完全版注釈付き例と、選択肢を持つキー（kind・mode・output・verification・cleanup・trigger・シークレット参照・並列上限）の選び分け基準、TOTSUKA_* 環境変数オーバーライドの対応表、および最小構成／GitHub Projects／Slack／設計→実装ハンドオフのシナリオ別レシピ。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-cli/templates/config.toml
 tags: [config, toml, examples, recipes, workflow, secrets, slack, github, herdr, environment]
-generated: { by: claude-code/opus-5, at: 2026-09-19T12:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-19T20:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -75,6 +75,7 @@ owner: tomoya-k31
 | `TOTSUKA_LLM_MAX_TOKENS` | `[llm].max_tokens` | 非負整数 ※ |
 | `TOTSUKA_LLM_TIMEOUT_SECS` | `[llm].timeout_secs` | 非負整数 ※ |
 | `TOTSUKA_LLM_API_KEY_REF` | `[llm].api_key_ref` | 文字列（シークレット参照）※ |
+| `TOTSUKA_LLM_CONFIDENCE_THRESHOLD` | `[llm].confidence_threshold` | 数値（0.0〜1.0）※ |
 
 ※ `[llm]` は `base_url` + `model` が必須のテーブルなので、**env だけからは合成しない**。
 `config.toml` に `[llm]` が無い状態で `TOTSUKA_LLM_*` を設定すると起動エラーになる（黙って無視はしない）。

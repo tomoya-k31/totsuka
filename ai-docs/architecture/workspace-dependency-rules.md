@@ -1,10 +1,10 @@
 ---
 type: Architecture
 title: ワークスペース依存境界ルール（Fitness Function）
-description: ヘキサゴナル構成の依存不変条件（plugins → plugin-protocol / plugin-sdk のみ、plugin-protocol は leaf、依存循環なし）と、それを CI で機械検証する scripts/arch-lint.sh の仕組み・正当な依存追加時の更新手順。
+description: ヘキサゴナル構成の依存不変条件（plugins → plugin-protocol / plugin-sdk / repo-classifier のみ、plugin-protocol と repo-classifier は leaf、依存循環なし）と、それを CI で機械検証する scripts/arch-lint.sh の仕組み・正当な依存追加時の更新手順。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/scripts/arch-lint.sh
 tags: [architecture, fitness-function, ci, workspace, dependency]
-generated: { by: claude-code/opus-5, at: 2026-09-17T12:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-19T12:00:00+09:00 }
 status: stable
 ---
 
@@ -18,6 +18,7 @@ totsuka はヘキサゴナル構成を採用しており、ワークスペース
 graph BT
     protocol["plugin-protocol<br/>(leaf・唯一の公開型クレート)"]
     sdk["plugin-sdk"]
+    classifier["repo-classifier<br/>(leaf・リポジトリ分類の共有部品)"]
     core["orchestrator-core"]
     cli["orchestrator-cli"]
     plugins["plugins/* 6種"]
@@ -29,6 +30,8 @@ graph BT
     cli --> protocol
     plugins --> protocol
     plugins -. "現状の利用は task-source-* のみ（許可は全 plugins/*）" .-> sdk
+    core --> classifier
+    plugins -. "現状の利用は task-source-slack のみ（許可は全 plugins/*）" .-> classifier
     core -. dev .-> ts
     cli -. dev .-> ts
     cli -. "dev（#349・生成した plugins/*.toml の検証用）" .-> plugins
@@ -44,14 +47,16 @@ graph BT
 
 | 対象 | `[dependencies]` | `[dev-dependencies]` | `[build-dependencies]` |
 |---|---|---|---|
-| `plugins/*` | `plugin-protocol` / `plugin-sdk` のみ | 左記 + `test-support` | なし |
+| `plugins/*` | `plugin-protocol` / `plugin-sdk` / `repo-classifier` のみ | 左記 + `test-support` | なし |
 | `plugin-sdk` | `plugin-protocol` のみ | `plugin-protocol` / `test-support` | なし |
 | `plugin-protocol` | なし（leaf） | なし | なし |
+| `repo-classifier` | なし（leaf） | なし | なし |
 | 全クレート | 依存循環なし（normal + build + dev の全エッジで検査） | | |
 
 - `orchestrator-core` / `orchestrator-cli` / `test-support` に個別の許可リストはない（循環検査のみ対象）。**したがって `cli → plugins`（dev）のようなエッジは arch-lint では検出できず、本ドキュメントのグラフが唯一の記録になる** — 追加したら必ずここに書く。
 - `plugins/*` の判定はクレート名の列挙ではなく **manifest パス（`plugins/` 配下）** で行うため、新プラグインを追加してもスクリプトの更新は不要。
 - dev-dependencies だけの循環は cargo 的には合法だが、本ワークスペースでは意図しない結合とみなしエラーにする。
+- **`repo-classifier` が leaf であること**（`classifier-leaf`）は、core と plugins の**両方**が依存する共有部品だから要る（#723、[ADR-0083](/decisions/adr-0083-repo-classifier-crate.md)）。これがワークスペース内の何か（たとえば `plugin-protocol`）に依存し始めると、プラグインから core 側の関心事へ届く抜け道になる。`plugin-protocol` が「プラグイン境界の公開型」なのに対し、こちらは「外部の分類 API をどう叩くか」で、プロトコルの一部ではない。
 
 ### プラグイン成果物の命名
 

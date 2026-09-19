@@ -3,7 +3,7 @@ type: Spec
 title: totsuka — Local AI-Agent Orchestrator Requirements (v1)
 description: Requirements specification for the totsuka orchestrator CLI — task-source/agent-IDE/notifier plugins, git-worktree lifecycle, workflows, parallel execution control, and v1 scope.
 tags: [orchestrator, requirements, plugin, worktree, cli, rust]
-generated: { by: claude-code/opus-5, at: 2026-09-17T19:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-19T12:00:00+09:00 }
 status: draft
 owner: tomoya-k31
 ---
@@ -100,7 +100,7 @@ Priorities use MoSCoW (M: Must / S: Should / C: Could / W: Won't in v1).
 | F-11 | Otherwise, classify with an LLM using the configured repository summaries + the head N lines of each repository root README | M |
 | F-12 | LLM calls use an OpenAI-compatible API; swapping `base_url` selects an AI gateway such as OpenRouter / LiteLLM | M |
 | F-13 | Model name, max_tokens, and timeout configurable (cheap models assumed, e.g. haiku-class) | M |
-| F-14 | The LLM returns `{repo, confidence, reason}` via structured output. Confidence is treated as a self-reported reference value; when multiple candidates are close, ask a human (put the task into pending) | S |
+| F-14 | The LLM returns `{repo, confidence, reason}` via structured output. Confidence is treated as a self-reported reference value; below `[llm].confidence_threshold` (default 0.6), or when multiple candidates are close, ask a human (put the task into pending) | S |
 | F-15 | Cache README summaries (XDG_CACHE_HOME); regenerate only when the README hash changes | C |
 
 ### 4.3 Worktree management
@@ -345,7 +345,7 @@ The path to a surface that is **always in view**, such as the macOS menu bar. No
 | Language | Rust (edition 2024, stable toolchain) |
 | Main crates (proposal) | tokio, clap, serde, toml, toml_edit, tracing, rusqlite, reqwest, keyring |
 | Dependency policy | Not minimalist, but avoid bloat. Anything likely to be swapped (JSON-RPC layer, persistence, secret store) must sit behind ports traits so crate choices can change later. The JSON-RPC layer starts as a thin hand-rolled serde_json + tokio implementation, migrating to a library as requirements dictate |
-| Architecture | Hexagonal. `core` (domain, state machine) / `ports` (TaskSource, AgentIde, LlmRouter, SecretStore traits) / `adapters` (JSON-RPC plugin bridge, SQLite, Keychain) |
+| Architecture | Hexagonal. `core` (domain, state machine) / `ports` (TaskSource, AgentIde, RepoClassifier, SecretStore traits) / `adapters` (JSON-RPC plugin bridge, SQLite, Keychain) |
 | Workspace layout | `orchestrator-core` / `orchestrator-cli` / `plugin-protocol` (type-definition crate published for plugin developers) / each official plugin crate |
 | Plugin management | Binary + manifest in `$XDG_DATA_HOME/totsuka/plugins/{name}/`. enable/disable via config-side flags |
 | AI gateway | Assumes OpenAI-compatible `/chat/completions`; `base_url` / `model` / `api_key_ref` configurable |

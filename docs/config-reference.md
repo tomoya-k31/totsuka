@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:6f9857b64a3f2e7bb904bc11151b1c44f43cbd2d7e98b2a783540da40e4df2a4 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:bd40d40a72d49b7c46047b5fae38485bb95cfc00398293e0e6933cba1fef6653 -->
 
 # Configuration reference
 
@@ -614,9 +614,10 @@ Assumes an OpenAI-compatible `/chat/completions`. Used to pick a repository for 
 |---|---|---|---|
 | `base_url` | string | required | Base URL, e.g. `https://openrouter.ai/api/v1` |
 | `model` | string | required | Model name |
-| `max_tokens` | int? | 256 | Maximum tokens for a classification call |
+| `max_tokens` | int? | none | Maximum tokens for a classification call. When omitted, it is not sent (the provider default applies) |
 | `timeout_secs` | int? | 30 | Request timeout |
 | `api_key_ref` | string? | none | Secret reference for the API key |
+| `confidence_threshold` | float? | 0.6 | A classification below this confidence is not used; the task goes to `pending` for a human to confirm. `0.0` to `1.0`; out-of-range values fail validation at startup. Not included in the default passed to task_source plugins (they keep their own threshold) |
 
 ## `[worktree]`
 

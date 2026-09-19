@@ -1,7 +1,7 @@
 > 🌐 [English](orchestrator-spec.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/product/orchestrator-spec.ja.md sha256:6a5134572c37f48af18d329ba9b2db98cf00bb1566b0db8b43282eb42302ed7b -->
+<!-- generated-from: ai-docs/product/orchestrator-spec.ja.md sha256:57a871d06673e498dded4d6b640a7f7f6eb05b49bef33b213a358a1d699d46b0 -->
 
 # totsuka とは
 
@@ -40,7 +40,7 @@ GitHub の Issue / Projects や Notion といったソースからタスクを�
 
 タスクがどのリポジトリのものかを示していれば、それが優先される。そうでなければ、設定した説明文と各リポジトリの README 冒頭を材料に LLM が判定する。
 
-LLM 呼び出しは OpenAI 互換の API を通すので、`base_url` を OpenRouter や LiteLLM のようなゲートウェイへ向けるだけでプロバイダを切り替えられる。安価で速いモデルを前提としている。モデルは選択と一緒に確信度を返し、候補が拮抗しているときは推測せずに人へ尋ねる。
+LLM 呼び出しは OpenAI 互換の API を通すので、`base_url` を OpenRouter や LiteLLM のようなゲートウェイへ向けるだけでプロバイダを切り替えられる。安価で速いモデルを前提としている。モデルは選択と一緒に確信度を返し、それが `[llm].confidence_threshold`(既定 0.6)を下回るときや候補が拮抗しているときは、推測せずに人へ尋ねる。
 
 totsuka はゲートウェイが生きているかも自分で見ている。`totsuka doctor --online` が送るのと同じ最小のリクエストを、起動時に 1 回、マシンがスリープから復帰した直後、そしてゲートウェイへの呼び出しが 10 分間なかったとき（落ちている間は 1 分おき）に送る。実際の呼び出しも接触として数えるので、忙しい run がプローブを浪費することはない。ゲートウェイが答えないと、メニューバーの `⚠` と `totsuka status` の `degraded:` に短い理由（到達不能・タイムアウト・サーバエラー）つきで出て、ゲートウェイが何か答えを返した時点で自動的に消える。プローブを待つものは無い —— 落ちているゲートウェイが起動を遅らせることはなく、totsuka は LLM 無しでも動き続ける。
 
