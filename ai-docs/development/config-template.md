@@ -4,7 +4,7 @@ title: config.toml 雛形とその網羅性検査
 description: "totsuka が書き出す config.toml 雛形の置き場（crates/orchestrator-cli/templates/config.toml）と、そこに全設定キーが載っていることを機械検証する scripts/config-template-lint.sh の仕組み・キーを増減したときの手順。Rust の文字列リテラルではなく実ファイルに置く理由（クレート境界を跨いで検査できる唯一の場所）も含む。"
 resource: https://github.com/tomoya-k31/totsuka/blob/main/scripts/config-template-lint.sh
 tags: [config, toml, template, lint, fitness-function, ci]
-generated: { by: claude-code/opus-5, at: 2026-09-17T19:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-19T23:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -53,14 +53,18 @@ github / slack の 2 本だけで、しかも dev-dependency である
 - **コード側**: `crates/orchestrator-core/src/config/schema.rs` と `plugins/*/src/config.rs`。
   プラグインはパスのグロブで拾うので、**新プラグインを足してもこのスクリプトの更新は要らない**
   （`arch-lint.sh` が `plugins/` 配下をパスで判定しているのと同じ方針）。
-  - `Deserialize` を導出する `pub struct` / `pub enum` の本体だけを読む。これを見ないと
+  - `Deserialize` を導出する `struct` / `enum` の本体だけを読む（pub かどうかは問わない）。これを見ないと
     `ConfigError::EnvOverride { var, reason }` のようなエラー enum のフィールドまで設定キーとして数える
+  - **`#[serde(try_from = "Raw…")]` の付いた型は読まない**（#723）。TOML に書かれる形は `Raw…` の側にあり、
+    `try_from` の先は検証して組み直した結果だからである。`[llm]` は `api` によって `base_url` と `endpoint` の
+    どちらを取るかが変わるので、平たい非 pub の `RawLlmConfig` で受けて型付きの `LlmConfig` に変換している。
+    **非 pub の型も読むのはこのため**で、`Raw…` を外に見せる理由は無い
   - `pub x: T` に加えて、enum の struct variant の中の `x: T` も拾う。後者は
     `cleanup = { retention_days = 5 }` のように TOML のキーとして書かれるが `pub` が付かない。
     **行単位で読むので、1 行に畳まれた variant（`Retention { retention_days: u32 }`）は拾えない** ——
     rustfmt がフィールド付き variant を展開する前提に乗っている
   - `#[derive(…)]` は `)]` が来るまで読む。1 行しか見ないと、rustfmt が折り返した瞬間にその型の
-    フィールドが丸ごと検査から消える（fail-open）。非 pub の型に付いた derive は次の型へ持ち越さない
+    フィールドが丸ごと検査から消える（fail-open）。型に付いた derive と `try_from` は次の型へ持ち越さない
   - `#[serde(flatten)]` は除外し（`plugin_settings` / `options` はキーではなく容れ物）、
     `#[serde(rename = "…")]` は差し替える
   - `#[cfg(test)]` 以降は読まない

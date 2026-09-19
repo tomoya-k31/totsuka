@@ -208,18 +208,30 @@
 # plan_args = ["--permission-mode", "plan"] # extra args in plan mode
 
 # ============================================================================
-# [llm] — the AI Gateway used for repository selection
+# [llm] — the classifier used for repository selection
 # ============================================================================
 #
-# Without this table, repository selection that needs an LLM falls back to
-# `pending`.
+# Without this table, repository selection that needs a classifier falls back
+# to `pending`. `api` picks the kind: "chat" (the default) is an
+# OpenAI-compatible /chat/completions gateway; "decisions" is a decision-only
+# model such as TypeSafe Jev, which picks one repository (or "none fits") and
+# returns a probability for each. The same OpenRouter key works for both.
 
 # [llm]
-# base_url = "https://openrouter.ai/api/v1"
+# api = "chat"                              # "chat" (default) / "decisions"
+# base_url = "https://openrouter.ai/api/v1" # chat only
 # model = "anthropic/claude-haiku-4-5"
-# max_tokens = 256                          # cap for the classification call
+# max_tokens = 256                          # chat only: cap for the classification call
 # timeout_secs = 30                         # request timeout
 # confidence_threshold = 0.6                # below this, the task waits in `pending` for a human
+# totsuka:secret llm-api-key
+# api_key_ref = "op://Dev/totsuka/llm-api-key"
+#
+# The decisions form: no base_url / max_tokens (they are errors here).
+# [llm]
+# api = "decisions"
+# model = "~typesafe/jev-latest"
+# endpoint = "https://openrouter.ai/api/alpha/decisions"   # decisions only; the default (alpha on OpenRouter)
 # totsuka:secret llm-api-key
 # api_key_ref = "op://Dev/totsuka/llm-api-key"
 
@@ -365,6 +377,7 @@
 # pull_max_messages = 100                   # messages pulled per request
 
 # [slack.llm]                               # repository classification; defaults to the core [llm]
+# api = "chat"                              # "chat" (default) / "decisions" (then `endpoint`, no base_url)
 # base_url = "https://openrouter.ai/api/v1"
 # model = "anthropic/claude-haiku-4-5"
 # totsuka:secret llm-api-key
