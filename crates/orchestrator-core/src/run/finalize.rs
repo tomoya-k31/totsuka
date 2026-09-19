@@ -19,7 +19,7 @@ impl<G: GitRunner, L: LlmRouter + 'static> Engine<G, L> {
     ) -> Result<(), EngineError> {
         // Last chance to learn the branch before anything consumes it. The
         // Stop handler already syncs, but only hook-capable agents send a
-        // Stop — a non-hook agent (orca, the mock) reports completion through
+        // Stop — a non-hook agent (the mock) reports completion through
         // `state/notification` and reaches here having produced no signal at
         // all. Re-reading is cheap and idempotent.
         self.sync_branch(record.id)?;
@@ -487,7 +487,7 @@ impl<G: GitRunner, L: LlmRouter + 'static> Engine<G, L> {
             return PaneRelease::NotApplicable;
         };
         if !agent.capabilities().pane_control {
-            // No pane to control (e.g. orca): nothing to release, ever.
+            // No pane to control (e.g. the mock): nothing to release, ever.
             self.released_panes.insert(session.id);
             return PaneRelease::NotApplicable;
         }

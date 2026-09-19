@@ -113,11 +113,12 @@ use semver::{Version, VersionReq};
 /// launch it at all (F-54), so the fallback is unreachable, not just
 /// deprecated.
 ///
-/// The floor follows the *dependency*, not the plugin kind. orca is an
-/// `agent_ide` too and stays at `>=0.1.0`: it drives the `orca` CLI itself and
-/// never reads `tool_launch`, so raising its bound would refuse orchestrators
-/// it works with perfectly well. task_source and notifier stay put for the
-/// same reason.
+/// The floor follows the *dependency*, not the plugin kind. orca was an
+/// `agent_ide` too and stayed at `>=0.1.0` then: it drove the `orca` CLI
+/// itself and never read `tool_launch`, so raising its bound would have
+/// refused orchestrators it worked with perfectly well. task_source and
+/// notifier stayed put for the same reason. (orca launches `tool_launch`
+/// since ADR-0082, and its floor is 0.6.0 by then — the rule is unchanged.)
 ///
 /// 0.4.1: [`TaskDispatchParams::repo_name`](crate::methods::TaskDispatchParams::repo_name)
 /// (#417) — the repository the task was routed to, named as the operator named
@@ -303,7 +304,8 @@ use semver::{Version, VersionReq};
 /// source with one domain filters an identity, and agents and notifiers never
 /// read the field, so requiring 0.7.0 there would strand orchestrators they
 /// work with — the floor states a dependency, not a generation (the same
-/// distinction orca's manifest drew against herdr's for #411).
+/// distinction orca's manifest drew against herdr's for #411, before ADR-0082
+/// gave orca the same dependency).
 /// 0.7.1 (#645): [`TaskDispatchParams::task_number`](crate::methods::TaskDispatchParams::task_number)
 /// — the Orchestrator's own task number, sent on **every** dispatch, plus the
 /// [`identifier`](crate::identifier) module that turns it into the name a tool
@@ -438,11 +440,12 @@ mod tests {
         }
         assert!(is_compatible(&herdr, &Version::new(0, 2, 3)));
 
-        // The floor tracks the dependency, not the kind: orca is an agent_ide
-        // too, reads no `tool_launch`, and keeps working with all of them.
-        let orca = VersionReq::parse(">=0.1.0, <0.8").unwrap();
-        assert!(is_compatible(&orca, &Version::new(0, 1, 0)));
-        assert!(is_compatible_with_current(&orca));
+        // The floor tracks the dependency, not the kind: an agent_ide that
+        // reads no `tool_launch` (orca, until ADR-0082) keeps a wide floor and
+        // keeps working with all of them.
+        let no_tool_launch = VersionReq::parse(">=0.1.0, <0.8").unwrap();
+        assert!(is_compatible(&no_tool_launch, &Version::new(0, 1, 0)));
+        assert!(is_compatible_with_current(&no_tool_launch));
     }
 
     #[test]

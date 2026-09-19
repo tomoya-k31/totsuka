@@ -66,7 +66,7 @@ Orchestrator は起動前に `protocol_version` の互換性を検査し（F-54�
 
 0.6.0 では**結果として同梱 7 本すべてが `>=0.6.0` に揃った**が、それは全部が同じものに依存しているからである —— `initialize` の改名は kind を問わず全プラグインが読む面だからで、「最新に合わせた」のではない。一律に見える状態を規則と読み違えないこと。
 
-**揃わない例のほうが規則をよく表す。** 0.4.0 では agent_ide のうち herdr だけを `>=0.2.3` へ上げた。0.2.3 が `TaskDispatchParams.tool_launch` の入ったバージョンで、herdr には argv を自前で組み立てるフォールバックがもう無かったためである（下限で弾くことが、そのフォールバックを「非推奨」ではなく**到達不能**にした、[ADR-0034](/decisions/adr-0034-protocol-0-4-0-removals.md)）。同じ agent_ide の orca は `>=0.1.0` のままだった —— `orca` CLI 自体を駆動していて `tool_launch` を一度も読まないので、下限を上げれば**問題なく動く Orchestrator を弾く**ことになる。
+**揃わない例のほうが規則をよく表す。** 0.4.0 では agent_ide のうち herdr だけを `>=0.2.3` へ上げた。0.2.3 が `TaskDispatchParams.tool_launch` の入ったバージョンで、herdr には argv を自前で組み立てるフォールバックがもう無かったためである（下限で弾くことが、そのフォールバックを「非推奨」ではなく**到達不能**にした、[ADR-0034](/decisions/adr-0034-protocol-0-4-0-removals.md)）。同じ agent_ide の orca は `>=0.1.0` のままだった —— `orca` CLI 自体を駆動していて `tool_launch` を一度も読まないので、下限を上げれば**問題なく動く Orchestrator を弾く**ことになる。（その orca も後に `tool_launch` を起動するよう作り直され（[ADR-0082](/decisions/adr-0082-orca-herdr-parity.md)）、今は herdr と同じ理由でこのフィールドに依存している。下限は 0.6.0 で、0.2.3 を含意している。）
 
 # メソッド（§11 付録 A）
 

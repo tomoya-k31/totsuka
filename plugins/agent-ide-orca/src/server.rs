@@ -1,6 +1,7 @@
 //! JSON-RPC dispatch for the stdio server (F-51), with streamed
-//! `state/notification` push (F-38). Mirrors the herdr plugin's server shape but
-//! builds an orca CLI adapter instead of a socket transport.
+//! `state/notification` push (F-38). Mirrors the herdr plugin's server — the
+//! same methods and capabilities — but builds an orca CLI adapter instead of a
+//! socket transport.
 //!
 //! Responses and notifications are written as NDJSON lines to an
 //! [`mpsc`] channel — `main` drains it to
@@ -9,8 +10,9 @@
 
 use plugin_protocol::jsonrpc::{Error, Notification, Response, error_code, to_line};
 use plugin_protocol::methods::{
-    ConfigValidateResult, InitializeParams, InitializeResult, SessionAttachParams,
-    StateSubscribeParams, TaskCancelParams, TaskDispatchParams,
+    ConfigValidateResult, DiagnosticsSnapshotParams, InitializeParams, InitializeResult,
+    SessionAttachParams, SessionFocusParams, SessionReleaseParams, StateSubscribeParams,
+    TaskCancelParams, TaskDispatchParams,
 };
 use plugin_protocol::{Capabilities, RequestId, method};
 use serde::de::DeserializeOwned;
@@ -20,6 +22,7 @@ use tokio::sync::mpsc;
 use crate::agent::OrcaAgent;
 use crate::cli::OrcaCli;
 use crate::config::OrcaConfig;
+use crate::error::OrcaError;
 
 /// Builds an orca CLI adapter from config. Abstracted so the server is tested
 /// against a fake orca.
@@ -77,6 +80,10 @@ impl<F: CliFactory> Server<F> {
             method::SESSION_ATTACH => self.session_attach(id, params).await,
             method::TASK_CANCEL => self.task_cancel(id, params).await,
             method::STATE_SUBSCRIBE => self.state_subscribe(id, params).await,
+            method::DIAGNOSTICS_SNAPSHOT => self.diagnostics_snapshot(id, params).await,
+            method::SESSION_FOCUS => self.session_focus(id, params).await,
+            method::SESSION_RELEASE => self.session_release(id, params).await,
+            method::SESSION_LIST => self.session_list(id).await,
             method::SHUTDOWN => {
                 self.send(Response::result(id, Value::Null));
                 return false;
@@ -97,6 +104,16 @@ impl<F: CliFactory> Server<F> {
             Ok(v) => v,
             Err(e) => return self.send(Response::error(id, e)),
         };
+        let removed = crate::config::removed_keys_in(&init.config);
+        if !removed.is_empty() {
+            return self.send(Response::error(
+                id,
+                Error::new(
+                    error_code::CONFIG_INVALID,
+                    format!("invalid orca plugin config: {}", removed.join(" ")),
+                ),
+            ));
+        }
         let config: OrcaConfig = match serde_json::from_value(init.config) {
             Ok(c) => c,
             Err(e) => {
@@ -115,20 +132,37 @@ impl<F: CliFactory> Server<F> {
     }
 
     async fn config_validate(&mut self, id: RequestId, params: Value) {
-        let config: OrcaConfig = match params
-            .get("config")
-            .cloned()
-            .ok_or(())
-            .and_then(|c| serde_json::from_value(c).map_err(|_| ()))
-        {
+        let raw = params.get("config").cloned().unwrap_or(Value::Null);
+        // Name the removed keys — `config does not parse` is true but useless
+        // for the one change the tool_launch rewrite forces.
+        let removed = crate::config::removed_keys_in(&raw);
+        if !removed.is_empty() {
+            return self.ok_validate(id, removed);
+        }
+        let config: OrcaConfig = match serde_json::from_value(raw) {
             Ok(c) => c,
-            Err(()) => return self.ok_validate(id, vec!["config does not parse".into()]),
+            Err(_) => return self.ok_validate(id, vec!["config does not parse".into()]),
         };
-        // Connectivity check (F-59): does `orca status` run and answer?
+        // Connectivity check (F-59): does `orca status` run, and is the
+        // runtime behind it up? The CLI answers `status` even with the app
+        // closed, so a successful call alone proves only that orca is
+        // installed.
         let mut errors = Vec::new();
         let cli = self.factory.build(&config);
-        if let Err(e) = cli.run(vec!["status".into(), "--json".into()]).await {
-            errors.push(format!("orca is not reachable → {e}"));
+        match cli.run(vec!["status".into(), "--json".into()]).await {
+            Ok(status) => {
+                let reachable = status
+                    .get("runtime")
+                    .and_then(|r| r.get("reachable"))
+                    .and_then(Value::as_bool);
+                if reachable == Some(false) {
+                    errors.push(
+                        "the orca runtime is not reachable → start the Orca app (`orca open`)"
+                            .into(),
+                    );
+                }
+            }
+            Err(e) => errors.push(format!("orca is not reachable → {e}")),
         }
         self.ok_validate(id, errors);
     }
@@ -204,6 +238,58 @@ impl<F: CliFactory> Server<F> {
         }
     }
 
+    async fn diagnostics_snapshot(&mut self, id: RequestId, params: Value) {
+        let Some(agent) = self.agent.as_ref() else {
+            return self.send(not_initialized(id));
+        };
+        let parsed: DiagnosticsSnapshotParams = match parse_params(&params) {
+            Ok(v) => v,
+            Err(e) => return self.send(Response::error(id, e)),
+        };
+        match agent.snapshot(&parsed.session_id).await {
+            Ok(result) => self.send(Response::result(id, to_value(&result))),
+            Err(e) => self.send(rpc_error(id, &e)),
+        }
+    }
+
+    async fn session_focus(&mut self, id: RequestId, params: Value) {
+        let Some(agent) = self.agent.as_ref() else {
+            return self.send(not_initialized(id));
+        };
+        let parsed: SessionFocusParams = match parse_params(&params) {
+            Ok(v) => v,
+            Err(e) => return self.send(Response::error(id, e)),
+        };
+        match agent.focus(&parsed.session_id).await {
+            Ok(result) => self.send(Response::result(id, to_value(&result))),
+            Err(e) => self.send(rpc_error(id, &e)),
+        }
+    }
+
+    async fn session_release(&mut self, id: RequestId, params: Value) {
+        let Some(agent) = self.agent.as_ref() else {
+            return self.send(not_initialized(id));
+        };
+        let parsed: SessionReleaseParams = match parse_params(&params) {
+            Ok(v) => v,
+            Err(e) => return self.send(Response::error(id, e)),
+        };
+        match agent.release(&parsed).await {
+            Ok(result) => self.send(Response::result(id, to_value(&result))),
+            Err(e) => self.send(rpc_error(id, &e)),
+        }
+    }
+
+    async fn session_list(&mut self, id: RequestId) {
+        let Some(agent) = self.agent.as_ref() else {
+            return self.send(not_initialized(id));
+        };
+        match agent.list_sessions().await {
+            Ok(result) => self.send(Response::result(id, to_value(&result))),
+            Err(e) => self.send(rpc_error(id, &e)),
+        }
+    }
+
     fn ok_validate(&self, id: RequestId, errors: Vec<String>) {
         let result = ConfigValidateResult {
             valid: errors.is_empty(),
@@ -221,11 +307,15 @@ impl<F: CliFactory> Server<F> {
     }
 }
 
-/// The capabilities this plugin declares (F-33): a state stream, and nothing
-/// else. `pane_control` is intentionally **not** declared — orca exposes no
-/// pane surface — and neither is `hook_completion`: orca drives the `orca` CLI
-/// itself and reports completion through the state stream. The Orchestrator
-/// never requests either.
+/// The capabilities this plugin declares (F-33) — the herdr plugin's set, now
+/// that orca is driven through the same contract. Must mirror `plugin.toml`.
+///
+/// - `pane_control`: an orca terminal is the pane — `terminal switch` /
+///   `close` / `list` answer focus, release and list.
+/// - `hook_completion`: the agent is launched from the Orchestrator's
+///   `tool_launch`, hook settings and env included, so it reports completion
+///   through its hooks; the state stream is only an exit deadman.
+/// - `diagnostics_snapshot`: `terminal read --screen`.
 fn capabilities_result() -> Value {
     to_value(&InitializeResult {
         // No workflow options of its own (#554).
@@ -233,7 +323,10 @@ fn capabilities_result() -> Value {
         plugin_version: plugin_version(),
         claimed_repos: Vec::new(),
         capabilities: Capabilities {
+            pane_control: true,
             state_stream: true,
+            hook_completion: true,
+            diagnostics_snapshot: true,
             ..Capabilities::default()
         },
     })
@@ -266,12 +359,17 @@ fn not_initialized(id: RequestId) -> Response {
     )
 }
 
-/// Map an [`OrcaError`](crate::error::OrcaError) to a JSON-RPC error.
-fn rpc_error(id: RequestId, error: &crate::error::OrcaError) -> Response {
-    Response::error(
-        id,
-        Error::new(error_code::INTERNAL_ERROR, error.to_string()),
-    )
+/// Map an [`OrcaError`] to a JSON-RPC error carrying its actionable message:
+/// an internal error, except a session that could not be resumed
+/// (`SESSION_UNRESUMABLE`, #242 — the Orchestrator retries without it) and a
+/// dispatch without a `tool_launch` (the caller's own malformed request).
+fn rpc_error(id: RequestId, error: &OrcaError) -> Response {
+    let code = match error {
+        OrcaError::SessionUnresumable(_) => error_code::SESSION_UNRESUMABLE,
+        OrcaError::MissingToolLaunch => error_code::INVALID_PARAMS,
+        _ => error_code::INTERNAL_ERROR,
+    };
+    Response::error(id, Error::new(code, error.to_string()))
 }
 
 /// Convert a JSON id value into a [`RequestId`].

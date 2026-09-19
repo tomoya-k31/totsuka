@@ -36,8 +36,10 @@ semver = { workspace = true, features = ["serde"] }
 # already includes `process` for spawning the orca CLI).
 tokio = { workspace = true, features = ["io-std"] }
 thiserror.workspace = true
-# Parses the embedded `src/defaults.toml` (prompt defaults, #317). The plugin
-# still receives its live config as JSON via `initialize`; this is only for the
-# built-in fallbacks baked into the binary.
-toml.workspace = true
 tracing.workspace = true
+
+[dev-dependencies]
+# `test-util` makes `#[tokio::test(start_paused = true)]` available: the
+# dispatch path that waits out AGENT_DETECT_WAIT for an agent orca never
+# recognises costs no wall time on a paused clock (as in agent-ide-herdr).
+tokio = { workspace = true, features = ["test-util"] }

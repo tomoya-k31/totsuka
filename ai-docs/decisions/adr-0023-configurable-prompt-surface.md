@@ -13,6 +13,8 @@ owner: tomoya-k31
 
 Accepted（2026-07-30、エピック [#311](https://github.com/tomoya-k31/totsuka/issues/311)）、**一部 amended（2026-08-17、[#465](https://github.com/tomoya-k31/totsuka/issues/465)）**。
 
+ただし orca の `plan_prefix`（`plan_prompt_prefix`）は [ADR-0082](/decisions/adr-0082-orca-herdr-parity.md) で設定キーごと廃止した。plan モードは `tool_launch` の plan フラグで伝わる。
+
 **決定 1 の後半「設定で上書き可能にする」を撤回した。** core の `[prompts]` / `[[workflows]].prompts` は削除され、プロンプト文は組み込み専用に戻った。残る上書き面は `[[workflows]].rubric` 1 キーのみである。**決定 1 の前半（`defaults.toml` への外出し）と、決定 2〜5 は生きている** — 撤回したのは設定面だけで、「何を伝えるか / 何が動くか」の一線も、インライン文字列のみという方針も、マーカーを失う出力を検査するという方針も変わらない。詳細と根拠は下の Amendment を参照。
 
 以下の Decision / Consequences は **2026-07-30 時点の決定として読むこと**。設定面に言及している箇所は Amendment が上書きする。

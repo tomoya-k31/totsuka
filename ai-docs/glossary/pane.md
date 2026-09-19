@@ -24,7 +24,7 @@ Orchestrator は pane を直接知らない。pane を触る操作はすべて `
 | `session/release` | 0.2.1 | worktree 削除に連動して pane を閉じる（[ADR-0010](/decisions/adr-0010-worktree-cleanup-pane-release.md)） |
 | `session/list` | 0.2.2 | 所有 pane を列挙して孤児を検出する（[ADR-0013](/decisions/adr-0013-orphan-pane-detection.md)） |
 
-3 つとも専用フラグを新設せず `pane_control` に相乗りしている（focus も release も list も「pane 表面の制御」で分離する意味がない）。宣言しないプラグイン（orca 等）では単に呼ばれず、Orchestrator は pane 操作をスキップして静かに縮退する。
+3 つとも専用フラグを新設せず `pane_control` に相乗りしている（focus も release も list も「pane 表面の制御」で分離する意味がない）。宣言しないプラグイン（mock 等）では単に呼ばれず、Orchestrator は pane 操作をスキップして静かに縮退する。orca は [ADR-0082](/decisions/adr-0082-orca-herdr-parity.md) から宣言しており、orca の端末（タブ）が pane に当たる。orca の端末 handle は再利用されないので、下の同一性ガードは herdr ほどの意味を持たない。
 
 herdr の pane id（`w34:p2`）は**位置ベース**で、閉じた pane の id が別の pane に再利用されうる。そのため release / 解放系の RPC は同一性ガードを添えて、列挙から実行までの間に id が付け替わるレースを弾く。プロトコルは `expect_cwd`（worktree パス）と `expect_label` の 2 つを定義しているが、**Orchestrator が送るのは `expect_cwd` だけ**である（`expect_label: None` 固定）。worktree パスはタスクごとに一意で状態 DB が正本であるのに対し、label はプラグイン内部の表現なので、Orchestrator 側で組み立てることはしない。
 

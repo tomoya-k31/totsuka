@@ -1,51 +1,12 @@
 //! Plugin settings, deserialized from `InitializeParams.config` — the resolved
 //! `[orca]` table of `config.toml` as JSON (F-65, #554).
 //!
-//! Prompt text lives in the sibling `defaults.toml` rather than in Rust string
-//! literals (#317), so adjusting the wording is an edit to a data file instead
-//! of a code change. Every prompt default there is still just a
-//! `#[serde(default = "...")]` fallback: the live value comes from
-//! `[orca]` in config.toml whenever the operator sets it. Note the two files use
-//! different key names — `defaults.toml` groups prompts under `[prompts]`,
-//! while `[orca]` in config.toml is a flat table of [`OrcaConfig`] fields.
-
-use plugin_protocol::identifier::{Case, IdentifierPolicy};
-use std::sync::LazyLock;
+//! The launch itself is not configured here: the Orchestrator resolves the full
+//! argv/env (`tool_launch`, #196) and this plugin types exactly that into an
+//! orca terminal. What is left is how to reach orca and how the terminal is
+//! presented.
 
 use serde::Deserialize;
-
-/// The embedded prompt defaults, parsed once on first use.
-///
-/// A malformed `defaults.toml` is a build-time authoring error, not a runtime
-/// condition — it ships inside the binary and no input can change it — so this
-/// panics rather than degrading. The first use is deserializing `initialize`'s
-/// config, so without a test the panic would land there; `embedded_defaults_parse`
-/// forces it in CI instead.
-static DEFAULTS: LazyLock<Defaults> = LazyLock::new(|| {
-    toml::from_str(include_str!("defaults.toml")).expect("embedded defaults.toml must parse")
-});
-
-/// Top level of `defaults.toml`.
-///
-/// `deny_unknown_fields`, like [`OrcaConfig`]: a key that no longer backs
-/// anything is dead prompt text that still reads as live, so a rename must
-/// fail the build rather than leave the stale copy sitting in the file.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Defaults {
-    prompts: DefaultPrompts,
-}
-
-/// The `[prompts]` table of `defaults.toml`. Field names are the TOML keys, and
-/// are deliberately *not* the `[orca]` in config.toml override keys — each one names
-/// its counterpart below.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct DefaultPrompts {
-    /// Backs [`OrcaConfig::plan_prompt_prefix`] (overridden as
-    /// `plan_prompt_prefix`, not `plan_prefix`).
-    plan_prefix: String,
-}
 
 /// orca agent_ide settings.
 #[derive(Debug, Clone, Deserialize)]
@@ -54,100 +15,135 @@ pub struct OrcaConfig {
     /// The `orca` executable (name on PATH or absolute path).
     #[serde(default = "default_orca_bin")]
     pub orca_bin: String,
-    /// The agent orca launches in the worktree terminal (F-31).
-    #[serde(default = "default_agent")]
-    pub agent: String,
-    /// The `--setup` mode for `worktree create` (`run`/`skip`/`inherit`).
-    #[serde(default = "default_setup")]
-    pub setup: String,
-    /// Explicit `--repo` selector (e.g. `id:…`/`path:/abs`/`branch:…`). When
-    /// unset, the dispatch worktree path is used as a `path:` selector.
+    /// The longest a single `orca` invocation may run before it is killed. A
+    /// `terminal wait` is given its own `--timeout-ms` on top of this.
+    #[serde(default = "default_request_timeout")]
+    pub request_timeout_secs: u64,
+    /// How the agent's terminal tab is arranged.
     #[serde(default)]
-    pub repo_selector: Option<String>,
-    /// Text prepended to the prompt in plan mode (F-36). orca has no structured
-    /// plan API, so plan intent is conveyed to the agent in-prompt.
-    #[serde(default = "default_plan_prefix")]
-    pub plan_prompt_prefix: String,
-    /// Poll interval (ms) for the state loop when no terminal handle is
-    /// available to block on. Also the `--timeout-ms` passed to
-    /// `orca terminal wait` for pacing.
-    #[serde(default = "default_poll_interval")]
-    pub poll_interval_ms: u64,
+    pub layout: LayoutConfig,
+    /// Whether the dispatch names the worktree after the task in orca's
+    /// sidebar.
+    #[serde(default)]
+    pub identity: IdentityConfig,
 }
 
-impl OrcaConfig {
-    /// The `--repo` selector for `worktree create`: the explicit config value,
-    /// else the dispatch worktree path as a `path:` selector.
-    pub fn repo_selector_for(&self, worktree_path: &str) -> String {
-        self.repo_selector
-            .clone()
-            .unwrap_or_else(|| format!("path:{worktree_path}"))
-    }
+/// `[orca.layout]`: the agent's tab.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LayoutConfig {
+    /// Split a companion shell off the agent's terminal (herdr's
+    /// `[herdr.layout] shell`).
+    ///
+    /// **Off by default, unlike herdr.** herdr gives each task a private
+    /// workspace, so without the split there is no shell there at all; orca
+    /// already shows the task's worktree in its sidebar, where a terminal is
+    /// one click away. The split also takes orca's focus into the new pane.
+    #[serde(default)]
+    pub shell: bool,
+    /// `terminal split --direction`. Unset leaves orca's default. A closed
+    /// set, so a typo fails `initialize` instead of silently leaving the tab
+    /// unsplit (the split itself is best-effort).
+    #[serde(default)]
+    pub direction: Option<SplitDirection>,
+}
 
-    /// Compose the launch prompt, prepending the plan directive in plan mode.
-    pub fn compose_prompt(&self, base: &str, plan: bool) -> String {
-        if plan {
-            format!("{}{base}", self.plan_prompt_prefix)
-        } else {
-            base.to_string()
+/// orca's `terminal split --direction` vocabulary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SplitDirection {
+    /// `horizontal`.
+    Horizontal,
+    /// `vertical`.
+    Vertical,
+}
+
+impl SplitDirection {
+    /// The value `--direction` takes.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SplitDirection::Horizontal => "horizontal",
+            SplitDirection::Vertical => "vertical",
         }
     }
+}
+
+/// `[orca.identity]`: what the dispatch tells orca about the task.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IdentityConfig {
+    /// Set the worktree's orca display name to `{repo}: {title}` (herdr's
+    /// `[herdr.identity]`, #417). Best-effort: a refusal never fails the
+    /// dispatch.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+impl Default for IdentityConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
+/// Keys the pre-`tool_launch` plugin accepted, with what replaced them.
+///
+/// [`OrcaConfig`] is `deny_unknown_fields`, so without these a config that
+/// worked yesterday would fail with serde's `unknown field 'agent'`, which does
+/// not say the key was *removed* or what to do instead (same device as the
+/// herdr plugin's #411 list).
+const REMOVED_KEYS: &[(&str, &str)] = &[
+    (
+        "agent",
+        "the agent is the Orchestrator's resolved `tool_launch` now; choose it with \
+         `[tools]` / `default_tool` in the orchestrator config",
+    ),
+    (
+        "setup",
+        "the plugin no longer creates worktrees — it opens a terminal in the one \
+         totsuka already prepared, so orca's setup script never runs",
+    ),
+    (
+        "repo_selector",
+        "the plugin no longer creates worktrees; the terminal is opened in the dispatch \
+         worktree by path, and orca finds it once the repository is registered \
+         (`orca repo add --path <repository>`)",
+    ),
+    (
+        "plan_prompt_prefix",
+        "plan mode is part of the resolved `tool_launch` (`[tools.<name>].plan_args`), \
+         not text typed ahead of the prompt",
+    ),
+    (
+        "poll_interval_ms",
+        "completion is reported by the agent's hooks; the state stream only blocks on \
+         `orca terminal wait --for exit` and no longer polls",
+    ),
+];
+
+/// The removed keys present in a raw plugin-config object, rendered as
+/// operator-facing lines. Empty when the config is clean — including when it is
+/// not an object at all, which is a different error and reported by serde.
+pub fn removed_keys_in(config: &serde_json::Value) -> Vec<String> {
+    let Some(map) = config.as_object() else {
+        return Vec::new();
+    };
+    REMOVED_KEYS
+        .iter()
+        .filter(|(key, _)| map.contains_key(*key))
+        .map(|(key, advice)| {
+            format!("`{key}` was removed from `[orca]`: {advice}. Delete the key.")
+        })
+        .collect()
 }
 
 fn default_orca_bin() -> String {
     "orca".to_string()
 }
-fn default_agent() -> String {
-    "claude".to_string()
+fn default_request_timeout() -> u64 {
+    30
 }
-fn default_setup() -> String {
-    "inherit".to_string()
-}
-fn default_plan_prefix() -> String {
-    DEFAULTS.prompts.plan_prefix.clone()
-}
-fn default_poll_interval() -> u64 {
-    2000
-}
-
-/// orca's constraints on a `worktree create --name`
-/// ([ADR-0071](../../../ai-docs/decisions/adr-0071-task-identifier-naming.md)).
-///
-/// **Every value here is a guess that orca has never contradicted.** Unlike
-/// herdr — whose 32-character rule is at least reported by `invalid_agent_name`
-/// — orca documents no alphabet, no length and no uniqueness rule for `--name`,
-/// and this plugin has no error path for a name it rejects (a refusal would
-/// surface as a generic `CliFailed`). So the constraints are kept
-/// deliberately narrow: alphanumerics plus `-`/`_`, which no tool in this
-/// family has objected to.
-///
-/// `max_len` is `None` because nothing suggests a limit; if one turns up, it
-/// is one line here rather than a rewrite. [`Case::Lower`] is not orca's
-/// requirement — it is what keeps the core shared with herdr, whose alphabet
-/// is lower-case only: a handle like `Web-App-42` (0.7.2) would otherwise
-/// read one way in the agent's name and another here, and matching is the
-/// whole point of sharing the core (ADR-0071 D-1).
-///
-/// The name is **write-only**: orca returns a worktree id from `create`, and
-/// every later call addresses `id:<session_id>`. Nothing reads it back.
-pub struct WorktreeName;
-
-impl IdentifierPolicy for WorktreeName {
-    fn prefix(&self) -> &str {
-        "totsuka-"
-    }
-
-    fn max_len(&self) -> Option<usize> {
-        None
-    }
-
-    fn case(&self) -> Case {
-        Case::Lower
-    }
-
-    fn extra_allowed(&self) -> &[char] {
-        &['-', '_']
-    }
+fn default_true() -> bool {
+    true
 }
 
 #[cfg(test)]
@@ -162,10 +158,30 @@ mod tests {
     fn minimal_config_applies_defaults() {
         let cfg = parse(serde_json::json!({}));
         assert_eq!(cfg.orca_bin, "orca");
-        assert_eq!(cfg.agent, "claude");
-        assert_eq!(cfg.setup, "inherit");
-        assert_eq!(cfg.poll_interval_ms, 2000);
-        assert!(cfg.repo_selector.is_none());
+        assert_eq!(cfg.request_timeout_secs, 30);
+        assert!(!cfg.layout.shell);
+        assert!(cfg.layout.direction.is_none());
+        assert!(cfg.identity.enabled);
+    }
+
+    #[test]
+    fn nested_tables_parse() {
+        let cfg = parse(serde_json::json!({
+            "layout": { "shell": true, "direction": "vertical" },
+            "identity": { "enabled": false },
+        }));
+        assert!(cfg.layout.shell);
+        assert_eq!(cfg.layout.direction, Some(SplitDirection::Vertical));
+        assert!(!cfg.identity.enabled);
+    }
+
+    #[test]
+    fn a_misspelt_direction_is_rejected() {
+        let err = serde_json::from_value::<OrcaConfig>(
+            serde_json::json!({ "layout": { "direction": "vertial" } }),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("vertial"), "got {err}");
     }
 
     #[test]
@@ -176,56 +192,14 @@ mod tests {
     }
 
     #[test]
-    fn repo_selector_falls_back_to_worktree_path() {
-        let cfg = parse(serde_json::json!({}));
-        assert_eq!(cfg.repo_selector_for("/wt/x"), "path:/wt/x");
-        let explicit = parse(serde_json::json!({ "repo_selector": "id:abc" }));
-        assert_eq!(explicit.repo_selector_for("/wt/x"), "id:abc");
-    }
-
-    #[test]
-    fn embedded_defaults_parse() {
-        // Force the LazyLock so a malformed `defaults.toml` fails here rather
-        // than on the first dispatch in a real pane.
-        assert!(!DEFAULTS.prompts.plan_prefix.is_empty());
-    }
-
-    #[test]
-    fn default_plan_prefix_matches_todays_literal() {
-        // Was pinned against the literal as it stood in Rust before #317
-        // moved it into `defaults.toml`. That literal was Japanese and has
-        // been rewritten into English, so there is no pre-#317 text left to
-        // transcribe: the expectation below is now derived from `DEFAULTS`
-        // and therefore only catches an *unintended* edit, not a wrong one.
-        // The `ends_with("\n\n")` assertion under it is the one that still
-        // holds on merit — that shape is what `compose_prompt` depends on.
-        assert_eq!(
-            default_plan_prefix(),
-            "[Design only / plan mode] Present a design and a plan first. \
-             Do not implement or modify code.\n\n"
-        );
-        // The trailing blank line separates the directive from the task prompt
-        // that `compose_prompt` concatenates onto it.
-        assert!(default_plan_prefix().ends_with("\n\n"));
-    }
-
-    #[test]
-    fn plan_prompt_is_prefixed_only_in_plan_mode() {
-        let cfg = parse(serde_json::json!({ "plan_prompt_prefix": "PLAN: " }));
-        assert_eq!(cfg.compose_prompt("do it", false), "do it");
-        assert_eq!(cfg.compose_prompt("do it", true), "PLAN: do it");
-    }
-
-    /// What stays this plugin's own after the procedure moved to
-    /// [`plugin_protocol::identifier`]: the constraints it declares. There is
-    /// no published orca rule to check them against (see [`WorktreeName`]), so
-    /// what is pinned is the narrowness itself — widening this is a decision,
-    /// not a detail.
-    #[test]
-    fn the_declared_policy_stays_narrow() {
-        assert_eq!(WorktreeName.prefix(), "totsuka-");
-        assert_eq!(WorktreeName.max_len(), None);
-        assert_eq!(WorktreeName.case(), Case::Lower);
-        assert_eq!(WorktreeName.extra_allowed(), &['-', '_']);
+    fn removed_keys_are_named_with_their_replacement() {
+        for (key, _) in REMOVED_KEYS {
+            let found = removed_keys_in(&serde_json::json!({ *key: "whatever" }));
+            assert_eq!(found.len(), 1, "{key}");
+            assert!(found[0].contains(key), "{}", found[0]);
+            assert!(found[0].contains("Delete the key"), "{}", found[0]);
+        }
+        assert!(removed_keys_in(&serde_json::json!({ "orca_bin": "orca" })).is_empty());
+        assert!(removed_keys_in(&serde_json::json!("not an object")).is_empty());
     }
 }

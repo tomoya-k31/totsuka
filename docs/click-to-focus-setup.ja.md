@@ -1,7 +1,7 @@
 > 🌐 [English](click-to-focus-setup.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/click-to-focus-setup.md sha256:249a4afe70b35be017281ed4507c45195d52c5273a9a90e70659f153425bb99d -->
+<!-- generated-from: ai-docs/operations/click-to-focus-setup.md sha256:6605ee8853b108567de3b15c2264ae6fc07ac326fab77a9e72b1ae6fd328e74f -->
 
 # 通知をクリックしてタスクの pane を開く
 

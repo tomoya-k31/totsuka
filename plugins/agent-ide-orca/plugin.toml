@@ -1,18 +1,21 @@
 name = "orca"
 kind = "agent_ide"
 version = "0.1.0"
-# This used to stay at `>=0.1.0` while herdr sat at `>=0.2.3`: orca drives the
-# `orca` CLI itself and never reads `TaskDispatchParams.tool_launch`, so #411's
-# floor would have excluded orchestrators it works with perfectly well. #554 is
-# a different case — 0.6.0 renamed `InitializeParams.triggers` to `workflows`,
-# and every plugin of every kind reads `initialize`. The floors match now
-# because the dependency does, not because agent_ide plugins move together.
+# The floor is `tool_launch` (0.2.3, #196) and every capability below
+# (`hook_completion` is 0.5.0) many times over; what actually sets it is #554 —
+# 0.6.0 renamed `InitializeParams.triggers` to `workflows`, and every plugin of
+# every kind reads `initialize`. The plugin used to drive its own `--agent`
+# launch and never read `tool_launch`; it depends on it now, and like herdr it
+# fails a dispatch that arrives without one rather than improvising an argv.
 # The upper bound moved to `<0.8` for #626 (`WorkflowInfo.projects`), which
-# an agent plugin never reads — the floor is untouched.
+# an agent plugin never reads.
 protocol_version = ">=0.6.0, <0.8"
 
-# orca has no structured plan API and no pane-control surface, so only the
-# capabilities it can honestly fulfil are declared (F-33). pane_control is
-# intentionally omitted.
+# The herdr plugin's set (F-33): an orca terminal is the pane, the agent is
+# launched from `tool_launch` with its hook settings, and the screen is
+# readable. Must mirror `capabilities_result` in src/server.rs.
 [capabilities]
+pane_control = true
 state_stream = true
+hook_completion = true
+diagnostics_snapshot = true

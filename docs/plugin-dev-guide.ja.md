@@ -1,7 +1,7 @@
 > 🌐 [English](plugin-dev-guide.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:c691e4d30e2bd022618c23b4ede9f6fa95d7ede0aefb566ac50b1c91fa2a0d77 -->
+<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:7fcc33dc9ba9703c33f277bdcaefc03174494f08a478834cd0f81d5561abace1 -->
 
 # プラグイン開発ガイド
 
@@ -62,7 +62,7 @@ Orchestrator は起動前に `protocol_version` の互換性を検査し、宣�
 
 **揃わない例のほうが規則をよく表す。** 0.4.0 で herdr プラグインだけを `>=0.2.3` へ上げたのは、ツール起動に必要なフィールドが入ったのが 0.2.3 で、コマンドラインを自前で組み立てるフォールバックをもう持っていないからである。下限で弾いておくことが、削除したフォールバックを「非推奨」ではなく**到達不能**にしている。
 
-同じ kind の orca プラグインは `>=0.1.0` のままだった。`orca` CLI を駆動していてそのフィールドを一度も読まないので、下限を上げると**問題なく動く Orchestrator を弾く**ことになる。
+同じ kind の orca プラグインは `>=0.1.0` のままだった。`orca` CLI を駆動していてそのフィールドを一度も読まないので、下限を上げると**問題なく動く Orchestrator を弾く**ことになる。（その orca プラグインも後にこのフィールドを起動するよう作り直され、今は herdr と同じ理由でこれに依存している。下限は 0.6.0 で、0.2.3 を含んでいる。）
 
 ## メソッド
 

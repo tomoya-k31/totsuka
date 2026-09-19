@@ -442,13 +442,21 @@
 # [orca] — agent-ide-orca
 # ============================================================================
 
+# The agent runs in an orca terminal opened in totsuka's own worktree, launched
+# from [tools] like herdr's. Register each repository with orca first:
+#   orca repo add --path /path/to/repo
+
 # [orca]
 # orca_bin = "orca"                         # the orca executable (PATH name or absolute path)
-# agent = "claude"                          # the agent orca launches in the worktree terminal
-# setup = "run"                             # `worktree create --setup`: "run" / "skip" / "inherit"
-# repo_selector = "path:/abs/path"          # explicit `--repo`; unset uses the dispatch worktree path
-# plan_prompt_prefix = "Plan only. "        # prepended in plan mode — orca has no structured plan API
-# poll_interval_ms = 500                    # state-loop poll when there is no handle to block on
+# request_timeout_secs = 30                 # per `orca` call; `terminal wait` gets its own timeout on top
+
+# [orca.layout]
+# shell = false                             # split a companion shell off the agent's terminal
+# direction = "vertical"                    # `terminal split --direction`: "horizontal" / "vertical".
+#                                           #   Unset leaves orca's default
+
+# [orca.identity]
+# enabled = true                            # name the worktree "{repo}: {title}" in orca's sidebar
 
 # totsuka:section plugin=macos label=macOS notifications
 # ============================================================================

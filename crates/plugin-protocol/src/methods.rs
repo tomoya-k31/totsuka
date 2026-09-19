@@ -652,7 +652,7 @@ pub struct TaskDispatchParams {
     /// **Sent on every dispatch**, unlike [`job_id`](Self::job_id) — which is
     /// minted only for agents declaring `hook_completion` under a workflow
     /// with hook launch settings, and is therefore permanently absent for
-    /// agents like orca. That difference is the whole reason this field is not
+    /// agents that declare none (the mock; orca, until ADR-0082). That difference is the whole reason this field is not
     /// just parsed out of `job_id`.
     ///
     /// `None` when the Orchestrator predates 0.7.1. A plugin must degrade —
@@ -678,8 +678,9 @@ pub struct TaskDispatchParams {
     /// assembling an argv of its own: there is no second channel left to fall
     /// back to, and an improvised argv would omit `--settings`. That is not a
     /// blanket rule for `agent_ide` — a plugin that never reads `tool_launch`
-    /// (orca drives the `orca` CLI itself) keeps a wide lower bound, because
-    /// raising it would only refuse orchestrators it works with.
+    /// (as orca did before ADR-0082, driving the `orca` CLI itself) keeps a wide
+    /// lower bound, because raising it would only refuse orchestrators it works
+    /// with.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_launch: Option<ToolLaunchSpec>,
     /// 0.4.1 (#417): the repository this task was routed to, named as the
