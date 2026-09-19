@@ -1,0 +1,1 @@
+* **Update**: [orca CLI 制御サーフェス](/references/orca-cli-control.md) の実測節に、`terminal wait --for exit` が生きている端末に対して間欠的に `terminal_handle_stale` を返すことを足した（orca 版の実機 e2e で 3 回観測）。[live-e2e-orca スキル](/components/live-e2e-orca.md) の O4 を実測に合わせた — CLI の `tt task cancel` は端末を閉じず、次の sweep が `session/release` で解放する

@@ -23,3 +23,4 @@ stdout に出て終了コード 1。**stderr だけ・終了コードだけを�
 | プラグインが自分自身を呼んで固まる | `target/{profile}` を PATH に入れている（バイナリ名が外部の `orca` と同じ） | PATH から外すか、`[orca] orca_bin` に絶対パスを書く |
 | deadman の試験（`exit-agent`）でタスクが `failed` ではなく `done` になった | 以前の `exit-agent` は `/exit` を文字で送っていて、完了確認の質問（Approve completion）が出ていると回答として扱われた | 今の `exit-agent` は worktree を cwd に持つプロセスへ SIGTERM を送る。質問が出ていても関係なく落ちる |
 | implement のタスクが最後に `waiting_input` で止まる | **正常。** profile が人間の完了確認を求めるとき、Claude は `AskUserQuestion` で「Approve completion」を聞く（ADR-0050）。herdr でも同じ | 人間が Orca のタブで答える。無人で回したいなら profile の confirm 方針を見直す |
+| ログに `orca said the agent's terminal ended, but terminal show has it connected; waiting again … terminal_handle_stale` | **正常（orca の間欠的な誤報を吸収した記録）。** 生きている端末に対して `terminal wait --for exit` が `terminal_handle_stale` を返すことがある（実測 2 回: dispatch の 5 秒後・35 秒後） | 何もしなくてよい。これが出ずにタスクが `failed` になるなら、プラグインが古い（`preflight` のプラグイン行） |

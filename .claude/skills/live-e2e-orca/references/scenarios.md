@@ -87,14 +87,20 @@ source .env && tt task show "$id"
 
 ```bash
 source .env && tt task cancel "$id"
+sleep 90   # 次の sweep（既定 60s 周期）を待つ
 bash .claude/skills/live-e2e-orca/scripts/orca.sh sessions
+source .env && tt logs --task "$id" | tail -5
 ```
 
 | 検証点 | 期待 |
 |---|---|
-| タブが閉じる | `sessions` にそのタスクの行が無い |
-| **worktree は orca から消されない** | `$E2E_HOME/wt/…` が残る（消すのは Orchestrator の cleanup 方針）。`orca worktree rm` は呼ばれない |
-| 2 回目の cancel | `tt task cancel` は**エラーを返すのが正常**（`task N is already cancelled → nothing to cancel`）。終端状態のタスクには打てない。プラグイン側の冪等性（消えた端末への close を成功扱い）は結合テストが持つ |
+| CLI の cancel | タスクが `cancelled` になる。**端末はその場では閉じない**（`the pane is not closed here — totsuka doctor lists it`。herdr でも同じ） |
+| sweep による解放 | 次の sweep でブランチを記録 → `pane released`（`session/release`）→ `worktree cleanup outcome="Removed"`。`sessions` からそのタスクが消える |
+| **worktree は orca から消されない** | 消すのは Orchestrator の cleanup（`orca worktree rm` は呼ばれない） |
+| 2 回目の cancel | `tt task cancel` は**エラーを返すのが正常**（`task N is already cancelled → nothing to cancel`） |
+| `tt focus`（解放後） | `pane not focused — the pane is already closed`。解放済みなので正しい |
+
+実測（2026-09-19, task 13）: cancel 02:57:21 → sweep の解放 02:58:06。
 
 ## O5. Slack / メンション経路と会話の継続 🙋👀
 
