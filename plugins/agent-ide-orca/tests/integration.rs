@@ -326,10 +326,12 @@ async fn dispatch_launches_tool_launch_in_the_tasks_worktree_and_submits_the_pro
 
     // Ownership lives on the worktree, not the tab: the agent retitles the
     // tab as soon as it works.
-    let mark = &cli.calls_to("worktree set")[0];
-    assert_eq!(flag_value(mark, "--worktree"), Some("path:/wt/agent-1"));
-    assert_eq!(flag_value(mark, "--comment"), Some("totsuka T-1"));
-    assert_eq!(flag_value(mark, "--display-name"), Some("web: Do it"));
+    let sets = cli.calls_to("worktree set");
+    assert_eq!(flag_value(&sets[0], "--worktree"), Some("path:/wt/agent-1"));
+    assert_eq!(flag_value(&sets[0], "--comment"), Some("totsuka T-1"));
+    // A separate call, so a refused display name cannot take the marker down.
+    assert_eq!(flag_value(&sets[0], "--display-name"), None);
+    assert_eq!(flag_value(&sets[1], "--display-name"), Some("web: Do it"));
 
     let wait = &cli.calls_to("terminal wait")[0];
     assert_eq!(flag_value(wait, "--for"), Some("tui-idle"));
@@ -370,9 +372,9 @@ async fn layout_shell_splits_a_companion_off_the_agent() {
     assert_eq!(flag_value(split, "--terminal"), Some(HANDLE));
     assert_eq!(flag_value(split, "--direction"), Some("vertical"));
     // With identity off the worktree is still marked as ours, but not renamed.
-    let mark = &cli.calls_to("worktree set")[0];
-    assert_eq!(flag_value(mark, "--comment"), Some("totsuka T-1"));
-    assert_eq!(flag_value(mark, "--display-name"), None, "identity is off");
+    let sets = cli.calls_to("worktree set");
+    assert_eq!(sets.len(), 1, "identity is off: {sets:?}");
+    assert_eq!(flag_value(&sets[0], "--comment"), Some("totsuka T-1"));
 }
 
 #[tokio::test]

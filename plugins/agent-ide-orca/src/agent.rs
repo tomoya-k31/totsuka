@@ -396,22 +396,44 @@ impl<C: OrcaCli> OrcaAgent<C> {
     /// Best-effort, like herdr's identity report: a worktree without the marker
     /// costs `session/list` (and so `doctor`'s orphan detection) this one task;
     /// failing the dispatch would cost far more.
+    ///
+    /// Two calls, not one: a display name orca refuses must not take the
+    /// ownership marker down with it.
     async fn mark_owned(&self, params: &TaskDispatchParams) {
-        let mut argv = args([
-            "worktree",
-            "set",
-            "--worktree",
-            &format!("path:{}", params.worktree_path),
-            "--comment",
-            &owned_label(params),
-        ]);
-        if self.config.identity.enabled {
-            let name = display_name(params.repo_name.as_deref(), &params.task.title);
-            argv.extend(args(["--display-name", &name]));
-        }
-        argv.push("--json".into());
-        if let Err(e) = self.cli.run(argv).await {
+        let selector = format!("path:{}", params.worktree_path);
+        if let Err(e) = self
+            .cli
+            .run(args([
+                "worktree",
+                "set",
+                "--worktree",
+                &selector,
+                "--comment",
+                &owned_label(params),
+                "--json",
+            ]))
+            .await
+        {
             tracing::warn!(error = %e, "could not mark the task's worktree; session/list will not see it");
+        }
+        if !self.config.identity.enabled {
+            return;
+        }
+        let name = display_name(params.repo_name.as_deref(), &params.task.title);
+        if let Err(e) = self
+            .cli
+            .run(args([
+                "worktree",
+                "set",
+                "--worktree",
+                &selector,
+                "--display-name",
+                &name,
+                "--json",
+            ]))
+            .await
+        {
+            tracing::warn!(error = %e, "could not set the worktree's orca display name");
         }
     }
 
