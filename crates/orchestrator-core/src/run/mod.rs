@@ -304,14 +304,14 @@ enum HookReceiver {
 }
 
 /// `L: 'static` because the liveness probe (F-111) runs on a spawned task
-/// holding an `Arc` of the router, so the loop never blocks on a gateway
+/// holding an `Arc` of the classifier, so the loop never blocks on a gateway
 /// that takes its whole timeout to not answer.
 pub struct Engine<G: GitRunner, L: RepoClassifier + 'static> {
     db: StateDb,
     settings: EngineSettings,
     plugins: PluginSet,
     worktrees: WorktreeManager<G>,
-    /// The LLM router, wrapped so every call and probe updates
+    /// The repository classifier, wrapped so every call and probe updates
     /// [`LlmHealth`] (F-110 / F-111). Shared, because the probe runs on a
     /// spawned task.
     llm: Option<Arc<crate::adapters::llm::MonitoredClassifier<L>>>,
@@ -859,7 +859,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// both). An operator resetting the clock trips it too, which is
     /// harmless — one extra probe and one fresh connection pool.
     ///
-    /// Today the only consumer is the LLM router (fresh pool, immediate
+    /// Today the only consumer is the repository classifier (fresh pool, immediate
     /// probe). Plugins reconnect their own sockets and are not told; a
     /// protocol notification for that is the next step if one is ever needed.
     fn detect_resume(&mut self) {
@@ -895,7 +895,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// [`EngineSettings::llm_probe_interval_while_unreachable`] once the
     /// gateway is latched down, so recovery is noticed within a minute. No
     /// contact at all (startup, or a resume that forgot it) is due at once.
-    /// At most one probe is in flight; the router records the outcome, so
+    /// At most one probe is in flight; the classifier wrapper records the outcome, so
     /// nothing here awaits it.
     fn probe_llm_if_due(&mut self) {
         let (Some(llm), Some(health)) = (&self.llm, &self.llm_health) else {
@@ -917,7 +917,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         }
         let llm = Arc::clone(llm);
         self.llm_probe = Some(tokio::spawn(async move {
-            // The outcome is recorded by the router; the `Result` itself has
+            // The outcome is recorded by the classifier wrapper; the `Result` itself has
             // already been logged there on every state change.
             let _ = llm.probe().await;
         }));
@@ -1125,7 +1125,7 @@ pub(crate) async fn test_engine(
 }
 
 #[cfg(test)]
-/// [`test_engine`] with an LLM router and a clock of the caller's choosing —
+/// [`test_engine`] with a classifier and a clock of the caller's choosing —
 /// the two seams the liveness tests (F-111) drive.
 pub(crate) async fn test_engine_with<L: RepoClassifier + 'static>(
     interval: Duration,
@@ -1368,7 +1368,7 @@ mod liveness_tests {
     use super::*;
     use crate::adapters::ManualClock;
 
-    /// A router whose probes are scripted and counted. It is never asked to
+    /// A classifier whose probes are scripted and counted. It is never asked to
     /// classify anything — these tests have no tasks.
     struct ProbeScript {
         answers: std::sync::Mutex<Vec<Result<(), ClassifyError>>>,

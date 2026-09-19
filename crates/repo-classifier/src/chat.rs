@@ -217,7 +217,8 @@ impl<T: HttpTransport> RepoClassifier for ChatClassifier<T> {
     /// No schema: providers differ in what structured-output shapes they
     /// accept, and a rejected schema (400) would masquerade as a credentials
     /// problem. No retries. `max_tokens: 1`, so a healthy provider bills a
-    /// rounding error. A 2xx is the whole answer; the body is not read.
+    /// rounding error. A 2xx is the whole answer: a body that is unreadable or
+    /// not JSON still means the key was accepted.
     async fn probe(&self) -> Result<(), ClassifyError> {
         let body = json!({
             "model": self.settings.model,
@@ -234,7 +235,7 @@ impl<T: HttpTransport> RepoClassifier for ChatClassifier<T> {
             })
             .await;
         match outcome {
-            // A 2xx with an unreadable body still accepted the key.
+            // `InvalidResponse` only ever follows a 2xx: the key was accepted.
             Ok(_) | Err(ClassifyError::InvalidResponse(_)) => Ok(()),
             Err(e) => Err(e),
         }

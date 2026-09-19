@@ -214,7 +214,7 @@ kind = "notifier"
 [llm]
 base_url = "https://openrouter.ai/api/v1"      # 必須
 model = "anthropic/claude-haiku-4-5"           # 必須
-max_tokens = 256                               # 分類呼び出しの最大トークン（省略時 256）
+max_tokens = 256                               # 分類呼び出しの最大トークン（省略時は送らない）
 timeout_secs = 30                              # リクエストタイムアウト（省略時 30）
 api_key_ref = "op://Dev/Openrouter/api_key"    # シークレット参照（後述）
 

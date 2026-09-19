@@ -50,10 +50,11 @@ pub struct HttpRequest<'a> {
 
 /// Sends one [`HttpRequest`] and returns the parsed 2xx response body.
 ///
-/// Failures map onto [`ClassifyError`]: `Transport`/`Timeout` when nothing
-/// usable came back, `Status` for a non-2xx ([`ClassifyError::status`]),
-/// `InvalidResponse` for a 2xx whose body is not JSON. No retries here —
-/// that is [`RetryPolicy`](crate::RetryPolicy)'s job.
+/// Failures map onto [`ClassifyError`]: `Transport`/`Timeout` when no
+/// response arrived, `Status` for a non-2xx ([`ClassifyError::status`]) even
+/// if its body could not be read, `InvalidResponse` for a 2xx whose body is
+/// unreadable or not JSON. No retries here — that is
+/// [`RetryPolicy`](crate::RetryPolicy)'s job.
 pub trait HttpTransport: Send + Sync {
     /// POST and parse.
     fn post_json(
@@ -132,14 +133,24 @@ impl HttpTransport for ReqwestTransport {
                     ClassifyError::Transport(scrub_urls(&e.to_string()))
                 }
             })?;
+        // The status line has arrived, so the far side answered. Everything
+        // below keeps that fact even when the body cannot be read: a 401 whose
+        // body is cut off is still a rejected key (not an outage), and a 2xx
+        // with an unreadable body still accepted it — which is all a probe asks.
         let status = response.status();
-        let text = response
-            .text()
-            .await
-            .map_err(|e| ClassifyError::Transport(scrub_urls(&e.to_string())))?;
+        let text = response.text().await;
         if !status.is_success() {
-            return Err(ClassifyError::status(status.as_u16(), &text));
+            return Err(ClassifyError::status(
+                status.as_u16(),
+                text.as_deref().unwrap_or_default(),
+            ));
         }
+        let text = text.map_err(|e| {
+            ClassifyError::InvalidResponse(format!(
+                "the response body could not be read: {}",
+                scrub_urls(&e.to_string())
+            ))
+        })?;
         serde_json::from_str(&text).map_err(|e| ClassifyError::InvalidResponse(e.to_string()))
     }
 
@@ -214,6 +225,58 @@ mod tests {
         let key = ApiKey::new("sk-live-secret");
         assert!(!format!("{key:?}").contains("sk-live"));
         assert_eq!(key.expose(), "sk-live-secret");
+    }
+
+    /// Serve one canned HTTP response whose body is cut short: the headers
+    /// promise 1000 bytes, 5 arrive, then the connection closes.
+    fn truncated_server(status_line: &str) -> String {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/v1", listener.local_addr().unwrap());
+        let response = format!(
+            "{status_line}\r\nContent-Type: application/json\r\nContent-Length: 1000\r\n\r\nshort"
+        );
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = stream.read(&mut buf);
+            let _ = stream.write_all(response.as_bytes());
+        });
+        url
+    }
+
+    async fn post(url: &str) -> Result<Value, ClassifyError> {
+        let key = ApiKey::default();
+        let body = serde_json::json!({});
+        ReqwestTransport::new()
+            .post_json(HttpRequest {
+                url,
+                api_key: &key,
+                body: &body,
+                timeout: Duration::from_secs(5),
+            })
+            .await
+    }
+
+    /// The status line is the answer; a body that cannot be read must not
+    /// turn a rejected key into an outage (`doctor --online`, F-111).
+    #[tokio::test]
+    async fn a_rejection_with_an_unreadable_body_is_still_an_auth_failure() {
+        let err = post(&truncated_server("HTTP/1.1 401 Unauthorized"))
+            .await
+            .unwrap_err();
+        assert!(err.is_auth_failure(), "{err:?}");
+    }
+
+    /// …and a 2xx with an unreadable body is an answer we cannot use, not a
+    /// gateway that is down — which a probe reads as "the key was accepted".
+    #[tokio::test]
+    async fn a_success_with_an_unreadable_body_is_an_unusable_answer() {
+        let err = post(&truncated_server("HTTP/1.1 200 OK"))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ClassifyError::InvalidResponse(_)), "{err:?}");
+        assert!(!err.is_unreachable(), "{err:?}");
     }
 
     /// The transport survives a reset mid-life: the next request simply uses
