@@ -131,7 +131,7 @@ impl Degradation {
                 .to_string(),
             Degradation::LlmUnreachable { reason } => format!(
                 "the LLM gateway is not answering ({reason}) → tasks that need repository \
-                 classification fail until it is back; check the network and `[llm].base_url`, \
+                 classification fail until it is back; check the network and `[llm].base_url` / `[llm].endpoint`, \
                  or run `totsuka doctor --online`"
             ),
             Degradation::Unknown => {

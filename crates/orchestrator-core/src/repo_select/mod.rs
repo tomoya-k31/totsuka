@@ -18,7 +18,7 @@ use sha2::{Digest, Sha256};
 
 use plugin_protocol::Task;
 
-use crate::ports::llm::{Candidate, ClassifyRequest, RepoClassifier};
+use crate::ports::llm::{Candidate, Classification, ClassifyRequest, RepoClassifier};
 
 /// Tuning for the selection pipeline.
 #[derive(Debug, Clone)]
@@ -100,18 +100,23 @@ pub async fn select_repo<C: RepoClassifier>(
     let mut last_error = String::new();
     for _ in 0..2 {
         match classifier.classify(&request).await {
-            Ok(verdict) if verdict.confidence < config.confidence_threshold => {
+            Ok(Classification::Repo {
+                repo,
+                confidence,
+                reason,
+            }) if confidence < config.confidence_threshold => {
                 return RepoDecision::Pending {
-                    reason: format!(
-                        "low confidence {:.2} for `{}`: {}",
-                        verdict.confidence, verdict.repo, verdict.reason
-                    ),
+                    reason: format!("low confidence {confidence:.2} for `{repo}`: {reason}"),
                 };
             }
-            Ok(verdict) => {
-                return RepoDecision::Selected {
-                    repo: verdict.repo,
-                    reason: verdict.reason,
+            Ok(Classification::Repo { repo, reason, .. }) => {
+                return RepoDecision::Selected { repo, reason };
+            }
+            // The classifier says no candidate fits: a human decides, and
+            // asking again would only repeat the verdict.
+            Ok(Classification::NoneFits { reason }) => {
+                return RepoDecision::Pending {
+                    reason: format!("no configured repository fits: {reason}"),
                 };
             }
             // A bad answer (unreadable, schema deviation, not a candidate) is
@@ -208,7 +213,7 @@ fn head_lines(text: &str, lines: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ports::llm::{Classification, ClassifyError};
+    use crate::ports::llm::ClassifyError;
     use std::sync::Mutex;
 
     fn task(repo_hint: Option<&str>) -> Task {
@@ -245,7 +250,7 @@ mod tests {
     }
 
     fn verdict(repo: &str, confidence: f64, reason: &str) -> Result<Classification, ClassifyError> {
-        Ok(Classification {
+        Ok(Classification::Repo {
             repo: repo.into(),
             confidence,
             reason: reason.into(),
@@ -373,6 +378,27 @@ mod tests {
             matches!(decision, RepoDecision::Pending { .. }),
             "got {decision:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn none_fitting_is_pending_without_asking_again() {
+        let classifier = Canned::new(vec![Ok(Classification::NoneFits {
+            reason: "jev: none p=0.98".into(),
+        })]);
+        let decision = select_repo(
+            &task(None),
+            &candidates(),
+            &classifier,
+            &SelectConfig::default(),
+        )
+        .await;
+        assert_eq!(
+            decision,
+            RepoDecision::Pending {
+                reason: "no configured repository fits: jev: none p=0.98".into()
+            }
+        );
+        assert_eq!(classifier.requests.lock().unwrap().len(), 1);
     }
 
     #[tokio::test]

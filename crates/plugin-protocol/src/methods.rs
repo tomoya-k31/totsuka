@@ -262,12 +262,22 @@ pub struct ProjectInfo {
     pub options: serde_json::Map<String, serde_json::Value>,
 }
 
-/// The Orchestrator's `[llm]` (AI Gateway) settings, as supplied to
-/// task_source plugins in [`InitializeParams::llm`] (#119).
+/// The Orchestrator's `[llm]` (repository classifier) settings, as supplied
+/// to task_source plugins in [`InitializeParams::llm`] (#119).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LlmInfo {
-    /// OpenAI-compatible base URL (`/chat/completions`).
+    /// Which kind of API (0.7.4, #723). Absent means `chat`, and `chat` is
+    /// omitted on the wire, so a chat `[llm]` serializes exactly as it did
+    /// before 0.7.4.
+    #[serde(default, skip_serializing_if = "LlmApiKind::is_chat")]
+    pub api: LlmApiKind,
+    /// OpenAI-compatible base URL (`/chat/completions`). **Empty unless `api`
+    /// is `chat`** — see the 0.7.4 note in [`crate::version`] for why empty
+    /// rather than absent.
     pub base_url: String,
+    /// The Decisions API URL when `api` is `decisions` (0.7.4, #723).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
     /// Model identifier.
     pub model: String,
     /// The API key, already resolved by the Orchestrator (F-65) — never a
@@ -275,6 +285,28 @@ pub struct LlmInfo {
     /// has no `api_key_ref` (e.g. a keyless local gateway).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
+}
+
+/// [`LlmInfo::api`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LlmApiKind {
+    /// An OpenAI-compatible `/chat/completions` gateway at `base_url`.
+    #[default]
+    Chat,
+    /// A decisions model (TypeSafe Jev) at `endpoint`.
+    Decisions,
+    /// An API added after this build. A plugin must treat the whole
+    /// `LlmInfo` as unusable rather than guess.
+    #[serde(other)]
+    Other,
+}
+
+impl LlmApiKind {
+    /// Whether this is the default, [`LlmApiKind::Chat`].
+    pub fn is_chat(&self) -> bool {
+        matches!(self, Self::Chat)
+    }
 }
 
 /// One repository this task_source files project items for, and where a new
@@ -1015,7 +1047,9 @@ mod tests {
                     .clone(),
             }],
             llm: Some(LlmInfo {
+                api: LlmApiKind::Chat,
                 base_url: "https://openrouter.ai/api/v1".into(),
+                endpoint: None,
                 model: "anthropic/claude-haiku-4.5".into(),
                 api_key: Some("sk-or-resolved".into()),
             }),
@@ -1376,5 +1410,38 @@ mod tests {
                 body: None,
             });
         }
+    }
+
+    /// `api` absent is `chat` (every pre-0.7.4 Orchestrator), an `api` this
+    /// build does not know is `Other` rather than a failed `initialize`, and a
+    /// decisions `LlmInfo` round-trips with its empty `base_url`.
+    #[test]
+    fn llm_info_api_is_backward_and_forward_compatible() {
+        let old: LlmInfo =
+            serde_json::from_str(r#"{"base_url":"https://gw/v1","model":"m"}"#).unwrap();
+        assert_eq!(old.api, LlmApiKind::Chat);
+        assert_eq!(old.endpoint, None);
+
+        let future: LlmInfo =
+            serde_json::from_str(r#"{"api":"telepathy","base_url":"","model":"m"}"#).unwrap();
+        assert_eq!(future.api, LlmApiKind::Other);
+
+        let decisions = LlmInfo {
+            api: LlmApiKind::Decisions,
+            base_url: String::new(),
+            endpoint: Some("https://openrouter.ai/api/alpha/decisions".into()),
+            model: "~typesafe/jev-latest".into(),
+            api_key: Some("sk".into()),
+        };
+        let wire = serde_json::to_value(&decisions).unwrap();
+        assert_eq!(wire["api"], "decisions");
+        // …while chat is left off the wire, as before 0.7.4.
+        let chat = LlmInfo {
+            api: LlmApiKind::Chat,
+            ..old.clone()
+        };
+        assert!(serde_json::to_value(&chat).unwrap().get("api").is_none());
+        assert_eq!(wire["base_url"], "");
+        assert_eq!(serde_json::from_value::<LlmInfo>(wire).unwrap(), decisions);
     }
 }

@@ -9,14 +9,15 @@ use std::time::Duration;
 
 use repo_classifier::{
     ApiKey, ChatClassifier, ChatSettings, Classification, ClassifyError, ClassifyRequest,
-    RepoClassifier, ReqwestTransport, scrub_urls,
+    ConfiguredClassifier, DecisionsClassifier, DecisionsSettings, RepoClassifier, ReqwestTransport,
+    scrub_urls,
 };
 
-use crate::config::LlmConfig;
+use crate::config::{LlmApi, LlmConfig};
 use crate::ports::SecretString;
 
 /// The classifier `[llm]` configures.
-pub type GatewayClassifier = ChatClassifier<ReqwestTransport>;
+pub type GatewayClassifier = ConfiguredClassifier<ReqwestTransport>;
 
 /// Build the classifier for `[llm]` with its resolved API key (F-65).
 ///
@@ -24,12 +25,37 @@ pub type GatewayClassifier = ChatClassifier<ReqwestTransport>;
 /// liveness verdict and the operator's can never disagree about what they are
 /// asking.
 pub fn gateway_classifier(llm: &LlmConfig, api_key: SecretString) -> GatewayClassifier {
-    let mut settings = ChatSettings::new(&llm.base_url, &llm.model, ApiKey::new(api_key.expose()));
-    if let Some(secs) = llm.timeout_secs {
-        settings.timeout = Duration::from_secs(secs);
+    let api_key = ApiKey::new(api_key.expose());
+    let timeout = llm.timeout_secs.map(Duration::from_secs);
+    match &llm.api {
+        LlmApi::Chat {
+            base_url,
+            max_tokens,
+        } => {
+            let mut settings = ChatSettings::new(base_url, &llm.model, api_key);
+            if let Some(timeout) = timeout {
+                settings.timeout = timeout;
+            }
+            settings.max_tokens = *max_tokens;
+            ConfiguredClassifier::Chat(ChatClassifier::new(ReqwestTransport::new(), settings))
+        }
+        LlmApi::Decisions { endpoint } => {
+            let mut settings = DecisionsSettings::new(
+                endpoint
+                    .as_deref()
+                    .unwrap_or(LlmApi::DEFAULT_DECISIONS_ENDPOINT),
+                &llm.model,
+                api_key,
+            );
+            if let Some(timeout) = timeout {
+                settings.timeout = timeout;
+            }
+            ConfiguredClassifier::Decisions(DecisionsClassifier::new(
+                ReqwestTransport::new(),
+                settings,
+            ))
+        }
     }
-    settings.max_tokens = llm.max_tokens;
-    ChatClassifier::new(ReqwestTransport::new(), settings)
 }
 
 /// What the engine currently knows about the LLM gateway (F-110 / F-111),
@@ -131,7 +157,7 @@ impl LlmHealth {
                     tracing::warn!(
                         reason = %reason,
                         "the LLM gateway is not answering → tasks that need classification \
-                         fail until it is back; check the network and `[llm].base_url`"
+                         fail until it is back; check the network and `[llm].base_url` (chat) or `[llm].endpoint` (decisions)"
                     );
                 }
                 *slot = Some(reason);
@@ -263,7 +289,7 @@ mod monitored_classifier_tests {
     }
 
     fn verdict() -> Classification {
-        Classification {
+        Classification::Repo {
             repo: "r".into(),
             confidence: 1.0,
             reason: String::new(),

@@ -375,6 +375,14 @@ mod tests {
         }
     }
 
+    /// `(repo, reason)` of a verdict that must name a candidate.
+    fn chosen(verdict: &Classification) -> (&str, &str) {
+        match verdict {
+            Classification::Repo { repo, reason, .. } => (repo, reason),
+            other => panic!("a chat verdict always names a candidate: {other:?}"),
+        }
+    }
+
     fn content(text: &str) -> Result<Value, ClassifyError> {
         Ok(json!({ "choices": [{ "message": { "content": text } }] }))
     }
@@ -428,8 +436,7 @@ mod tests {
             )],
         );
         let verdict = c.classify(&request(None)).await.unwrap();
-        assert_eq!(verdict.repo, "api");
-        assert_eq!(verdict.reason, "backend");
+        assert_eq!(chosen(&verdict), ("api", "backend"));
 
         let bodies = c.transport.bodies.lock().unwrap();
         let body = &bodies[0];
@@ -488,8 +495,7 @@ mod tests {
             )],
         );
         let verdict = c.classify(&request(Some(prose_prompt()))).await.unwrap();
-        assert_eq!(verdict.repo, "web");
-        assert_eq!(verdict.reason, "");
+        assert_eq!(chosen(&verdict), ("web", ""));
         let body = &c.transport.bodies.lock().unwrap()[0];
         assert!(body.get("response_format").is_none());
         assert_eq!(body["messages"][0]["content"], "sys");
@@ -506,7 +512,7 @@ mod tests {
             ],
         );
         let verdict = c.classify(&request(Some(prose_prompt()))).await.unwrap();
-        assert_eq!(verdict.repo, "api");
+        assert_eq!(chosen(&verdict).0, "api");
 
         let bodies = c.transport.bodies.lock().unwrap();
         assert_eq!(bodies.len(), 2);

@@ -673,27 +673,136 @@ pub struct ToolConfig {
     pub plan_args: Option<Vec<String>>,
 }
 
-/// AI Gateway (OpenAI-compatible) settings (F-12, F-13).
+/// Repository classifier settings — `[llm]` (F-11–F-14).
+///
+/// Read through `RawLlmConfig` so that a key that does not apply to the
+/// chosen [`LlmApi`] (`endpoint` on a chat gateway, `base_url` on a decisions
+/// model) is a load error rather than a silently ignored line.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(try_from = "RawLlmConfig")]
 pub struct LlmConfig {
-    /// OpenAI-compatible base URL (`/chat/completions`).
-    pub base_url: String,
-    /// Model name (cheap model assumed).
+    /// Which kind of API, with its API-specific settings.
+    pub api: LlmApi,
+    /// Model name (cheap model assumed for chat; `~typesafe/jev-latest` for
+    /// decisions).
     pub model: String,
-    /// Max tokens for the classification call.
-    #[serde(default)]
-    pub max_tokens: Option<u32>,
     /// Request timeout in seconds.
-    #[serde(default)]
     pub timeout_secs: Option<u64>,
     /// Secret reference to the API key (`${ENV}` or `keychain:`).
-    #[serde(default)]
     pub api_key_ref: Option<String>,
     /// Minimum classifier confidence to select a repository without asking
     /// (F-14), `0.0..=1.0`. Default 0.6.
-    #[serde(default)]
     pub confidence_threshold: Option<f64>,
+}
+
+/// `[llm].api` with the keys only that API takes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LlmApi {
+    /// An OpenAI-compatible `/chat/completions` gateway (the default).
+    Chat {
+        /// Base URL; `/chat/completions` is appended.
+        base_url: String,
+        /// Max tokens for the classification call (not sent when unset).
+        max_tokens: Option<u32>,
+    },
+    /// A decisions model (TypeSafe Jev) behind a Decisions API.
+    Decisions {
+        /// The full endpoint URL; `None` is OpenRouter's
+        /// ([`LlmApi::DEFAULT_DECISIONS_ENDPOINT`]).
+        endpoint: Option<String>,
+    },
+}
+
+impl LlmApi {
+    /// OpenRouter's Decisions API, the endpoint when `[llm].endpoint` is unset.
+    pub const DEFAULT_DECISIONS_ENDPOINT: &str =
+        repo_classifier::DecisionsSettings::OPENROUTER_ENDPOINT;
+
+    /// The value written as `[llm].api`.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Chat { .. } => "chat",
+            Self::Decisions { .. } => "decisions",
+        }
+    }
+}
+
+/// `[llm].api` as written.
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum LlmApiKind {
+    #[default]
+    Chat,
+    Decisions,
+}
+
+/// `[llm]` as written, before the per-API keys are checked.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawLlmConfig {
+    #[serde(default)]
+    api: LlmApiKind,
+    #[serde(default)]
+    base_url: Option<String>,
+    #[serde(default)]
+    endpoint: Option<String>,
+    model: String,
+    #[serde(default)]
+    max_tokens: Option<u32>,
+    #[serde(default)]
+    timeout_secs: Option<u64>,
+    #[serde(default)]
+    api_key_ref: Option<String>,
+    #[serde(default)]
+    confidence_threshold: Option<f64>,
+}
+
+impl TryFrom<RawLlmConfig> for LlmConfig {
+    type Error = String;
+
+    fn try_from(raw: RawLlmConfig) -> Result<Self, String> {
+        let misplaced = |key: &str, api: &str| {
+            format!(
+                "`[llm].{key}` does not apply to api = \"{api}\" → remove it{}",
+                if api == "chat" {
+                    ", or set api = \"decisions\""
+                } else {
+                    ", or set api = \"chat\""
+                }
+            )
+        };
+        let api = match raw.api {
+            LlmApiKind::Chat => {
+                if raw.endpoint.is_some() {
+                    return Err(misplaced("endpoint", "chat"));
+                }
+                LlmApi::Chat {
+                    base_url: raw.base_url.ok_or(
+                        "`[llm].base_url` is required for api = \"chat\" (e.g. \"https://openrouter.ai/api/v1\")",
+                    )?,
+                    max_tokens: raw.max_tokens,
+                }
+            }
+            LlmApiKind::Decisions => {
+                if raw.base_url.is_some() {
+                    return Err(misplaced("base_url", "decisions"));
+                }
+                if raw.max_tokens.is_some() {
+                    return Err(misplaced("max_tokens", "decisions"));
+                }
+                LlmApi::Decisions {
+                    endpoint: raw.endpoint,
+                }
+            }
+        };
+        Ok(Self {
+            api,
+            model: raw.model,
+            timeout_secs: raw.timeout_secs,
+            api_key_ref: raw.api_key_ref,
+            confidence_threshold: raw.confidence_threshold,
+        })
+    }
 }
 
 /// worktree placement defaults (F-22) and cleanup policies (F-23, F-85).
@@ -954,6 +1063,57 @@ on_success = { status = "レビュー待ち" }
             llm.api_key_ref.as_deref(),
             Some("keychain:totsuka/openrouter")
         );
+    }
+
+    /// `[llm].api` picks which keys are allowed; the others are load errors
+    /// naming the key, never silently ignored (#723).
+    #[test]
+    fn llm_keys_follow_the_api() {
+        let llm = |body: &str| RootConfig::from_toml_str(&format!("[llm]\n{body}"));
+
+        // No `api` is chat, as every config before #723 was written.
+        let chat = llm("base_url = \"https://gw/v1\"\nmodel = \"m\"\nmax_tokens = 64")
+            .unwrap()
+            .llm
+            .unwrap();
+        assert_eq!(
+            chat.api,
+            LlmApi::Chat {
+                base_url: "https://gw/v1".into(),
+                max_tokens: Some(64),
+            }
+        );
+
+        let decisions = llm("api = \"decisions\"\nmodel = \"~typesafe/jev-latest\"")
+            .unwrap()
+            .llm
+            .unwrap();
+        assert_eq!(decisions.api, LlmApi::Decisions { endpoint: None });
+        assert_eq!(decisions.api.name(), "decisions");
+
+        for (body, needle) in [
+            ("model = \"m\"", "`[llm].base_url` is required"),
+            (
+                "base_url = \"https://gw/v1\"\nendpoint = \"https://gw/d\"\nmodel = \"m\"",
+                "`[llm].endpoint` does not apply",
+            ),
+            (
+                "api = \"decisions\"\nbase_url = \"https://gw/v1\"\nmodel = \"m\"",
+                "`[llm].base_url` does not apply",
+            ),
+            (
+                "api = \"decisions\"\nmax_tokens = 64\nmodel = \"m\"",
+                "`[llm].max_tokens` does not apply",
+            ),
+            ("api = \"telepathy\"\nmodel = \"m\"", "telepathy"),
+            (
+                "base_url = \"u\"\nmodel = \"m\"\nbase_uri = \"typo\"",
+                "base_uri",
+            ),
+        ] {
+            let message = llm(body).unwrap_err().to_string();
+            assert!(message.contains(needle), "{body}: {message}");
+        }
     }
 
     /// Since #554 an unknown top-level key is not a parse error — it is a

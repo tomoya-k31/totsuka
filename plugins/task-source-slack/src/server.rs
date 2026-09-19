@@ -21,9 +21,7 @@ use serde_json::Value;
 
 use std::sync::Arc;
 
-use crate::config::{
-    LlmConfig, RepoInfo, SlackConfig, default_confidence_threshold, static_config_errors,
-};
+use crate::config::{LlmConfig, RepoInfo, SlackConfig, static_config_errors};
 use crate::draft::DraftStore;
 use crate::error::SlackError;
 use crate::gateway;
@@ -718,23 +716,15 @@ where
                 .collect();
         }
         // Without an explicit `[llm]`, the orchestrator's own `[llm]`
-        // (supplied since protocol 0.1.2, #119) becomes the classifier
-        // default — adopted only when usable as-is (non-empty base_url /
-        // model / api_key; the plugin always authenticates its calls), so
-        // a keyless core gateway is treated as "nothing supplied" rather
-        // than failing the config checks below with a misleading message.
+        // (supplied since protocol 0.1.2, #119; chat or decisions since
+        // 0.7.4, #723) becomes the classifier default — adopted only when
+        // usable as-is, so a keyless core gateway is treated as "nothing
+        // supplied" rather than failing the config checks below with a
+        // misleading message.
         if config.llm.is_none()
             && let Some(llm) = init.llm
-            && !llm.base_url.is_empty()
-            && !llm.model.is_empty()
-            && let Some(api_key) = llm.api_key.filter(|k| !k.is_empty())
         {
-            config.llm = Some(LlmConfig {
-                base_url: llm.base_url,
-                model: llm.model,
-                api_key,
-                confidence_threshold: default_confidence_threshold(),
-            });
+            config.llm = LlmConfig::from_supplied(llm);
         }
         // The merged candidates + adopted classifier are what the pipeline
         // will actually run on; validate them (and the checks

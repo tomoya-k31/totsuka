@@ -12,25 +12,146 @@ use std::sync::LazyLock;
 
 use serde::Deserialize;
 
-/// The OpenAI-compatible LLM used for repository classification when channel
-/// rules leave more than one candidate. This is the plugin's own LLM call
-/// (repo resolution happens entirely inside this plugin; tasks are submitted
-/// with a resolved `repo_hint`). An explicit `[llm]` here always wins; when
-/// omitted, the orchestrator's `[llm]` (supplied at `initialize` since
-/// protocol 0.1.2, #119) is adopted as the default — see `server`.
+/// The classifier used for repository classification when channel rules
+/// leave more than one candidate. This is the plugin's own call (repo
+/// resolution happens entirely inside this plugin; tasks are submitted with a
+/// resolved `repo_hint`). An explicit `[llm]` here always wins; when omitted,
+/// the orchestrator's `[llm]` (supplied at `initialize` since protocol 0.1.2,
+/// #119) is adopted as the default — see [`LlmConfig::from_supplied`].
+///
+/// Read through `RawLlmConfig` so a key the chosen `api` does not take is a
+/// config error rather than a silently ignored line (#723).
 #[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(try_from = "RawLlmConfig")]
 pub struct LlmConfig {
-    /// OpenAI-compatible base URL (e.g. `https://openrouter.ai/api/v1`).
-    pub base_url: String,
+    /// Which API, with where it lives.
+    pub backend: LlmBackend,
     /// Model identifier.
     pub model: String,
     /// API key (resolved by the orchestrator, F-65).
     pub api_key: String,
     /// Minimum classification confidence; below it the plugin falls back to
     /// asking in-thread via an ephemeral message.
-    #[serde(default = "default_confidence_threshold")]
     pub confidence_threshold: f64,
+}
+
+/// `[llm].api` and the location that API is called at.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LlmBackend {
+    /// An OpenAI-compatible `/chat/completions` gateway (the default).
+    Chat {
+        /// Base URL (e.g. `https://openrouter.ai/api/v1`).
+        base_url: String,
+    },
+    /// A decisions model (TypeSafe Jev) behind a Decisions API.
+    Decisions {
+        /// The full endpoint URL (default: OpenRouter's, which is alpha).
+        endpoint: String,
+    },
+}
+
+impl LlmConfig {
+    /// The orchestrator's `[llm]` as this plugin's classifier, when it is
+    /// usable as-is: a non-empty model and key (the plugin always
+    /// authenticates its calls), and the location its `api` needs. Anything
+    /// else is "nothing supplied" rather than a config error with a
+    /// misleading message.
+    ///
+    /// A pre-0.7.4 orchestrator sends no `api` (read as chat); a decisions
+    /// `[llm]` arrives with an empty `base_url` precisely so that plugins
+    /// older than this one decline it here (protocol 0.7.4).
+    pub fn from_supplied(llm: plugin_protocol::methods::LlmInfo) -> Option<Self> {
+        use plugin_protocol::methods::LlmApiKind;
+        let api_key = llm.api_key.filter(|k| !k.is_empty())?;
+        if llm.model.is_empty() {
+            return None;
+        }
+        let backend = match llm.api {
+            LlmApiKind::Chat if !llm.base_url.is_empty() => LlmBackend::Chat {
+                base_url: llm.base_url,
+            },
+            LlmApiKind::Decisions => LlmBackend::Decisions {
+                endpoint: llm.endpoint.filter(|e| !e.is_empty()).unwrap_or_else(|| {
+                    repo_classifier::DecisionsSettings::OPENROUTER_ENDPOINT.to_string()
+                }),
+            },
+            _ => return None,
+        };
+        Some(Self {
+            backend,
+            model: llm.model,
+            api_key,
+            confidence_threshold: default_confidence_threshold(),
+        })
+    }
+}
+
+/// `[llm].api` as written.
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum LlmApiKind {
+    #[default]
+    Chat,
+    Decisions,
+}
+
+/// `[llm]` as written, before the per-API keys are checked.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawLlmConfig {
+    #[serde(default)]
+    api: LlmApiKind,
+    #[serde(default)]
+    base_url: Option<String>,
+    #[serde(default)]
+    endpoint: Option<String>,
+    model: String,
+    api_key: String,
+    #[serde(default = "default_confidence_threshold")]
+    confidence_threshold: f64,
+}
+
+impl TryFrom<RawLlmConfig> for LlmConfig {
+    type Error = String;
+
+    fn try_from(raw: RawLlmConfig) -> Result<Self, String> {
+        let backend = match raw.api {
+            LlmApiKind::Chat => {
+                if raw.endpoint.is_some() {
+                    return Err(
+                        "`llm.endpoint` does not apply to api = \"chat\" → remove it, \
+                                or set api = \"decisions\""
+                            .into(),
+                    );
+                }
+                LlmBackend::Chat {
+                    base_url: raw
+                        .base_url
+                        .ok_or("`llm.base_url` is required for api = \"chat\"")?,
+                }
+            }
+            LlmApiKind::Decisions => {
+                if raw.base_url.is_some() {
+                    return Err(
+                        "`llm.base_url` does not apply to api = \"decisions\" → remove it, \
+                         or set api = \"chat\""
+                            .into(),
+                    );
+                }
+                LlmBackend::Decisions {
+                    endpoint: raw.endpoint.unwrap_or_else(|| {
+                        repo_classifier::DecisionsSettings::OPENROUTER_ENDPOINT.to_string()
+                    }),
+                }
+            }
+        };
+        Ok(Self {
+            backend,
+            model: raw.model,
+            api_key: raw.api_key,
+            confidence_threshold: raw.confidence_threshold,
+        })
+    }
 }
 
 /// One or more channel-name prefixes as written in config:
@@ -737,8 +858,18 @@ pub fn static_config_errors(config: &SlackConfig) -> Vec<String> {
     // orchestrator's `[llm]` as the default (#119), so that check runs at
     // `initialize` (see `server`), like the empty-`[[repos]]` case above.
     if let Some(llm) = &config.llm {
-        if llm.base_url.is_empty() {
-            errors.push("`llm.base_url` is empty → set the OpenAI-compatible base URL".into());
+        match &llm.backend {
+            LlmBackend::Chat { base_url } if base_url.is_empty() => {
+                errors.push("`llm.base_url` is empty → set the OpenAI-compatible base URL".into());
+            }
+            LlmBackend::Decisions { endpoint } if endpoint.is_empty() => {
+                errors.push(
+                    "`llm.endpoint` is empty → set the Decisions API URL, or remove it for \
+                     OpenRouter's"
+                        .into(),
+                );
+            }
+            _ => {}
         }
         if llm.model.is_empty() {
             errors.push("`llm.model` is empty → set the model identifier".into());
@@ -1330,6 +1461,87 @@ mod tests {
         value["llm"] = json!({ "base_url": "https://llm", "model": "m", "api_key": "k" });
         let cfg = parse(value);
         assert!((cfg.llm.unwrap().confidence_threshold - 0.6).abs() < f64::EPSILON);
+    }
+
+    /// `api` picks which location key is allowed; a decisions `[llm]`
+    /// without `endpoint` goes to OpenRouter (#723).
+    #[test]
+    fn llm_keys_follow_the_api() {
+        let with_llm = |llm: serde_json::Value| {
+            let mut value = minimal();
+            value["llm"] = llm;
+            serde_json::from_value::<SlackConfig>(value)
+        };
+        let cfg = with_llm(
+            json!({ "api": "decisions", "model": "~typesafe/jev-latest", "api_key": "k" }),
+        )
+        .unwrap();
+        assert_eq!(
+            cfg.llm.unwrap().backend,
+            LlmBackend::Decisions {
+                endpoint: "https://openrouter.ai/api/alpha/decisions".into()
+            }
+        );
+        for (llm, needle) in [
+            (
+                json!({ "model": "m", "api_key": "k" }),
+                "`llm.base_url` is required",
+            ),
+            (
+                json!({ "base_url": "u", "endpoint": "e", "model": "m", "api_key": "k" }),
+                "`llm.endpoint` does not apply",
+            ),
+            (
+                json!({ "api": "decisions", "base_url": "u", "model": "m", "api_key": "k" }),
+                "`llm.base_url` does not apply",
+            ),
+        ] {
+            let message = with_llm(llm.clone()).unwrap_err().to_string();
+            assert!(message.contains(needle), "{llm}: {message}");
+        }
+    }
+
+    /// The orchestrator's `[llm]` is adopted only when it is usable as-is —
+    /// and a decisions `LlmInfo` with its empty `base_url` is exactly what a
+    /// plugin that does not know `api` would decline (protocol 0.7.4).
+    #[test]
+    fn a_supplied_llm_is_adopted_only_when_usable() {
+        use plugin_protocol::methods::{LlmApiKind, LlmInfo};
+        let supplied = |api, base_url: &str, endpoint: Option<&str>| LlmInfo {
+            api,
+            base_url: base_url.into(),
+            endpoint: endpoint.map(str::to_string),
+            model: "m".into(),
+            api_key: Some("k".into()),
+        };
+        assert_eq!(
+            LlmConfig::from_supplied(supplied(LlmApiKind::Chat, "https://gw/v1", None))
+                .unwrap()
+                .backend,
+            LlmBackend::Chat {
+                base_url: "https://gw/v1".into()
+            }
+        );
+        assert_eq!(
+            LlmConfig::from_supplied(supplied(
+                LlmApiKind::Decisions,
+                "",
+                Some("https://gw/decisions")
+            ))
+            .unwrap()
+            .backend,
+            LlmBackend::Decisions {
+                endpoint: "https://gw/decisions".into()
+            }
+        );
+        // An empty chat base_url (what a decisions `[llm]` looks like to a
+        // plugin that ignores `api`), an api from the future, and a missing
+        // key are all "nothing supplied".
+        assert!(LlmConfig::from_supplied(supplied(LlmApiKind::Chat, "", None)).is_none());
+        assert!(LlmConfig::from_supplied(supplied(LlmApiKind::Other, "u", Some("e"))).is_none());
+        let mut keyless = supplied(LlmApiKind::Chat, "https://gw/v1", None);
+        keyless.api_key = None;
+        assert!(LlmConfig::from_supplied(keyless).is_none());
     }
 
     #[test]

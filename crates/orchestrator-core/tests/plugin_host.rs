@@ -59,7 +59,9 @@ async fn initialize_carries_the_supplied_repositories_and_llm() {
         project: None,
     }];
     with_supplies.llm = Some(plugin_protocol::methods::LlmInfo {
+        api: plugin_protocol::methods::LlmApiKind::Chat,
         base_url: "https://openrouter.ai/api/v1".into(),
+        endpoint: None,
         model: "anthropic/claude-haiku-4.5".into(),
         api_key: Some("sk-or-resolved".into()),
     });

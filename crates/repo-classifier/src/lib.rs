@@ -19,8 +19,14 @@
 //!   [`ReqwestTransport`] is production.
 //! - [`RetryPolicy`] — exponential backoff over retryable failures (§5.3).
 //! - [`ChatClassifier`] — an OpenAI-compatible `/chat/completions` backend.
+//! - [`DecisionsClassifier`] — a decisions-model backend (TypeSafe Jev via
+//!   OpenRouter's Decisions API): a typed `choice` question instead of a chat.
+//! - [`ConfiguredClassifier`] — whichever of the two the configuration asked
+//!   for, behind one type.
 
 mod chat;
+mod configured;
+mod decisions;
 mod error;
 mod retry;
 mod transport;
@@ -28,6 +34,8 @@ mod transport;
 use std::future::Future;
 
 pub use chat::{ChatClassifier, ChatOutput, ChatPrompt, ChatSettings};
+pub use configured::ConfiguredClassifier;
+pub use decisions::{DecisionsClassifier, DecisionsSettings};
 pub use error::ClassifyError;
 pub use retry::RetryPolicy;
 pub use transport::{ApiKey, HttpRequest, HttpTransport, ReqwestTransport, scrub_urls};
@@ -59,17 +67,27 @@ pub struct ClassifyRequest {
     pub chat_prompt: Option<ChatPrompt>,
 }
 
-/// A validated verdict: `repo` is one of the candidates and `confidence` lies
-/// in `[0, 1]`.
+/// A validated verdict.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Classification {
-    /// The chosen candidate's name.
-    pub repo: String,
-    /// How sure the backend is, `0.0..=1.0`. Callers compare it to their own
-    /// threshold.
-    pub confidence: f64,
-    /// Why — surfaced by `--dry-run` and the logs, never decided on.
-    pub reason: String,
+pub enum Classification {
+    /// One of the candidates: `repo` is always a candidate's name and
+    /// `confidence` always lies in `[0, 1]`.
+    Repo {
+        /// The chosen candidate's name.
+        repo: String,
+        /// How sure the backend is, `0.0..=1.0`. Callers compare it to their
+        /// own threshold.
+        confidence: f64,
+        /// Why — surfaced by `--dry-run` and the logs, never decided on.
+        reason: String,
+    },
+    /// The backend judged that **none** of the candidates fits. Only backends
+    /// that can say so return it (the decisions backend offers a `none`
+    /// option); a chat verdict always names a candidate.
+    NoneFits {
+        /// Why — surfaced like the `reason` of a [`Classification::Repo`].
+        reason: String,
+    },
 }
 
 /// Classifies work into one of a set of candidate repositories.
@@ -116,7 +134,7 @@ pub(crate) fn validated(
             "`confidence` out of range [0,1]: {confidence}"
         )));
     }
-    Ok(Classification {
+    Ok(Classification::Repo {
         repo,
         confidence,
         reason,

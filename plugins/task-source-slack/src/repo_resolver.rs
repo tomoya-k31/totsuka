@@ -216,7 +216,9 @@ mod tests {
     fn config_with_llm() -> SlackConfig {
         let mut config = config(json!([]));
         config.llm = Some(crate::config::LlmConfig {
-            base_url: "https://llm.test/v1".into(),
+            backend: crate::config::LlmBackend::Chat {
+                base_url: "https://llm.test/v1".into(),
+            },
             model: "test-model".into(),
             api_key: "sk-dead".into(),
             confidence_threshold: 0.6,
