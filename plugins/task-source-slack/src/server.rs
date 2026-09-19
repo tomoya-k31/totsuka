@@ -1715,6 +1715,76 @@ mod tests {
         assert!(!errors[0].contains("workflows `"), "{}", errors[0]);
     }
 
+    /// **Every `trigger` example in the setup template that this source could
+    /// receive must be one this source accepts.**
+    ///
+    /// `totsuka setup` writes that file for the operator to uncomment, so an
+    /// example that does not parse is a config they cannot start. One did:
+    /// `channel = true` instead of a channel id, shipped in the commit that
+    /// created the template and carried forward untouched, because
+    /// `scripts/config-template-lint.sh` checks key *names* and nothing looks
+    /// at the values.
+    ///
+    /// The filter is the principle rather than a list: an example whose keys
+    /// are all in `TRIGGER_KEYS` is one this plugin could be handed, so it is
+    /// validated. The github and notion examples name keys this source does
+    /// not read (`status`, `filter`, `assignee`) and drop out on their own.
+    ///
+    /// Lives here rather than in `orchestrator-cli` because the validators are
+    /// private to this module — the file is read by path, and nothing depends
+    /// on that crate.
+    #[test]
+    fn every_slack_trigger_example_in_the_setup_template_is_valid() {
+        let template = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../crates/orchestrator-cli/templates/config.toml");
+        let text = std::fs::read_to_string(&template)
+            .unwrap_or_else(|e| panic!("reading {}: {e}", template.display()));
+
+        let mut checked = 0;
+        for line in text.lines() {
+            let Some(rest) = line.trim_start().strip_prefix("# trigger = ") else {
+                continue;
+            };
+            // `lint:raw` marks an example whose inner table is a foreign
+            // vocabulary passed through untouched (a Notion filter).
+            let body = rest.split("   #").next().unwrap_or(rest).trim();
+            if body.contains("lint:raw") || !body.starts_with('{') {
+                continue;
+            }
+            let table: toml::Table = format!("trigger = {body}")
+                .parse::<toml::Table>()
+                .unwrap_or_else(|e| panic!("`{body}` is not valid TOML: {e}"))["trigger"]
+                .as_table()
+                .expect("an inline table")
+                .clone();
+            if !table.keys().all(|k| TRIGGER_KEYS.contains(&k.as_str())) {
+                continue; // another source's example
+            }
+            checked += 1;
+
+            let trigger = serde_json::to_value(&table).expect("a JSON object");
+            let wf = wf_with(trigger);
+            // A watch and a mention route are validated by different halves,
+            // and an example may be either.
+            if wf.trigger.get("channel").is_some() {
+                plugin_sdk::resolve_watch_triggers(
+                    std::slice::from_ref(&wf),
+                    &["my-repo"],
+                    Some("U0000000000"),
+                    "target_user_id",
+                )
+                .unwrap_or_else(|e| panic!("`{body}` is refused as a watch: {e:?}"));
+            } else {
+                workflow_reactions(std::slice::from_ref(&wf))
+                    .unwrap_or_else(|e| panic!("`{body}` is refused as a mention route: {e:?}"));
+            }
+        }
+        assert!(
+            checked >= 4,
+            "only {checked} slack trigger examples found — has the template moved?"
+        );
+    }
+
     /// `to_group` on a channel watch has no reader at all: watches are
     /// filtered out before `parse_to_group` runs, so the watch would start and
     /// the group restriction would simply go away. `unknown_trigger_keys`
