@@ -204,6 +204,10 @@ impl WatchTriggers {
             // The whole point of a watched channel: the repository is settled
             // by config, so no lookup and no classifier runs.
             repo_pin: Some(watched.trigger.repo.clone()),
+            // A watch result is the bot's (#615 decision Q13). Stated here
+            // rather than inferred from `repo_pin`, which a group mention
+            // route now also sets (ADR-0081).
+            post_as_bot: true,
             // A clipped article is exactly the kind of post that carries a
             // file, so this path needs the metadata as much as a mention does.
             files: post.files.to_vec(),
@@ -255,7 +259,7 @@ mod tests {
     }
 
     fn filter() -> MentionFilter {
-        MentionFilter::new("U_OP", None)
+        MentionFilter::new("U_OP", Vec::new())
     }
 
     #[test]
@@ -268,6 +272,11 @@ mod tests {
         // One post, one task — prefix and all.
         assert_eq!(mention.task_id(), "impl:C_CLIP:1.1");
         assert_eq!(mention.instructions_kind.as_deref(), Some("implement"));
+        // A watch result is the bot's (#615 decision Q13). Asserted since
+        // ADR-0081 stopped deriving this from `repo_pin`: without a test the
+        // decoupling could silently flip who answers, and the symptom is a
+        // reply under the wrong name rather than an error.
+        assert!(mention.post_as_bot, "a watch result is posted by the bot");
     }
 
     #[test]
@@ -339,7 +348,7 @@ mod tests {
     fn a_mention_nobody_answers_still_reaches_the_watch() {
         let watch = triggers(&["U_MATE"]);
         // No mention workflow — the config has only the watch.
-        let mut filter = MentionFilter::new("U_OP", None);
+        let mut filter = MentionFilter::new("U_OP", Vec::new());
         let mut post = post("U_MATE", "C_CLIP");
         post["text"] = json!("<@U_OP> これ見て https://example.com");
 

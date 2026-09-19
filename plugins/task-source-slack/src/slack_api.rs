@@ -470,8 +470,15 @@ impl<T: SlackTransport> SlackApi<T> {
     /// This asks Slack every time it starts.
     ///
     /// Requires the `usergroups:read` user scope. Without it Slack returns
-    /// `missing_scope`, which surfaces as an error here; the caller degrades
-    /// to personal mentions and warns rather than failing startup.
+    /// `missing_scope`, which surfaces as an error here.
+    ///
+    /// **What the caller does with that depends on the config** (ADR-0081):
+    /// with no `trigger.to_group` anywhere it degrades to personal mentions
+    /// and warns rather than failing startup, which is what this call has
+    /// always done. A `to_group` route makes membership a config question, so
+    /// `initialize` resolves it up front and refuses to start — the route
+    /// could never match, and saying so at startup beats a workflow that is
+    /// configured and inert.
     pub async fn usergroups_for_user(&self, user_id: &str) -> Result<Vec<String>, SlackError> {
         let response = self
             .call(

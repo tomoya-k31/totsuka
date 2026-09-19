@@ -167,6 +167,15 @@ fn push_guard_ok(shared: &Shared) {
     shared.push(Canned::Data(connections_ok()));
 }
 
+/// `usergroups.list` naming the groups the operator belongs to.
+fn usergroups_ok(ids: &[&str]) -> Value {
+    json!({
+        "ok": true,
+        "usergroups": ids.iter().map(|id| json!({ "id": id, "users": ["U_ME"] }))
+            .collect::<Vec<_>>()
+    })
+}
+
 /// The error object of an error response.
 fn error_of(response: &Response) -> (i64, String) {
     let error = response.error.as_ref().expect("an error response");
@@ -658,6 +667,147 @@ async fn config_validate_accepts_a_valid_config_without_network() {
     assert_eq!(result["valid"], json!(true));
     // Static validation only: no Web API call was made.
     assert!(shared.requests().is_empty());
+}
+
+/// A `to_group` route naming a group the operator has left can never fire,
+/// so it is refused at `initialize` rather than left to run dead.
+///
+/// **This check cannot live in `config/validate`**: membership is a live
+/// fact, and that call is deliberately offline. It sits beside the TokenGuard
+/// for the same reason a revoked token does.
+#[tokio::test]
+async fn initialize_refuses_a_group_the_operator_is_not_in() {
+    let shared = Shared::default();
+    push_guard_ok(&shared);
+    shared.push(Canned::Data(usergroups_ok(&["S0MINE"])));
+    let (mut srv, _harness) = server(&shared);
+
+    let params = json!({
+        "protocol_version": "0.1.0",
+        "config": init_config(),
+        "workflows": [
+            { "workflow": "slack-oncall",
+              "trigger": { "mention": true, "to_group": ["S0THEIRS"] } },
+            { "workflow": "slack-reply", "trigger": { "mention": true } },
+        ],
+    });
+    let resp = call(&mut srv, 1, "initialize", params).await;
+    let (code, message) = error_of(&resp);
+    assert_eq!(
+        code,
+        plugin_protocol::error_code::CONFIG_INVALID,
+        "{message}"
+    );
+    assert!(message.contains("S0THEIRS"), "{message}");
+    assert!(message.contains("does not belong to"), "{message}");
+}
+
+/// …and a group the operator *is* in initializes.
+#[tokio::test]
+async fn initialize_accepts_a_group_the_operator_is_in() {
+    let shared = Shared::default();
+    push_guard_ok(&shared);
+    shared.push(Canned::Data(usergroups_ok(&["S0MINE", "S0OTHER"])));
+    let (mut srv, _harness) = server(&shared);
+
+    let params = json!({
+        "protocol_version": "0.1.0",
+        "config": init_config(),
+        "workflows": [
+            { "workflow": "slack-oncall",
+              "trigger": { "mention": true, "to_group": ["S0MINE"] } },
+            { "workflow": "slack-reply", "trigger": { "mention": true } },
+        ],
+    });
+    let resp = call(&mut srv, 1, "initialize", params).await;
+    assert!(resp.error.is_none(), "{:?}", resp.error);
+}
+
+/// Without `usergroups:read` the membership question is unanswerable, and an
+/// unanswerable `to_group` is a workflow that silently never fires. Writing
+/// the key is what makes the scope required — a config without one keeps the
+/// old warning.
+#[tokio::test]
+async fn initialize_refuses_to_group_when_the_groups_cannot_be_resolved() {
+    let shared = Shared::default();
+    push_guard_ok(&shared);
+    shared.push(Canned::Data(
+        json!({ "ok": false, "error": "missing_scope" }),
+    ));
+    let (mut srv, _harness) = server(&shared);
+
+    let params = json!({
+        "protocol_version": "0.1.0",
+        "config": init_config(),
+        "workflows": [{ "workflow": "slack-oncall",
+                        "trigger": { "mention": true, "to_group": ["S0MINE"] } }],
+    });
+    let resp = call(&mut srv, 1, "initialize", params).await;
+    let (code, message) = error_of(&resp);
+    assert_eq!(
+        code,
+        plugin_protocol::error_code::CONFIG_INVALID,
+        "{message}"
+    );
+    assert!(message.contains("usergroups:read"), "{message}");
+}
+
+/// A Slack outage during startup is not a bad config.
+///
+/// Every `usergroups.list` failure used to map to `CONFIG_INVALID`, which
+/// would send the operator to edit a file that is correct. Only a
+/// credential/permission failure is the config's fault — the same split the
+/// TokenGuard makes.
+#[tokio::test]
+async fn a_transient_usergroups_failure_is_not_a_config_error() {
+    let shared = Shared::default();
+    push_guard_ok(&shared);
+    shared.push(Canned::Network);
+    let (mut srv, _harness) = server(&shared);
+
+    let params = json!({
+        "protocol_version": "0.1.0",
+        "config": init_config(),
+        "workflows": [{ "workflow": "slack-oncall",
+                        "trigger": { "mention": true, "to_group": ["S0MINE"] } }],
+    });
+    let resp = call(&mut srv, 1, "initialize", params).await;
+    let (code, message) = error_of(&resp);
+    assert_eq!(
+        code,
+        plugin_protocol::error_code::INTERNAL_ERROR,
+        "a transient failure must not read as a bad config: {message}"
+    );
+}
+
+/// A config with no `to_group` must not start asking for user groups at
+/// `initialize` — that would turn a missing scope into a startup failure for
+/// everyone who never opted in.
+#[tokio::test]
+async fn initialize_does_not_resolve_groups_without_to_group() {
+    let shared = Shared::default();
+    push_guard_ok(&shared);
+    let (mut srv, _harness) = server(&shared);
+
+    let params = json!({
+        "protocol_version": "0.1.0",
+        "config": init_config(),
+        "workflows": [{ "workflow": "slack-reply", "trigger": { "mention": true } }],
+    });
+    let resp = call(&mut srv, 1, "initialize", params).await;
+    assert!(resp.error.is_none(), "{:?}", resp.error);
+    assert!(
+        !shared
+            .requests()
+            .iter()
+            .any(|r| r.method.contains("usergroups")),
+        "no usergroups call without `to_group`: {:?}",
+        shared
+            .requests()
+            .iter()
+            .map(|r| r.method.clone())
+            .collect::<Vec<_>>()
+    );
 }
 
 /// `config validate` must refuse the same trigger `initialize` refuses.

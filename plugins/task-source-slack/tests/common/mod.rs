@@ -381,6 +381,24 @@ impl SubmitHarness {
         request["params"]["task"].clone()
     }
 
+    /// Like [`next_task`](Self::next_task), but the whole `task/submit`
+    /// params — the **workflow travels beside the task**, not in it (#554), so
+    /// a test asserting which workflow claimed a delivery needs this one.
+    pub async fn next_submit(&mut self) -> Value {
+        let line = tokio::time::timeout(Duration::from_secs(5), self.rx.recv())
+            .await
+            .expect("no task/submit within 5s")
+            .expect("submit channel closed");
+        let request: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(request["method"], "task/submit", "{request}");
+        self.client.resolve(&json!({
+            "jsonrpc": "2.0",
+            "id": request["id"],
+            "result": { "status": "accepted" }
+        }));
+        request["params"].clone()
+    }
+
     /// Assert nothing is submitted within `window`.
     pub async fn assert_no_task(&mut self, window: Duration) {
         match tokio::time::timeout(window, self.rx.recv()).await {

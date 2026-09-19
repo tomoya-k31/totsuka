@@ -55,9 +55,120 @@ pub struct ReactionTriggers {
     /// just written — and the duplicate is what forced `reaction` to be a
     /// vocabulary word in `config.toml`'s core schema.
     ///
-    /// `None` means no mention workflow is configured, so a mention has
+    /// Where a mention goes, **in the order it is tried** (ADR-0081).
+    ///
+    /// The order is the whole routing rule, so that no caller has to
+    /// re-implement it: group-scoped routes come first in `[[workflows]]`
+    /// definition order, then the catch-all if one is configured. Walking
+    /// this list front to back therefore gives "the more specific route
+    /// wins, and equally specific routes break the tie by definition
+    /// order" — without the walker knowing either rule.
+    ///
+    /// Empty means no workflow answers mentions at all, so a mention has
     /// nowhere to go and is dropped before it is built.
-    mention_workflow: Option<String>,
+    mention_routes: Vec<MentionRoute>,
+}
+
+/// One mention workflow, and the user groups it claims.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MentionRoute {
+    /// `[[workflows]].name`, named on `task/submit`.
+    pub workflow: String,
+    /// The groups this route claims. **Empty is the catch-all**: it matches
+    /// any mention, including a personal one naming no group at all.
+    pub to_group: Vec<String>,
+    /// `task_id_prefix` from the profile (#397). On a group route this is
+    /// only half the prefix: a group route puts the matched group id behind
+    /// it, so two routes sharing a profile still get separate id spaces.
+    pub task_id_prefix: Option<String>,
+    /// `instructions_kind` from the profile (#398).
+    pub instructions_kind: Option<String>,
+    /// `trigger.repo`, when this route pins one.
+    pub repo: Option<String>,
+}
+
+impl MentionRoute {
+    /// The catch-all route for `workflow`: claims every mention, pins no
+    /// repository, and keys its task on the conversation.
+    ///
+    /// This is the whole routing table of a config written before ADR-0081,
+    /// which is why it is worth a constructor of its own.
+    pub fn catch_all(workflow: impl Into<String>) -> Self {
+        Self {
+            workflow: workflow.into(),
+            to_group: Vec::new(),
+            task_id_prefix: None,
+            instructions_kind: None,
+            repo: None,
+        }
+    }
+
+    /// Whether this route claims a mention naming `groups`.
+    ///
+    /// The catch-all claims everything, which is what makes walking the list
+    /// in order sufficient: it is placed last, so anything a group route
+    /// wanted has already been taken.
+    pub(crate) fn claims(&self, groups: &[String]) -> bool {
+        self.to_group.is_empty() || self.claimed_group(groups).is_some()
+    }
+
+    /// The group **this route** claims out of the ones a mention named, which
+    /// is the one that rides into the task id.
+    ///
+    /// Two things follow from asking the route rather than the message:
+    ///
+    /// - the catch-all answers `None` even for a mention full of groups, so
+    ///   its task stays keyed on the conversation (ADR-0015). Taking the
+    ///   message's first group instead would give the catch-all a prefix and
+    ///   quietly split every thread that happened to name a group.
+    /// - a route claiming several groups picks by **its own** declaration
+    ///   order, so the task id does not depend on the order someone typed the
+    ///   tags in. That is the same reason decision 3 breaks ties on config
+    ///   order rather than on message order.
+    pub(crate) fn claimed_group<'a>(&'a self, groups: &[String]) -> Option<&'a str> {
+        self.to_group
+            .iter()
+            .find(|g| groups.contains(g))
+            .map(String::as_str)
+    }
+
+    /// The task-id prefix a mention on this route carries.
+    ///
+    /// **The group id is in it, and that is deliberate** (ADR-0081): a group
+    /// route must not share an id space with the catch-all, or the two would
+    /// name the same conversation and a mention arriving mid-run would be
+    /// dropped as a hand-over to a busy task. The id is Slack's `S…`, which
+    /// survives renaming both the group and the workflow — the workflow name
+    /// would not, and putting *it* here would strand every in-flight
+    /// conversation on the next rename.
+    ///
+    /// `None` only for the catch-all, whose task **is** the conversation
+    /// (ADR-0015) and must stay keyed on it.
+    pub(crate) fn task_id_prefix_for(&self, group: Option<&str>) -> Option<String> {
+        let group = group?;
+        Some(match &self.task_id_prefix {
+            Some(profile) => format!("{profile}:{group}"),
+            None => group.to_string(),
+        })
+    }
+
+    /// The instruction set a mention on this route asks for (#398, #450).
+    ///
+    /// **Moves with [`task_id_prefix_for`](Self::task_id_prefix_for), and the
+    /// pairing is the rule**: the two describe one thing from two sides. The
+    /// catch-all has no prefix because its task *is* the conversation
+    /// (ADR-0015), and a conversation is what `answer` replies to — so it
+    /// takes the reply instructions whatever `profile` says, exactly as the
+    /// mention path did before ADR-0081. A group route keys per message, which
+    /// is the shape `triage` and `implement` want, so it takes its profile's.
+    ///
+    /// Splitting them would allow the one incoherent state: a task keyed on
+    /// the conversation that runs the implement instructions, opening a branch
+    /// and a PR against a thread the operator expected a reply in.
+    pub(crate) fn instructions_kind_for(&self, group: Option<&str>) -> Option<String> {
+        group?;
+        self.instructions_kind.clone()
+    }
 }
 
 /// One accepted emoji and what the workflow behind it wants.
@@ -99,9 +210,11 @@ impl ReactionTriggers {
             task_id_prefix,
             instructions_kind,
             from_bot,
-            // Read below, once, to pick the single mention workflow — this
-            // loop only builds the emoji table.
+            // All read below, where the mention routes are built — this loop
+            // only builds the emoji table.
             mention: _,
+            to_group: _,
+            repo: _,
         } in triggers
         {
             let Some(raw) = reaction else { continue };
@@ -138,37 +251,85 @@ impl ReactionTriggers {
             return Err(errors);
         }
 
-        // The workflows that declare `mention = true`: that is where a plain
-        // mention goes. Two of them is the same failure as two workflows
-        // claiming one emoji — first-match would pick one and say nothing —
-        // so it is refused rather than resolved.
+        // Where mentions go. The candidates are *declared* (`mention = true`,
+        // ADR-0080) rather than inferred from the absence of a `reaction`, so
+        // a workflow can no longer arrive here by omission.
         //
-        // The candidates are *declared* rather than inferred from the absence
-        // of a `reaction` (server.rs `check_trigger_kind`), so a workflow can
-        // no longer arrive here by omission.
-        let mention_candidates: Vec<&String> = triggers
+        // Built in the order it will be *tried*, which is the routing rule
+        // itself: group-scoped routes in definition order, catch-all last.
+        let (group_routes, catch_alls): (Vec<&WorkflowTrigger>, Vec<&WorkflowTrigger>) = triggers
             .iter()
             .filter(|t| t.mention)
-            .map(|t| &t.workflow)
-            .collect();
-        if mention_candidates.len() > 1 {
+            .partition(|t| !t.to_group.is_empty());
+
+        // Two catch-alls is the same failure as two workflows claiming one
+        // emoji — first-match would pick one and say nothing. **Two *group*
+        // routes are fine**, which is the point of ADR-0081; they are only
+        // refused when they claim the same group, below.
+        if catch_alls.len() > 1 {
             errors.push(format!(
-                "workflows {} all have `trigger = {{ mention = true }}` → a mention selects \
-                 one workflow; leave it on the one that should answer mentions and give the \
-                 others a `reaction` trigger, or merge them",
-                mention_candidates
+                "workflows {} all have `trigger = {{ mention = true }}` with no `to_group` → \
+                 a mention that no group route claims selects one workflow; leave the bare \
+                 `mention = true` on the one that should answer the rest, and give the others \
+                 a `to_group`",
+                catch_alls
                     .iter()
-                    .map(|w| format!("`{w}`"))
+                    .map(|t| format!("`{}`", t.workflow))
                     .collect::<Vec<_>>()
                     .join(", ")
             ));
             return Err(errors);
         }
-        let mention_workflow = mention_candidates.first().map(|w| (*w).clone());
+
+        // One group selects one workflow, exactly as one emoji does. Unlike
+        // the emoji case this cannot be left to first-match "safely": the
+        // routes are tried in definition order, so a duplicate would make the
+        // later workflow permanently unreachable rather than merely ambiguous.
+        let mut claimed_groups: Vec<(&str, &str)> = Vec::new(); // (group, workflow)
+        for t in &group_routes {
+            for group in &t.to_group {
+                if let Some((_, first)) = claimed_groups.iter().find(|(g, _)| g == group) {
+                    errors.push(if first == &t.workflow.as_str() {
+                        // One workflow listing a group twice is a different
+                        // mistake from two workflows fighting over it, and
+                        // "workflows `w` and `w`" reads as a bug in the check.
+                        format!(
+                            "workflow `{}` lists user group `{group}` twice in `to_group` → \
+                             drop the duplicate",
+                            t.workflow
+                        )
+                    } else {
+                        format!(
+                            "workflows `{first}` and `{}` both claim user group `{group}` in \
+                             `to_group` → one group selects one workflow; give them different \
+                             groups or merge the workflows",
+                            t.workflow
+                        )
+                    });
+                    continue;
+                }
+                claimed_groups.push((group, &t.workflow));
+            }
+        }
+        if !errors.is_empty() {
+            return Err(errors);
+        }
+
+        let mention_routes = group_routes
+            .iter()
+            .chain(catch_alls.iter())
+            .map(|t| MentionRoute {
+                workflow: t.workflow.clone(),
+                to_group: t.to_group.clone(),
+                task_id_prefix: t.task_id_prefix.clone(),
+                instructions_kind: t.instructions_kind.clone(),
+                repo: t.repo.clone(),
+            })
+            .collect();
 
         Ok(Self {
             emojis,
-            mention_workflow,
+            mention_routes,
         })
     }
 
@@ -177,9 +338,17 @@ impl ReactionTriggers {
         self.emojis.is_empty()
     }
 
-    /// The workflow a plain mention belongs to, if one is configured.
-    pub fn mention_workflow(&self) -> Option<&str> {
-        self.mention_workflow.as_deref()
+    /// The mention routes, in the order they are tried.
+    pub fn mention_routes(&self) -> &[MentionRoute] {
+        &self.mention_routes
+    }
+
+    /// Every user group any route claims — what `initialize` checks against
+    /// the operator's live membership.
+    pub fn claimed_groups(&self) -> impl Iterator<Item = &str> {
+        self.mention_routes
+            .iter()
+            .flat_map(|r| r.to_group.iter().map(String::as_str))
     }
 
     /// The configured entry for `emoji`, if it is a trigger at all.
@@ -224,6 +393,21 @@ pub struct WorkflowTrigger {
     /// `[slack] target_user_id` and the user groups `usergroups.list` resolves
     /// for them. The key carries no ids, so it cannot drift from either.
     pub mention: bool,
+    /// `trigger.to_group`: the user groups whose mentions select **this**
+    /// workflow rather than the catch-all (ADR-0081).
+    ///
+    /// Empty is the catch-all — the workflow a mention takes when no
+    /// group-scoped route claims it. Non-empty narrows this workflow to
+    /// mentions naming one of these groups, and every id must be one the
+    /// operator actually belongs to (checked at `initialize`, where the live
+    /// `usergroups.list` answer is).
+    pub to_group: Vec<String>,
+    /// `trigger.repo`: the repository mentions on this route are pinned to.
+    ///
+    /// `Some` skips resolution outright — no `task/lookup`, no LLM
+    /// classification, no picker — because the operator has already said
+    /// which repository this group's mentions concern.
+    pub repo: Option<String>,
 }
 
 /// Where a reaction points: the coordinates needed to re-fetch the message.
@@ -390,6 +574,9 @@ pub fn to_mention(target: &ReactionTarget, message: SlackMessage) -> Option<Ment
         reaction: Some(target.reaction.clone()),
         workflow: Some(target.workflow.clone()),
         repo_pin: None,
+        // A reaction resolves its repository and is answered as the operator,
+        // exactly as before ADR-0081 split these two facts apart.
+        post_as_bot: false,
         task_id_prefix: target.task_id_prefix.clone(),
         instructions_kind: target.instructions_kind.clone(),
         // Metadata only — see `SlackFile`. The reacted-to message is the one
@@ -416,6 +603,8 @@ mod tests {
                 task_id_prefix: None,
                 instructions_kind: None,
                 from_bot: Vec::new(),
+                to_group: Vec::new(),
+                repo: None,
                 mention: true,
             },
             WorkflowTrigger {
@@ -424,6 +613,8 @@ mod tests {
                 task_id_prefix: None,
                 instructions_kind: None,
                 from_bot: Vec::new(),
+                to_group: Vec::new(),
+                repo: None,
                 mention: true,
             },
         ])
@@ -445,6 +636,8 @@ mod tests {
                 task_id_prefix: Some("impl".into()),
                 instructions_kind: Some("implement".into()),
                 from_bot: Vec::new(),
+                to_group: Vec::new(),
+                repo: None,
                 mention: false,
             },
             WorkflowTrigger {
@@ -453,15 +646,173 @@ mod tests {
                 task_id_prefix: None,
                 instructions_kind: None,
                 from_bot: Vec::new(),
+                to_group: Vec::new(),
+                repo: None,
                 mention: true,
             },
         ])
         .expect("one of each is the intended shape");
-        assert_eq!(resolved.mention_workflow(), Some("slack-reply"));
+        assert_eq!(
+            resolved
+                .mention_routes()
+                .iter()
+                .map(|r| r.workflow.as_str())
+                .collect::<Vec<_>>(),
+            vec!["slack-reply"]
+        );
         assert_eq!(
             resolved.entry("hammer").map(|e| e.workflow.as_str()),
             Some("slack-implement")
         );
+    }
+
+    /// A mention workflow declaring `to_group`.
+    fn group_route(workflow: &str, groups: &[&str], prefix: Option<&str>) -> WorkflowTrigger {
+        WorkflowTrigger {
+            workflow: workflow.into(),
+            reaction: None,
+            task_id_prefix: prefix.map(str::to_string),
+            instructions_kind: None,
+            from_bot: Vec::new(),
+            to_group: groups.iter().map(|g| (*g).to_string()).collect(),
+            repo: None,
+            mention: true,
+        }
+    }
+
+    /// The route order **is** the routing rule, so it is asserted directly:
+    /// group routes in definition order, catch-all last however it was
+    /// written (ADR-0081 decisions 2 and 3).
+    #[test]
+    fn group_routes_precede_the_catch_all_whatever_the_order() {
+        let resolved = ReactionTriggers::resolve(&[
+            group_route("slack-mention", &[], None), // the catch-all, written first
+            group_route("slack-oncall", &["S0ONCALL"], None),
+            group_route("slack-design", &["S0DESIGN"], None),
+        ])
+        .expect("valid");
+        assert_eq!(
+            resolved
+                .mention_routes()
+                .iter()
+                .map(|r| r.workflow.as_str())
+                .collect::<Vec<_>>(),
+            vec!["slack-oncall", "slack-design", "slack-mention"]
+        );
+    }
+
+    /// A mention naming two claimed groups takes the earlier workflow — the
+    /// tie-break, and the only place definition order decides anything.
+    #[test]
+    fn two_claimed_groups_break_the_tie_by_definition_order() {
+        let resolved = ReactionTriggers::resolve(&[
+            group_route("slack-oncall", &["S0ONCALL"], None),
+            group_route("slack-design", &["S0DESIGN"], None),
+            group_route("slack-mention", &[], None),
+        ])
+        .expect("valid");
+        let both = vec!["S0DESIGN".to_string(), "S0ONCALL".to_string()];
+        let picked = resolved.mention_routes().iter().find(|r| r.claims(&both));
+        assert_eq!(picked.map(|r| r.workflow.as_str()), Some("slack-oncall"));
+    }
+
+    /// A personal mention names no group, so only the catch-all claims it.
+    #[test]
+    fn a_personal_mention_reaches_the_catch_all() {
+        let resolved = ReactionTriggers::resolve(&[
+            group_route("slack-oncall", &["S0ONCALL"], None),
+            group_route("slack-mention", &[], None),
+        ])
+        .expect("valid");
+        let picked = resolved.mention_routes().iter().find(|r| r.claims(&[]));
+        assert_eq!(picked.map(|r| r.workflow.as_str()), Some("slack-mention"));
+    }
+
+    /// An unclaimed group falls to the catch-all, not off the end
+    /// (ADR-0081 decision 8) — adding one group route must not silently stop
+    /// the other groups' mentions.
+    #[test]
+    fn an_unclaimed_group_falls_to_the_catch_all() {
+        let resolved = ReactionTriggers::resolve(&[
+            group_route("slack-oncall", &["S0ONCALL"], None),
+            group_route("slack-mention", &[], None),
+        ])
+        .expect("valid");
+        let other = vec!["S0GUILD".to_string()];
+        let picked = resolved.mention_routes().iter().find(|r| r.claims(&other));
+        assert_eq!(picked.map(|r| r.workflow.as_str()), Some("slack-mention"));
+    }
+
+    /// …and with no catch-all configured it reaches nothing, which the caller
+    /// reports without spending the dedup key.
+    #[test]
+    fn without_a_catch_all_an_unclaimed_group_reaches_nothing() {
+        let resolved =
+            ReactionTriggers::resolve(&[group_route("slack-oncall", &["S0ONCALL"], None)])
+                .expect("a group route alone is a valid config");
+        let other = vec!["S0GUILD".to_string()];
+        assert!(resolved.mention_routes().iter().all(|r| !r.claims(&other)));
+    }
+
+    /// Two catch-alls is still the old ambiguity; two *group* routes is the
+    /// whole point of the feature and must not be refused.
+    #[test]
+    fn two_catch_alls_are_refused_but_two_group_routes_are_not() {
+        let errors =
+            ReactionTriggers::resolve(&[group_route("a", &[], None), group_route("b", &[], None)])
+                .unwrap_err();
+        assert!(errors[0].contains("no `to_group`"), "{}", errors[0]);
+
+        ReactionTriggers::resolve(&[
+            group_route("a", &["S0ONE"], None),
+            group_route("b", &["S0TWO"], None),
+        ])
+        .expect("two group routes are the point");
+    }
+
+    /// One group selects one workflow. Left to first-match the later workflow
+    /// would be permanently unreachable rather than merely ambiguous.
+    #[test]
+    fn two_workflows_claiming_one_group_are_refused() {
+        let errors = ReactionTriggers::resolve(&[
+            group_route("slack-oncall", &["S0SHARED"], None),
+            group_route("slack-other", &["S0SHARED"], None),
+        ])
+        .unwrap_err();
+        assert!(errors[0].contains("S0SHARED"), "{}", errors[0]);
+        assert!(
+            errors[0].contains("one group selects one workflow"),
+            "{}",
+            errors[0]
+        );
+    }
+
+    /// The group id rides into the task-id prefix, and the profile's prefix
+    /// (when it has one) stays in front of it.
+    #[test]
+    fn the_prefix_carries_the_matched_group() {
+        let plain = MentionRoute {
+            workflow: "w".into(),
+            to_group: vec!["S0ONCALL".into()],
+            task_id_prefix: None,
+            instructions_kind: None,
+            repo: None,
+        };
+        assert_eq!(
+            plain.task_id_prefix_for(Some("S0ONCALL")).as_deref(),
+            Some("S0ONCALL")
+        );
+        let triage = MentionRoute {
+            task_id_prefix: Some("books".into()),
+            ..plain.clone()
+        };
+        assert_eq!(
+            triage.task_id_prefix_for(Some("S0ONCALL")).as_deref(),
+            Some("books:S0ONCALL")
+        );
+        // The catch-all keys on the conversation, so it carries no prefix —
+        // that is what lets a second message in the thread continue it.
+        assert_eq!(plain.task_id_prefix_for(None), None);
     }
 
     /// A resolved trigger set holding `eyes`.
@@ -472,6 +823,8 @@ mod tests {
             task_id_prefix: None,
             instructions_kind: None,
             from_bot: Vec::new(),
+            to_group: Vec::new(),
+            repo: None,
             mention: false,
         }])
         .expect("valid")
@@ -522,6 +875,8 @@ mod tests {
             task_id_prefix: Some("impl".into()),
             instructions_kind: None,
             from_bot: Vec::new(),
+            to_group: Vec::new(),
+            repo: None,
             mention: false,
         }])
         .expect("valid");
@@ -551,6 +906,8 @@ mod tests {
                 task_id_prefix: None,
                 instructions_kind: None,
                 from_bot: Vec::new(),
+                to_group: Vec::new(),
+                repo: None,
                 mention: false,
             },
             WorkflowTrigger {
@@ -559,6 +916,8 @@ mod tests {
                 task_id_prefix: Some("impl".into()),
                 instructions_kind: None,
                 from_bot: Vec::new(),
+                to_group: Vec::new(),
+                repo: None,
                 mention: false,
             },
         ])
@@ -615,6 +974,8 @@ mod tests {
             task_id_prefix: None,
             instructions_kind: None,
             from_bot: Vec::new(),
+            to_group: Vec::new(),
+            repo: None,
             mention: false,
         }])
         .expect("valid");
@@ -632,6 +993,8 @@ mod tests {
                 task_id_prefix: None,
                 instructions_kind: None,
                 from_bot: Vec::new(),
+                to_group: Vec::new(),
+                repo: None,
                 mention: false,
             },
             WorkflowTrigger {
@@ -640,6 +1003,8 @@ mod tests {
                 task_id_prefix: None,
                 instructions_kind: None,
                 from_bot: Vec::new(),
+                to_group: Vec::new(),
+                repo: None,
                 mention: false,
             },
         ])
@@ -659,6 +1024,8 @@ mod tests {
             task_id_prefix: None,
             instructions_kind: None,
             from_bot: Vec::new(),
+            to_group: Vec::new(),
+            repo: None,
             mention: false,
         }])
         .expect_err("a non-name must be rejected");
@@ -675,6 +1042,8 @@ mod tests {
             task_id_prefix: None,
             instructions_kind: None,
             from_bot: Vec::new(),
+            to_group: Vec::new(),
+            repo: None,
             mention: true,
         }])
         .unwrap();
@@ -904,6 +1273,8 @@ mod tests {
             task_id_prefix: None,
             instructions_kind: None,
             from_bot: vec!["B_APPROVALS".to_string()],
+            to_group: Vec::new(),
+            repo: None,
             mention: false,
         }])
         .expect("valid");
