@@ -41,15 +41,18 @@ pub enum OrcaError {
     InvalidResponse(String),
     /// orca does not know the dispatch worktree, so no terminal can be opened
     /// in it. orca discovers a registered repository's git worktrees on its
-    /// own — including the ones totsuka cuts — so this means the repository
-    /// is not registered.
+    /// own — including the ones totsuka cuts, after a short delay the dispatch
+    /// waits out — so this most likely means the repository is not
+    /// registered.
     #[error(
         "orca does not know the worktree {path} → register its repository with \
-         `orca repo add --path <repository>` (orca then sees every worktree of it)"
+         `orca repo add --path <repository>` (orca then sees every worktree of it) [{orca}]"
     )]
     WorktreeUnknown {
         /// The dispatch worktree path.
         path: String,
+        /// What orca answered, since the advice above is an inference.
+        orca: String,
     },
     /// `task/dispatch` arrived without a `tool_launch` (see the herdr plugin's
     /// identical error, #411).

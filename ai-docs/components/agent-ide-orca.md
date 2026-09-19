@@ -37,7 +37,7 @@ orca は公開 REST/ソケット API を持たず、**`orca` CLI（`--json`）�
 
 | メソッド | orca CLI |
 |---|---|
-| `task/dispatch` | `terminal create --worktree path:<worktree_path> --title "totsuka <task_id>" --command "exec env … <tool_launch>"` → `worktree set --comment "totsuka <task_id>" [--display-name "<repo>: <title>"]`（所有マーカーと identity、best-effort）→ `terminal split`（`layout.shell` のときのみ）→ `terminal wait --for tui-idle` → `terminal show` で `agentIdentity` が出るまで待つ（最大 30 秒）→ `terminal send --text <prompt> --enter --wait-submit 60`。`session_id` = 端末 handle。途中で失敗したらタブを閉じてから失敗を返す |
+| `task/dispatch` | `worktree show` で orca がその worktree を認識するまで待つ（最大 20 秒。新しい worktree は 0.8〜10 秒遅れて見つかる）→ `terminal create --worktree path:<worktree_path> --title "totsuka <task_id>" --command "exec env … <tool_launch>"` → `worktree set --comment "totsuka <task_id>" [--display-name "<repo>: <title>"]`（所有マーカーと identity、best-effort）→ `terminal split`（`layout.shell` のときのみ）→ `terminal wait --for tui-idle` → `terminal show` で `agentIdentity` が出るまで待つ（最大 30 秒）→ `terminal send --text <prompt> --enter --wait-submit 60`。`session_id` = 端末 handle。途中で失敗したらタブを閉じてから失敗を返す |
 | `task/cancel` | `terminal close --tab`（`terminal_handle_stale` は成功扱い）。**worktree は消さない** — Orchestrator のもの |
 | `session/attach` | `terminal show` の `connected` → 生存。state は `worktree ps` のその worktree の `status`、無ければ `running` |
 | `session/release` | `terminal show` で `expect_cwd` / `expect_label` を照合 → `terminal close --tab`。終了済み（`connected: false`）は残ったタブを片付けて `gone`。handle 消失と不一致のときは、`session/list` に**別の handle で**同じ worktree（`expect_cwd`）か同じラベル（`expect_label` — `doctor` はこちらだけを送る）の端末があれば `refused`、無ければ `gone` |

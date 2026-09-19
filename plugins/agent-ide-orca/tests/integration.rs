@@ -405,6 +405,46 @@ async fn an_unknown_worktree_points_at_repo_registration() {
     assert!(message.contains("orca repo add"), "{message}");
 }
 
+/// orca finds a freshly cut worktree only after a delay (0.8–2.1s measured,
+/// ~10s in the first e2e). The dispatch waits it out instead of failing.
+#[tokio::test(start_paused = true)]
+async fn a_worktree_orca_has_not_found_yet_is_waited_for() {
+    let cli = FakeCli::default();
+    cli.on(
+        "worktree show",
+        vec![
+            Canned::Err("selector_not_found"),
+            Canned::Err("selector_not_found"),
+            Canned::Ok(json!({ "worktree": { "path": WORKTREE } })),
+        ],
+    );
+    cli.on("terminal create", vec![created()]);
+    cli.on("terminal show", vec![agent_shown()]);
+    let mut d = Driver::new(cli.clone());
+    d.init().await;
+    let disp = d.call("task/dispatch", dispatch_params(None)).await;
+    assert_eq!(disp["result"]["session_id"], HANDLE, "{disp}");
+    assert_eq!(cli.calls_to("worktree show").len(), 3);
+    let keys = cli.keys();
+    let at = |k: &str| keys.iter().position(|x| x == k).unwrap();
+    assert!(at("worktree show") < at("terminal create"), "{keys:?}");
+}
+
+/// Past the wait, the repository really is unregistered: no terminal is
+/// opened, and the error carries orca's own answer beside the advice.
+#[tokio::test(start_paused = true)]
+async fn a_worktree_orca_never_finds_fails_without_opening_a_terminal() {
+    let cli = FakeCli::default();
+    cli.on("worktree show", vec![Canned::Err("selector_not_found")]);
+    let mut d = Driver::new(cli.clone());
+    d.init().await;
+    let disp = d.call("task/dispatch", dispatch_params(None)).await;
+    let message = disp["error"]["message"].as_str().unwrap();
+    assert!(message.contains("orca repo add"), "{message}");
+    assert!(message.contains("selector_not_found"), "{message}");
+    assert!(cli.calls_to("terminal create").is_empty());
+}
+
 #[tokio::test]
 async fn a_resume_that_kills_the_agent_is_unresumable_and_cleaned_up() {
     let cli = FakeCli::default();
@@ -697,6 +737,32 @@ async fn release_of_an_exited_terminal_tidies_its_tab_and_says_gone() {
     assert_eq!(r["result"]["released"], false);
     assert_eq!(r["result"]["not_released"], "gone");
     assert_eq!(cli.calls_to("terminal close").len(), 1);
+}
+
+/// A closed terminal's record answers `worktreePath: ""`. That is "cannot
+/// say", not "a different worktree" — the first e2e refused this release as
+/// someone else's terminal (task 14).
+#[tokio::test]
+async fn release_of_a_closed_terminal_with_no_path_is_gone_not_refused() {
+    let cli = FakeCli::default();
+    cli.on("terminal show", vec![shown(false, "")]);
+    let mut d = Driver::new(cli.clone());
+    d.init().await;
+    let r = d
+        .call(
+            "session/release",
+            json!({ "session_id": HANDLE, "expect_cwd": WORKTREE }),
+        )
+        .await;
+    assert_eq!(r["result"]["released"], false);
+    assert_eq!(r["result"]["not_released"], "gone", "{r}");
+    // It is recognised as the task's own exited terminal — so its leftover
+    // tab is tidied — rather than refused as someone else's and left alone.
+    assert_eq!(cli.calls_to("terminal close").len(), 1);
+    assert!(
+        cli.calls_to("terminal list").is_empty(),
+        "no search for another terminal: this one is the task's"
+    );
 }
 
 #[tokio::test]

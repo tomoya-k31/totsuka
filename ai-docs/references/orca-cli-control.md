@@ -146,6 +146,14 @@ orca は**登録済みリポジトリの git worktree を自分で見つける**
 `orca worktree show --worktree path:<dir>` で引け、`terminal create --worktree path:<dir>` も通る（`worktreeId` は `<repoId>::<path>`）。
 リポジトリが未登録なら `selector_not_found`。
 
+**ただし即座ではない。** `git worktree add` した直後の worktree は、`terminal create` にも `worktree show` にも
+`selector_not_found` と答える。実測で 0.8〜2.1 秒、Orchestrator が同じパスに worktree を作り直した実タスクでは約 10 秒
+続いた。`worktree list --repo` を呼んでも発見は早まらない。逆に、**消した worktree もしばらく `show` で引ける**
+（削除直後に `ok: true`）。
+
+閉じた端末の `terminal show` は記録を残し、`connected: false` に加えて `worktreePath: ""`（空文字）を返す。空文字は
+「不明」として扱うこと（パスとして比べると「別の worktree」に見える）。
+
 orca の外で作った worktree は **external worktree** として扱われる。リポジトリ設定 `externalWorktreeVisibility`（`orca repo show --json` で見える。今回の環境は `show`）が `show` なら、**GUI のサイドバーでプロジェクト配下に表示され**、選ぶとそこで開いた端末タブ（`terminal create` の応答は `surface: visible`）がそのまま見える。Claude の対話画面も普通に表示・操作できることを GUI で確認した。
 
 worktree の `comment`（`worktree set --comment`）はエージェントに書き換えられないので、タスクの持ち主を示すのに使える（agent-ide-orca の所有マーカー）。

@@ -72,6 +72,13 @@ const AGENT_DETECT_WAIT: Duration = Duration::from_secs(30);
 /// The spacing of those checks.
 const AGENT_DETECT_POLL: Duration = Duration::from_millis(500);
 
+/// How long a freshly cut worktree is given to become known to orca before
+/// the dispatch gives up on it (see `wait_for_worktree`).
+const WORKTREE_DISCOVERY_WAIT: Duration = Duration::from_secs(20);
+
+/// The spacing of those checks.
+const WORKTREE_DISCOVERY_POLL: Duration = Duration::from_millis(500);
+
 /// How long `terminal send --wait-submit` watches for the prompt to start a
 /// turn, in seconds. Only an observation: orca never resends, so running out
 /// of it costs a warning, not a duplicate prompt.
@@ -123,6 +130,7 @@ impl<C: OrcaCli> OrcaAgent<C> {
             .as_ref()
             .ok_or(OrcaError::MissingToolLaunch)?;
         let command = shell_command(&tool.program, &tool.args, &tool.env);
+        self.wait_for_worktree(&params.worktree_path).await?;
         let created = self
             .cli
             .run(args([
@@ -144,6 +152,7 @@ impl<C: OrcaCli> OrcaAgent<C> {
                 if e.is_missing() {
                     OrcaError::WorktreeUnknown {
                         path: params.worktree_path.clone(),
+                        orca: e.to_string(),
                     }
                 } else {
                     e
@@ -174,6 +183,52 @@ impl<C: OrcaCli> OrcaAgent<C> {
             return Err(e);
         }
         Ok(TaskDispatchResult { session_id: handle })
+    }
+
+    /// Wait until orca knows the dispatch worktree.
+    ///
+    /// orca finds a registered repository's git worktrees on its own, but
+    /// **not at once**: measured, a worktree `git worktree add`ed a moment
+    /// before answered `selector_not_found` for 0.8–2.1s, and in the first
+    /// orca e2e a re-opened conversation's worktree (cut again at the same
+    /// path) was refused for ~10s — two dispatches failed before the
+    /// Orchestrator's automatic requeue got one through. Nothing tells orca to
+    /// look sooner (`worktree list --repo` does not), so this polls
+    /// `worktree show` until it answers, for up to [`WORKTREE_DISCOVERY_WAIT`].
+    /// Past that the repository really is unregistered, and the error says so
+    /// — with orca's own answer attached, since the advice is an inference.
+    async fn wait_for_worktree(&self, path: &str) -> Result<(), OrcaError> {
+        let deadline = tokio::time::Instant::now() + WORKTREE_DISCOVERY_WAIT;
+        loop {
+            match self
+                .cli
+                .run(args([
+                    "worktree",
+                    "show",
+                    "--worktree",
+                    &format!("path:{path}"),
+                    "--json",
+                ]))
+                .await
+            {
+                Ok(_) => return Ok(()),
+                Err(e) if e.is_missing() => {
+                    if tokio::time::Instant::now() >= deadline {
+                        return Err(OrcaError::WorktreeUnknown {
+                            path: path.to_string(),
+                            orca: e.to_string(),
+                        });
+                    }
+                }
+                // Not a verdict about the worktree: let `terminal create`
+                // report whatever is wrong.
+                Err(e) => {
+                    tracing::debug!(path, error = %e, "worktree show failed; creating the terminal anyway");
+                    return Ok(());
+                }
+            }
+            tokio::time::sleep(WORKTREE_DISCOVERY_POLL).await;
+        }
     }
 
     /// Wait for the agent's TUI, then submit the prompt.
@@ -904,10 +959,14 @@ async fn show_terminal<C: OrcaCli>(cli: &C, handle: &str) -> Result<TerminalReco
     let terminal = shown
         .get("terminal")
         .ok_or_else(|| OrcaError::InvalidResponse("`terminal show` returned no terminal".into()))?;
+    // An empty string is "cannot say", not a value: a closed terminal's
+    // record answers `worktreePath: ""`, and comparing that against the task's
+    // worktree read as "a different terminal" (first orca e2e, task 14).
     let text = |key: &str| {
         terminal
             .get(key)
             .and_then(Value::as_str)
+            .filter(|v| !v.is_empty())
             .map(str::to_string)
     };
     Ok(TerminalRecord {
