@@ -24,8 +24,23 @@ REPO="$(cd "$HERE/../../../.." && pwd)"
 ORCA_BIN="${E2E_ORCA_BIN:-orca}"
 CONFIG="$E2E_HOME/cfg/totsuka/config.toml"
 PLUGIN_BIN="$E2E_HOME/data/totsuka/plugins/orca/orca"
-REPO_WEB="$E2E_HOME/repo/${E2E_GH_REPO_WEB:-totsuka-sandbox-web}"
-REPO_CLI="$E2E_HOME/repo/${E2E_GH_REPO_CLI:-totsuka-sandbox-cli}"
+
+# E2E 設定の [[repositories]] の path（${E2E_HOME} などの環境変数を展開済み）を
+# "<name>\t<path>" で列挙する。**repo の場所は決め打ちしない** — orca が知っているのは
+# 登録されたクローンだけなので、設定が指すクローンと orca の登録が一致している必要がある。
+config_repos() {
+  python3 - "$CONFIG" <<'EOF'
+import os, sys, tomllib
+cfg = tomllib.load(open(sys.argv[1], "rb"))
+for r in cfg.get("repositories", []):
+    print(r["name"] + "\t" + os.path.expandvars(r["path"]))
+EOF
+}
+
+# repo 名 → 設定上の path。
+repo_path_of() {
+  config_repos | awk -F '\t' -v n="$1" '$1 == n { print $2 }'
+}
 
 pass() { printf '  PASS  %s\n' "$*"; }
 fail() {
@@ -75,18 +90,19 @@ cmd_preflight() {
     fail "orca status が答えない（orca_bin / インストールを確認）"
   fi
 
-  echo "== サンドボックス repo の orca 登録と external worktree の表示"
-  for p in "$REPO_WEB" "$REPO_CLI"; do
+  echo "== E2E 設定の [[repositories]] が指すクローンの orca 登録と external worktree の表示"
+  local name p
+  while IFS=$'\t' read -r name p; do
     if repo="$(orca_json repo show --repo "path:$p")"; then
       vis="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["repo"].get("externalWorktreeVisibility"))' <<<"$repo")"
-      pass "登録済み: $p"
+      pass "登録済み: ${name}（${p}）"
       if [ "$vis" = "show" ]; then pass "externalWorktreeVisibility = show"; else
         fail "externalWorktreeVisibility = $vis → totsuka の worktree がサイドバーに出ない（Orca の repo 設定で表示にする）"
       fi
     else
-      fail "未登録: $p → 【承認が要る】orca repo add --path ${p}（Orca のサイドバーにプロジェクトが増える）"
+      fail "未登録: ${name}（${p}）→ 【承認が要る】orca repo add --path ${p}（Orca のサイドバーにプロジェクトが増える）"
     fi
-  done
+  done < <(config_repos)
 
   echo "== インストール済みプラグイン（tt run が起動するのはこのコピー）"
   if [ -x "$PLUGIN_BIN" ]; then
@@ -214,7 +230,8 @@ sys.exit(0 if ok else 1)
   fi
   # orca が 2 本目の worktree を作っていないこと（旧実装の worktree create の再発検知）。
   # タスクが振られた repo で見る（Slack 経路では cli に振られうる）。
-  local extra repo_path="$E2E_HOME/repo/${repo:-${E2E_GH_REPO_WEB:-totsuka-sandbox-web}}"
+  local extra repo_path
+  repo_path="$(repo_path_of "$repo")"
   extra="$("$ORCA_BIN" worktree list --repo "path:$repo_path" --json 2>/dev/null | python3 -c '
 import json, sys
 ws = json.load(sys.stdin).get("result", {}).get("worktrees", [])
