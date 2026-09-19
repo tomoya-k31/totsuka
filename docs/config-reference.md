@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:bd40d40a72d49b7c46047b5fae38485bb95cfc00398293e0e6933cba1fef6653 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:7c73846386c8bff2b935d0f568303f81888277ca4007a0abd45ca6c0497160ef -->
 
 # Configuration reference
 
@@ -56,7 +56,7 @@ cmd:bw get item totsuka-slack | jq -r '.fields[]|select(.name=="api_token").valu
 | `[[repositories]]` | array | — | Repositories to work in |
 | `[plugins.{name}]` | table | — | Which plugins exist and their shared settings |
 | `[[workflows]]` | array | — | Workflow definitions |
-| `[llm]` | table | none | AI gateway settings. Without it, repository selection that needs an LLM falls back to `pending` |
+| `[llm]` | table | none | Repository classification (a chat LLM or a decisions model). Without it, repository selection that needs a classifier falls back to `pending` |
 | `[worktree]` | table | — | Worktree placement and cleanup |
 | `[log]` | table | — | Logging |
 | `[hooks]` | table | — | Receiving agent CLI hook events |
@@ -608,16 +608,43 @@ rubric = "Check that the draft answers the question directly and shows its reaso
 
 ## `[llm]`
 
-Assumes an OpenAI-compatible `/chat/completions`. Used to pick a repository for tasks that carry no hint, and supplied to task source plugins as their default classifier (a plugin's own LLM settings always win).
+Used to pick a repository for tasks that carry no hint, and supplied to task source plugins as their default classifier (a plugin's own LLM settings always win).
+
+`api` chooses the kind of API:
+
+- **`chat`** (the default): an OpenAI-compatible `/chat/completions`. Point `base_url` at OpenRouter, LiteLLM, and so on. The model returns `{repo, confidence, reason}` as structured output
+- **`decisions`**: a decision-only model such as TypeSafe Jev. It generates no text; it picks one of the candidates (or "none fits") and returns a probability for every candidate, and cannot answer outside them. **The default endpoint is OpenRouter's Decisions API (`https://openrouter.ai/api/alpha/decisions`), which OpenRouter labels alpha**, so set `endpoint` if it changes or to call TypeSafe directly (`https://api.typesafe.ai/v1/systemone`). Your OpenRouter API key works as is
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
-| `base_url` | string | required | Base URL, e.g. `https://openrouter.ai/api/v1` |
-| `model` | string | required | Model name |
-| `max_tokens` | int? | none | Maximum tokens for a classification call. When omitted, it is not sent (the provider default applies) |
+| `api` | string? | `"chat"` | `"chat"` or `"decisions"` |
+| `model` | string | required | Model name. For decisions, `~typesafe/jev-latest` (always the latest) or `typesafe/jev-1.13` (pinned) |
+| `base_url` | string | required for chat | Base URL, e.g. `https://openrouter.ai/api/v1`; `/chat/completions` is appended. **An error with decisions** |
+| `max_tokens` | int? | none | Maximum tokens for a classification call. When omitted, it is not sent (the provider default applies). **Chat only** (an error with decisions) |
+| `endpoint` | string? | OpenRouter's Decisions API | The **full URL** of the Decisions API (not a base URL — gateways put it at different paths). **Decisions only** (an error with chat) |
 | `timeout_secs` | int? | 30 | Request timeout |
 | `api_key_ref` | string? | none | Secret reference for the API key |
 | `confidence_threshold` | float? | 0.6 | A classification below this confidence is not used; the task goes to `pending` for a human to confirm. `0.0` to `1.0`; out-of-range values fail validation at startup. Not included in the default passed to task_source plugins (they keep their own threshold) |
+
+A key that does not apply to the chosen `api` (`base_url` / `max_tokens` with decisions, `endpoint` with chat) fails config loading rather than being ignored.
+
+**With decisions, the value compared against the threshold** is the chosen candidate's **probability** (say, 0.84 for `totsuka`), which reads the same way as a chat model's self-reported confidence. The separate `confidence` the API returns (how concentrated the distribution is — 0.6 is possible at a probability of 0.84) is only used when no probability comes back. Probabilities are **rounded to two decimals**, so the threshold is only meaningful in steps of 0.01. A task for which "none fits" is chosen goes to `pending` whatever the probability.
+
+```toml
+# chat (the default)
+[llm]
+base_url = "https://openrouter.ai/api/v1"
+model = "anthropic/claude-haiku-4-5"
+api_key_ref = "keychain:totsuka/openrouter"
+
+# decisions (TypeSafe Jev through OpenRouter; the same key as chat)
+[llm]
+api = "decisions"
+model = "~typesafe/jev-latest"
+api_key_ref = "keychain:totsuka/openrouter"
+# endpoint = "https://openrouter.ai/api/alpha/decisions"   # the default; overridable because it is alpha
+confidence_threshold = 0.7
+```
 
 ## `[worktree]`
 
@@ -949,7 +976,7 @@ kind = "task_source"
 | `[[slack.repos]]` | array | none | Candidate repositories: `name` (must match one in `config.toml`), optional `summary` and `path`. **Omit it and the repositories from `config.toml` are used**, which is usually what you want |
 | `[[slack.channel_groups]]` | array | none | Narrow the candidates by channel name prefix; first match in definition order. `prefix` plus `repos`. Matching is **prefix-only** — `*` is a literal character, and there is no glob or regex. `prefix` takes **either a string or a list of strings** (`prefix = "dev-"`, `prefix = ["dev-", "team-"]`); a list lets several prefixes share one `repos`, so you do not copy the same candidate list once per prefix — and a copy that goes stale in one place is a silent mis-routing rather than a config error. Any entry in the list matching is a hit, and **the outer first-match-by-declaration-order is unchanged**. **A blank string is rejected either way** — as `prefix = ""` or as an entry in `prefix = ["dev-", ""]` — because a blank matches every channel, which would quietly turn its group into the catch-all. An empty list is rejected too (it names nothing). Every blank in a list is reported at once, so you fix them in one pass rather than one restart each. So **a catch-all for every channel does not belong here**; that is what `fallback_repo` is for |
 | `fallback_repo` | string? | none | Where a mention goes when no `[[slack.channel_groups]]` rule matches its channel (a name from `[[slack.repos]]`). Being the only candidate it **resolves without calling the classifier**, so this is how you give org-wide questions — the ones that belong to no single code repository — one deliberate destination. **Omit it and every repository stays a candidate** and goes to the classifier, which gets less accurate and more expensive the more candidates there are. A matching rule that narrows to nothing (an empty `repos`, or only names that do not exist) is treated as no match and lands here too. **It does not let you omit `[slack.llm]`**: that requirement is a plain count of the declared candidates and reads neither this key nor `[[slack.channel_groups]]`, so it applies even to a setup where nothing could reach the classifier (every rule naming one repository, plus this key set). **A name that matches no repository fails startup** with a config error, the same way a `[[slack.channel_groups]]` entry referencing an unknown repository does. So does an empty string, rather than silently ignoring a fallback you meant to set |
-| `[slack.llm]` | table | none | The classifier LLM: `base_url`, `model`, `api_key`, and `confidence_threshold` (default 0.6; below it you get a picker). **Omit it and `config.toml`'s `[llm]` is the default**, provided it has a key. With two or more candidates and neither source of settings, startup fails |
+| `[slack.llm]` | table | none | The classifier: `api` (`"chat"` by default, or `"decisions"`), `base_url` (chat), `endpoint` (decisions; OpenRouter's Decisions API when omitted), `model`, `api_key`, and `confidence_threshold` (default 0.6; below it — or when a decisions model answers "none fits" — you get a picker). **Omit it and `config.toml`'s `[llm]` is the default**, provided it has a key. With two or more candidates and neither source of settings, startup fails |
 | `api_url` | string | `https://slack.com/api` | Web API base URL, for testing |
 | `max_retries` | int | 3 | Retries for retryable API failures. **One call may sleep 90s in total**; if the next wait would exceed that, the call returns the real cause instead of retrying, so a long `retry-after` cannot look like a hang. Raising `max_retries` therefore does not raise the total wait |
 

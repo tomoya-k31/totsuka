@@ -10,14 +10,26 @@
 
 use repo_classifier::{
     ApiKey, Candidate, ChatClassifier, ChatOutput, ChatPrompt, ChatSettings, Classification,
-    ClassifyRequest, HttpTransport, RepoClassifier, RetryPolicy,
+    ClassifyRequest, ConfiguredClassifier, DecisionsClassifier, DecisionsSettings, HttpTransport,
+    RepoClassifier, RetryPolicy,
 };
 
-use crate::config::{LlmConfig, RepoInfo, SlackPrompts};
+use crate::config::{LlmBackend, LlmConfig, RepoInfo, SlackPrompts};
 use crate::template;
 
 /// How much of a candidate's README is offered to the classifier.
 const README_HEAD_LINES: usize = 30;
+
+/// A usable verdict: a candidate at or above the threshold.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Verdict {
+    /// The chosen candidate.
+    pub repo: String,
+    /// The classifier's confidence (≥ the configured threshold).
+    pub confidence: f64,
+    /// Why (logged, not shown to Slack).
+    pub reason: String,
+}
 
 /// How long one classification request may take.
 const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
@@ -36,6 +48,10 @@ pub enum ClassifyError {
     /// The verdict named a repository that is not among the candidates.
     #[error("LLM chose `{0}`, which is not a candidate")]
     UnknownRepo(String),
+    /// The classifier judged that no candidate fits (decisions models can
+    /// say so; a chat model always names one).
+    #[error("the classifier found no fitting repository: {0}")]
+    NoneFits(String),
     /// Valid verdict, but below the configured confidence threshold.
     #[error("LLM confidence {confidence:.2} is below the threshold {threshold:.2}")]
     LowConfidence {
@@ -68,13 +84,16 @@ impl From<repo_classifier::ClassifyError> for ClassifyError {
     }
 }
 
-/// Classify which of `candidates` the mention concerns.
+/// Classify which of `candidates` the mention concerns, with the backend
+/// `[llm].api` names.
 ///
-/// An unreadable verdict is retried once with a correction — the malformed
-/// answer echoed back and [`SlackPrompts::classifier_correction`] appended —
-/// since resending an identical body at temperature 0 to a deterministic
-/// provider would only repeat the failure. Any terminal failure is a
-/// [`ClassifyError`] and the caller falls through to the ephemeral picker.
+/// On a chat backend an unreadable verdict is retried once with a correction
+/// — the malformed answer echoed back and
+/// [`SlackPrompts::classifier_correction`] appended — since resending an
+/// identical body at temperature 0 to a deterministic provider would only
+/// repeat the failure. A decisions backend cannot answer outside its options,
+/// so it has nothing to correct. Any terminal failure is a [`ClassifyError`]
+/// and the caller falls through to the ephemeral picker.
 pub async fn classify<T: HttpTransport>(
     transport: &T,
     config: &LlmConfig,
@@ -82,7 +101,7 @@ pub async fn classify<T: HttpTransport>(
     mention_text: &str,
     thread_context: &str,
     candidates: &[RepoInfo],
-) -> Result<Classification, ClassifyError> {
+) -> Result<Verdict, ClassifyError> {
     // README reads are blocking filesystem I/O; keep them off the async
     // worker so a slow disk cannot stall the runtime.
     let request = {
@@ -101,32 +120,50 @@ pub async fn classify<T: HttpTransport>(
         })?
     };
 
-    let verdict = ChatClassifier::new(transport, chat_settings(config))
-        .classify(&request)
-        .await?;
-    if verdict.confidence < config.confidence_threshold {
-        return Err(ClassifyError::LowConfidence {
-            confidence: verdict.confidence,
-            threshold: config.confidence_threshold,
-        });
+    match classifier(transport, config).classify(&request).await? {
+        Classification::Repo { confidence, .. } if confidence < config.confidence_threshold => {
+            Err(ClassifyError::LowConfidence {
+                confidence,
+                threshold: config.confidence_threshold,
+            })
+        }
+        Classification::Repo {
+            repo,
+            confidence,
+            reason,
+        } => Ok(Verdict {
+            repo,
+            confidence,
+            reason,
+        }),
+        Classification::NoneFits { reason } => Err(ClassifyError::NoneFits(reason)),
     }
-    Ok(verdict)
 }
 
-/// The plugin's call shape: the prompt asks for JSON in prose (no
-/// `response_format`, which not every model accepts), temperature 0, one
-/// attempt with a generous timeout.
-fn chat_settings(config: &LlmConfig) -> ChatSettings {
-    let mut settings = ChatSettings::new(
-        &config.base_url,
-        &config.model,
-        ApiKey::new(config.api_key.as_str()),
-    );
-    settings.output = ChatOutput::Prose;
-    settings.temperature = Some(0.0);
-    settings.timeout = REQUEST_TIMEOUT;
-    settings.retry = RetryPolicy::NONE;
-    settings
+/// The plugin's call shape, whichever the backend: one attempt with a
+/// generous timeout. A chat prompt asks for JSON in prose (no
+/// `response_format`, which not every model accepts) at temperature 0.
+fn classifier<'a, T: HttpTransport>(
+    transport: &'a T,
+    config: &LlmConfig,
+) -> ConfiguredClassifier<&'a T> {
+    let api_key = ApiKey::new(config.api_key.as_str());
+    match &config.backend {
+        LlmBackend::Chat { base_url } => {
+            let mut settings = ChatSettings::new(base_url, &config.model, api_key);
+            settings.output = ChatOutput::Prose;
+            settings.temperature = Some(0.0);
+            settings.timeout = REQUEST_TIMEOUT;
+            settings.retry = RetryPolicy::NONE;
+            ConfiguredClassifier::Chat(ChatClassifier::new(transport, settings))
+        }
+        LlmBackend::Decisions { endpoint } => {
+            let mut settings = DecisionsSettings::new(endpoint, &config.model, api_key);
+            settings.timeout = REQUEST_TIMEOUT;
+            settings.retry = RetryPolicy::NONE;
+            ConfiguredClassifier::Decisions(DecisionsClassifier::new(transport, settings))
+        }
+    }
 }
 
 /// The classification question: the mention and its thread as the subject,
@@ -221,7 +258,9 @@ mod tests {
 
     fn config() -> LlmConfig {
         LlmConfig {
-            base_url: "https://llm.test/v1".into(),
+            backend: LlmBackend::Chat {
+                base_url: "https://llm.test/v1".into(),
+            },
             model: "test-model".into(),
             api_key: "sk-test".into(),
             confidence_threshold: 0.6,
@@ -274,11 +313,87 @@ mod tests {
         }
     }
 
-    async fn run(
-        chat: &FakeChat,
-        candidates: &[RepoInfo],
-    ) -> Result<Classification, ClassifyError> {
+    async fn run(chat: &FakeChat, candidates: &[RepoInfo]) -> Result<Verdict, ClassifyError> {
         classify(chat, &config(), &prompts(), "m", "", candidates).await
+    }
+
+    fn decisions_config() -> LlmConfig {
+        LlmConfig {
+            backend: LlmBackend::Decisions {
+                endpoint: "https://decisions.test/alpha/decisions".into(),
+            },
+            model: "~typesafe/jev-latest".into(),
+            api_key: "sk-test".into(),
+            confidence_threshold: 0.6,
+        }
+    }
+
+    fn decisions_answer(choice: &str, probabilities: Value) -> Result<Value, WireError> {
+        Ok(json!({
+            "model": "typesafe/jev-1.13-20260917",
+            "answers": { "repo": { "type": "choice", "choice": choice, "probabilities": probabilities } },
+        }))
+    }
+
+    /// A decisions backend is asked one choice question — no prompt
+    /// templates, no correction retry — at the configured endpoint.
+    #[tokio::test]
+    async fn a_decisions_backend_resolves_from_its_distribution() {
+        let chat = FakeChat::new(vec![decisions_answer(
+            "web-app",
+            json!({ "web-app": 0.84, "design-system": 0.15, "none": 0.01 }),
+        )]);
+        let verdict = classify(
+            &chat,
+            &decisions_config(),
+            &prompts(),
+            "the button is broken",
+            "",
+            &[repo("web-app"), repo("design-system")],
+        )
+        .await
+        .unwrap();
+        assert_eq!(verdict.repo, "web-app");
+        assert!((verdict.confidence - 0.84).abs() < 1e-9);
+
+        let requests = chat.requests.lock().unwrap();
+        let (url, body) = &requests[0];
+        assert_eq!(url, "https://decisions.test/alpha/decisions");
+        assert_eq!(body["state"]["Mention"], "the button is broken");
+        assert_eq!(
+            body["questions"]["repo"]["criteria"]["web-app"],
+            "web-app summary"
+        );
+        assert!(body.get("messages").is_none(), "not a chat request");
+    }
+
+    #[tokio::test]
+    async fn a_decisions_none_or_a_low_probability_falls_through_to_the_picker() {
+        let candidates = [repo("web-app"), repo("design-system")];
+        let chat = FakeChat::new(vec![decisions_answer(
+            "none",
+            json!({ "web-app": 0.02, "design-system": 0.0, "none": 0.98 }),
+        )]);
+        let err = classify(
+            &chat,
+            &decisions_config(),
+            &prompts(),
+            "lunch?",
+            "",
+            &candidates,
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, ClassifyError::NoneFits(_)), "{err}");
+
+        let chat = FakeChat::new(vec![decisions_answer(
+            "web-app",
+            json!({ "web-app": 0.5, "design-system": 0.5, "none": 0.0 }),
+        )]);
+        let err = classify(&chat, &decisions_config(), &prompts(), "m", "", &candidates)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ClassifyError::LowConfidence { .. }), "{err}");
     }
 
     #[tokio::test]

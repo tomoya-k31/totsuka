@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:bd40d40a72d49b7c46047b5fae38485bb95cfc00398293e0e6933cba1fef6653 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:7c73846386c8bff2b935d0f568303f81888277ca4007a0abd45ca6c0497160ef -->
 
 # 設定リファレンス
 
@@ -57,7 +57,7 @@ cmd:bw get item totsuka-slack | jq -r '.fields[]|select(.name=="api_token").valu
 | `[[repositories]]` | 配列 | — | 作業対象のリポジトリ |
 | `[plugins.{name}]` | テーブル | — | どのプラグインが存在するかと、その共通設定 |
 | `[[workflows]]` | 配列 | — | ワークフロー定義 |
-| `[llm]` | テーブル | なし | AI ゲートウェイの設定。無いと、LLM が要るリポジトリ選択は `pending` へ縮退する |
+| `[llm]` | テーブル | なし | リポジトリ分類の設定（chat 形式の LLM か decisions モデル）。無いと、分類が要るリポジトリ選択は `pending` へ縮退する |
 | `[worktree]` | テーブル | — | worktree の配置と掃除 |
 | `[log]` | テーブル | — | ログ |
 | `[hooks]` | テーブル | — | エージェント CLI のフックイベント受信 |
@@ -609,16 +609,43 @@ rubric = "返信案が質問に直接答えているか、根拠が示されて�
 
 ## `[llm]`
 
-OpenAI 互換の `/chat/completions` を前提とする。ヒントを持たないタスクのリポジトリ選択に使うほか、task_source プラグインへ分類用の既定として供給される（プラグイン自身の LLM 設定が常に優先される）。
+ヒントを持たないタスクのリポジトリ選択に使うほか、task_source プラグインへ分類の既定値として渡す（プラグイン自身の LLM 設定が常に優先）。
+
+呼び出す API の種類を `api` で選ぶ。
+
+- **`chat`**（既定）: OpenAI 互換の `/chat/completions`。`base_url` の先を OpenRouter / LiteLLM などに向ける。モデルに `{repo, confidence, reason}` を structured output で返させる
+- **`decisions`**: TypeSafe Jev のような判定専用モデル。文章を生成せず、候補（＋「どれも当てはまらない」）から 1 つを選び、全候補の確率を返す。候補外の答えは返らない。**既定の呼び出し先は OpenRouter の Decisions API（`https://openrouter.ai/api/alpha/decisions`）で、OpenRouter 側で alpha 扱い**のため、仕様が変わったときや TypeSafe の API を直接使うとき（`https://api.typesafe.ai/v1/systemone`）は `endpoint` で差し替える。OpenRouter の API キーをそのまま使える
 
 | キー | 型 | 既定 | 意味 |
 |---|---|---|---|
-| `base_url` | string | 必須 | ベース URL（例 `https://openrouter.ai/api/v1`） |
-| `model` | string | 必須 | モデル名 |
-| `max_tokens` | int? | なし | 分類呼び出しの最大トークン。省略時は送らない（プロバイダの既定） |
+| `api` | string? | `"chat"` | `"chat"` / `"decisions"` |
+| `model` | string | 必須 | モデル名。decisions なら `~typesafe/jev-latest`（常に最新版）や `typesafe/jev-1.13`（版固定） |
+| `base_url` | string | chat では必須 | ベース URL（例 `https://openrouter.ai/api/v1`）。`/chat/completions` を付けて呼ぶ。**decisions では書くとエラー** |
+| `max_tokens` | int? | なし | 分類呼び出しの最大トークン。省略時は送らない（プロバイダの既定）。**chat 専用**（decisions では書くとエラー） |
+| `endpoint` | string? | OpenRouter の Decisions API | Decisions API の**完全な URL**（ベース URL ではない。ゲートウェイごとにパスが違うため）。**decisions 専用**（chat では書くとエラー） |
 | `timeout_secs` | int? | 30 | リクエストのタイムアウト |
 | `api_key_ref` | string? | なし | API キーのシークレット参照 |
 | `confidence_threshold` | float? | 0.6 | この確信度未満の分類結果は採用せず、タスクを `pending` にして人間に確認を求める。`0.0`〜`1.0`、範囲外は起動時検証でエラー。task_source プラグインへ渡す既定値には含まれない（プラグインは自分の閾値を持つ） |
+
+`api` に合わないキー（decisions の `base_url` / `max_tokens`、chat の `endpoint`）は、無視せず設定の読み込みエラーにする。
+
+**decisions で閾値と比べる値**は、選ばれた候補の**確率**（例: `totsuka` が 0.84）である。chat のモデルが自己申告する confidence と同じ読み方ができる。API が別に返す `confidence`（分布がどれだけ一点に集中しているか。確率 0.84 でも 0.6 になりうる）は、確率が返らなかったときの代わりにだけ使う。確率は**小数第 2 位に丸めて返る**ので、閾値も 0.01 刻みでしか意味を持たない。「どれも当てはまらない」が選ばれたタスクは、確率によらず `pending` になる。
+
+```toml
+# chat（既定）
+[llm]
+base_url = "https://openrouter.ai/api/v1"
+model = "anthropic/claude-haiku-4-5"
+api_key_ref = "keychain:totsuka/openrouter"
+
+# decisions（TypeSafe Jev を OpenRouter 経由で。キーは chat と同じものでよい）
+[llm]
+api = "decisions"
+model = "~typesafe/jev-latest"
+api_key_ref = "keychain:totsuka/openrouter"
+# endpoint = "https://openrouter.ai/api/alpha/decisions"   # 既定。alpha のため差し替え可能にしてある
+confidence_threshold = 0.7
+```
 
 ## `[worktree]`
 
@@ -948,7 +975,7 @@ kind = "task_source"
 | `[[slack.repos]]` | 配列 | なし | リポジトリ候補。`name`（`config.toml` のものと一致必須）と、任意の `summary` / `path`。**省略すると `config.toml` のリポジトリがそのまま候補になる**ので、通常は書かなくてよい |
 | `[[slack.channel_groups]]` | 配列 | なし | チャンネル名の接頭辞で候補を絞る規則。定義順に first-match。`prefix` と `repos` を持つ。マッチは**前方一致だけ**で、`*` はリテラル文字として扱われる（glob・正規表現は無い）。`prefix` は**文字列と文字列配列のどちらでも書ける**（`prefix = "dev-"` / `prefix = ["dev-", "team-"]`）。配列にすると 1 本の `repos` を複数 prefix で共有でき、prefix ごとに同じ候補一覧を書き写さずに済む —— 書き写しは片方だけ古くなったときに設定エラーではなく無言の誤ルーティングになる。配列内はどれか 1 つ当たれば hit で、**外側の定義順 first-match は変わらない**。**空文字は単体でも配列内でも拒否される**（`prefix = ""` も `prefix = ["dev-", ""]` も）。空文字は全チャンネルに当たるので、そのグループが黙って catch-all になってしまうため。空配列も拒否される（何も名指していない）。配列内の空文字は見つかった全件が一度に報告されるので、再起動を繰り返さずに直せる。したがって**全チャンネルに当てる catch-all はここには書けない** —— それは `fallback_repo` の仕事 |
 | `fallback_repo` | string? | なし | `[[slack.channel_groups]]` がどれもマッチしないチャンネルの行き先リポジトリ（`[[slack.repos]]` にある名前）。候補 1 件になるので**分類 LLM を経由せず即確定する**。組織横断の質問のように、特定のコードリポジトリに属さないメンションの受け口を 1 つ決めるためのキー。**省略すると全リポジトリが候補**として分類器へ渡る（候補が多いほど精度は落ちトークンも増える）。マッチした規則が候補ゼロに縮んだ場合（`repos` が空、または存在しない名前だけ）も「マッチしなかった」扱いでここへ落ちる。**これを置いても `[slack.llm]` は省略できない** —— 必須判定は宣言された候補数の素朴なカウントで、このキーも `[[slack.channel_groups]]` も読まない。そのため「全規則が 1 件ずつ挙げ、かつこのキーも設定済み」のように分類器に到達しえない構成でも必須になる。**存在しない名前を指すと起動に失敗する**（設定エラー）。`[[slack.channel_groups]]` が未知のリポジトリを参照した場合と同じ扱い。空文字も同様に拒否される —— 「フォールバックを置いたつもり」を黙って無効にしないため |
-| `[slack.llm]` | テーブル | なし | 分類用の LLM。`base_url` / `model` / `api_key` / `confidence_threshold`（既定 0.6、下回るとピッカーへ）。**省略すると `config.toml` の `[llm]` が既定になる**（キーが解決できる場合のみ）。候補が 2 件以上でどちらにも無ければ起動に失敗する |
+| `[slack.llm]` | テーブル | なし | 分類の設定。`api`（`"chat"` 既定 / `"decisions"`）/ `base_url`（chat）/ `endpoint`（decisions。省略時は OpenRouter の Decisions API）/ `model` / `api_key` / `confidence_threshold`（既定 0.6。下回るとき、decisions で「どれも当てはまらない」が選ばれたときはピッカーへ）。**省略すると `config.toml` の `[llm]` が既定になる**（キーが解決できる場合のみ）。候補が 2 件以上でどちらにも無ければ起動に失敗する |
 | `api_url` | string | `https://slack.com/api` | Web API のベース URL（テスト用） |
 | `max_retries` | int | 3 | 再試行可能な API 失敗の最大再試行回数。**1 回の呼び出しで眠れる合計は 90 秒**で、次の待ち時間がそれを超えるなら再試行せず本当の原因を返す（スロットルの `retry-after` が長いときに「ハングしたように見える」のを避けるため）。`max_retries` を大きくしても待ち時間の合計はこの予算で頭打ちになる |
 

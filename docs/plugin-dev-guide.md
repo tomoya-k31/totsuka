@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](plugin-dev-guide.ja.md)
 
-<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:7fcc33dc9ba9703c33f277bdcaefc03174494f08a478834cd0f81d5561abace1 -->
+<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:bf22ee02c15e2058664190b464b2a0c52b9a2571b452cd30bb82d915ccf08632 -->
 
 # Plugin development guide
 
@@ -76,7 +76,7 @@ The cases that *don't* line up show the rule better. In 0.4.0 only the herdr plu
 `initialize` also hands a `task_source` several things it would otherwise have to configure twice. All are optional — ignore what you do not use.
 
 - `repositories: [{name, summary?, path?}]` — the orchestrator's configured repositories, so a source that resolves repositories itself does not need its own copy
-- `llm: {base_url, model, api_key?}` — the orchestrator's LLM settings with the key already resolved. If your plugin has its own LLM configuration, prefer that and treat this as the default
+- `llm: {api?, base_url, endpoint?, model, api_key?}` — the orchestrator's classifier settings with the key already resolved. If your plugin has its own LLM configuration, prefer that and treat this as the default. `api` absent or `"chat"` means an OpenAI-compatible API at `base_url`; `"decisions"` means a Decisions API at `endpoint`, and then **`base_url` is an empty string** — deliberately, so plugins that do not know `api` read it as "nothing supplied". Do not use an `llm` with an empty `base_url` as a chat API, or one with an `api` value you do not know
 - `workflows: [{workflow, trigger, instructions_kind?, task_id_prefix?, options}]` — every workflow that names you, as its `source` or its `agent`, in the order they appear in the configuration. `trigger` is what a source watches for, passed through exactly as the operator wrote it (an agent gets an empty object); `instructions_kind` and `task_id_prefix` are derived by the orchestrator from the workflow's `profile`; `options` holds the keys on that workflow the orchestrator does not understand. **Reject `trigger` keys you do not read.** Pass-through means nobody else checks them, so a key you ignore is silently dropped and the condition goes away — a typo does not narrow the trigger, it *widens* it. `plugin_sdk::unknown_trigger_keys(&init.workflows, TRIGGER_KEYS)` returns one message per unknown key, each listing the keys you do read; fail `initialize` with `CONFIG_INVALID` if it is not empty. **If your source has assignees, use `plugin_sdk::AssigneeFilter` for the `assignee` condition** — it owns the vocabulary (`@me` / `@none` / `@any` / a name / a list) and the matching, and you supply only what those are matched against: who "me" is, and where the assignees come from. `check_assignee_triggers` in the same module is the `initialize` half: it refuses conditions that cannot be evaluated (an `@me` with no identity configured) and warns about an `assignee` trigger with no `status` beside it, which can only ever run once per task — you declare whether that warning applies, because a source that keys no delivery on its status column would not be helped by adding one
 - `projects: [{name, options}]` — the projects you own, from `[[projects]]` entries whose `source` is you. The repositories bound to each come from `[[repositories]].project`
 

@@ -11,12 +11,12 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use plugin_protocol::manifest::PluginKind;
-use plugin_protocol::methods::{LlmInfo, ProjectInfo, RepoInfo, WorkflowInfo};
+use plugin_protocol::methods::{LlmApiKind, LlmInfo, ProjectInfo, RepoInfo, WorkflowInfo};
 use serde_json::Value;
 
 use crate::adapters::plugin_host::PluginSpec;
 use crate::config::{
-    self, ConfigError, ResolveError, RootConfig, resolve_strings, secret_resolver,
+    self, ConfigError, LlmApi, ResolveError, RootConfig, resolve_strings, secret_resolver,
 };
 use crate::domain::workflow::OutcomeAction;
 use crate::plugins::{PluginStore, StoreError};
@@ -267,8 +267,25 @@ fn llm_info(cfg: &RootConfig, env: &HashMap<String, String>) -> Option<LlmInfo> 
         },
         None => None,
     };
+    // A decisions `[llm]` goes out with an empty `base_url` on purpose: a
+    // pre-0.7.4 plugin ignores `api` and reads that as "nothing supplied"
+    // rather than sending a chat request to a decisions model (protocol 0.7.4).
+    let (api, base_url, endpoint) = match &llm.api {
+        LlmApi::Chat { base_url, .. } => (LlmApiKind::Chat, base_url.clone(), None),
+        LlmApi::Decisions { endpoint } => (
+            LlmApiKind::Decisions,
+            String::new(),
+            Some(
+                endpoint
+                    .clone()
+                    .unwrap_or_else(|| LlmApi::DEFAULT_DECISIONS_ENDPOINT.to_string()),
+            ),
+        ),
+    };
     Some(LlmInfo {
-        base_url: llm.base_url.clone(),
+        api,
+        base_url,
+        endpoint,
         model: llm.model.clone(),
         api_key,
     })
@@ -662,6 +679,29 @@ api_key_ref = "${OPENROUTER_API_KEY}"
         assert_eq!(info.base_url, "https://openrouter.ai/api/v1");
         assert_eq!(info.model, "anthropic/claude-haiku-4.5");
         assert_eq!(info.api_key.as_deref(), Some("sk-or-test"));
+    }
+
+    #[test]
+    fn a_decisions_llm_is_supplied_with_its_endpoint_and_no_base_url() {
+        let cfg = root(
+            r#"
+[llm]
+api = "decisions"
+model = "~typesafe/jev-latest"
+api_key_ref = "${OPENROUTER_API_KEY}"
+"#,
+        );
+        let info = llm_info(&cfg, &env(&[("OPENROUTER_API_KEY", "sk-or-test")])).unwrap();
+        assert_eq!(info.api, LlmApiKind::Decisions);
+        assert_eq!(
+            info.base_url, "",
+            "an old plugin must read this as nothing supplied"
+        );
+        assert_eq!(
+            info.endpoint.as_deref(),
+            Some("https://openrouter.ai/api/alpha/decisions")
+        );
+        assert_eq!(info.model, "~typesafe/jev-latest");
     }
 
     #[test]

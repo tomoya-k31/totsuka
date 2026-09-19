@@ -2333,7 +2333,7 @@ fn check_llm_online(
     match runtime.block_on(classifier.probe()) {
         Ok(()) => checks.push(Check::ok(
             "llm-online",
-            format!("{} accepted the API key", llm.base_url),
+            format!("{} accepted the API key", classifier.endpoint()),
         )),
         Err(e) if e.is_auth_failure() => checks.push(Check::fail(
             "llm-online",

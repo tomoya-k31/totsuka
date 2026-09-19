@@ -92,13 +92,21 @@ done
 
 # ---------- 1) コード側のキー ----------
 #
-# struct の `pub <ident>:` だけを拾う（`pub fn` は `:` が続かないので落ちる）。
+# struct の `<ident>:` だけを拾う（`pub fn` は `:` が続かないので落ちる）。
 # 直前の #[serde(...)] を見て flatten / skip は除外し、rename は差し替える。
 # #[cfg(test)] 以降は読まない（テスト用の struct を本番キーと混ぜない）。
+#
+# **型に `#[serde(try_from = "Raw…")]` が付いていたら、その型のフィールドは
+# キーではない**（#723）。TOML に書かれる形は `Raw…` の側にあり、`try_from` の
+# 先の型は「検証して組み直した結果」である —— `[llm]` は `api` によって
+# `base_url` と `endpoint` のどちらを取るかが変わるので、平たい `RawLlmConfig`
+# で受けて型付きの `LlmConfig { api: LlmApi::Chat { base_url, .. } | … }` に
+# 変換している。`Raw…` は外に見せる理由が無いので非 pub であり、したがって
+# **非 pub の型も読む**。Deserialize を導出していなければ読まない点は同じ。
 extract_code_keys() {
   # shellcheck disable=SC2086
   awk '
-    FNR == 1 { in_test = 0; item = ""; rename = ""; drop = 0; derives = 0; in_derive = 0 }
+    FNR == 1 { in_test = 0; item = ""; rename = ""; drop = 0; derives = 0; in_derive = 0; converted = 0 }
     in_test { next }
     /^#\[cfg\(test\)\]/ { in_test = 1; next }
 
@@ -118,12 +126,14 @@ extract_code_keys() {
 
     # struct / enum の本体だけを読む。impl ブロックや自由関数の中の
     # `Foo { bar: 1 }` を誤ってフィールドとして拾わないための境界である。
+    # 型に付いた `#[serde(try_from = …)]`（derive と型宣言のあいだ、行頭）。
+    /^#\[serde\(.*try_from/ { converted = 1; next }
+
     /^(pub )?(struct|enum) [A-Za-z0-9_]+/ {
-      # 非 pub の型にも derive は付く。ここで消さないと、その derive が
-      # 次に来る pub 型へ持ち越され、Deserialize しない型のフィールドが
-      # 設定キーとして数えられる。
-      item = (derives && /^pub (struct|enum) [A-Za-z0-9_]+.*\{/) ? "on" : ""
-      derives = 0; rename = ""; drop = 0; next
+      # derive と try_from はここで必ず消す。消さないと、Deserialize しない
+      # 次の型へ持ち越されてそのフィールドが設定キーとして数えられる。
+      item = (derives && !converted && /^(pub )?(struct|enum) [A-Za-z0-9_]+.*\{/) ? "on" : ""
+      derives = 0; converted = 0; rename = ""; drop = 0; next
     }
     /^\}/ { item = ""; rename = ""; drop = 0; next }
     item == "" { next }

@@ -3,7 +3,7 @@ type: Spec
 title: totsuka — ローカルAIエージェント Orchestrator 要件定義（v1）
 description: totsuka Orchestrator CLI の要件定義 — タスクソース/Agent IDE/Notifier プラグイン、git worktree ライフサイクル、ワークフロー、並列実行制御、v1 スコープ。
 tags: [orchestrator, requirements, plugin, worktree, cli, rust]
-generated: { by: claude-code/opus-5, at: 2026-09-19T12:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-19T22:00:00+09:00 }
 status: draft
 owner: tomoya-k31
 ---
@@ -99,9 +99,9 @@ Notion タスクや GitHub Projects に紐づく Issue などのタスク管理�
 |---|---|---|
 | F-10 | タスクに repo 指定(Notion プロパティ / Issue の所属リポジトリ等)があればそれを優先する | M |
 | F-11 | 未指定の場合、設定内のリポジトリ概要 + リポジトリルートの README(先頭 N 行)を材料に LLM で分類する | M |
-| F-12 | LLM 呼び出しは OpenAI 互換 API とし、`base_url` を差し替えることで OpenRouter / LiteLLM 等の AI Gateway を指定できる | M |
-| F-13 | モデル名・max_tokens・タイムアウトを設定可能(安価モデル前提、例: haiku 級) | M |
-| F-14 | LLM には structured output で `{repo, confidence, reason}` を返させる。confidence は self-reported の参考値と割り切り、`[llm].confidence_threshold`(既定 0.6)を下回った場合や複数候補が拮抗した場合に人間へ確認を求める(タスクを pending 状態にする) | S |
+| F-12 | LLM 呼び出しは OpenAI 互換 API とし、`base_url` を差し替えることで OpenRouter / LiteLLM 等の AI Gateway を指定できる。代わりに `[llm].api = "decisions"` で判定専用モデル(TypeSafe Jev)でも分類できる。候補(または「どれも当てはまらない」)から 1 つを選び、全候補の確率を返す。呼び出し先の既定は OpenRouter の Decisions API(alpha)で、差し替えられる | M |
+| F-13 | モデル名・max_tokens(chat のみ)・タイムアウトを設定可能(安価モデル前提、例: haiku 級) | M |
+| F-14 | LLM には structured output で `{repo, confidence, reason}` を返させる(decisions モデルでは選ばれた候補の確率を confidence とする)。confidence は参考値と割り切り、`[llm].confidence_threshold`(既定 0.6)を下回った場合、複数候補が拮抗した場合、decisions モデルが「どれも当てはまらない」と答えた場合に人間へ確認を求める(タスクを pending 状態にする) | S |
 | F-15 | README 要約はキャッシュし(XDG_CACHE_HOME)、README の hash 変更時のみ再生成 | C |
 
 ### 4.3 worktree 管理

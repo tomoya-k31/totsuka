@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](orchestrator-spec.ja.md)
 
-<!-- generated-from: ai-docs/product/orchestrator-spec.md sha256:45a05cb4dade6c21356e6f3258e046b832f17236dbc56e31ebc684de456d6d4a -->
+<!-- generated-from: ai-docs/product/orchestrator-spec.md sha256:c5f21825063be9ce4cf6a4b7aaea49d6a932e3fe634fbe9ad7c3a1ebb03a2658 -->
 
 # What totsuka is
 
@@ -40,6 +40,8 @@ Some sources write the result back for you. Where the agent can write the delive
 If the task says which repository it belongs to, that wins. Otherwise totsuka classifies it with an LLM, using the summaries you configured plus the first few lines of each repository's README.
 
 LLM calls go through an OpenAI-compatible API, so pointing `base_url` at a gateway such as OpenRouter or LiteLLM is all it takes to switch providers. A cheap, fast model is assumed. The model reports a confidence alongside its choice; when that confidence is below `[llm].confidence_threshold` (default 0.6), or candidates are close, totsuka asks you rather than guessing.
+
+Instead of a chat model, `[llm].api = "decisions"` classifies with a decision-only model such as TypeSafe Jev. It picks one of the candidates — or "none fits" — and returns a probability for each; the chosen candidate's probability is compared against the same threshold, and "none fits" always goes to you. It is reached through OpenRouter's Decisions API by default, whose endpoint can be overridden.
 
 totsuka also keeps an eye on whether the gateway is alive. It sends the cheapest request the gateway will answer — the same one `totsuka doctor --online` sends — once at startup, again right after the machine wakes from sleep, and whenever ten minutes pass without any call to the gateway (every minute while it is down). Real calls count as contact, so a busy run never spends a probe. A gateway that is not answering shows as `⚠` in the menu bar and under `degraded:` in `totsuka status`, with a short reason (unreachable, timed out, or a server error), and clears by itself as soon as the gateway answers anything at all. Nothing waits on the probe: a gateway that is down never holds up startup, and totsuka keeps running without it.
 

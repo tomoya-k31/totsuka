@@ -28,7 +28,7 @@ use std::str::FromStr;
 
 use crate::logging;
 
-use super::schema::{ConfigError, RootConfig};
+use super::schema::{ConfigError, LlmApi, RootConfig};
 
 /// Prefix for environment variable overrides (F-66 layer 2).
 pub const ENV_PREFIX: &str = "TOTSUKA_";
@@ -112,7 +112,17 @@ const OVERRIDES: &[(&str, Applier)] = &[
         Ok(())
     }),
     ("TOTSUKA_LLM_BASE_URL", |cfg, v| {
-        llm(cfg)?.base_url = v.to_string();
+        match &mut llm(cfg)?.api {
+            LlmApi::Chat { base_url, .. } => *base_url = v.to_string(),
+            other => return Err(inapplicable("base_url", other)),
+        }
+        Ok(())
+    }),
+    ("TOTSUKA_LLM_ENDPOINT", |cfg, v| {
+        match &mut llm(cfg)?.api {
+            LlmApi::Decisions { endpoint } => *endpoint = Some(v.to_string()),
+            other => return Err(inapplicable("endpoint", other)),
+        }
         Ok(())
     }),
     ("TOTSUKA_LLM_MODEL", |cfg, v| {
@@ -120,7 +130,11 @@ const OVERRIDES: &[(&str, Applier)] = &[
         Ok(())
     }),
     ("TOTSUKA_LLM_MAX_TOKENS", |cfg, v| {
-        llm(cfg)?.max_tokens = Some(parse::<u32>(v, "a non-negative integer")?);
+        let value = parse::<u32>(v, "a non-negative integer")?;
+        match &mut llm(cfg)?.api {
+            LlmApi::Chat { max_tokens, .. } => *max_tokens = Some(value),
+            other => return Err(inapplicable("max_tokens", other)),
+        }
         Ok(())
     }),
     ("TOTSUKA_LLM_TIMEOUT_SECS", |cfg, v| {
@@ -204,6 +218,18 @@ fn llm(cfg: &mut RootConfig) -> Result<&mut super::schema::LlmConfig, String> {
     cfg.llm
         .as_mut()
         .ok_or_else(|| "config.toml has no [llm] table to override".to_string())
+}
+
+/// A `TOTSUKA_LLM_*` variable naming a key the configured `[llm].api` does not
+/// take. Not ignored, for the same reason a missing `[llm]` is not: the
+/// operator exported it expecting an effect. `[llm].api` itself has no
+/// variable — switching it changes which keys are required, and the
+/// environment cannot supply a whole table.
+fn inapplicable(key: &str, api: &LlmApi) -> String {
+    format!(
+        "`[llm].{key}` does not apply to [llm].api = \"{}\"",
+        api.name()
+    )
 }
 
 #[cfg(test)]
@@ -294,12 +320,47 @@ block_retry_limit = 3
         .unwrap();
         assert!(warnings.is_empty(), "{warnings:?}");
         let llm = cfg.llm.unwrap();
-        assert_eq!(llm.base_url, "https://env.example/v1");
+        assert_eq!(
+            llm.api,
+            LlmApi::Chat {
+                base_url: "https://env.example/v1".into(),
+                max_tokens: Some(512),
+            }
+        );
         assert_eq!(llm.model, "env-model");
-        assert_eq!(llm.max_tokens, Some(512));
         assert_eq!(llm.timeout_secs, Some(30));
         assert_eq!(llm.api_key_ref.as_deref(), Some("${ENV_KEY}"));
         assert_eq!(llm.confidence_threshold, Some(0.75));
+    }
+
+    #[test]
+    fn llm_overrides_follow_the_configured_api() {
+        let decisions = "[llm]\napi = \"decisions\"\nmodel = \"~typesafe/jev-latest\"\n";
+        let (cfg, _) = apply(
+            decisions,
+            &[(
+                "TOTSUKA_LLM_ENDPOINT",
+                "https://api.typesafe.ai/v1/systemone",
+            )],
+        )
+        .unwrap();
+        assert_eq!(
+            cfg.llm.unwrap().api,
+            LlmApi::Decisions {
+                endpoint: Some("https://api.typesafe.ai/v1/systemone".into())
+            }
+        );
+
+        // A key the configured api does not take is an error, never dropped.
+        for (config, var, value) in [
+            (decisions, "TOTSUKA_LLM_BASE_URL", "https://gw/v1"),
+            (decisions, "TOTSUKA_LLM_MAX_TOKENS", "64"),
+            (WITH_LLM, "TOTSUKA_LLM_ENDPOINT", "https://gw/decisions"),
+        ] {
+            let message = apply(config, &[(var, value)]).unwrap_err().to_string();
+            assert!(message.contains(var), "{message}");
+            assert!(message.contains("does not apply"), "{message}");
+        }
     }
 
     #[test]

@@ -357,7 +357,29 @@ use semver::{Version, VersionReq};
 /// `doctor` teaches the operator that red is normal. The plugin's log is worse:
 /// `doctor` does not read it, so the knowledge never reaches the one command
 /// whose whole job is to surface it.
-pub const PROTOCOL_VERSION: &str = "0.7.3";
+///
+/// 0.7.4 (#723): [`LlmInfo::api`](crate::methods::LlmInfo::api) and
+/// [`LlmInfo::endpoint`](crate::methods::LlmInfo::endpoint) — the
+/// Orchestrator's `[llm]` can name a decisions model (TypeSafe Jev), which has
+/// no `/chat/completions` and so no base URL. When it does, `api` is
+/// `"decisions"`, `endpoint` carries the Decisions API URL, and **`base_url` is
+/// the empty string**.
+///
+/// **The empty `base_url` is what keeps old plugins safe**, not a placeholder.
+/// Nothing tells the Orchestrator which fields a plugin understands, so a
+/// pre-0.7.4 plugin will receive this `LlmInfo`, ignore the two unknown keys,
+/// and read what is left. The bundled Slack plugin has treated an empty
+/// `base_url` as "nothing supplied" since 0.1.2 (#119), so it falls back to its
+/// own `[slack.llm]` instead of sending a chat request to a model that cannot
+/// answer one. A real chat URL in that field would have been the dangerous
+/// choice.
+///
+/// **Patch, additive, no manifest moves.** Absent `api` reads as `"chat"`,
+/// which is exactly what every earlier Orchestrator meant; an `api` this build
+/// does not know reads as [`LlmApiKind::Other`](crate::methods::LlmApiKind::Other)
+/// rather than failing `initialize`. As with 0.7.3, this is a **source** break
+/// for code that builds `LlmInfo` with a struct literal.
+pub const PROTOCOL_VERSION: &str = "0.7.4";
 
 /// [`PROTOCOL_VERSION`] parsed into a [`Version`].
 pub fn protocol_version() -> Version {
@@ -381,7 +403,7 @@ mod tests {
 
     #[test]
     fn current_version_parses() {
-        assert_eq!(protocol_version(), Version::new(0, 7, 3));
+        assert_eq!(protocol_version(), Version::new(0, 7, 4));
     }
 
     #[test]
