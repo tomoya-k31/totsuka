@@ -8,7 +8,7 @@
 #   bash .claude/skills/live-e2e-orca/scripts/orca.sh sessions           # totsuka が開いた orca 端末の一覧
 #   bash .claude/skills/live-e2e-orca/scripts/orca.sh inspect <task-id>  # そのタスクの端末・worktree を判定
 #   bash .claude/skills/live-e2e-orca/scripts/orca.sh snapshot <task-id> # そのタスクの画面
-#   bash .claude/skills/live-e2e-orca/scripts/orca.sh exit-agent <task-id>  # エージェントを /exit させる（deadman 試験）
+#   bash .claude/skills/live-e2e-orca/scripts/orca.sh exit-agent <task-id>  # エージェントのプロセスに SIGTERM（deadman 試験）
 #   bash .claude/skills/live-e2e-orca/scripts/orca.sh cleanup-hints      # 後始末の対象を列挙（消さない）
 #
 # 前提: リポジトリルートで `source .env` 済み（E2E_HOME / E2E_TOTSUKA_BIN / tt）。
@@ -181,15 +181,29 @@ EOF
   echo "==> 反映には tt run の再起動が要る（【手動】人間のターミナルで Ctrl-C → source .env && tt run --watch）"
 }
 
+# totsuka の端末: worktree の orca comment が "totsuka " で始まる worktree にある端末。
+# **タブタイトルでは判定しない** — 作業中のエージェントが OSC で書き換え続ける（ADR-0081 D-4）。
 cmd_sessions() {
-  orca_json terminal list --limit 500 | python3 -c '
-import json, sys
-ts = [t for t in json.load(sys.stdin)["terminals"] if (t.get("title") or "").startswith("totsuka ")]
-if not ts:
+  local terms
+  terms="$(orca_json terminal list --limit 500)"
+  TERMS_JSON="$terms" ORCA_BIN="$ORCA_BIN" python3 - <<'EOF'
+import json, os, subprocess
+ts = [t for t in json.loads(os.environ["TERMS_JSON"])["terminals"] if t.get("worktreeId")]
+comments = {}
+for repo in sorted({t["worktreeId"].split("::", 1)[0] for t in ts}):
+    out = subprocess.run([os.environ["ORCA_BIN"], "worktree", "list", "--repo", "id:" + repo, "--limit", "500", "--json"],
+                         capture_output=True, text=True).stdout
+    try:
+        for w in json.loads(out).get("result", {}).get("worktrees", []):
+            comments[w.get("id")] = w.get("comment") or ""
+    except ValueError:
+        pass
+owned = [t for t in ts if comments.get(t["worktreeId"], "").startswith("totsuka ")]
+if not owned:
     print("(totsuka の端末は無い)")
-for t in ts:
-    print("%s  %-22s connected=%s  %s" % (t["handle"], t["title"], t.get("connected"), t.get("worktreePath")))
-'
+for t in owned:
+    print("%s  %-20s agent=%-6s connected=%s  %s" % (t["handle"], comments[t["worktreeId"]], t.get("agentIdentity"), t.get("connected"), t.get("worktreePath")))
+EOF
 }
 
 # タスクの端末と worktree を、ADR-0081 の契約に照らして判定する。
@@ -206,8 +220,7 @@ t = json.loads(os.environ["TERM_JSON"])["terminal"]
 ok = True
 def same(a, b):
     return a == b or (os.path.exists(a) and os.path.exists(b) and os.path.realpath(a) == os.path.realpath(b))
-title = t.get("title") or ""
-print("  %s  タブタイトル = %r（totsuka で始まり、Claude の OSC に上書きされていない）" % ("PASS" if title.startswith("totsuka ") else "FAIL", title)); ok &= title.startswith("totsuka ")
+print("  ----  タブタイトル = %r（エージェントが付けるもの。判定には使わない）" % (t.get("title") or ""))
 w = t.get("worktreePath") or ""
 print("  %s  端末は totsuka の worktree にある（%s）" % ("PASS" if same(w, wt) else "FAIL", w)); ok &= same(w, wt)
 print("  ----  connected = %s（稼働中なら true。完了後も対話型エージェントは終了しない）" % t.get("connected"))
@@ -221,9 +234,12 @@ EOF
 import json, os, sys
 w = json.load(sys.stdin)["worktree"]
 n = w.get("displayName") or ""
-ok = n.startswith(os.environ.get("REPO_NAME", "") + ": ")
-print("  %s  サイドバーの表示名 = %r（{repo}: {title}）" % ("PASS" if ok else "FAIL", n))
-sys.exit(0 if ok else 1)
+c = w.get("comment") or ""
+ok_c = c.startswith("totsuka ")
+print("  %s  所有マーカー（worktree の comment）= %r（totsuka <source_task_id>）" % ("PASS" if ok_c else "FAIL", c))
+ok_n = n.startswith(os.environ.get("REPO_NAME", "") + ": ")
+print("  %s  サイドバーの表示名 = %r（{repo}: {title}）" % ("PASS" if ok_n else "FAIL", n))
+sys.exit(0 if ok_c and ok_n else 1)
 ' <<<"$wtj" || FAILED=1
   else
     note "worktree show が答えない（worktree 掃除後なら正常）"
@@ -251,18 +267,33 @@ print("\n".join(t.get("tail") or []) or "(source=%s: 画面を描画できない
 '
 }
 
-# エージェントを /exit で終わらせる。exec 起動なので端末ごと終了し、deadman が
-# failed を送るはず。**完了済みのタスクに使っても何も起きない**（Orchestrator が無視する）。
+# エージェントを異常終了させる（deadman 試験）。そのタスクの worktree を cwd に持つ
+# プロセスへ SIGTERM を送る — 起動は exec なので Claude 本体が死ねば端末も終わる。
+# **`/exit` の文字送信はしない**: 完了確認の質問（Approve completion）が出ていると
+# 自由入力の回答として扱われ、タスクが done になってしまう（実機 e2e で踏んだ）。
 cmd_exit_agent() {
-  local id="${1:?task id}" handle wt _repo sent
+  local id="${1:?task id}" handle wt _repo pids
   IFS=$'\t' read -r handle wt _repo < <(task_session "$id")
-  sent="$(orca_json terminal send --terminal "$handle" --text "/exit" --enter)"
-  # プラグインと同じく accepted:false を失敗として扱う（届かなかったのに「送った」と言わない）。
-  if [ "$(python3 -c 'import json,sys; print((json.load(sys.stdin).get("send") or {}).get("accepted"))' <<<"$sent")" = "False" ]; then
-    echo "==> orca が /exit を受け付けなかった（accepted: false）。snapshot で端末の状態を確かめる" >&2
+  [ -n "$wt" ] || { echo "task $id に worktree が無い" >&2; exit 1; }
+  pids="$(lsof -d cwd -Fpn 2>/dev/null | WT="$wt" python3 -c '
+import os, sys
+wt = os.path.realpath(os.environ["WT"])
+pid = None
+for line in sys.stdin:
+    k, v = line[0], line[1:].rstrip("\n")
+    if k == "p":
+        pid = v
+    elif k == "n" and pid and os.path.realpath(v) == wt:
+        print(pid)
+')"
+  if [ -z "$pids" ]; then
+    echo "==> worktree を cwd に持つプロセスが無い（既に終了している？）" >&2
     exit 1
   fi
-  echo "==> /exit を送った。tt task show $id で failed への遷移を確認する"
+  ps -o pid=,comm= -p "$(echo "$pids" | paste -sd, -)"
+  # shellcheck disable=SC2086
+  kill -TERM $pids
+  echo "==> SIGTERM を送った。tt task show $id で failed への遷移を確認する"
 }
 
 cmd_cleanup_hints() {

@@ -44,7 +44,7 @@ bash .claude/skills/live-e2e-herdr/scripts/github.sh verify web "$n"
 
 | 検証点 | 見るもの |
 |---|---|
-| dispatch（F-31） | `inspect`: タブタイトル `totsuka <source_task_id>`、端末の worktree = タスクの worktree |
+| dispatch（F-31） | `inspect`: 端末の worktree = タスクの worktree、その worktree の orca comment が `totsuka <source_task_id>`（所有マーカー） |
 | **worktree が 1 本であること** | `inspect`: orca 自身が作った `totsuka-*` worktree が無い（旧実装の `worktree create` の再発検知） |
 | サイドバーの表示名 | `inspect`: worktree の `displayName` が `{repo}: {title}` |
 | **プロンプトの到達** | `snapshot`: 画面の `❯` の後にタスク本文が**丸ごと 1 ターン**で出ている。空の `❯` のままなら届いていない（troubleshooting 参照） |
@@ -111,13 +111,13 @@ herdr 版 S3 をそのまま回す（文面・承認の依頼の仕方もそち�
 
 人間に見てもらう。**CLI の一覧は GUI と見え方が違う**ので、これは CLI では代替できない:
 
-> Orca のサイドバーで、`totsuka-sandbox-web` プロジェクトの下に `totsuka-sandbox-web: <issue のタイトル>` という worktree が出ていますか？ 選ぶと `totsuka <source_task_id>` というタブに Claude の画面が出ていますか？
+> Orca のサイドバーで、`totsuka-sandbox-web` プロジェクトの下に `totsuka-sandbox-web: <issue のタイトル>` という worktree が出ていますか？ 選ぶと Claude のタブ（タイトルは Claude が付けたもの）に対話画面が出ていますか？
 
 | 検証点 | 区分 |
 |---|---|
 | プロジェクト配下に worktree が出る | 👀（`externalWorktreeVisibility = show` が前提） |
 | 表示名が `{repo}: {title}` | 👀 |
-| タブ名が `totsuka <source_task_id>` のまま（Claude の `✳ Claude Code` に上書きされていない） | 👀 |
+| worktree のメモ（comment）に `totsuka <source_task_id>` が出ている | 👀 GUI での見え方の確認。判定は `inspect` が CLI で行う |
 | Claude の対話画面が見え、操作できる | 👀 |
 | `[orca.layout] shell = true` のときの分割 | 👀 設定したときだけ |
 
