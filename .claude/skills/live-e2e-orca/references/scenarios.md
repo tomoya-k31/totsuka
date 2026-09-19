@@ -94,7 +94,7 @@ bash .claude/skills/live-e2e-orca/scripts/orca.sh sessions
 |---|---|
 | タブが閉じる | `sessions` にそのタスクの行が無い |
 | **worktree は orca から消されない** | `$E2E_HOME/wt/…` が残る（消すのは Orchestrator の cleanup 方針）。`orca worktree rm` は呼ばれない |
-| 冪等 | もう一度 cancel してもエラーにならない |
+| 2 回目の cancel | `tt task cancel` は**エラーを返すのが正常**（`task N is already cancelled → nothing to cancel`）。終端状態のタスクには打てない。プラグイン側の冪等性（消えた端末への close を成功扱い）は結合テストが持つ |
 
 ## O5. Slack / メンション経路と会話の継続 🙋👀
 

@@ -4,7 +4,7 @@ title: live-e2e-herdr スキル
 description: 実 Slack / 実 GitHub / 実 herdr + 実 Claude Code に対して totsuka を通しで動かす実機検証の手順・設定雛形・駆動スクリプト一式（herdr 版、旧名 live-e2e）。自動／手動／目視の区分と、別環境での一からの構築手順を含む。GitHub / Slack の駆動スクリプトと $E2E_HOME は orca 版の live-e2e-orca と共用する。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/.claude/skills/live-e2e-herdr
 tags: [testing, e2e, skill, tooling, slack, github, herdr]
-generated: { by: claude-code/opus-5, at: 2026-08-23T00:00:00Z }
+generated: { by: claude-code/opus-5, at: 2026-09-19T05:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---

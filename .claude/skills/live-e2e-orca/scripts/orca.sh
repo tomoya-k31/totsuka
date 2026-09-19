@@ -17,7 +17,8 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/../../../.." && pwd)"
 # `tt` の定義は herdr 版に 1 つだけある（シェル関数は子プロセスへ継承されない）。
-# shellcheck source=../../live-e2e-herdr/scripts/_common.sh
+# 実行ディレクトリに依らないよう、追跡はせず抑える（_common.sh は tt を定義するだけ）。
+# shellcheck disable=SC1091
 . "$REPO/.claude/skills/live-e2e-herdr/scripts/_common.sh"
 
 ORCA_BIN="${E2E_ORCA_BIN:-orca}"
@@ -52,7 +53,7 @@ else:
 ' <<<"$out"
 }
 
-# task show --json から orca のセッション（最新）を取り出す: "<handle>\t<worktree_path>"
+# task show --json から orca のセッション（最新）を取り出す: "<handle>\t<worktree_path>\t<repo>"
 task_session() {
   tt task show "$1" --json | python3 -c '
 import json, sys
@@ -60,7 +61,7 @@ t = json.load(sys.stdin)
 s = [s for s in t.get("sessions", []) if s.get("plugin") == "orca"]
 if not s:
     print("task %s has no orca session (agent が orca ではない？)" % t.get("id"), file=sys.stderr); sys.exit(1)
-print(s[0]["session_id"] + "\t" + (t.get("worktree_path") or ""))
+print("\t".join([s[0]["session_id"], t.get("worktree_path") or "", t.get("repo") or ""]))
 '
 }
 
@@ -69,7 +70,7 @@ cmd_preflight() {
   if status="$(orca_json status)"; then
     reach="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("runtime",{}).get("reachable"))' <<<"$status")"
     ver="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("runtime",{}).get("appVersion"))' <<<"$status")"
-    [ "$reach" = "True" ] && pass "runtime reachable（orca ${ver}）" || fail "runtime に届かない → Orca アプリを起動（orca open）"
+    if [ "$reach" = "True" ]; then pass "runtime reachable（orca ${ver}）"; else fail "runtime に届かない → Orca アプリを起動（orca open）"; fi
   else
     fail "orca status が答えない（orca_bin / インストールを確認）"
   fi
@@ -79,8 +80,9 @@ cmd_preflight() {
     if repo="$(orca_json repo show --repo "path:$p")"; then
       vis="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["repo"].get("externalWorktreeVisibility"))' <<<"$repo")"
       pass "登録済み: $p"
-      [ "$vis" = "show" ] && pass "externalWorktreeVisibility = show" ||
+      if [ "$vis" = "show" ]; then pass "externalWorktreeVisibility = show"; else
         fail "externalWorktreeVisibility = $vis → totsuka の worktree がサイドバーに出ない（Orca の repo 設定で表示にする）"
+      fi
     else
       fail "未登録: $p → 【承認が要る】orca repo add --path ${p}（Orca のサイドバーにプロジェクトが増える）"
     fi
@@ -90,8 +92,8 @@ cmd_preflight() {
   if [ -x "$PLUGIN_BIN" ]; then
     installed=$(stat -f %m "$PLUGIN_BIN")
     newest=$(find "$REPO/plugins/agent-ide-orca" \( -name '*.rs' -o -name '*.toml' \) -print0 | xargs -0 stat -f %m | sort -n | tail -1)
-    [ "$installed" -ge "$newest" ] && pass "install はソースより新しい" ||
-      fail "install がソースより古い → tt plugin install --from-source --yes orca"
+    if [ "$installed" -ge "$newest" ]; then pass "install はソースより新しい"; else
+      fail "install がソースより古い → tt plugin install --from-source --yes orca"; fi
   else
     fail "未インストール → tt plugin install --from-source --yes orca"
   fi
@@ -119,10 +121,11 @@ if not cfg.get("hooks", {}).get("auth_token_ref"):
     print("  FAIL  [hooks].auth_token_ref が無い（orca は hook_completion を宣言する）"); ok = False
 sys.exit(0 if ok else 1)
 EOF
-  [ "$FAILED" = 0 ] && echo "preflight: OK" || {
+  if [ "$FAILED" != 0 ]; then
     echo "preflight: 未充足あり"
     exit 1
-  }
+  fi
+  echo "preflight: OK"
 }
 
 # E2E 設定の [[workflows]].agent を herdr ⇄ orca で書き換える。バックアップを残す。
@@ -136,17 +139,28 @@ cmd_use() {
   esac
   cp "$CONFIG" "$CONFIG.bak.$(date +%Y%m%d%H%M%S)"
   sed -i '' "s/^agent = \"$from\"/agent = \"$to\"/" "$CONFIG"
-  if ! grep -q '^\[plugins\.orca\]' "$CONFIG"; then
-    # [plugins.herdr] の直後に置く（ロスターの並びを保つ）。
-    python3 - "$CONFIG" <<'EOF'
-import sys
-p = sys.argv[1]; s = open(p).read()
-block = '[plugins.orca]\nenabled = true\nkind = "agent_ide"\n\n'
-anchor = '[plugins.mock_agent]'
-s = s.replace(anchor, block + anchor, 1) if anchor in s else s + '\n' + block
+  # [plugins.orca] を作るか、既にあれば enabled を合わせる（false のまま残っていると
+  # preflight が「use orca」を案内し続け、抜けられない）。
+  python3 - "$CONFIG" "$to" <<'EOF'
+import re, sys
+p, to = sys.argv[1], sys.argv[2]
+s = open(p).read()
+want = "true" if to == "orca" else "false"
+m = re.search(r'^\[plugins\.orca\]\n(?:(?!\[).*\n)*', s, re.M)
+if m:
+    block = m.group(0)
+    if re.search(r'^enabled = ', block, re.M):
+        new = re.sub(r'^enabled = \w+', 'enabled = ' + want, block, count=1, flags=re.M)
+    else:
+        new = block.replace('[plugins.orca]\n', '[plugins.orca]\nenabled = ' + want + '\n', 1)
+    s = s.replace(block, new, 1)
+elif to == "orca":
+    # [plugins.mock_agent] の前に置く（ロスターの並びを保つ）。
+    block = '[plugins.orca]\nenabled = true\nkind = "agent_ide"\n\n'
+    anchor = '[plugins.mock_agent]'
+    s = s.replace(anchor, block + anchor, 1) if anchor in s else s + '\n' + block
 open(p, "w").write(s)
 EOF
-  fi
   grep -n '^agent = \|^\[plugins\.orca\]' "$CONFIG"
   echo "==> 反映には tt run の再起動が要る（【手動】人間のターミナルで Ctrl-C → source .env && tt run --watch）"
 }
@@ -164,9 +178,9 @@ for t in ts:
 
 # タスクの端末と worktree を、ADR-0081 の契約に照らして判定する。
 cmd_inspect() {
-  local id="${1:?task id}" handle wt
-  IFS=$'\t' read -r handle wt < <(task_session "$id")
-  echo "== task $id  handle=$handle"
+  local id="${1:?task id}" handle wt repo
+  IFS=$'\t' read -r handle wt repo < <(task_session "$id")
+  echo "== task $id  handle=$handle  repo=$repo"
   echo "   worktree=$wt"
   if term="$(orca_json terminal show --terminal "$handle")"; then
     TERM_JSON="$term" python3 - "$wt" <<'EOF' || FAILED=1
@@ -187,29 +201,32 @@ EOF
     fail "terminal show が答えない（タブが閉じられた？ cleanup 済みなら正常）"
   fi
   if [ -n "$wt" ] && wtj="$(orca_json worktree show --worktree "path:$wt")"; then
-    python3 -c '
-import json, sys
+    REPO_NAME="$repo" python3 -c '
+import json, os, sys
 w = json.load(sys.stdin)["worktree"]
 n = w.get("displayName") or ""
-print("  %s  サイドバーの表示名 = %r（{repo}: {title}）" % ("PASS" if ": " in n else "FAIL", n))
-' <<<"$wtj"
+ok = n.startswith(os.environ.get("REPO_NAME", "") + ": ")
+print("  %s  サイドバーの表示名 = %r（{repo}: {title}）" % ("PASS" if ok else "FAIL", n))
+sys.exit(0 if ok else 1)
+' <<<"$wtj" || FAILED=1
   else
     note "worktree show が答えない（worktree 掃除後なら正常）"
   fi
   # orca が 2 本目の worktree を作っていないこと（旧実装の worktree create の再発検知）。
-  local extra
-  extra="$("$ORCA_BIN" worktree list --repo "path:$REPO_WEB" --json 2>/dev/null | python3 -c '
+  # タスクが振られた repo で見る（Slack 経路では cli に振られうる）。
+  local extra repo_path="$E2E_HOME/repo/${repo:-${E2E_GH_REPO_WEB:-totsuka-sandbox-web}}"
+  extra="$("$ORCA_BIN" worktree list --repo "path:$repo_path" --json 2>/dev/null | python3 -c '
 import json, sys
 ws = json.load(sys.stdin).get("result", {}).get("worktrees", [])
 print(sum(1 for w in ws if "totsuka-" in (w.get("path") or "").rsplit("/", 1)[-1] and (w.get("creatorProvenance") or {}).get("kind")))
 ' 2>/dev/null || echo 0)"
-  [ "${extra:-0}" = 0 ] && pass "orca 自身が作った totsuka-* worktree は無い" || fail "orca が作った worktree が $extra 本ある（worktree create の再発？）"
+  if [ "${extra:-0}" = 0 ]; then pass "orca 自身が作った totsuka-* worktree は無い"; else fail "orca が作った worktree が $extra 本ある（worktree create の再発？）"; fi
   [ "$FAILED" = 0 ] || exit 1
 }
 
 cmd_snapshot() {
-  local id="${1:?task id}" handle wt
-  IFS=$'\t' read -r handle wt < <(task_session "$id")
+  local id="${1:?task id}" handle wt _repo
+  IFS=$'\t' read -r handle wt _repo < <(task_session "$id")
   orca_json terminal read --terminal "$handle" --screen | python3 -c '
 import json, sys
 t = json.load(sys.stdin)["terminal"]
@@ -220,9 +237,14 @@ print("\n".join(t.get("tail") or []) or "(source=%s: 画面を描画できない
 # エージェントを /exit で終わらせる。exec 起動なので端末ごと終了し、deadman が
 # failed を送るはず。**完了済みのタスクに使っても何も起きない**（Orchestrator が無視する）。
 cmd_exit_agent() {
-  local id="${1:?task id}" handle wt
-  IFS=$'\t' read -r handle wt < <(task_session "$id")
-  orca_json terminal send --terminal "$handle" --text "/exit" --enter >/dev/null
+  local id="${1:?task id}" handle wt _repo sent
+  IFS=$'\t' read -r handle wt _repo < <(task_session "$id")
+  sent="$(orca_json terminal send --terminal "$handle" --text "/exit" --enter)"
+  # プラグインと同じく accepted:false を失敗として扱う（届かなかったのに「送った」と言わない）。
+  if [ "$(python3 -c 'import json,sys; print((json.load(sys.stdin).get("send") or {}).get("accepted"))' <<<"$sent")" = "False" ]; then
+    echo "==> orca が /exit を受け付けなかった（accepted: false）。snapshot で端末の状態を確かめる" >&2
+    exit 1
+  fi
   echo "==> /exit を送った。tt task show $id で failed への遷移を確認する"
 }
 
