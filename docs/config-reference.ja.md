@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:6f9857b64a3f2e7bb904bc11151b1c44f43cbd2d7e98b2a783540da40e4df2a4 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:bd40d40a72d49b7c46047b5fae38485bb95cfc00398293e0e6933cba1fef6653 -->
 
 # 設定リファレンス
 
@@ -615,9 +615,10 @@ OpenAI 互換の `/chat/completions` を前提とする。ヒントを持たな�
 |---|---|---|---|
 | `base_url` | string | 必須 | ベース URL（例 `https://openrouter.ai/api/v1`） |
 | `model` | string | 必須 | モデル名 |
-| `max_tokens` | int? | 256 | 分類呼び出しの最大トークン |
+| `max_tokens` | int? | なし | 分類呼び出しの最大トークン。省略時は送らない（プロバイダの既定） |
 | `timeout_secs` | int? | 30 | リクエストのタイムアウト |
 | `api_key_ref` | string? | なし | API キーのシークレット参照 |
+| `confidence_threshold` | float? | 0.6 | この確信度未満の分類結果は採用せず、タスクを `pending` にして人間に確認を求める。`0.0`〜`1.0`、範囲外は起動時検証でエラー。task_source プラグインへ渡す既定値には含まれない（プラグインは自分の閾値を持つ） |
 
 ## `[worktree]`
 

@@ -1,6 +1,6 @@
 //! Ports layer: trait boundaries that adapters implement.
 //!
-//! The swap-prone boundaries (`TaskSource`, `AgentIde`, `LlmRouter`,
+//! The swap-prone boundaries (`TaskSource`, `AgentIde`, `RepoClassifier`,
 //! `SecretStore`, persistence) live here so their implementations can be
 //! replaced without touching the domain. Filled in incrementally by feature
 //! tasks.
@@ -16,7 +16,7 @@ pub mod signal_ingress;
 pub use agent_session::{AgentSession, AgentSessionError, AttachOutcome};
 pub use clock::Clock;
 pub use git::{GitOutput, GitRunner};
-pub use llm::{ChatRequest, LlmError, LlmRouter};
+pub use llm::{ClassifyError, RepoClassifier};
 pub use process::ProcessProbe;
 pub use secret::{SecretError, SecretRef, SecretStore, SecretString, is_secret_reference};
 pub use signal_ingress::{FocusOutcome, FocusPort, SignalAck, SignalError, SignalPort};

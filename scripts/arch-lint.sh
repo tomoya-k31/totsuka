@@ -5,12 +5,15 @@
 # 対象は「ワークスペース内クレート間」の依存のみ（crates.io 等の外部依存は対象外）。
 #
 # チェック内容:
-#   [E] plugin-deps   : plugins/* の [dependencies] は plugin-protocol / plugin-sdk のみ
+#   [E] plugin-deps   : plugins/* の [dependencies] は plugin-protocol / plugin-sdk /
+#                       repo-classifier のみ
 #   [E] plugin-dev    : plugins/* の [dev-dependencies] は 上記 + test-support のみ
 #   [E] plugin-build  : plugins/* の [build-dependencies] にワークスペース内依存なし
 #   [E] sdk-deps      : plugin-sdk の依存は plugin-protocol（dev は + test-support）のみ、
 #                       [build-dependencies] にワークスペース内依存なし
 #   [E] protocol-leaf : plugin-protocol はワークスペース内クレートに一切依存しない
+#   [E] classifier-leaf : repo-classifier はワークスペース内クレートに一切依存しない
+#                       （core と plugins の双方が使う共有部品なので、どちらにも寄らない）
 #   [E] cycle         : ワークスペース内に依存循環がない
 #   [E] plugin-bin-name : plugins/* は bin ターゲットをちょうど 1 つ持ち、その名前が
 #                       同ディレクトリの plugin.toml の `name` と一致する
@@ -42,8 +45,8 @@ set -euo pipefail
 # 区別できるようにするためにある。理由なしで足さないこと。
 DECLARATION_EXEMPT=""
 
-PLUGIN_ALLOWED_NORMAL="plugin-protocol plugin-sdk"
-PLUGIN_ALLOWED_DEV="plugin-protocol plugin-sdk test-support"
+PLUGIN_ALLOWED_NORMAL="plugin-protocol plugin-sdk repo-classifier"
+PLUGIN_ALLOWED_DEV="plugin-protocol plugin-sdk repo-classifier test-support"
 SDK_ALLOWED_NORMAL="plugin-protocol"
 SDK_ALLOWED_DEV="plugin-protocol test-support"
 # plugin-protocol は leaf: いかなる種類のワークスペース内依存も持たない。
@@ -121,6 +124,9 @@ while IFS="$(printf '\t')" read -r pkg kind dep manifest; do
       ;;
     plugin-protocol)
       error protocol-leaf "$pkg" "leaf クレートがワークスペース内クレート '$dep' に依存（種別: ${kind}）"
+      ;;
+    repo-classifier)
+      error classifier-leaf "$pkg" "leaf クレートがワークスペース内クレート '$dep' に依存（種別: ${kind}）"
       ;;
     esac
     ;;

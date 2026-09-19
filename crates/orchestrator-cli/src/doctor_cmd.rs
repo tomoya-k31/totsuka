@@ -6,12 +6,12 @@ use std::collections::{HashMap, HashSet};
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::Output;
-use std::time::Duration;
 
 use orchestrator_core::adapters::StateError;
 use orchestrator_core::adapters::git::SystemGitRunner;
-use orchestrator_core::adapters::llm::{OpenAiConfig, OpenAiRouter};
+use orchestrator_core::adapters::llm::gateway_classifier;
 use orchestrator_core::adapters::plugin_host;
+use orchestrator_core::ports::RepoClassifier;
 // Aliased on purpose: `plugin_protocol::manifest::PluginKind` (the manifest's
 // declaration) also appears in this file, and the two are different types.
 // This one is the config roster's, which is readable without touching the
@@ -2317,16 +2317,10 @@ fn check_llm_online(
         None => SecretString::new(""),
     };
 
-    // `probe_auth` deliberately bypasses the retry loop — a probe answers now
-    // or not at all, and retrying a 5xx would only make `doctor` hang on an
-    // unwell provider — so `max_retries` is left at its default rather than
-    // zeroed here: an assignment the probe never reads would only suggest it
-    // is what disables retrying. Only `timeout` is honoured.
-    let mut openai = OpenAiConfig::new(&llm.base_url, &llm.model);
-    if let Some(secs) = llm.timeout_secs {
-        openai.timeout = Duration::from_secs(secs);
-    }
-    let router = OpenAiRouter::new(openai, api_key);
+    // The probe is never retried — it answers now or not at all, and retrying
+    // a 5xx would only make `doctor` hang on an unwell provider — and honours
+    // `[llm].timeout_secs`, exactly as the engine's liveness probe does.
+    let classifier = gateway_classifier(llm, api_key);
 
     let Ok(runtime) = tokio::runtime::Runtime::new() else {
         checks.push(Check::fail(
@@ -2336,7 +2330,7 @@ fn check_llm_online(
         ));
         return;
     };
-    match runtime.block_on(router.probe_auth()) {
+    match runtime.block_on(classifier.probe()) {
         Ok(()) => checks.push(Check::ok(
             "llm-online",
             format!("{} accepted the API key", llm.base_url),

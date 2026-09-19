@@ -196,8 +196,11 @@ pub fn settings_from_config(
         cleanup_plan: cleanup_policy(cfg.worktree.plan_cleanup, CleanupPolicy::Immediate),
         env: env.clone(),
         select: SelectConfig {
-            max_tokens: cfg.llm.as_ref().and_then(|l| l.max_tokens),
-            ..SelectConfig::default()
+            confidence_threshold: cfg
+                .llm
+                .as_ref()
+                .and_then(|l| l.confidence_threshold)
+                .unwrap_or(SelectConfig::DEFAULT_CONFIDENCE_THRESHOLD),
         },
         readme_cache_dir: None,
         worktree_sweep_interval: WORKTREE_SWEEP_INTERVAL,

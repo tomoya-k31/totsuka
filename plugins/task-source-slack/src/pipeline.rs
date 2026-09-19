@@ -24,7 +24,6 @@ use plugin_protocol::Task;
 
 use crate::config::{DEFAULT_WATCH_POLL_INTERVAL_SECS, EventSource, SlackConfig};
 use crate::draft::{DRAFT_TTL, Draft, DraftStatus, DraftStore};
-use crate::llm::ChatTransport;
 use crate::mention::{Mention, MentionFilter};
 use crate::reaction::{ReactionTriggers, reaction_target, to_mention};
 use crate::repo_resolver::{Resolution, resolve};
@@ -32,6 +31,7 @@ use crate::slack_api::{PostEphemeral, SlackApi, SlackFile};
 use crate::socket_mode::SocketEvent;
 use crate::template;
 use crate::transport::SlackTransport;
+use repo_classifier::HttpTransport;
 
 /// Slack coordinates a task needs again at `result/publish` time (where the
 /// approved reply goes). Keyed by task id; in-memory, lost on restart —
@@ -377,7 +377,7 @@ pub fn spawn<T, C, S>(
 ) -> tokio::task::JoinHandle<()>
 where
     T: SlackTransport + 'static,
-    C: ChatTransport + 'static,
+    C: HttpTransport + 'static,
     S: Submitter + Clone + 'static,
 {
     tokio::spawn(async move {
@@ -720,7 +720,7 @@ where
 /// Resolve the repository for an enriched mention and either submit the task
 /// or park it behind an ephemeral selection. Runs as its own task (spawned
 /// per mention), so slow LLM calls never stall the event loop.
-async fn handle_mention<T: SlackTransport, C: ChatTransport, S: Submitter>(
+async fn handle_mention<T: SlackTransport, C: HttpTransport, S: Submitter>(
     api: Arc<SlackApi<T>>,
     chat: Arc<C>,
     config: Arc<SlackConfig>,

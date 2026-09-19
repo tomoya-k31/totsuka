@@ -219,6 +219,7 @@
 # model = "anthropic/claude-haiku-4-5"
 # max_tokens = 256                          # cap for the classification call
 # timeout_secs = 30                         # request timeout
+# confidence_threshold = 0.6                # below this, the task waits in `pending` for a human
 # totsuka:secret llm-api-key
 # api_key_ref = "op://Dev/totsuka/llm-api-key"
 

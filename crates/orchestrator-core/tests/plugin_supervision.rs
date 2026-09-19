@@ -29,7 +29,7 @@ use plugin_protocol::manifest::Manifest;
 use serde_json::json;
 
 use orchestrator_core::adapters::git::SystemGitRunner;
-use orchestrator_core::adapters::llm::OpenAiRouter;
+use orchestrator_core::adapters::llm::GatewayClassifier;
 use orchestrator_core::logging::{LogFormat, RedactingLayer};
 
 const RUN_TIMEOUT: Duration = Duration::from_secs(30);
@@ -152,7 +152,7 @@ fn settings_with_backoff(max_attempts: u32, first_backoff: Duration) -> EngineSe
 
 /// Drive a watch-mode run until `cond` holds, then stop it.
 async fn run_until(
-    engine: &mut Engine<SystemGitRunner, OpenAiRouter>,
+    engine: &mut Engine<SystemGitRunner, GatewayClassifier>,
     cond: impl Fn() -> bool,
 ) -> RunSummary {
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
@@ -182,7 +182,7 @@ async fn run_until(
 /// Drive a watch-mode run for a fixed window, then stop it. For assertions
 /// whose subject is that a plugin merely *started*, with no event to wait for.
 async fn run_for(
-    engine: &mut Engine<SystemGitRunner, OpenAiRouter>,
+    engine: &mut Engine<SystemGitRunner, GatewayClassifier>,
     window: Duration,
 ) -> RunSummary {
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
@@ -332,7 +332,7 @@ async fn a_dead_task_source_is_noticed_and_comes_back() {
         settings(5),
         plugins,
         SystemGitRunner,
-        None::<OpenAiRouter>,
+        None::<GatewayClassifier>,
     )
     .await;
 
@@ -387,7 +387,7 @@ async fn a_dead_notifier_is_noticed_and_comes_back() {
         settings(5),
         plugins,
         SystemGitRunner,
-        None::<OpenAiRouter>,
+        None::<GatewayClassifier>,
     )
     .await;
     let probe = counter.clone();
@@ -431,7 +431,7 @@ async fn giving_up_escalates_instead_of_retrying_forever() {
         settings(2),
         plugins,
         SystemGitRunner,
-        None::<OpenAiRouter>,
+        None::<GatewayClassifier>,
     )
     .await;
 
@@ -531,8 +531,14 @@ async fn restart_can_be_disabled_without_losing_detection() {
 
     let mut settings = settings(5);
     settings.restart_disabled = ["mock_src".to_string()].into_iter().collect();
-    let mut engine =
-        Engine::new(db, settings, plugins, SystemGitRunner, None::<OpenAiRouter>).await;
+    let mut engine = Engine::new(
+        db,
+        settings,
+        plugins,
+        SystemGitRunner,
+        None::<GatewayClassifier>,
+    )
+    .await;
 
     let probe = notify_log.clone();
     let summary = run_until(&mut engine, move || {
@@ -658,8 +664,14 @@ output = "none"
     settings.limits = Limits::global(1);
     settings.location_template = format!("{}/../wt/{{worktree_name}}", repo.display());
 
-    let mut engine =
-        Engine::new(db, settings, plugins, SystemGitRunner, None::<OpenAiRouter>).await;
+    let mut engine = Engine::new(
+        db,
+        settings,
+        plugins,
+        SystemGitRunner,
+        None::<GatewayClassifier>,
+    )
+    .await;
 
     // Stop as soon as anything dispatches. Without the gate ahead of slot
     // acquisition nothing ever does, and the harness times out.
@@ -736,7 +748,7 @@ async fn a_task_queued_during_a_crash_window_is_not_failed() {
         settings_with_backoff(5, Duration::from_secs(30)),
         plugins,
         SystemGitRunner,
-        None::<OpenAiRouter>,
+        None::<GatewayClassifier>,
     )
     .await;
 
@@ -791,7 +803,7 @@ async fn the_summary_accounts_for_rpcs_per_plugin() {
         settings(5),
         plugins,
         SystemGitRunner,
-        None::<OpenAiRouter>,
+        None::<GatewayClassifier>,
     )
     .await;
     let summary = run_for(&mut engine, Duration::from_millis(200)).await;
@@ -838,7 +850,7 @@ async fn a_restart_does_not_reset_the_accounting() {
         settings(5),
         plugins,
         SystemGitRunner,
-        None::<OpenAiRouter>,
+        None::<GatewayClassifier>,
     )
     .await;
     let probe = counter.clone();
@@ -891,7 +903,7 @@ async fn an_abandoned_plugin_is_published_as_a_degradation() {
         settings_publishing_health(2, &dir),
         plugins,
         SystemGitRunner,
-        None::<OpenAiRouter>,
+        None::<GatewayClassifier>,
     )
     .await;
 

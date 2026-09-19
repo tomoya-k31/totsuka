@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use orchestrator_core::adapters::clock::ManualClock;
 use orchestrator_core::adapters::git::SystemGitRunner;
-use orchestrator_core::adapters::llm::OpenAiRouter;
+use orchestrator_core::adapters::llm::GatewayClassifier;
 use orchestrator_core::adapters::plugin_host::{Plugin, PluginSpec};
 use orchestrator_core::adapters::state_db::{HookEventInsert, TaskMessageInsert};
 use orchestrator_core::adapters::{NewTask, StateDb};
@@ -62,7 +62,7 @@ protocol_version = ">=0.6.0, <0.8"
     .expect("launch mock plugin")
 }
 
-fn no_llm() -> Option<OpenAiRouter> {
+fn no_llm() -> Option<GatewayClassifier> {
     None
 }
 
@@ -79,7 +79,10 @@ const RUN_TIMEOUT: Duration = Duration::from_secs(30);
 /// `task/submit`, arriving as an event on its own schedule, so `cond`
 /// observes durable state (e.g. re-opening the state DB) rather than
 /// borrowing `engine`, which `run` holds mutably for the loop's duration.
-async fn run_until(engine: &mut Engine<SystemGitRunner, OpenAiRouter>, cond: impl Fn() -> bool) {
+async fn run_until(
+    engine: &mut Engine<SystemGitRunner, GatewayClassifier>,
+    cond: impl Fn() -> bool,
+) {
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
     let mut stop_tx = Some(stop_tx);
     let run_fut = engine.run(true, async move {

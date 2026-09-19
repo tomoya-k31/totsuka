@@ -4,7 +4,7 @@ title: orchestrator-cli クレート
 description: "totsuka の CLI エントリポイント（bin: totsuka）。§5.1 のコマンド体系（setup / run / status / menu / task / focus / plugin / config / logs / doctor / completion）と共通フラグ（--config / --debug / --json）を提供する。"
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/orchestrator-cli
 tags: [rust, crate, cli, plugin, run, status, menu, doctor, hooks, security]
-generated: { by: claude-code/opus-5, at: 2026-09-17T12:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-19T12:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -80,7 +80,7 @@ owner: tomoya-k31
 `check_llm_key`（`llm`）が答えられるのは「**シークレット参照が解決できるか**」だけで、「**その鍵が API に受理されるか**」ではない。両者は無関係で、実機では `op://` 参照が正しく解決する裏でプロバイダが全リクエストに 401 を返し続けていた。決定の全文は [ADR-0016](/decisions/adr-0016-doctor-online-probe.md)。
 
 - 既定の `doctor` は不変（オフライン・非対話・`op://` を解決しない、[ADR-0006](/decisions/adr-0006-onepassword-secret-backend.md)）。`--online` を明示したときだけ `check_llm_online`（`llm-online`）が走る。
-- 実体は core の **`OpenAiRouter::probe_auth`** — `LlmRouter` の本経路を通さない専用メソッドで、**json_schema を送らず**（構造化出力の受理形はプロバイダ差が大きく、拒否された schema の 400 が「鍵が悪い」に化ける）、**リトライせず**（`max_retries = 0`。不調なプロバイダ相手に doctor が固まらない）、`max_tokens: 1`、レスポンス本文は破棄する（2xx = 鍵が受理された、が問い全体）。
+- 実体は core の `gateway_classifier()` で組んだ分類器の **`RepoClassifier::probe`**（#723 までは `OpenAiRouter::probe_auth`）— engine の疎通確認（F-111）と同じ呼び出しで、分類の本経路は通らない。**json_schema を送らず**（構造化出力の受理形はプロバイダ差が大きく、拒否された schema の 400 が「鍵が悪い」に化ける）、**リトライせず**（不調なプロバイダ相手に doctor が固まらない）、`max_tokens: 1`、レスポンス本文は破棄する（2xx = 鍵が受理された、が問い全体）。
 - severity は **401/403 のみ `Check::fail`**。タイムアウト・トランスポート・429・5xx は `Check::warn` に留める — ネットワークの不調で exit 3（[ADR-0012](/decisions/adr-0012-cli-exit-codes-json-errors.md)）になると赤信号が「設定が壊れている」の意味を失う。
 - オフラインの `llm` が解決に失敗している場合はプローブしない（投げる鍵が無く、同じ失敗を言い直すだけ）。
 - **`--online` は `op://` を実際に解決する**ため生体認証プロンプトが出うる。`--help` にも明記しており、CI / cron からは使わない。

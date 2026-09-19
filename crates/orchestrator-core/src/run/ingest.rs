@@ -6,7 +6,7 @@
 
 use super::*;
 
-impl<G: GitRunner, L: LlmRouter + 'static> Engine<G, L> {
+impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// Persist one normalized task under `wf`, idempotently (F-73), appending
     /// the delivery to the conversation's message ledger. Returns
     /// `(row id, outcome)`. Every ingest since 0.2.0 arrives via `task/submit`
@@ -536,7 +536,7 @@ mod tests {
     /// An engine with one workflow named `implement`, which is the name every
     /// test below submits under — so `on_task_submit` resolves and the ingest
     /// path is what the test observes.
-    async fn ingest_test_engine() -> Engine<crate::adapters::git::SystemGitRunner, NoLlmRouter> {
+    async fn ingest_test_engine() -> Engine<crate::adapters::git::SystemGitRunner, NoClassifier> {
         let mut engine = test_engine(Duration::from_secs(3600)).await;
         engine.settings.workflows = vec![Workflow {
             name: "implement".to_string(),
@@ -644,7 +644,7 @@ mod tests {
     /// Add a second workflow on the same source, differing in the fields the
     /// handoff has to move.
     fn add_second_workflow(
-        engine: &mut Engine<crate::adapters::git::SystemGitRunner, NoLlmRouter>,
+        engine: &mut Engine<crate::adapters::git::SystemGitRunner, NoClassifier>,
     ) {
         let mut second = engine.settings.workflows[0].clone();
         second.name = "review".to_string();
@@ -1471,7 +1471,7 @@ mod tests {
         let mut engine = ingest_test_engine().await;
 
         async fn ask(
-            engine: &mut Engine<crate::adapters::git::SystemGitRunner, NoLlmRouter>,
+            engine: &mut Engine<crate::adapters::git::SystemGitRunner, NoClassifier>,
             source: &str,
             task_id: &str,
         ) -> TaskLookupResult {

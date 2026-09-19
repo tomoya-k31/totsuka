@@ -27,13 +27,13 @@ use crate::config::{
 use crate::draft::DraftStore;
 use crate::error::SlackError;
 use crate::gateway;
-use crate::llm::ChatTransport;
 use crate::persist;
 use crate::pipeline::{self, SharedState};
 use crate::reaction::{ReactionTriggers, WorkflowTrigger};
 use crate::slack_api::SlackApi;
 use crate::socket_mode::{self, SocketModeOptions};
 use crate::transport::{SlackTransport, TransportSettings};
+use repo_classifier::HttpTransport;
 
 /// Builds the plugin's outbound clients: the Slack Web API transport and the
 /// repo-classifier chat transport. Abstracted so the server can be tested
@@ -42,7 +42,7 @@ pub trait TransportFactory {
     /// The Slack transport this factory produces.
     type Transport: SlackTransport;
     /// The LLM chat transport this factory produces.
-    type Chat: ChatTransport;
+    type Chat: HttpTransport;
     /// Build a transport from connection `settings`.
     fn build(&self, settings: TransportSettings<'_>) -> Self::Transport;
     /// Build the chat transport for repository classification.

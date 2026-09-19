@@ -7,7 +7,7 @@
 use super::*;
 use crate::adapters::state_db::AUTO_RETRY_KIND;
 
-impl<G: GitRunner, L: LlmRouter + 'static> Engine<G, L> {
+impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// Select a repository for every queued task that has none (F-10–F-14).
     pub(super) async fn select_repos(&mut self) -> Result<(), EngineError> {
         let queued = self.db.tasks_in_state(TaskState::Queued)?;
@@ -59,11 +59,11 @@ impl<G: GitRunner, L: LlmRouter + 'static> Engine<G, L> {
 
     /// Decide the repository for one task (rules first, LLM fallback).
     async fn decide_repo(&self, task: &Task) -> RepoDecision {
-        let candidates: Vec<RepoCandidate> = self
+        let candidates: Vec<Candidate> = self
             .settings
             .repos
             .iter()
-            .map(|r| RepoCandidate {
+            .map(|r| Candidate {
                 name: r.name.clone(),
                 summary: r.summary.clone(),
                 readme_head: self
@@ -74,7 +74,7 @@ impl<G: GitRunner, L: LlmRouter + 'static> Engine<G, L> {
             .collect();
         match &self.llm {
             Some(llm) => select_repo(task, &candidates, llm.as_ref(), &self.settings.select).await,
-            None => select_repo(task, &candidates, &NoLlmRouter, &self.settings.select).await,
+            None => select_repo(task, &candidates, &NoClassifier, &self.settings.select).await,
         }
     }
 
