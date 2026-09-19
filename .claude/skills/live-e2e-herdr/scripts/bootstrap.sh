@@ -2,7 +2,7 @@
 # $E2E_HOME を作り、プラグインを install し、設定の雛形を置く。
 # 既存の設定は上書きしない（値を埋めたものを潰さないため）。
 #
-#   source .env && bash .claude/skills/live-e2e/scripts/bootstrap.sh
+#   source .env && bash .claude/skills/live-e2e-herdr/scripts/bootstrap.sh
 set -euo pipefail
 # `tt` はシェル関数なので子プロセスには継承されない。共通定義を読む。
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_common.sh"

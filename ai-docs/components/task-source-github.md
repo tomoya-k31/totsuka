@@ -71,7 +71,7 @@ manifest（`plugins/task-source-github/plugin.toml`、`protocol_version = ">=0.7
 
 # トークンに必要な権限
 
-**十分条件は実測済み、最小値は未実測**（#514、2026-08-23 / #556、2026-08-25）。下の「実際に呼んでいるもの」は確定した事実で、「実測できたこと」は 2 本のプローブが分担する: 従来 4 操作（fetch / resolve / viewer / カード移動）は `.claude/skills/live-e2e/scripts/github-permissions.sh`（2026-08-23）、claim の 4 操作（claim 読み / user id / self-assign / 自己除去）は `.claude/skills/live-e2e/scripts/github-claim-probe.sh`（2026-08-25、OAuth `gho_` トークンで全 PASS）が、同じサンドボックス（user 所有の Project、private リポジトリ 2 本）へ実際に投げて確かめた。「導いた権限」の側は**依然として導出**である — 権限を削ったトークンをまだ試していないので、そこに書かれた値が**最小**であることは示されていない。**この但し書きは実測が済むまで消さないこと。** 断定に固まると、間違っていたときに誰も疑わなくなる。
+**十分条件は実測済み、最小値は未実測**（#514、2026-08-23 / #556、2026-08-25）。下の「実際に呼んでいるもの」は確定した事実で、「実測できたこと」は 2 本のプローブが分担する: 従来 4 操作（fetch / resolve / viewer / カード移動）は `.claude/skills/live-e2e-herdr/scripts/github-permissions.sh`（2026-08-23）、claim の 4 操作（claim 読み / user id / self-assign / 自己除去）は `.claude/skills/live-e2e-herdr/scripts/github-claim-probe.sh`（2026-08-25、OAuth `gho_` トークンで全 PASS）が、同じサンドボックス（user 所有の Project、private リポジトリ 2 本）へ実際に投げて確かめた。「導いた権限」の側は**依然として導出**である — 権限を削ったトークンをまだ試していないので、そこに書かれた値が**最小**であることは示されていない。**この但し書きは実測が済むまで消さないこと。** 断定に固まると、間違っていたときに誰も疑わなくなる。
 
 ## 実際に呼んでいるもの
 
@@ -90,7 +90,7 @@ manifest（`plugins/task-source-github/plugin.toml`、`protocol_version = ">=0.7
 
 ## 実測できたこと（2026-08-23）
 
-`bash .claude/skills/live-e2e/scripts/github-permissions.sh probe --write` を、実 GitHub の
+`bash .claude/skills/live-e2e-herdr/scripts/github-permissions.sh probe --write` を、実 GitHub の
 サンドボックス（`tomoya-k31` 所有の Project #7 / private リポジトリ 2 本）に対して実行した。
 このスクリプトはプラグインと**同じエンドポイント・同じヘッダ・同じクエリ本文**で 4 操作だけを投げる。
 

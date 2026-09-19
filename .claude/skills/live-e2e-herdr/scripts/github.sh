@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # GitHub 側の駆動と観測。人間の関与ゼロで完結する。
 #
-#   bash .claude/skills/live-e2e/scripts/github.sh bootstrap        # サンドボックス repo 2 つ + Project + seed Issue
-#   bash .claude/skills/live-e2e/scripts/github.sh status           # Project の item と Status 一覧
-#   bash .claude/skills/live-e2e/scripts/github.sh seed <web|cli> <issue#> [Status]  # 既定 Todo。design を試すなら Design
+#   bash .claude/skills/live-e2e-herdr/scripts/github.sh bootstrap        # サンドボックス repo 2 つ + Project + seed Issue
+#   bash .claude/skills/live-e2e-herdr/scripts/github.sh status           # Project の item と Status 一覧
+#   bash .claude/skills/live-e2e-herdr/scripts/github.sh seed <web|cli> <issue#> [Status]  # 既定 Todo。design を試すなら Design
 #
 # `seed` の `<issue#>` は **issue 番号**であって seed の連番ではない。しかも
 # **既に閉じている issue／Project に入っていない issue に打っても何も起きない**
@@ -18,10 +18,10 @@
 # 注意: Project #7 は新規 item を自動で Todo にする。design を回したいときは
 # item-add 後すぐ（poll_interval_secs より早く。既定 60s）Design へ倒すこと。遅れると
 # github-task が先に拾って implement が走る。
-#   bash .claude/skills/live-e2e/scripts/github.sh prime-item <web|cli> <issue#> <item-id>  # item id をキャッシュ
-#   bash .claude/skills/live-e2e/scripts/github.sh clear <web|cli> <issue#>  # Status を外す
-#   bash .claude/skills/live-e2e/scripts/github.sh wait <web|cli> <issue#> [sec]  # **その issue の**タスクが終端に達するまで追う
-#   bash .claude/skills/live-e2e/scripts/github.sh verify <web|cli> <issue#> # F-84/F-86 を判定
+#   bash .claude/skills/live-e2e-herdr/scripts/github.sh prime-item <web|cli> <issue#> <item-id>  # item id をキャッシュ
+#   bash .claude/skills/live-e2e-herdr/scripts/github.sh clear <web|cli> <issue#>  # Status を外す
+#   bash .claude/skills/live-e2e-herdr/scripts/github.sh wait <web|cli> <issue#> [sec]  # **その issue の**タスクが終端に達するまで追う
+#   bash .claude/skills/live-e2e-herdr/scripts/github.sh verify <web|cli> <issue#> # F-84/F-86 を判定
 #
 # GraphQL のレートに注意（実測 2026-08-11）。`gh project` 系は 1 リクエスト 1 ポイント
 # ではない:

@@ -172,7 +172,7 @@ Orchestrator の UDS を叩けず、**タスクは完了報告を出さない**�
 
 # いつ測り直すか
 
-**herdr の版を上げるたび。** 上げた直後の実機検証（[live-e2e スキル](https://github.com/tomoya-k31/totsuka/tree/main/.claude/skills/live-e2e)）に
+**herdr の版を上げるたび。** 上げた直後の実機検証（[live-e2e スキル](https://github.com/tomoya-k31/totsuka/tree/main/.claude/skills/live-e2e-herdr)）に
 C-4 / C-5 を必須項目として入れてある。C-1 / C-2 は 1 コマンドで済むので同時に回す。
 C-3 は独立に測れないため、dispatch のログから読む。
 

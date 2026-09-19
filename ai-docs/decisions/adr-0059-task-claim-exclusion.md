@@ -93,4 +93,4 @@ pre-read で**既に自分が assignee なら書き込まずに Won**。この 1
 - github プラグインの「Issue へは何も書かない」（#398）は**撤回**される: `addAssigneesToAssignable` / `removeAssigneesFromAssignable` / timeline 読みが増え、GraphQL 操作は 4 → 7。トークン権限表も更新（実測は OAuth `gho_` のみ = 実運用と同種別。fine-grained PAT は user 所有 board を読めないため対象外）
 - `TaskState` に `Skipped` が増える（DB マイグレーション不要・TEXT。**旧バイナリは `"skipped"` 行を読めない** — 0.x の downgrade 制約としてリリースノートに記載）。worktree sweep の対象に Skipped を追加（retry 中に負けた行が worktree を持ち得る）
 - capability 未宣言による無言スキップは**受容した残存リスク**（発火点はプラグイン再インストール。doctor 検査は作らないと決めた）。読み取りの結果整合性の窓・クラッシュした勝者の assignee 残留も同様（issue 本文の残存リスク 11〜13）
-- Phase 0 の probe は `.claude/skills/live-e2e/scripts/github-claim-probe.sh` として恒久化（トークン種別を差し替えて再測定できる）
+- Phase 0 の probe は `.claude/skills/live-e2e-herdr/scripts/github-claim-probe.sh` として恒久化（トークン種別を差し替えて再測定できる）

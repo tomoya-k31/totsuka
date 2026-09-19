@@ -30,11 +30,11 @@ date -u +%Y-%m-%dT%H:%M:%SZ > "$E2E_HOME/state/live-e2e/seed-$E2E_GH_REPO_WEB-$n
 iid=$(gh project item-add "$E2E_GH_PROJECT" --owner "$E2E_GH_OWNER" --url "$url" \
         --format json --jq .id)
 # item id をキャッシュへ入れておく（`item-list` の 102 points を毎 run 節約する）
-bash .claude/skills/live-e2e/scripts/github.sh prime-item web "$n" "$iid"
+bash .claude/skills/live-e2e-herdr/scripts/github.sh prime-item web "$n" "$iid"
 
-bash .claude/skills/live-e2e/scripts/github.sh seed  web "$n"   # Issue を Todo にする
-bash .claude/skills/live-e2e/scripts/github.sh wait  web "$n"   # **その issue の**タスクを待つ
-bash .claude/skills/live-e2e/scripts/github.sh verify web "$n"
+bash .claude/skills/live-e2e-herdr/scripts/github.sh seed  web "$n"   # Issue を Todo にする
+bash .claude/skills/live-e2e-herdr/scripts/github.sh wait  web "$n"   # **その issue の**タスクを待つ
+bash .claude/skills/live-e2e-herdr/scripts/github.sh verify web "$n"
 ```
 
 `wait` は `source_task_id`（issue の node id）で対象を特定し、**基準時刻より後に動いた
@@ -78,7 +78,7 @@ S1 と同時に確認できる。`bootstrap` は cli#2 を `In Progress` にし�
 ## S3. Slack / メンション経路 🙋👀
 
 ```bash
-bash .claude/skills/live-e2e/scripts/slack.sh channels              # チャンネル ID の確認
+bash .claude/skills/live-e2e-herdr/scripts/slack.sh channels              # チャンネル ID の確認
 ```
 
 **🙋 人間に依頼**（貼れる文面を渡すこと）:
@@ -87,14 +87,14 @@ bash .claude/skills/live-e2e/scripts/slack.sh channels              # チャン�
 > `@<A の表示名> ログ集計ツールの出力を JSON にも対応させたいです。どう実装するのが良いでしょうか？`
 
 ```bash
-bash .claude/skills/live-e2e/scripts/slack.sh watch                 # タスク化 → done までを追う
-bash .claude/skills/live-e2e/scripts/slack.sh draft                 # self-DM とナッジ DM に返信案が届いたか
+bash .claude/skills/live-e2e-herdr/scripts/slack.sh watch                 # タスク化 → done までを追う
+bash .claude/skills/live-e2e-herdr/scripts/slack.sh draft                 # self-DM とナッジ DM に返信案が届いたか
 ```
 
 **🙋 人間に依頼**: 承認ボタンを押してもらう（スレッド内エフェメラル or self-DM）
 
 ```bash
-bash .claude/skills/live-e2e/scripts/slack.sh reply <thread_ts>     # A 名義のスレッド返信が生えたか
+bash .claude/skills/live-e2e-herdr/scripts/slack.sh reply <thread_ts>     # A 名義のスレッド返信が生えたか
 ```
 
 | 検証点 | 区分 |
@@ -117,8 +117,8 @@ bash .claude/skills/live-e2e/scripts/slack.sh reply <thread_ts>     # A 名義�
 > `#totsuka-e2e` に**メンションなしの普通のメッセージ**を手で打ってください。
 
 ```bash
-bash .claude/skills/live-e2e/scripts/slack.sh react <ts>            # 絵文字付けは自動（reactions.add）
-bash .claude/skills/live-e2e/scripts/slack.sh watch
+bash .claude/skills/live-e2e-herdr/scripts/slack.sh react <ts>            # 絵文字付けは自動（reactions.add）
+bash .claude/skills/live-e2e-herdr/scripts/slack.sh watch
 ```
 
 | 検証点 | 区分 |
@@ -209,9 +209,9 @@ live-e2e にも存在しない。測るなら database を 2 つ作るところ�
 （キャッシュのキーにも project 番号が入るので混ざらない）:
 
 ```bash
-E2E_GH_PROJECT=8 bash .claude/skills/live-e2e/scripts/github.sh status
-E2E_GH_PROJECT=8 bash .claude/skills/live-e2e/scripts/github.sh seed cli <n> Backlog
-E2E_GH_PROJECT=8 bash .claude/skills/live-e2e/scripts/github.sh wait cli <n>
+E2E_GH_PROJECT=8 bash .claude/skills/live-e2e-herdr/scripts/github.sh status
+E2E_GH_PROJECT=8 bash .claude/skills/live-e2e-herdr/scripts/github.sh seed cli <n> Backlog
+E2E_GH_PROJECT=8 bash .claude/skills/live-e2e-herdr/scripts/github.sh wait cli <n>
 ```
 
 `verify` は `Done` 決め打ちなので #8 の `Shipped` レーンには使えない。`status` で列を読む。

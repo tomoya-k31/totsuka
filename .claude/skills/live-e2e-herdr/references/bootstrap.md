@@ -86,7 +86,7 @@ herdr のセッションを起動しておく（`herdr` を実行してターミ
 ## 4. GitHub のサンドボックス【自動】
 
 ```bash
-bash .claude/skills/live-e2e/scripts/github.sh bootstrap
+bash .claude/skills/live-e2e-herdr/scripts/github.sh bootstrap
 ```
 
 作られるもの:
@@ -126,7 +126,7 @@ ProjectsV2 の書き戻し（F-84）には **project write** が要る。3 択:
 
 ```bash
 source .env
-bash .claude/skills/live-e2e/scripts/bootstrap.sh
+bash .claude/skills/live-e2e-herdr/scripts/bootstrap.sh
 ```
 
 やること: ディレクトリ作成 → `cargo build --workspace` → プラグイン（slack / github / herdr /

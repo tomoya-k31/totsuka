@@ -3,7 +3,7 @@
 # **実測**する。設計はこの結果が通らなければ成立しない（issue #556 の
 # 「着手前に必ず測るもの」）。
 #
-#   bash .claude/skills/live-e2e/scripts/github-claim-probe.sh probe
+#   bash .claude/skills/live-e2e-herdr/scripts/github-claim-probe.sh probe
 #   GH_PROBE_TOKEN='…' bash .../github-claim-probe.sh probe   # 別トークンで測る
 #
 # 既定トークンは `.env` の `E2E_GH_TOKEN`。github-permissions.sh と同じ流儀:

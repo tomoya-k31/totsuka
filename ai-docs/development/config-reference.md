@@ -872,7 +872,7 @@ project = "tomo-prj"
 
 **Contents は不要。** classic PAT なら `project` と、`repo`（private を含む場合）または `public_repo`。private org のボードでは `read:org` も要りうる。
 
-実測できているのは「OAuth トークン（scope `gist, project, read:org, repo, workflow`）で 4 操作すべてが通る」まで。**どれが要らないかは測っていない** — とくに Issue の本文・ラベル・アサイニーは `projectV2` 経由でしか読まないので、`project` だけで返るなら `repo` は不要である。確かめ方は `bash .claude/skills/live-e2e/scripts/github-permissions.sh probe --write`。
+実測できているのは「OAuth トークン（scope `gist, project, read:org, repo, workflow`）で 4 操作すべてが通る」まで。**どれが要らないかは測っていない** — とくに Issue の本文・ラベル・アサイニーは `projectV2` 経由でしか読まないので、`project` だけで返るなら `repo` は不要である。確かめ方は `bash .claude/skills/live-e2e-herdr/scripts/github-permissions.sh probe --write`。
 
 **PR 作成はこのトークンの仕事ではない。** `gh pr create` を実行するのはエージェント自身で、ペインの環境にあるあなた自身の `gh` 認証を使う。`gh auth login` は別個の前提条件である。
 
