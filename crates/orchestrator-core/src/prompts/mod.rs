@@ -97,6 +97,12 @@ pub struct Prompts {
     /// Dispatch-time instruction to create the task's branch. Emitted only
     /// when the worktree is handed over detached.
     branch_convention: String,
+    /// Sent instead of [`branch_convention`](Self::branch_convention) when the
+    /// worktree was put **on** a branch its source hinted at (#734).
+    hinted_branch_on: String,
+    /// Sent on a read-only stage whose worktree is **detached at the head** of
+    /// a hinted branch (#734).
+    hinted_branch_detached: String,
     /// Appended to a `triage` task's instructions, naming where the item goes
     /// (#542). `{destination}` is the claiming plugin's own prose.
     project_destination: String,
@@ -179,6 +185,8 @@ pub const ALLOWED_PLACEHOLDERS: &[(&str, &[&str])] = &[
         ],
     ),
     ("branch_convention", &[]),
+    ("hinted_branch_on", &["branch"]),
+    ("hinted_branch_detached", &["branch"]),
     ("project_destination", &["destination"]),
     ("verification_rubric", &[]),
     ("verification_rubric_artifact_url", &[]),
@@ -334,6 +342,20 @@ impl Prompts {
     /// only supplies the text.
     pub fn branch_convention(&self) -> &str {
         &self.branch_convention
+    }
+
+    /// The instruction for a worktree put **on** a branch the task's source
+    /// hinted at (`Task.branch_hint`, #734) — the counterpart of
+    /// [`branch_convention`](Self::branch_convention), which would tell the
+    /// agent to name a new branch.
+    pub fn hinted_branch_on(&self, branch: &str) -> String {
+        self.hinted_branch_on.replace("{branch}", branch)
+    }
+
+    /// The instruction for a read-only stage whose worktree is **detached at
+    /// the head** of a hinted branch (#734).
+    pub fn hinted_branch_detached(&self, branch: &str) -> String {
+        self.hinted_branch_detached.replace("{branch}", branch)
     }
 
     /// The instruction naming where a `triage` task's item goes (#542).
@@ -500,6 +522,8 @@ mod tests {
                 &p.marker_self_report_confirm_question,
             ),
             ("branch_convention", &p.branch_convention),
+            ("hinted_branch_on", &p.hinted_branch_on),
+            ("hinted_branch_detached", &p.hinted_branch_detached),
             ("project_destination", &p.project_destination),
             ("verification_rubric", &p.verification_rubric),
             (
@@ -547,6 +571,41 @@ mod tests {
             "must put the branch BEFORE the first commit — commits made while \
              still detached are reachable from nothing once the worktree goes: \
              {text}"
+        );
+    }
+
+    /// The counterpart of the test above for a hinted branch (#734). Each
+    /// assertion is one of the numbered load-bearing points in
+    /// `defaults.toml`; dropping one reopens the failure it names.
+    #[test]
+    fn the_builtin_hinted_branch_texts_state_what_they_have_to() {
+        let on = Prompts::builtin().hinted_branch_on("renovate/x");
+        assert!(
+            !on.contains("{branch}"),
+            "placeholder left unrendered: {on}"
+        );
+        assert!(
+            on.contains("EXISTING"),
+            "must say the branch already exists — otherwise the repository's \
+             own conventions win and the agent names a fresh one: {on}"
+        );
+        assert!(
+            on.contains("Do not create a branch") && on.contains("do not switch"),
+            "must forbid creating AND switching: {on}"
+        );
+        assert!(on.contains("push"), "must say to push: {on}");
+
+        let detached = Prompts::builtin().hinted_branch_detached("renovate/x");
+        assert!(!detached.contains("{branch}"), "{detached}");
+        assert!(detached.contains("DETACHED"), "{detached}");
+        assert!(
+            detached.contains("not the default branch"),
+            "must say whose files these are — a design written against the \
+             wrong branch is confidently wrong: {detached}"
+        );
+        assert!(
+            detached.contains("read-only"),
+            "must not invite git on a read-only stage: {detached}"
         );
     }
 

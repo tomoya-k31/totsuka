@@ -142,6 +142,84 @@ pub enum WorktreeError {
     /// A location template referenced an unset variable.
     #[error(transparent)]
     Resolve(#[from] ResolveError),
+    /// The branch a source hinted at (`Task.branch_hint`, #734) is not on
+    /// `origin`.
+    ///
+    /// A hard failure, unlike a *recorded* branch that went missing (which
+    /// falls back to a detached worktree, see `branch_source`): falling back
+    /// here starts the work somewhere the source never meant, and the usual
+    /// outcome of that is a second pull request for the same change.
+    #[error(
+        "the hinted branch `{branch}` is not on origin — the pull request it came from may \
+         have been merged or closed since → check the source item, then retry or cancel the task"
+    )]
+    HintedBranchMissing {
+        /// The hinted branch name.
+        branch: String,
+    },
+    /// The hinted branch exists locally and has diverged from `origin`'s.
+    ///
+    /// Neither side is an ancestor of the other, so there is no choice that
+    /// loses nothing: the local commits may be someone's unpushed work, and
+    /// the remote ones are what the pull request now is (a bot that rebases
+    /// its branches force-pushes them routinely).
+    #[error(
+        "the local branch `{branch}` has diverged from origin/{branch} (it may have been \
+         force-pushed) → delete the local branch or reconcile it with origin, then retry"
+    )]
+    HintedBranchDiverged {
+        /// The hinted branch name.
+        branch: String,
+    },
+    /// The hinted branch is checked out in a different worktree, and git
+    /// allows a branch only one.
+    #[error(
+        "the hinted branch `{branch}` is checked out in another worktree at {holder} → if that \
+         is another task's worktree, continue that task instead (move its card back to the \
+         trigger column); otherwise remove that worktree and retry"
+    )]
+    HintedBranchHeld {
+        /// The hinted branch name.
+        branch: String,
+        /// The worktree that holds it.
+        holder: PathBuf,
+    },
+    /// A surviving worktree could not be moved onto the hinted start —
+    /// normally uncommitted changes that the switch would overwrite.
+    #[error(
+        "could not move the worktree at {path} to the hinted branch `{branch}`: {stderr} → \
+         commit, stash or discard the changes there, then retry"
+    )]
+    HintSyncBlocked {
+        /// The worktree that could not be moved.
+        path: PathBuf,
+        /// The hinted branch name.
+        branch: String,
+        /// git stderr.
+        stderr: String,
+    },
+}
+
+/// How a source-supplied branch hint (`Task.branch_hint`, #734) applies to a
+/// worktree. Chosen by the caller from the workflow's profile — a source only
+/// ever names the branch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HintedStart<'a> {
+    /// A writable stage: the worktree goes **on** this branch.
+    On(&'a str),
+    /// A read-only stage: the worktree is **detached at this branch's head**.
+    /// Never on it — a read-only worktree found on a named branch is read as
+    /// "the agent ran git" and the task is failed for it (ADR-0045).
+    DetachedAt(&'a str),
+}
+
+impl HintedStart<'_> {
+    /// The hinted branch name.
+    pub fn branch(&self) -> &str {
+        match self {
+            HintedStart::On(b) | HintedStart::DetachedAt(b) => b,
+        }
+    }
 }
 
 /// The worktree cleanup policy for a workflow mode (F-23, F-85).
@@ -383,6 +461,16 @@ pub struct CreateRequest<'a> {
     pub location_template: &'a str,
     /// Base branch override; `None` detects `origin`'s default (F-25).
     pub base_branch: Option<&'a str>,
+    /// A branch the task's **source** asked for (`Task.branch_hint`, #734).
+    ///
+    /// When set it decides the starting point and
+    /// [`existing_branch`](Self::existing_branch) /
+    /// [`base_branch`](Self::base_branch) are not consulted: the hint is what
+    /// the source says the work *is*, and it is strict where those two are
+    /// lenient — a hinted branch that is missing, diverged or held elsewhere
+    /// is an error rather than a fallback. `None` is every task that existed
+    /// before the field did.
+    pub hinted: Option<HintedStart<'a>>,
     /// Environment for `${ENV}` in the location template.
     pub env: &'a HashMap<String, String>,
 }
@@ -425,33 +513,36 @@ impl<G: GitRunner> WorktreeManager<G> {
     /// working directory — which is why the caller re-renders the *same* path.
     pub fn create(&self, req: &CreateRequest<'_>) -> Result<Worktree, WorktreeError> {
         // F-25: always fetch first so we branch off fresh remote state.
-        let fetch = self.run_with_transient_retry(req.repo_path, &["fetch", "origin"])?;
-        if !fetch.success() {
-            return Err(WorktreeError::Fetch {
-                repo: req.repo_path.display().to_string(),
-                stderr: fetch.stderr,
-            });
-        }
+        self.fetch_origin(req.repo_path)?;
 
-        let default_branch = match req.base_branch {
-            Some(b) => b.to_string(),
-            None => self.detect_default_branch(req.repo_path)?,
+        // A source's hint (#734) names the starting point outright, so the
+        // default branch is not even looked up: the work starts at the hinted
+        // branch's head on `origin`, or it does not start.
+        let base_commit = match req.hinted {
+            Some(hint) => self.hinted_head(req.repo_path, hint.branch())?,
+            None => {
+                let default_branch = match req.base_branch {
+                    Some(b) => b.to_string(),
+                    None => self.detect_default_branch(req.repo_path)?,
+                };
+                // Resolve `origin/{default}` to a commit and branch from *that*:
+                // creating a branch off a remote-tracking ref sets up upstream
+                // tracking, which writes `.git/config` and contends under
+                // parallel creation (§5.5). Branching from a raw commit avoids
+                // that shared-config write entirely.
+                let base_ref = format!("origin/{default_branch}^{{commit}}");
+                let rev = self
+                    .git
+                    .run(req.repo_path, &["rev-parse", "--verify", &base_ref])?;
+                if !rev.success() {
+                    return Err(WorktreeError::Git {
+                        command: "rev-parse".to_string(),
+                        stderr: rev.stderr,
+                    });
+                }
+                rev.stdout.trim().to_string()
+            }
         };
-        // Resolve `origin/{default}` to a commit and branch from *that*: creating
-        // a branch off a remote-tracking ref sets up upstream tracking, which
-        // writes `.git/config` and contends under parallel creation (§5.5).
-        // Branching from a raw commit avoids that shared-config write entirely.
-        let base_ref = format!("origin/{default_branch}^{{commit}}");
-        let rev = self
-            .git
-            .run(req.repo_path, &["rev-parse", "--verify", &base_ref])?;
-        if !rev.success() {
-            return Err(WorktreeError::Git {
-                command: "rev-parse".to_string(),
-                stderr: rev.stderr,
-            });
-        }
-        let base_commit = rev.stdout.trim().to_string();
 
         let ctx = LocationContext {
             repo_path: req.repo_path,
@@ -471,7 +562,19 @@ impl<G: GitRunner> WorktreeManager<G> {
         // Re-creation must work, not just first creation (#254): a task whose
         // worktree was cleaned up is dispatched again on retry or on a new
         // message in the same conversation.
-        let mut source = self.branch_source(req.repo_path, req.existing_branch, &base_commit)?;
+        let mut source = match req.hinted {
+            // Read-only: at the hinted head, on no branch (ADR-0045).
+            Some(HintedStart::DetachedAt(_)) => BranchSource::Detached(base_commit.clone()),
+            Some(HintedStart::On(branch)) => {
+                self.reconcile_hinted_branch(req.repo_path, branch, &base_commit, None)?;
+                if self.ref_exists(req.repo_path, &format!("refs/heads/{branch}"))? {
+                    BranchSource::Existing(branch.to_string())
+                } else {
+                    BranchSource::CreateAt(branch.to_string(), base_commit.clone())
+                }
+            }
+            None => self.branch_source(req.repo_path, req.existing_branch, &base_commit)?,
+        };
         let mut add = self.worktree_add(req.repo_path, &path_str, &source)?;
         if !add.success() && is_stale_registration(&add.stdout, &add.stderr) {
             // The directory vanished without `git worktree remove` (a manual
@@ -577,6 +680,213 @@ impl<G: GitRunner> WorktreeManager<G> {
             }
         }
         Ok(BranchSource::Detached(base_commit.to_string()))
+    }
+
+    /// `git fetch origin`, as [`WorktreeError::Fetch`] when it fails.
+    fn fetch_origin(&self, repo_path: &Path) -> Result<(), WorktreeError> {
+        let fetch = self.run_with_transient_retry(repo_path, &["fetch", "origin"])?;
+        if !fetch.success() {
+            return Err(WorktreeError::Fetch {
+                repo: repo_path.display().to_string(),
+                stderr: fetch.stderr,
+            });
+        }
+        Ok(())
+    }
+
+    /// The commit a hinted branch (#734) is at on `origin`, or
+    /// [`WorktreeError::HintedBranchMissing`].
+    ///
+    /// `origin` only, by design: the hint comes from a source describing the
+    /// remote (a pull request's head), and a local branch of that name proves
+    /// nothing about it. Callers fetch first.
+    fn hinted_head(&self, repo_path: &Path, branch: &str) -> Result<String, WorktreeError> {
+        let rev = self.git.run(
+            repo_path,
+            &[
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                &format!("refs/remotes/origin/{branch}^{{commit}}"),
+            ],
+        )?;
+        if !rev.success() {
+            return Err(WorktreeError::HintedBranchMissing {
+                branch: branch.to_string(),
+            });
+        }
+        Ok(rev.stdout.trim().to_string())
+    }
+
+    /// Whether `ancestor` is reachable from `descendant`.
+    fn is_ancestor(
+        &self,
+        repo_path: &Path,
+        ancestor: &str,
+        descendant: &str,
+    ) -> Result<bool, WorktreeError> {
+        let out = self.git.run(
+            repo_path,
+            &["merge-base", "--is-ancestor", ancestor, descendant],
+        )?;
+        match out.status {
+            Some(0) => Ok(true),
+            Some(1) => Ok(false),
+            _ => Err(WorktreeError::Git {
+                command: "merge-base".to_string(),
+                stderr: out.stderr,
+            }),
+        }
+    }
+
+    /// The worktree that has `branch` checked out, other than `own`.
+    fn branch_holder(
+        &self,
+        repo_path: &Path,
+        branch: &str,
+        own: Option<&Path>,
+    ) -> Result<Option<PathBuf>, WorktreeError> {
+        let listing = self.worktree_list(repo_path)?;
+        let own = own.map(canonical);
+        let wanted = format!("branch refs/heads/{branch}");
+        let mut current: Option<PathBuf> = None;
+        for line in listing.lines() {
+            if let Some(raw) = line.strip_prefix("worktree ") {
+                current = Some(PathBuf::from(raw.trim()));
+            } else if line.trim() == wanted
+                && let Some(path) = &current
+                && own.as_ref() != Some(&canonical(path))
+            {
+                return Ok(Some(path.clone()));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Make the local side of a hinted branch (#734) fit to work on, or say
+    /// why it is not. `origin_head` is where `origin` has it; `own` is the
+    /// task's own worktree when it already exists (the sync path).
+    ///
+    /// The local branch, when there is one, is somebody's: an operator's old
+    /// `gh pr checkout`, or this task's own earlier run. So it is never
+    /// reset — the four cases are:
+    ///
+    /// | local vs `origin` | what happens |
+    /// |---|---|
+    /// | no local branch | nothing; the caller creates it at `origin_head` |
+    /// | same commit, or local is **ahead** | nothing (ahead is unpushed work) |
+    /// | local is **behind** | fast-forwarded to `origin_head` |
+    /// | **diverged** | [`WorktreeError::HintedBranchDiverged`] |
+    ///
+    /// Held elsewhere is checked first and wins: moving a ref under another
+    /// worktree's feet would leave that worktree showing a diff nobody made.
+    fn reconcile_hinted_branch(
+        &self,
+        repo_path: &Path,
+        branch: &str,
+        origin_head: &str,
+        own: Option<&Path>,
+    ) -> Result<(), WorktreeError> {
+        if let Some(holder) = self.branch_holder(repo_path, branch, own)? {
+            return Err(WorktreeError::HintedBranchHeld {
+                branch: branch.to_string(),
+                holder,
+            });
+        }
+        let local_ref = format!("refs/heads/{branch}");
+        // One call answers both "is there a local branch" and "where is it".
+        let rev = self
+            .git
+            .run(repo_path, &["rev-parse", "--verify", "--quiet", &local_ref])?;
+        if !rev.success() {
+            return Ok(());
+        }
+        let local_head = rev.stdout.trim().to_string();
+        if local_head == origin_head || self.is_ancestor(repo_path, origin_head, &local_head)? {
+            return Ok(());
+        }
+        if !self.is_ancestor(repo_path, &local_head, origin_head)? {
+            return Err(WorktreeError::HintedBranchDiverged {
+                branch: branch.to_string(),
+            });
+        }
+        // Behind. When the task's own worktree is on the branch the ref cannot
+        // be moved from outside it (git refuses, rightly), so fast-forward
+        // from inside; the old-value guard on `update-ref` is the same
+        // compare-and-swap for the other case.
+        let forwarded = match own.filter(|w| self.head_branch(w).as_deref() == Some(branch)) {
+            Some(worktree) => self
+                .git
+                .run(worktree, &["merge", "--ff-only", origin_head])?,
+            None => self.git.run(
+                repo_path,
+                &["update-ref", &local_ref, origin_head, &local_head],
+            )?,
+        };
+        if !forwarded.success() {
+            return Err(WorktreeError::HintSyncBlocked {
+                path: own.unwrap_or(repo_path).to_path_buf(),
+                branch: branch.to_string(),
+                stderr: forwarded.stderr.trim().to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Bring a **surviving** worktree to its hinted start (#734).
+    ///
+    /// [`create`](Self::create) applies a hint only when it builds the
+    /// worktree, and a dispatch reuses one that is still on disk — so without
+    /// this, a task handed from a read-only stage to a writable one would
+    /// start the writable stage detached at whatever commit the first stage
+    /// saw, and be told to name a new branch. Runs on every dispatch of a
+    /// hinted task; when nothing has moved it is a fetch and two `rev-parse`s.
+    ///
+    /// Never discards anything: a switch that uncommitted changes would block
+    /// is [`WorktreeError::HintSyncBlocked`], for a human to resolve.
+    pub fn sync_to_hint(
+        &self,
+        repo_path: &Path,
+        worktree_path: &Path,
+        hint: HintedStart<'_>,
+    ) -> Result<(), WorktreeError> {
+        self.fetch_origin(repo_path)?;
+        let branch = hint.branch();
+        let origin_head = self.hinted_head(repo_path, branch)?;
+        let switch: Vec<&str> = match hint {
+            HintedStart::DetachedAt(_) => {
+                let at = self.git.run(worktree_path, &["rev-parse", "HEAD"])?;
+                if self.head_branch(worktree_path).is_none()
+                    && at.success()
+                    && at.stdout.trim() == origin_head
+                {
+                    return Ok(());
+                }
+                vec!["switch", "--detach", &origin_head]
+            }
+            HintedStart::On(_) => {
+                self.reconcile_hinted_branch(repo_path, branch, &origin_head, Some(worktree_path))?;
+                if self.head_branch(worktree_path).as_deref() == Some(branch) {
+                    return Ok(());
+                }
+                if self.ref_exists(repo_path, &format!("refs/heads/{branch}"))? {
+                    vec!["switch", branch]
+                } else {
+                    // `--no-track` for the reason `create` branches from a raw
+                    // commit: upstream tracking writes the shared `.git/config`.
+                    vec!["switch", "--no-track", "-c", branch, &origin_head]
+                }
+            }
+        };
+        let out = self.git.run(worktree_path, &switch)?;
+        if !out.success() {
+            return Err(WorktreeError::HintSyncBlocked {
+                path: worktree_path.to_path_buf(),
+                branch: branch.to_string(),
+                stderr: out.stderr.trim().to_string(),
+            });
+        }
+        Ok(())
     }
 
     /// `git worktree add`, detached or onto a branch.
@@ -993,9 +1303,8 @@ impl<G: GitRunner> WorktreeManager<G> {
         Ok(out.success())
     }
 
-    /// Every worktree `repo_path` has registered, as git reports them — the
-    /// main working tree included, symlink-resolved and absolute.
-    fn registered_worktrees(&self, repo_path: &Path) -> Result<Vec<PathBuf>, WorktreeError> {
+    /// `git worktree list --porcelain`, verbatim.
+    fn worktree_list(&self, repo_path: &Path) -> Result<String, WorktreeError> {
         let out = self
             .git
             .run(repo_path, &["worktree", "list", "--porcelain"])?;
@@ -1005,8 +1314,14 @@ impl<G: GitRunner> WorktreeManager<G> {
                 stderr: out.stderr,
             });
         }
-        Ok(out
-            .stdout
+        Ok(out.stdout)
+    }
+
+    /// Every worktree `repo_path` has registered, as git reports them — the
+    /// main working tree included, symlink-resolved and absolute.
+    fn registered_worktrees(&self, repo_path: &Path) -> Result<Vec<PathBuf>, WorktreeError> {
+        Ok(self
+            .worktree_list(repo_path)?
             .lines()
             .filter_map(|line| line.strip_prefix("worktree "))
             .map(|raw| PathBuf::from(raw.trim()))

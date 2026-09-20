@@ -154,6 +154,7 @@ impl WatchTriggers {
             // timestamp out: the task number already separates two posts in
             // one channel.
             handle: Some(watched.trigger.channel_name.clone()),
+            branch_hint: None,
             source: String::new(), // filled by the caller, which knows the instance name
             title: format!("Discord #{}: {snippet}", watched.trigger.channel_name),
             body: Some(format!(

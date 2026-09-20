@@ -1492,6 +1492,7 @@ fn build_task(
         // nothing to do with the task. No handle reads better than a wrong
         // one, and the next task in the same channel recovers on its own.
         handle: (enriched.channel_name != mention.channel).then(|| enriched.channel_name.clone()),
+        branch_hint: None,
         source: config.source_name.clone(),
         title,
         body: Some(body),

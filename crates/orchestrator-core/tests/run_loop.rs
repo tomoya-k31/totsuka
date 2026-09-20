@@ -3050,3 +3050,114 @@ async fn a_read_only_task_that_branches_mid_run_is_failed_and_its_pane_closed() 
 
     let _ = std::fs::remove_dir_all(&base);
 }
+
+// ---------------------------------------------------------------------------
+// `Task.branch_hint` (0.7.5, #734)
+// ---------------------------------------------------------------------------
+
+/// Push `branch` to `origin` from the fixture's other clone — a pull request's
+/// head, as the clone under test would first meet it. Returns its head.
+fn someone_pushes(base: &Path, branch: &str) -> String {
+    let seed = base.join("seed");
+    git(&seed, &["switch", "-c", branch, "main"]);
+    git(&seed, &["commit", "--allow-empty", "-m", "their change"]);
+    git(&seed, &["push", "origin", branch]);
+    git(&seed, &["rev-parse", "HEAD"])
+}
+
+/// Run one hinted task through a real engine and return its row plus every
+/// recorded failure reason.
+async fn run_hinted(
+    name: &str,
+    mode: &str,
+    hint: &str,
+    push: bool,
+) -> (
+    orchestrator_core::adapters::state_db::TaskRecord,
+    Vec<String>,
+    Option<String>,
+) {
+    let base = scratch(name);
+    let repo = setup_repo(&base);
+    let theirs = push.then(|| someone_pushes(&base, hint));
+    let db_path = base.join("state.db");
+    let mut task = mock_task("1");
+    task["branch_hint"] = json!(hint);
+
+    let plugins = plugin_set(
+        json!([task]),
+        json!({ "stream_states": ["running", "done"] }),
+        &base.join("source.ndjson"),
+        &base.join("notify.ndjson"),
+    )
+    .await;
+    let mut settings = engine_settings(&repo);
+    settings.workflows = workflows_with(mode, "none");
+    let mut engine = Engine::new(
+        StateDb::open(&db_path).unwrap(),
+        settings,
+        plugins,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+    let db_probe = db_path.clone();
+    run_watch_until(&mut engine, move || {
+        StateDb::open(&db_probe)
+            .unwrap()
+            .find_by_source("mock_src", "1")
+            .unwrap()
+            .is_some_and(|t| matches!(t.state, TaskState::Done | TaskState::Failed))
+    })
+    .await;
+    engine.shutdown(Duration::from_secs(5)).await;
+
+    let db = StateDb::open(&db_path).unwrap();
+    let record = db.find_by_source("mock_src", "1").unwrap().unwrap();
+    let reasons = db
+        .list_events(record.id)
+        .unwrap()
+        .into_iter()
+        .filter_map(|e| e.detail)
+        .filter_map(|d| d["reason"].as_str().map(str::to_string))
+        .collect();
+    let _ = std::fs::remove_dir_all(&base);
+    (record, reasons, theirs)
+}
+
+/// The hint travels the whole way — source payload, `state.db`, dispatch —
+/// and **the mode decides what it means**: a writable stage is put on the
+/// branch, a plan stage is detached at its head. Both start from the hinted
+/// head rather than the default branch.
+#[tokio::test]
+async fn a_branch_hint_reaches_the_worktree_and_the_mode_decides_how() {
+    let (task, reasons, theirs) = run_hinted("hint_impl", "implement", "renovate/x", true).await;
+    assert_eq!(task.state, TaskState::Done, "{reasons:?}");
+    assert_eq!(task.branch.as_deref(), Some("renovate/x"));
+    assert_eq!(task.base_commit, theirs);
+
+    let (task, reasons, theirs) = run_hinted("hint_plan", "plan", "renovate/x", true).await;
+    assert_eq!(task.state, TaskState::Done, "{reasons:?}");
+    assert_eq!(task.branch, None, "a plan stage is never put on a branch");
+    assert_eq!(
+        task.base_commit, theirs,
+        "but it does start at the hinted head"
+    );
+}
+
+/// A hint that cannot be honoured stops the task with a reason an operator
+/// can act on. Falling back to the default branch would hand the agent a
+/// detached worktree and an instruction to name a new branch — the second
+/// pull request this whole field exists to prevent.
+#[tokio::test]
+async fn a_branch_hint_that_cannot_be_honoured_fails_the_dispatch() {
+    let (task, reasons, _) = run_hinted("hint_gone", "implement", "merged/gone", false).await;
+    assert_eq!(task.state, TaskState::Failed);
+    assert!(
+        reasons
+            .iter()
+            .any(|r| r.contains("merged/gone") && r.contains("not on origin")),
+        "{reasons:?}"
+    );
+    assert_eq!(task.worktree_path, None, "no worktree was made at all");
+}

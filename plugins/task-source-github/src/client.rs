@@ -327,6 +327,7 @@ impl<T: GithubTransport> GithubClient<T> {
         Some(Task {
             id,
             handle,
+            branch_hint: None,
             source: self.config.source_name.clone(),
             title: content["title"].as_str().unwrap_or_default().to_string(),
             body: body.map(str::to_string),

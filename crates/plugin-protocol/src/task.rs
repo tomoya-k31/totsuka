@@ -90,6 +90,33 @@ pub struct Task {
     /// human and nothing more.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub handle: Option<String>,
+    /// 0.7.5 (#734): the **existing branch** this task's work belongs on, when
+    /// the source knows one — a pull request's head branch, say. The pair of
+    /// [`repo_hint`](Self::repo_hint): that one says *where*, this one says
+    /// *on what*.
+    ///
+    /// A source only ever states the branch. **What the Orchestrator does with
+    /// it depends on the workflow's profile, which a source does not know:**
+    /// a writable stage gets its worktree *on* the branch and commits there; a
+    /// read-only stage gets one **detached at the branch's head**, because a
+    /// read-only worktree found on a named branch is read as "the agent ran
+    /// git" and failed for it (ADR-0045). One field, so that distinction is
+    /// made in exactly one place.
+    ///
+    /// The name is resolved against `origin` only. A source must leave this
+    /// unset for a branch that does not live there (a fork's head): the same
+    /// name may exist on `origin` and mean something unrelated.
+    ///
+    /// Unlike `repo_hint`, this is **not advisory**. A hinted branch that
+    /// cannot be found fails the task rather than falling back to the default
+    /// branch — starting somewhere else is how a second pull request for the
+    /// same work gets opened.
+    ///
+    /// `None` is the normal case and means exactly what it did before the
+    /// field existed: a detached worktree at the default branch, named by the
+    /// agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch_hint: Option<String>,
 }
 
 #[cfg(test)]
@@ -112,6 +139,7 @@ mod tests {
             message_key: None,
             instructions: None,
             handle: None,
+            branch_hint: None,
         };
         // Parse to a JSON object and assert on keys (robust against values
         // that might contain field-name substrings).
@@ -146,6 +174,7 @@ mod tests {
             message_key: Some("C0123456789:1718000000.000300".into()),
             instructions: None,
             handle: None,
+            branch_hint: None,
         };
         let value = serde_json::to_value(&task).unwrap();
         assert_eq!(
@@ -179,6 +208,7 @@ mod tests {
             message_key: None,
             instructions: Some("返信案を日本語で作成してください。".into()),
             handle: None,
+            branch_hint: None,
         };
         let value = serde_json::to_value(&task).unwrap();
         assert_eq!(
@@ -191,5 +221,44 @@ mod tests {
         let old: Task =
             serde_json::from_str(r#"{"id":"1","source":"github","title":"t"}"#).unwrap();
         assert!(old.instructions.is_none());
+    }
+
+    /// `branch_hint` (0.7.5) round-trips when set, stays off the wire when
+    /// unset, and is absent from every older source's tasks.
+    #[test]
+    fn branch_hint_is_additive() {
+        let task = Task {
+            id: "PR_kwDO1".into(),
+            source: "github".into(),
+            title: "chore(deps): update setup-uv".into(),
+            body: None,
+            repo_hint: Some("zenn-blog".into()),
+            labels: vec![],
+            priority: 0,
+            status: None,
+            url: None,
+            assignee: None,
+            message_key: None,
+            instructions: None,
+            handle: None,
+            branch_hint: Some("renovate/setup-uv-10.x".into()),
+        };
+        let value = serde_json::to_value(&task).unwrap();
+        assert_eq!(
+            value["branch_hint"],
+            serde_json::json!("renovate/setup-uv-10.x")
+        );
+        let back: Task = serde_json::from_value(value).unwrap();
+        assert_eq!(back, task);
+
+        let unset = Task {
+            branch_hint: None,
+            ..task
+        };
+        let value = serde_json::to_value(&unset).unwrap();
+        assert!(!value.as_object().unwrap().contains_key("branch_hint"));
+        let old: Task =
+            serde_json::from_str(r#"{"id":"1","source":"github","title":"t"}"#).unwrap();
+        assert!(old.branch_hint.is_none());
     }
 }

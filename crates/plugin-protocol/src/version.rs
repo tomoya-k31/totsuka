@@ -379,7 +379,23 @@ use semver::{Version, VersionReq};
 /// does not know reads as [`LlmApiKind::Other`](crate::methods::LlmApiKind::Other)
 /// rather than failing `initialize`. As with 0.7.3, this is a **source** break
 /// for code that builds `LlmInfo` with a struct literal.
-pub const PROTOCOL_VERSION: &str = "0.7.4";
+///
+/// 0.7.5 (#734): [`Task::branch_hint`](crate::task::Task::branch_hint) — the
+/// existing branch a task's work belongs on, for a source that knows one (a
+/// pull request's head). The source states the branch and nothing else; the
+/// Orchestrator decides from the workflow's profile whether the worktree goes
+/// *on* it (a writable stage) or *detached at its head* (a read-only one), so
+/// no plugin has to learn what a profile is.
+///
+/// **Patch, additive, no manifest moves.** A plugin that never sets it
+/// produces exactly the tasks it did before, and an Orchestrator older than
+/// this ignores the key — which for such a task means the pre-0.7.5 behaviour,
+/// a detached worktree at the default branch. That is a wrong starting point
+/// for a pull request's task, not an unsafe one, and it cannot be reached with
+/// the bundled plugins: the one that sets the field ships in the same release.
+/// As with 0.7.2, this is a **source** break for code that builds `Task` with a
+/// struct literal.
+pub const PROTOCOL_VERSION: &str = "0.7.5";
 
 /// [`PROTOCOL_VERSION`] parsed into a [`Version`].
 pub fn protocol_version() -> Version {
@@ -403,7 +419,7 @@ mod tests {
 
     #[test]
     fn current_version_parses() {
-        assert_eq!(protocol_version(), Version::new(0, 7, 4));
+        assert_eq!(protocol_version(), Version::new(0, 7, 5));
     }
 
     #[test]

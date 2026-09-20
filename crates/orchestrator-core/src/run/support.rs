@@ -43,6 +43,41 @@ pub(super) fn read_only_side_effect(
     ))
 }
 
+/// What to tell the agent about the branch it is on, if anything (#734).
+///
+/// Exactly one of three texts, or none:
+///
+/// | hint | mode | worktree | text |
+/// |---|---|---|---|
+/// | none | implement | detached | `branch_convention` — name a branch |
+/// | none | implement | on a branch | none — resuming its own branch |
+/// | none | plan | any | none — plan is promised no git at all |
+/// | some | plan | (detached at the hint's head) | `hinted_branch_detached` |
+/// | some | implement | on a branch | `hinted_branch_on` |
+///
+/// The last row is sent on **every** dispatch, not only the first. A resumed
+/// conversation on its own branch needs no reminder because the agent made
+/// that branch; a hinted one was made by someone else, and "do not open a
+/// second pull request" is worth the one sentence each time.
+///
+/// A hinted implement task that is *not* on a branch cannot be produced by
+/// `acquire_worktree` (a hint that cannot be honoured fails the dispatch), so
+/// that case deliberately falls through to `branch_convention` rather than
+/// claiming a branch the worktree is not on.
+pub(super) fn branch_instruction(
+    prompts: &crate::prompts::Prompts,
+    mode: &str,
+    on_a_branch: bool,
+    branch_hint: Option<&str>,
+) -> Option<String> {
+    match (branch_hint, mode == "plan", on_a_branch) {
+        (Some(branch), true, _) => Some(prompts.hinted_branch_detached(branch)),
+        (Some(branch), false, true) => Some(prompts.hinted_branch_on(branch)),
+        (_, false, false) => Some(prompts.branch_convention().to_string()),
+        (None, true, _) | (None, false, true) => None,
+    }
+}
+
 /// The output-policy name, for audit `detail`.
 pub(super) fn policy_str(policy: OutputPolicy) -> &'static str {
     match policy {
@@ -193,12 +228,53 @@ pub(super) fn task_from_record(record: &TaskRecord) -> Task {
             message_key: None,
             instructions: None,
             handle: None,
+            branch_hint: None,
         })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One text at most, and the right one: a hinted task must never be told
+    /// to name a new branch (that is the second pull request), and a plan
+    /// stage must never be told to run git.
+    #[test]
+    fn the_branch_instruction_follows_the_hint_the_mode_and_head() {
+        let prompts = crate::prompts::Prompts::builtin();
+        let pick = |mode, on_a_branch, hint| branch_instruction(prompts, mode, on_a_branch, hint);
+
+        // No hint: exactly what was sent before the field existed.
+        assert_eq!(
+            pick("implement", false, None).as_deref(),
+            Some(prompts.branch_convention())
+        );
+        assert_eq!(pick("implement", true, None), None);
+        assert_eq!(pick("plan", false, None), None);
+        assert_eq!(pick("plan", true, None), None);
+
+        let on = pick("implement", true, Some("renovate/x")).unwrap();
+        assert!(
+            on.contains("`renovate/x`") && on.contains("EXISTING"),
+            "{on}"
+        );
+        assert!(!on.contains("git switch -c"), "{on}");
+
+        let detached = pick("plan", false, Some("renovate/x")).unwrap();
+        assert!(
+            detached.contains("`renovate/x`") && detached.contains("DETACHED"),
+            "{detached}"
+        );
+        // Plan is detached whatever HEAD claims; the text must not change.
+        assert_eq!(pick("plan", true, Some("renovate/x")).unwrap(), detached);
+
+        // Unreachable through `acquire_worktree`, and deliberately not a lie:
+        // the worktree is not on the hinted branch, so it is not told it is.
+        assert_eq!(
+            pick("implement", false, Some("renovate/x")).as_deref(),
+            Some(prompts.branch_convention())
+        );
+    }
 
     /// #415: the preamble goes in front, and the no-preamble case has to come
     /// back untouched — that is what keeps every existing dispatch identical.
@@ -258,6 +334,7 @@ mod tests {
             message_key: None,
             instructions: None,
             handle: None,
+            branch_hint: None,
         };
         let db = StateDb::open_in_memory().unwrap();
         let id = db

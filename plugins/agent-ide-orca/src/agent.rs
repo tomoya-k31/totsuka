@@ -1165,6 +1165,7 @@ mod tests {
                 message_key: None,
                 instructions: None,
                 handle: None,
+                branch_hint: None,
             },
             worktree_path: "/wt".into(),
             mode: plugin_protocol::methods::ExecutionMode::Plan,

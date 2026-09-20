@@ -42,6 +42,7 @@ fn request<'a>(
         handle: None,
         location_template: ENV_LOCATION_TEMPLATE,
         base_branch: None,
+        hinted: None,
         env,
     }
 }
@@ -95,6 +96,7 @@ fn default_location_creates_a_worktree_without_xdg_state_home() {
             handle: None,
             location_template: &template,
             base_branch: None,
+            hinted: None,
             env: &HashMap::new(),
         })
         .unwrap();
@@ -901,6 +903,355 @@ fn a_detached_worktree_with_no_commits_is_removed() {
         CleanupOutcome::Removed
     );
     assert!(!wt.path.exists());
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+// ---------------------------------------------------------------------------
+// A branch the task's source hinted at (`Task.branch_hint`, #734)
+// ---------------------------------------------------------------------------
+
+use orchestrator_core::worktree::{HintedStart, WorktreeError};
+
+/// Stand in for whoever owns the pull request — a dependency bot, a colleague:
+/// commit `content` to `f.txt` on `branch` and push it to `origin` from the
+/// fixture's *other* clone, so the clone under test learns of it only by
+/// fetching. `rewrite` rebuilds the branch from `main` and force-pushes, which
+/// is what a bot rebasing its branch looks like from outside. Returns the head.
+fn someone_pushes(base: &Path, branch: &str, content: &str, rewrite: bool) -> String {
+    let seed = base.join("seed");
+    if rewrite {
+        git(&seed, &["switch", "-C", branch, "main"]);
+    } else if git(&seed, &["branch", "--list", branch]).is_empty() {
+        git(&seed, &["switch", "-c", branch, "main"]);
+    } else {
+        git(&seed, &["switch", branch]);
+    }
+    std::fs::write(seed.join("f.txt"), content).unwrap();
+    git(&seed, &["add", "f.txt"]);
+    git(&seed, &["commit", "-m", content]);
+    git(&seed, &["push", "--force", "origin", branch]);
+    git(&seed, &["rev-parse", "HEAD"])
+}
+
+fn hinted<'a>(
+    clone: &'a Path,
+    task_id: &'a str,
+    hint: HintedStart<'a>,
+    env: &'a HashMap<String, String>,
+) -> CreateRequest<'a> {
+    CreateRequest {
+        hinted: Some(hint),
+        ..request(clone, task_id, env)
+    }
+}
+
+/// A writable stage goes **on** the hinted branch, at `origin`'s head of it,
+/// and what it pushes fast-forwards the pull request rather than opening a
+/// second line of history.
+#[test]
+fn a_hinted_branch_puts_a_writable_worktree_on_it() {
+    let base = scratch("hint-on");
+    let clone = setup(&base);
+    let env = env(&base.join("state"));
+    let mgr = WorktreeManager::new(SystemGitRunner);
+    let theirs = someone_pushes(&base, "renovate/x", "v1", false);
+
+    let wt = mgr
+        .create(&hinted(&clone, "pr-1", HintedStart::On("renovate/x"), &env))
+        .unwrap();
+
+    assert_eq!(wt.branch.as_deref(), Some("renovate/x"));
+    assert_eq!(mgr.head_branch(&wt.path).as_deref(), Some("renovate/x"));
+    assert_eq!(git(&wt.path, &["rev-parse", "HEAD"]), theirs);
+    assert_eq!(wt.base_commit, theirs, "the work starts at their head");
+
+    git(&wt.path, &["commit", "--allow-empty", "-m", "a fix on top"]);
+    git(&wt.path, &["push", "origin", "renovate/x"]);
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// A read-only stage sees the branch's files without being on the branch: a
+/// read-only worktree found on a named branch is failed as "the agent ran git"
+/// (ADR-0045), so putting it there ourselves would fail every such task.
+#[test]
+fn a_hinted_branch_leaves_a_read_only_worktree_detached_at_its_head() {
+    let base = scratch("hint-detached");
+    let clone = setup(&base);
+    let env = env(&base.join("state"));
+    let mgr = WorktreeManager::new(SystemGitRunner);
+    let theirs = someone_pushes(&base, "renovate/x", "v1", false);
+
+    let wt = mgr
+        .create(&hinted(
+            &clone,
+            "pr-1",
+            HintedStart::DetachedAt("renovate/x"),
+            &env,
+        ))
+        .unwrap();
+
+    assert_eq!(wt.branch, None);
+    assert_eq!(
+        mgr.head_branch(&wt.path),
+        None,
+        "detached, not on the branch"
+    );
+    assert_eq!(git(&wt.path, &["rev-parse", "HEAD"]), theirs);
+    assert_ne!(theirs, git(&clone, &["rev-parse", "origin/main"]));
+    assert_eq!(
+        std::fs::read_to_string(wt.path.join("f.txt")).unwrap(),
+        "v1"
+    );
+    assert!(
+        git(&clone, &["branch", "--list", "renovate/x"]).is_empty(),
+        "and no local branch was made on the way"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// The difference from a *recorded* branch, which falls back to a detached
+/// worktree when it is gone: a hint that cannot be honoured must stop the
+/// task, because starting at the default branch instead is how a second pull
+/// request for the same change gets opened.
+#[test]
+fn a_hinted_branch_missing_from_origin_is_an_error_not_a_fallback() {
+    let base = scratch("hint-missing");
+    let clone = setup(&base);
+    let env = env(&base.join("state"));
+    let mgr = WorktreeManager::new(SystemGitRunner);
+
+    for hint in [
+        HintedStart::On("merged/and-deleted"),
+        HintedStart::DetachedAt("merged/and-deleted"),
+    ] {
+        let err = mgr.create(&hinted(&clone, "pr-1", hint, &env)).unwrap_err();
+        assert!(
+            matches!(&err, WorktreeError::HintedBranchMissing { branch } if branch == "merged/and-deleted"),
+            "{hint:?}: {err}"
+        );
+    }
+    // The lenient path is untouched: a recorded branch that vanished still
+    // yields a detached worktree.
+    let wt = mgr
+        .create(&resume(&clone, "45", "merged/and-deleted", &env))
+        .unwrap();
+    assert_eq!(wt.branch, None);
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// A local copy of the branch is somebody's — an old `gh pr checkout`, or this
+/// task's own earlier run — so it is never reset. Behind is fast-forwarded,
+/// ahead is unpushed work and left alone, diverged has no lossless answer.
+#[test]
+fn a_local_copy_of_the_hinted_branch_is_reconciled_without_losing_anything() {
+    let base = scratch("hint-local");
+    let clone = setup(&base);
+    let env = env(&base.join("state"));
+    let mgr = WorktreeManager::new(SystemGitRunner);
+
+    // Behind: they pushed again after the local copy was taken.
+    someone_pushes(&base, "pr/behind", "v1", false);
+    git(&clone, &["fetch", "origin"]);
+    git(
+        &clone,
+        &["branch", "--no-track", "pr/behind", "origin/pr/behind"],
+    );
+    let v2 = someone_pushes(&base, "pr/behind", "v2", false);
+    let wt = mgr
+        .create(&hinted(
+            &clone,
+            "behind",
+            HintedStart::On("pr/behind"),
+            &env,
+        ))
+        .unwrap();
+    assert_eq!(git(&wt.path, &["rev-parse", "HEAD"]), v2, "fast-forwarded");
+
+    // Ahead: a commit that exists only here.
+    someone_pushes(&base, "pr/ahead", "v1", false);
+    git(&clone, &["fetch", "origin"]);
+    git(
+        &clone,
+        &["switch", "--no-track", "-c", "pr/ahead", "origin/pr/ahead"],
+    );
+    git(&clone, &["commit", "--allow-empty", "-m", "unpushed"]);
+    let unpushed = git(&clone, &["rev-parse", "HEAD"]);
+    git(&clone, &["switch", "main"]);
+    let wt = mgr
+        .create(&hinted(&clone, "ahead", HintedStart::On("pr/ahead"), &env))
+        .unwrap();
+    assert_eq!(git(&wt.path, &["rev-parse", "HEAD"]), unpushed, "kept");
+
+    // Diverged: local work on one side, their force-push on the other.
+    someone_pushes(&base, "pr/diverged", "v1", false);
+    git(&clone, &["fetch", "origin"]);
+    git(
+        &clone,
+        &[
+            "switch",
+            "--no-track",
+            "-c",
+            "pr/diverged",
+            "origin/pr/diverged",
+        ],
+    );
+    git(&clone, &["commit", "--allow-empty", "-m", "local work"]);
+    let local = git(&clone, &["rev-parse", "HEAD"]);
+    git(&clone, &["switch", "main"]);
+    someone_pushes(&base, "pr/diverged", "rebased", true);
+    let err = mgr
+        .create(&hinted(
+            &clone,
+            "diverged",
+            HintedStart::On("pr/diverged"),
+            &env,
+        ))
+        .unwrap_err();
+    assert!(
+        matches!(&err, WorktreeError::HintedBranchDiverged { branch } if branch == "pr/diverged"),
+        "{err}"
+    );
+    assert_eq!(
+        git(&clone, &["rev-parse", "pr/diverged"]),
+        local,
+        "the local branch is exactly where it was"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// git gives a branch to one worktree. The error names the holder, because
+/// the usual holder is another task (the issue this pull request came from,
+/// kept by a retention policy) and the remedy is to continue *that* task.
+#[test]
+fn a_hinted_branch_held_by_another_worktree_is_an_error_naming_it() {
+    let base = scratch("hint-held");
+    let clone = setup(&base);
+    let env = env(&base.join("state"));
+    let mgr = WorktreeManager::new(SystemGitRunner);
+    someone_pushes(&base, "feat/x", "v1", false);
+
+    let first = mgr
+        .create(&hinted(&clone, "issue-10", HintedStart::On("feat/x"), &env))
+        .unwrap();
+    let err = mgr
+        .create(&hinted(&clone, "pr-12", HintedStart::On("feat/x"), &env))
+        .unwrap_err();
+    match &err {
+        WorktreeError::HintedBranchHeld { branch, holder } => {
+            assert_eq!(branch, "feat/x");
+            assert_eq!(
+                holder.canonicalize().unwrap(),
+                first.path.canonicalize().unwrap()
+            );
+        }
+        other => panic!("expected HintedBranchHeld, got {other}"),
+    }
+    // A read-only stage takes no branch, so it is not in anyone's way.
+    mgr.create(&hinted(
+        &clone,
+        "pr-12",
+        HintedStart::DetachedAt("feat/x"),
+        &env,
+    ))
+    .unwrap();
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// A dispatch reuses a worktree that is still on disk and never calls
+/// `create` — where a hint is applied. So a task handed from a read-only stage
+/// to a writable one would start the writable stage detached, at whatever
+/// commit the first stage saw. `sync_to_hint` is what closes that.
+#[test]
+fn sync_moves_a_surviving_worktree_to_its_hinted_start() {
+    let base = scratch("hint-sync");
+    let clone = setup(&base);
+    let env = env(&base.join("state"));
+    let mgr = WorktreeManager::new(SystemGitRunner);
+    let v1 = someone_pushes(&base, "renovate/x", "v1", false);
+
+    // The design stage.
+    let wt = mgr
+        .create(&hinted(
+            &clone,
+            "pr-1",
+            HintedStart::DetachedAt("renovate/x"),
+            &env,
+        ))
+        .unwrap();
+    assert_eq!(git(&wt.path, &["rev-parse", "HEAD"]), v1);
+
+    // They push again; a second design dispatch must not read stale code.
+    let v2 = someone_pushes(&base, "renovate/x", "v2", false);
+    mgr.sync_to_hint(&clone, &wt.path, HintedStart::DetachedAt("renovate/x"))
+        .unwrap();
+    assert_eq!(git(&wt.path, &["rev-parse", "HEAD"]), v2);
+    assert_eq!(mgr.head_branch(&wt.path), None, "still detached");
+
+    // The card moves to the implement column: same task, same worktree.
+    mgr.sync_to_hint(&clone, &wt.path, HintedStart::On("renovate/x"))
+        .unwrap();
+    assert_eq!(mgr.head_branch(&wt.path).as_deref(), Some("renovate/x"));
+    assert_eq!(git(&wt.path, &["rev-parse", "HEAD"]), v2);
+
+    // Nothing moved: a no-op that leaves the agent's unpushed commit alone.
+    git(&wt.path, &["commit", "--allow-empty", "-m", "agent's fix"]);
+    let fix = git(&wt.path, &["rev-parse", "HEAD"]);
+    mgr.sync_to_hint(&clone, &wt.path, HintedStart::On("renovate/x"))
+        .unwrap();
+    assert_eq!(git(&wt.path, &["rev-parse", "HEAD"]), fix);
+
+    // Pushed, and then they push on top: the worktree is behind on its own
+    // branch, which can only be fast-forwarded from inside it.
+    git(&wt.path, &["push", "origin", "renovate/x"]);
+    let seed = base.join("seed");
+    git(&seed, &["pull", "origin", "renovate/x"]);
+    let v3 = someone_pushes(&base, "renovate/x", "v3", false);
+    mgr.sync_to_hint(&clone, &wt.path, HintedStart::On("renovate/x"))
+        .unwrap();
+    assert_eq!(git(&wt.path, &["rev-parse", "HEAD"]), v3);
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// The one thing a sync never does is discard. Uncommitted changes that the
+/// switch would overwrite stop the task, with the worktree named, and are
+/// still there afterwards.
+#[test]
+fn sync_refuses_to_overwrite_uncommitted_changes() {
+    let base = scratch("hint-sync-dirty");
+    let clone = setup(&base);
+    let env = env(&base.join("state"));
+    let mgr = WorktreeManager::new(SystemGitRunner);
+    someone_pushes(&base, "renovate/x", "v1", false);
+    let wt = mgr
+        .create(&hinted(
+            &clone,
+            "pr-1",
+            HintedStart::DetachedAt("renovate/x"),
+            &env,
+        ))
+        .unwrap();
+    std::fs::write(wt.path.join("f.txt"), "notes the agent left").unwrap();
+    someone_pushes(&base, "renovate/x", "v2", false);
+
+    let err = mgr
+        .sync_to_hint(&clone, &wt.path, HintedStart::On("renovate/x"))
+        .unwrap_err();
+    assert!(
+        matches!(&err, WorktreeError::HintSyncBlocked { path, branch, .. }
+            if path == &wt.path && branch == "renovate/x"),
+        "{err}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(wt.path.join("f.txt")).unwrap(),
+        "notes the agent left"
+    );
 
     let _ = std::fs::remove_dir_all(&base);
 }
