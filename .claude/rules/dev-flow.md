@@ -221,55 +221,46 @@ for why. CI's own flags stay exactly as they are:
 **Over-engineering pass — `/ponytail-review`** (right before committing /
 opening the PR, when the diff contains code):
 
-- Run the `/ponytail-review` skill **inline in the main session**, on **the
-  current diff only**: `git diff --staged` before a commit, `git diff
-  main...HEAD` before a PR. Not the whole repository — that is
-  `/ponytail-audit`, a different skill, and its findings are not this PR's to
-  fix.
-- **Stage first (`git add <explicit files>`), then review.** `git diff
-  --staged` shows only what is staged, so anything left out is reviewed by
-  nobody: an untracked file appears in **neither** `git diff` nor `git diff
-  --staged` (measured: a new file is `??` in `git status --short` and absent
-  from both), and an edited tracked file you did not name is ` M` and absent
-  from `--staged`. A brand-new file is exactly where a speculative abstraction
-  lives, and `git add <explicit files>` stages only what you name, so both are
-  easy to leave behind. Before the pass is worth anything, `git status
-  --short` must show **neither a `??` nor an unstaged ` M`** that belongs in
-  the commit.
-- Skip it when the diff has no code in it (docs-only, `ai-docs/**`-only, prose
-  `*.md`). The skill's own boundary is coding work; on prose it has nothing to
-  cut.
-- It **only lists** deletion candidates (`delete:` / `stdlib:` / `native:` /
-  `yagni:` / `shrink:`, ending in `net: -N lines possible`); it never applies
-  them. Go through the list and **decide each finding yourself**:
+- Run the `/ponytail-review` skill **inline in the main session**, on **this
+  change only**: `git diff --staged` before a commit, `git diff main...HEAD`
+  before a PR. Scanning the whole repository is `/ponytail-audit`, a different
+  skill, and its findings are not this PR's to fix.
+- **Stage everything that belongs in the commit first, and re-stage after
+  applying a cut.** `git diff --staged` is the pass's whole input, so anything
+  outside it is reviewed by nobody. One check covers every way that happens:
+  `git status --short` must print a **blank second column** for each of the
+  commit's files. That column is the worktree side, so `??` (untracked), ` M`
+  (never staged), `MM` and `AM` (staged, then edited again) all mean something
+  is not being looked at — and enumerating the codes instead misses one, as
+  `AM` was. The re-stage half is the trap this procedure builds itself:
+  applying a cut leaves the file `MM`/`AM`, and committing from there commits
+  the **un-cut** version while the report says "applied" (measured).
+- Skip it when the diff has no code (docs-only, `ai-docs/**`-only, prose
+  `*.md`) — the skill's own boundary is coding work.
+- The skill **only lists** candidates; it never applies them. Decide each one
+  yourself:
   - **Apply** it when behaviour is unchanged and the cut is covered — dead
     code, a hand-rolled stdlib equivalent, an abstraction with one caller.
   - **Reject** it, with the reason, when the "bloat" is something this
-    repository requires: a regression test (the skill itself never counts a
-    smoke test as bloat), a docs obligation, a boundary that `arch-lint` or an
-    ADR mandates, a comment that carries the rationale for a decision, or
-    error handling at a plugin / process boundary.
-  - **Cannot tell → ask the user; do not guess.** Typical cases: the cut
-    changes observable behaviour or a public interface, it removes flexibility
-    that may have been asked for outside this conversation, or applying it
-    would grow the diff beyond what the PR is for. Put the finding and what is
-    unclear to the user, and wait for the answer before committing.
-    **When there is nobody to ask** — an unattended or background run, the
-    shape `unattended-commit-signing.md` presupposes — do **not** block on it
-    and do **not** guess: leave the code as written, record the finding and
-    that it was left undecided, and carry on. An uncertain deletion is the one
-    outcome this pass must never produce on its own.
-- Report the outcome to the user as one list: each finding with
-  applied / rejected (why) / asked.
-- Its scope is complexity only. Correctness, security and performance are
-  explicitly out of scope for it, so it **never replaces** `/code-review`
-  (below, and step 5).
-- Applied cuts change the code, so run this **before the final pass of the
-  scoped checks above** — what gets checked should be what gets committed. If
-  the checks already ran, re-run the groups the cuts touched.
-- `ponytail` is a user-installed plugin, not one this repository declares. If
-  the skill is not available in the session, say so and move on — a missing
-  plugin must not block the PR.
+    repository requires: a regression test, a docs obligation, a boundary that
+    `arch-lint` or an ADR mandates, a comment carrying a decision's rationale,
+    or error handling at a plugin / process boundary.
+  - **Cannot tell → ask; never guess.** Put the finding and what is unclear to
+    the user. **Bounded like every other wait in this file: 10 minutes.** No
+    answer in time, or nobody to ask at all (an unattended run, the shape
+    `unattended-commit-signing.md` presupposes), means leave the code as
+    written and record the finding as undecided. An uncertain deletion is the
+    one outcome this pass must never produce on its own.
+- Report each finding as applied / rejected (why) / undecided.
+- Complexity only: correctness, security and performance are out of its scope,
+  so it **never replaces** `/code-review` (below, and step 5). It also never
+  counts a single smoke test or `assert`-based self-check as bloat — the
+  `/ponytail-review` **command** carries a shorter brief than the skill of the
+  same name and omits that carve-out, so hold the rule here either way.
+- Applied cuts change the code: run this **before** the scoped checks above,
+  or re-run the groups the cuts touched.
+- `ponytail` is a user-installed plugin this repository does not declare. If
+  the skill is missing, say so and move on — it must not block the PR.
 
 **Pre-PR review** (optional, best-effort — must NEVER block the PR):
 
