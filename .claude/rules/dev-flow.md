@@ -226,13 +226,16 @@ opening the PR, when the diff contains code):
   main...HEAD` before a PR. Not the whole repository — that is
   `/ponytail-audit`, a different skill, and its findings are not this PR's to
   fix.
-- **Stage first (`git add <explicit files>`), then review.** A file that is
-  still untracked appears in **neither** `git diff` nor `git diff --staged`
-  (measured: a new file is `??` in `git status --short` and absent from both
-  diffs), and a brand-new file is exactly where a speculative abstraction
-  lives — so reviewing before staging silently skips the most likely finding.
-  `git status --short` must show no `??` entry that belongs in the commit
-  before the pass is worth anything.
+- **Stage first (`git add <explicit files>`), then review.** `git diff
+  --staged` shows only what is staged, so anything left out is reviewed by
+  nobody: an untracked file appears in **neither** `git diff` nor `git diff
+  --staged` (measured: a new file is `??` in `git status --short` and absent
+  from both), and an edited tracked file you did not name is ` M` and absent
+  from `--staged`. A brand-new file is exactly where a speculative abstraction
+  lives, and `git add <explicit files>` stages only what you name, so both are
+  easy to leave behind. Before the pass is worth anything, `git status
+  --short` must show **neither a `??` nor an unstaged ` M`** that belongs in
+  the commit.
 - Skip it when the diff has no code in it (docs-only, `ai-docs/**`-only, prose
   `*.md`). The skill's own boundary is coding work; on prose it has nothing to
   cut.
@@ -251,6 +254,11 @@ opening the PR, when the diff contains code):
     that may have been asked for outside this conversation, or applying it
     would grow the diff beyond what the PR is for. Put the finding and what is
     unclear to the user, and wait for the answer before committing.
+    **When there is nobody to ask** — an unattended or background run, the
+    shape `unattended-commit-signing.md` presupposes — do **not** block on it
+    and do **not** guess: leave the code as written, record the finding and
+    that it was left undecided, and carry on. An uncertain deletion is the one
+    outcome this pass must never produce on its own.
 - Report the outcome to the user as one list: each finding with
   applied / rejected (why) / asked.
 - Its scope is complexity only. Correctness, security and performance are
