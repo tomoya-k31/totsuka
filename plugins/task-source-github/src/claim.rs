@@ -107,9 +107,28 @@ pub fn adjudicate(state: &ClaimState) -> Result<&str, AdjudicationError> {
 /// `last: 100` reads from the tail — with at most 10 assignees the effective
 /// events are always inside it — and the result order is **not relied on**
 /// (the adjudication sorts).
+///
+/// **Both fragments are required.** A task's node is a pull request as readily
+/// as an issue (#734), and a read that only understands issues answers a pull
+/// request with *nothing* — which [`claim`](crate::client::GithubClient::claim)
+/// cannot tell from "unassigned". It then self-assigns (that succeeds:
+/// `Assignable` is `Issue | PullRequest`), reads back nothing again, concludes
+/// the write was silently discarded for lack of push access, and answers
+/// `Forbidden` — on every pull request, including one the operator is already
+/// assigned to. The two fragments select the same fields, so the parse is
+/// shared.
 pub const CLAIM_READ_QUERY: &str = r#"query($id: ID!) {
   node(id: $id) {
     ... on Issue {
+      assignees(first: 10) { nodes { login } }
+      timelineItems(last: 100, itemTypes: [ASSIGNED_EVENT]) {
+        nodes { ... on AssignedEvent {
+          id createdAt
+          assignee { ... on User { login } }
+        } }
+      }
+    }
+    ... on PullRequest {
       assignees(first: 10) { nodes { login } }
       timelineItems(last: 100, itemTypes: [ASSIGNED_EVENT]) {
         nodes { ... on AssignedEvent {

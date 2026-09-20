@@ -387,14 +387,16 @@ use semver::{Version, VersionReq};
 /// *on* it (a writable stage) or *detached at its head* (a read-only one), so
 /// no plugin has to learn what a profile is.
 ///
-/// **Patch, additive, no manifest moves.** A plugin that never sets it
-/// produces exactly the tasks it did before, and an Orchestrator older than
-/// this ignores the key — which for such a task means the pre-0.7.5 behaviour,
-/// a detached worktree at the default branch. That is a wrong starting point
-/// for a pull request's task, not an unsafe one, and it cannot be reached with
-/// the bundled plugins: the one that sets the field ships in the same release.
-/// As with 0.7.2, this is a **source** break for code that builds `Task` with a
-/// struct literal.
+/// **Patch and additive — but one manifest moves.** A plugin that never sets
+/// the field produces exactly the tasks it did before, so six of the seven
+/// bundled manifests stay where they are. The github plugin is the one that
+/// sets it, and an Orchestrator older than this would ignore the key: the
+/// task starts detached at the default branch and is told to name a new
+/// branch, while the plugin's own text says not to open another pull request.
+/// That is the "running, silent, wrong" failure the F-54 gate exists for, so
+/// github's floor moves to `>=0.7.5` — a floor states a dependency, and this
+/// is one. As with 0.7.2, this is a **source** break for code that builds
+/// `Task` with a struct literal.
 pub const PROTOCOL_VERSION: &str = "0.7.5";
 
 /// [`PROTOCOL_VERSION`] parsed into a [`Version`].
@@ -428,8 +430,9 @@ mod tests {
         // the floor and that is the point: a plugin requires the version it
         // depends on, so only github and notion — which read
         // `WorkflowInfo.projects` to pick the boards to scan — moved to
-        // `>=0.7.0`.
-        for req in [">=0.7.0, <0.8", ">=0.6.0, <0.8"] {
+        // `>=0.7.0`. #734 moved github alone again, to the patch that carries
+        // `Task.branch_hint`: it is the one plugin that sets it.
+        for req in [">=0.7.5, <0.8", ">=0.7.0, <0.8", ">=0.6.0, <0.8"] {
             let parsed = VersionReq::parse(req).unwrap();
             assert!(
                 is_compatible_with_current(&parsed),

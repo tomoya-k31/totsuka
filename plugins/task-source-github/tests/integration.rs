@@ -291,6 +291,48 @@ async fn initialize_then_update_status() {
     assert!(err.message.contains("output"), "{}", err.message);
 }
 
+/// `on_start` / `on_success` must reach a **pull request's** card (#734). The
+/// write-back finds the board item by its content's node id, and the lookup
+/// used to select `content { ... on Issue { id } }` alone — so a pull request
+/// item came back with no id, never matched, and its column never moved. As
+/// with the claim read, the transport is canned, so the query is what is
+/// pinned; the behaviour below is what it buys.
+#[tokio::test]
+async fn update_status_finds_a_pull_request_item() {
+    let shared = Shared::default();
+    let mut srv = server(&shared);
+    call(&mut srv, 1, "initialize", init_params()).await;
+
+    shared.push(Canned::Data(json!({ "data": { "user": { "projectV2": {
+        "id": "PROJ_1",
+        "field": { "id": "FIELD_1", "options": [
+            { "id": "OPT_review", "name": "In Review" } ] },
+        "items": { "nodes": [
+            { "id": "ITEM_1", "content": { "id": "I_1" } },
+            { "id": "ITEM_PR", "content": { "id": "PR_1" } } ] }
+    } } } })));
+    shared.push(Canned::Data(
+        json!({ "data": { "updateProjectV2ItemFieldValue": {
+        "projectV2Item": { "id": "ITEM_PR" } } } }),
+    ));
+    let resp = call(
+        &mut srv,
+        2,
+        "task/update_status",
+        json!({ "task_id": "PR_1", "status": "In Review" }),
+    )
+    .await;
+    assert!(resp.error.is_none(), "update failed: {:?}", resp.error);
+    assert_eq!(shared.last_request()["variables"]["item"], "ITEM_PR");
+
+    let requests = shared.all_requests();
+    let lookup = requests[0]["query"].as_str().expect("a query");
+    assert!(
+        lookup.contains("... on Issue { id }") && lookup.contains("... on PullRequest { id }"),
+        "the item lookup must read the id of both content types: {lookup}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // task/claim (#556, ADR-0059)
 // ---------------------------------------------------------------------------
@@ -368,6 +410,38 @@ async fn claim_when_already_mine_wins_without_writing() {
     let resp = claim(&mut srv, 2, "I_1").await;
     assert_eq!(resp.result.expect("result")["outcome"], "won");
     assert_eq!(shared.all_requests().len(), 1, "read only — no mutation");
+}
+
+/// A pull request's claim (#734) must be *readable*. The read used to select
+/// `... on Issue` only, so a pull request's node answered with nothing —
+/// indistinguishable from "unassigned". The plugin then self-assigned (that
+/// succeeds: `Assignable` is `Issue | PullRequest`), read back nothing again,
+/// concluded the write had been discarded for lack of push access, and
+/// answered `forbidden` for every pull request, even one already assigned to
+/// the operator. The transport here is canned, so what this pins is the query
+/// itself; it was verified against the live API when the fragment was added.
+#[tokio::test]
+async fn claim_reads_a_pull_request_as_well_as_an_issue() {
+    let shared = Shared::default();
+    let mut srv = server(&shared);
+    call(&mut srv, 1, "initialize", init_params()).await;
+
+    shared.push(Canned::Data(claim_read(&["Me"], &[])));
+    let resp = claim(&mut srv, 2, "PR_1").await;
+    assert_eq!(resp.result.expect("result")["outcome"], "won");
+
+    let requests = shared.all_requests();
+    let query = requests[0]["query"].as_str().expect("a query");
+    for fragment in ["... on Issue {", "... on PullRequest {"] {
+        let selected = query
+            .split(fragment)
+            .nth(1)
+            .unwrap_or_else(|| panic!("the claim read must select `{fragment}`: {query}"));
+        assert!(
+            selected.contains("assignees") && selected.contains("ASSIGNED_EVENT"),
+            "`{fragment}` must select what the adjudication reads: {query}"
+        );
+    }
 }
 
 /// Someone else already holds it (the fetch was stale): lost, zero writes.

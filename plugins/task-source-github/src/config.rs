@@ -41,6 +41,8 @@ struct EmbeddedPrompts {
     triage_instructions: String,
     design_instructions: String,
     implement_instructions: String,
+    design_pr_instructions: String,
+    implement_pr_instructions: String,
 }
 
 /// Instruction text this plugin sends with each task (#398, epic #311).
@@ -60,6 +62,16 @@ pub struct GithubPrompts {
     /// Sent when the workflow's profile is `implement`.
     #[serde(default = "default_implement_instructions")]
     pub implement_instructions: String,
+    /// Sent instead of [`design_instructions`](Self::design_instructions) when
+    /// the task **is a pull request** (#734).
+    #[serde(default = "default_design_pr_instructions")]
+    pub design_pr_instructions: String,
+    /// Sent instead of
+    /// [`implement_instructions`](Self::implement_instructions) when the task
+    /// **is a pull request** (#734) — the issue text ends in "open a pull
+    /// request", which on a pull request's own branch means a second one.
+    #[serde(default = "default_implement_pr_instructions")]
+    pub implement_pr_instructions: String,
 }
 
 fn default_triage_instructions() -> String {
@@ -71,6 +83,12 @@ fn default_design_instructions() -> String {
 fn default_implement_instructions() -> String {
     DEFAULTS.implement_instructions.clone()
 }
+fn default_design_pr_instructions() -> String {
+    DEFAULTS.design_pr_instructions.clone()
+}
+fn default_implement_pr_instructions() -> String {
+    DEFAULTS.implement_pr_instructions.clone()
+}
 
 impl Default for GithubPrompts {
     fn default() -> Self {
@@ -78,6 +96,8 @@ impl Default for GithubPrompts {
             triage_instructions: default_triage_instructions(),
             design_instructions: default_design_instructions(),
             implement_instructions: default_implement_instructions(),
+            design_pr_instructions: default_design_pr_instructions(),
+            implement_pr_instructions: default_implement_pr_instructions(),
         }
     }
 }
@@ -96,6 +116,22 @@ impl GithubPrompts {
             "triage" => Some(&self.triage_instructions),
             "design" => Some(&self.design_instructions),
             "implement" => Some(&self.implement_instructions),
+            _ => None,
+        }
+    }
+
+    /// The template for a task that **is a pull request** (#734), or `None`
+    /// when `kind` is not one a pull request can be taken under.
+    ///
+    /// `None` is how ineligibility is expressed, and the caller relies on it:
+    /// a pull request is ingested only when this answers. `triage` files a
+    /// *new* item from a request, which for a pull request would recreate the
+    /// issue-plus-pull-request pair this feature exists to avoid; a workflow
+    /// with no profile sends no kind at all.
+    pub fn for_pull_request(&self, kind: &str) -> Option<&str> {
+        match kind {
+            "design" => Some(&self.design_pr_instructions),
+            "implement" => Some(&self.implement_pr_instructions),
             _ => None,
         }
     }

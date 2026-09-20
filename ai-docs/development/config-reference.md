@@ -4,7 +4,7 @@ title: 設定リファレンス（config.toml）
 description: "config.toml の全キー・デフォルト値・意味の一覧。設定ファイルは 1 本で、プラグイン個別設定もトップレベルの [<name>] テーブルに入る。シークレット参照、設定スキーマのバージョニング方針、[[projects]] の domain 宣言とワークフローからの参照、プラグインが定義する追加プロパティ、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-github の [github]、task-source-notion の [notion]、task-source-slack の [slack]、agent-ide-herdr の [herdr] を含む。"
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
 tags: [config, reference, toml, secrets, workflow, worktree, github, notion, slack, hooks, versioning]
-generated: { by: claude-code/opus-5, at: 2026-09-19T22:00:00+09:00 }
+generated: { by: claude-code/fable-5-1, at: 2026-09-21T02:10:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -461,6 +461,8 @@ agent = "herdr"
 | `triage_instructions` | `profile = "triage"` | github: `{issue_number}` `{repo}` / notion: `{page_url}` `{title}` |
 | `design_instructions` | `profile = "design"` | 同上 |
 | `implement_instructions` | `profile = "implement"` | 同上 |
+| `design_pr_instructions` | `profile = "design"` で、タスクが **PR** のとき（github のみ、#734） | `{pr_number}` `{repo}` |
+| `implement_pr_instructions` | `profile = "implement"` で、タスクが **PR** のとき（github のみ、#734） | `{pr_number}` `{repo}` |
 
 いずれも省略可（埋め込みの既定を使う）。**profile を使わない構成ではこのキー群は一切使われず、タスクの `instructions` は従来どおり空**になる。
 
@@ -913,6 +915,30 @@ project = "tomo-prj"
 | `triage_instructions` | ワークフローの profile が `triage` のとき送られる |
 | `design_instructions` | 同 `design` |
 | `implement_instructions` | 同 `implement` |
+| `design_pr_instructions` | profile が `design` で、タスクが PR のとき `design_instructions` の**代わりに**送られる（#734） |
+| `implement_pr_instructions` | 同 `implement`。issue 版は「PR を開け」で終わるので、PR 自身のブランチ上では 2 本目の PR になる |
+
+PR 版のプレースホルダは `{pr_number}` と `{repo}`。上書きするときに**落としてはいけない点が 3 つ**ある（`defaults.toml` のコメントに理由がある）: PR であると**断定形**で書くこと、読み取りコマンド（`gh pr view {pr_number} --comments` / `gh pr diff {pr_number}`）を名指しすること、OPEN でなければ何もせず止まらせること。**ブランチのことは書かない** —— worktree が PR のブランチ上にあるか、その先頭に detached かは Orchestrator が profile から決めて自分で伝える（[ADR-0085](/decisions/adr-0085-branch-hint.md)）。
+
+## ボード上の PR もタスクになる（#734）
+
+`profile = "design"` または `"implement"` の workflow は、**設定を変えなくても** PR item を受ける。trigger（`status` / `label` / `assignee`）と `[[repositories]].project` の取り込みフィルタは issue と同じものが効く。PR にはさらに 3 つの条件がある。
+
+| 条件 | 理由 |
+|---|---|
+| workflow の profile が `design` か `implement` | PR 用の指示文面を持つのはこの 2 つだけ。`triage` は PR から新しい item を起票することになり、profile なしの workflow は `instructions_kind` を送らない。受けない workflow は**黙って**見送るので、同じボードの別の workflow が拾える |
+| `state` が `OPEN`（draft は可） | merge / close 済みのブランチに積んだ commit は行き先が無い |
+| fork からの PR ではない | head ブランチが `origin` に無い。**同名のブランチが `origin` に別の意味で在りうる**（fork の head は `main` であることが多い）ので、取り込み時に弾く |
+
+後ろの 2 つに当たった PR は、PR ごとに 1 回だけ warn を出す（ボードは poll のたびに読み直すので、毎回出すと trigger 列にある間ずっと数秒おきに出続ける）。
+
+PR のタスクは、その PR を生んだ issue のタスクとは**別物**である（id は PR の node id）。プラグインは PR の head ブランチを `Task.branch_hint` に入れ、Orchestrator が `implement` ならそのブランチ上に、`design` ならその先頭 commit に detached で worktree を作る。
+
+成果物はどちらも PR へのコメントである。`design` は「この PR をマージ可能にするための**追加修正の設計**」（コードレビューではない）、`implement` は commit を push したうえで**何をなぜ変えたか**を書く。`implement` が報告するのは PR の URL ではなく**そのコメントの URL** —— PR の URL は実行前から存在するので、報告させても何の証拠にもならない。
+
+**totsuka が issue から作った PR には、issue のカードを trigger 列へ戻すほうを使う。** 同じタスクが同じブランチ・同じセッションで再開される。その PR をボードに載せると別タスクになり、issue 側の worktree が保持ポリシー（`keep_7d` など）でブランチを掴んでいる間は `the hinted branch … is checked out in another worktree` で失敗する。PR item が効くのは、totsuka のタスクから生まれていない PR（依存更新ボットの bump、人間が開いた PR）である。
+
+**依存更新ボットのブランチに push した後の注意。** Renovate は、自分以外の commit が積まれたブランチの更新を止める。その後 rebase ラベルやチェックボックスを使うと、Renovate は自分の commit でブランチを作り直し、エージェントの commit は消える。`implement` が残すコメントが、その場合に何が失われたかの記録になる。
 
 # `[notion]`（task-source-notion）
 

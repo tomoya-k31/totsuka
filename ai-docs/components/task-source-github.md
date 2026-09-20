@@ -4,7 +4,7 @@ title: task-source-github プラグイン
 description: GitHub Issues / ProjectsV2 をタスクソースとして接続する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。GraphQL で fetch→正規化、ProjectsV2 ステータス書き戻し、task/claim（Issue への self-assign + AssignedEvent 先着裁定による楽観排他）を行う。Issue への書き込みは claim の assignee 操作だけ。呼び出す 8 つの GraphQL 操作と、トークン権限（十分条件は実測済み・最小値は未実測。fine-grained PAT が user 所有ボードに使えない理由を含む）を扱う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-github
 tags: [rust, crate, plugin, task-source, github, graphql, projectsv2]
-generated: { by: claude-code/opus-5, at: 2026-09-12T23:10:00+09:00 }
+generated: { by: claude-code/fable-5-1, at: 2026-09-21T02:15:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -51,9 +51,34 @@ fetch（`poll_loop` の各 tick が呼ぶ `GithubClient::fetch`。0.2.0 で `tas
 
 `Task.handle` に **`{repo}-{issue 番号}`** を入れる（protocol 0.7.2）。エージェントの名前や worktree 名に載る人間向けの短い名前で（[ADR-0071](/decisions/adr-0071-task-identifier-naming.md) D-7）、`Task.id` が base64 の node id でこれになれないために要る。リポジトリを先に置くのは、識別子の予算が足りないとき**末尾から切られる**のと、1 つのボードが複数リポジトリを追うので番号だけでは曖昧だからである。**一意である必要は無い** — 一意性はダイジェストが持つので、これで dedup してはならない。
 
+# PR item もタスクにする（#734）
+
+ボード上の item の中身は `Issue` / `PullRequest` / `DraftIssue` の 3 種で、#734 までは `Issue` 以外を入口で捨てていた。今は **`PullRequest` もタスクになる**（draft item は今も捨てる）。決定の経緯は [ADR-0085](/decisions/adr-0085-branch-hint.md)。
+
+PR は issue と同じ trigger と取り込み制御（上の F-08、`[[repositories]].project` のフィルタ）を通り、そのあと `pull_request_branch` の 3 条件に当たる。
+
+| 条件 | 外れたとき |
+|---|---|
+| workflow の `instructions_kind` が `design` か `implement` | **黙って**見送る。このプラグインは workflow ごとにボードを走査するので、同じボードの別の workflow が拾える |
+| `state = OPEN`（draft は可） | 見送り + warn |
+| `isCrossRepository = false` | 見送り + warn。fork の head は `origin` に無く、**同名のブランチが `origin` に別の意味で在りうる**（`main` が典型）ので、dispatch 時の失敗に任せず入口で弾く |
+
+warn は PR の node id ごとに 1 回だけ出す（`skipped_pull_requests`。ボードは poll のたびに読み直すので、毎回出すと trigger 列にある間ずっと出続ける）。プロセス内の記憶なので、再起動後にもう 1 行出る。
+
+取り込んだ PR のタスクは、`Task.id` が **PR の node id**（その PR を生んだ issue のタスクとは別物）、`Task.branch_hint` が **`headRefName`** になる。プラグインがブランチについてするのはここまでで、worktree をそのブランチ上に作るか先頭 commit に detached で作るかは Orchestrator が決める（[branch hint](/glossary/branch-hint.md)）。`handle` は issue と同じ `{repo}-{番号}` —— GitHub では issue と PR が 1 つの番号空間を共有するので衝突しない。
+
+指示文面は `for_pull_request` が `design_pr_instructions` / `implement_pr_instructions` から選ぶ（issue 版は 1 バイトも変えていない）。中立的な 1 本に書き直さなかったのは、種類をこのプラグインが `__typename` で確定的に知っているからで、エージェントに実行時に判定させると外れる（`gh issue view <番号>` は PR 番号でも成功する）。プレースホルダは `{pr_number}` と `{repo}`。**ブランチのことは書かない** —— worktree がどう作られたかをプラグインは知らないので、それは core の不可視文面（`hinted_branch_on` / `hinted_branch_detached`）が語る。
+
+**`... on Issue` に限定されていた箇所がほかに 2 つあり、どちらも PR では無言で壊れていた。**
+
+- **claim の読み取り（`CLAIM_READ_QUERY`）。** PR のノードには何も返らず、`claim` はそれを「未アサイン」と区別できない。自己アサインの mutation は成功する（`Assignable = Issue | PullRequest`）が、読み返しがまた空なので「push 権限が無く黙殺された」と解釈し、**すべての PR に `forbidden` を返す**。運用者が既にアサインされている PR でも同じだった。
+- **`update_status` の item 解決（`resolve_query`）。** `content { ... on Issue { id } }` だけを見ていたので、PR の item は id 無しで返り、どの task_id とも一致せず、`on_start` / `on_success` の列移動が届かなかった。
+
+どちらも同形のフラグメントを足しただけで、パースは共有している。transport が定型応答を返すテストではクエリの中身が結果に効かないため、**クエリ文字列そのもの**を固定するテストを置いた（実 API に対しては追加時に確認済み）。
+
 # capabilities（F-83）
 
-manifest（`plugins/task-source-github/plugin.toml`、`protocol_version = ">=0.7.0, <0.8"`（#626: 複数 domain を持つので `WorkflowInfo.projects` に依存する。無視すると全ボードを走査してしまうため下限を上げた））と `initialize` 応答で `kind = task_source` を宣言する。**`task_claim = true`**（#556、protocol 0.6.1）— `task/claim` に上記の self-assign で答える。**`outputs` は空**（#398）—— 成果物はエージェントが `gh` で自分で書くので、このプラグインは何も publish しない。`output = "source"` を書いた workflow は `config validate` が弾く（F-83）。
+manifest（`plugins/task-source-github/plugin.toml`、`protocol_version = ">=0.7.5, <0.8"`（#626 で 0.7.0 へ: 複数 domain を持つので `WorkflowInfo.projects` に依存する。無視すると全ボードを走査してしまう。**#734 で 0.7.5 へ**: `Task.branch_hint` を埋める唯一のプラグインになった。これを無視する Orchestrator は PR のタスクを既定ブランチに detached で始め「新しいブランチを作れ」と指示するので、このプラグインの「2 本目の PR を開くな」と矛盾する。下限は依存を表すので、patch でも上げる））と `initialize` 応答で `kind = task_source` を宣言する。**`task_claim = true`**（#556、protocol 0.6.1）— `task/claim` に上記の self-assign で答える。**`outputs` は空**（#398）—— 成果物はエージェントが `gh` で自分で書くので、このプラグインは何も publish しない。`output = "source"` を書いた workflow は `config validate` が弾く（F-83）。
 
 # テスト
 
