@@ -184,11 +184,26 @@ pub enum WorktreeError {
         /// The worktree that holds it.
         holder: PathBuf,
     },
-    /// A surviving worktree could not be moved onto the hinted start —
-    /// normally uncommitted changes that the switch would overwrite.
+    /// The path recorded for a hinted task is not one of this repository's
+    /// worktrees any more.
+    ///
+    /// Checked before anything is run inside it, because a plain directory
+    /// under a repository answers git as the **enclosing** repository (#694):
+    /// `git switch` there would move the operator's own checkout.
+    #[error(
+        "{path} is recorded as this task's worktree but is not one of the repository's \
+         worktrees any more → remove that directory and retry; the worktree is re-created"
+    )]
+    HintedWorktreeUnregistered {
+        /// The recorded path.
+        path: PathBuf,
+    },
+    /// A surviving worktree could not be moved onto the hinted start, because
+    /// moving it would lose something: uncommitted changes the switch would
+    /// overwrite, or commits on a detached `HEAD` that no branch reaches.
     #[error(
         "could not move the worktree at {path} to the hinted branch `{branch}`: {stderr} → \
-         commit, stash or discard the changes there, then retry"
+         save what is there (commit, stash, or put a branch on it), then retry"
     )]
     HintSyncBlocked {
         /// The worktree that could not be moved.
@@ -701,6 +716,51 @@ impl<G: GitRunner> WorktreeManager<G> {
     /// remote (a pull request's head), and a local branch of that name proves
     /// nothing about it. Callers fetch first.
     fn hinted_head(&self, repo_path: &Path, branch: &str) -> Result<String, WorktreeError> {
+        // The name comes from outside and is about to be a bare argument to
+        // `git switch` / `git worktree add`, where a leading `-` reads as an
+        // option. `check-ref-format --branch` refuses that and every other
+        // malformed name in one call.
+        let valid = self
+            .git
+            .run(repo_path, &["check-ref-format", "--branch", branch])?;
+        if !valid.success() {
+            return Err(WorktreeError::Git {
+                command: "check-ref-format".to_string(),
+                stderr: valid.stderr,
+            });
+        }
+        // Ask `origin` itself, not the remote-tracking ref. `git fetch origin`
+        // does not prune, so a branch deleted on the remote after this clone
+        // fetched it — a merged pull request, the very case the error below
+        // names — keeps answering from `refs/remotes/origin/` with a stale
+        // commit. Pruning on fetch would fix that too, but it rewrites refs the
+        // whole repository shares; one `ls-remote` touches nothing.
+        let remote = self.run_with_transient_retry(
+            repo_path,
+            &[
+                "ls-remote",
+                "--exit-code",
+                "--heads",
+                "origin",
+                &format!("refs/heads/{branch}"),
+            ],
+        )?;
+        match remote.status {
+            Some(0) => {}
+            // `--exit-code`: 2 means "no matching ref", as opposed to a failure
+            // to reach the remote at all.
+            Some(2) => {
+                return Err(WorktreeError::HintedBranchMissing {
+                    branch: branch.to_string(),
+                });
+            }
+            _ => {
+                return Err(WorktreeError::Fetch {
+                    repo: repo_path.display().to_string(),
+                    stderr: remote.stderr,
+                });
+            }
+        }
         let rev = self.git.run(
             repo_path,
             &[
@@ -814,23 +874,75 @@ impl<G: GitRunner> WorktreeManager<G> {
         // be moved from outside it (git refuses, rightly), so fast-forward
         // from inside; the old-value guard on `update-ref` is the same
         // compare-and-swap for the other case.
-        let forwarded = match own.filter(|w| self.head_branch(w).as_deref() == Some(branch)) {
-            Some(worktree) => self
-                .git
-                .run(worktree, &["merge", "--ff-only", origin_head])?,
-            None => self.git.run(
-                repo_path,
-                &["update-ref", &local_ref, origin_head, &local_head],
-            )?,
-        };
-        if !forwarded.success() {
-            return Err(WorktreeError::HintSyncBlocked {
-                path: own.unwrap_or(repo_path).to_path_buf(),
-                branch: branch.to_string(),
-                stderr: forwarded.stderr.trim().to_string(),
-            });
+        match own.filter(|w| self.head_branch(w).as_deref() == Some(branch)) {
+            Some(worktree) => {
+                let merged = self
+                    .git
+                    .run(worktree, &["merge", "--ff-only", origin_head])?;
+                if !merged.success() {
+                    return Err(WorktreeError::HintSyncBlocked {
+                        path: worktree.to_path_buf(),
+                        branch: branch.to_string(),
+                        stderr: merged.stderr.trim().to_string(),
+                    });
+                }
+            }
+            None => {
+                // Fails only if the ref moved since it was read a moment ago —
+                // someone else's write, not anything in a worktree.
+                let moved = self.git.run(
+                    repo_path,
+                    &["update-ref", &local_ref, origin_head, &local_head],
+                )?;
+                if !moved.success() {
+                    return Err(WorktreeError::Git {
+                        command: "update-ref".to_string(),
+                        stderr: moved.stderr,
+                    });
+                }
+            }
         }
         Ok(())
+    }
+
+    /// A commit this worktree's `HEAD` reflog records as **made here** (its
+    /// subject starts with `commit`: plain, `(amend)`, `(merge)`, `(initial)`)
+    /// that no branch, tag or remote-tracking ref reaches.
+    fn unreachable_commit_made_here(
+        &self,
+        worktree_path: &Path,
+    ) -> Result<Option<String>, WorktreeError> {
+        let log = self
+            .git
+            .run(worktree_path, &["log", "-g", "--format=%H %gs", "HEAD"])?;
+        if !log.success() {
+            return Err(WorktreeError::Git {
+                command: "log -g".to_string(),
+                stderr: log.stderr,
+            });
+        }
+        let made_here: Vec<&str> = log
+            .stdout
+            .lines()
+            .filter_map(|line| line.split_once(' '))
+            .filter(|(_, subject)| subject.starts_with("commit"))
+            .map(|(sha, _)| sha)
+            .collect();
+        if made_here.is_empty() {
+            return Ok(None);
+        }
+        let mut args = vec!["rev-list", "--max-count=1"];
+        args.extend(made_here);
+        args.extend(["--not", "--branches", "--tags", "--remotes"]);
+        let orphans = self.git.run(worktree_path, &args)?;
+        if !orphans.success() {
+            return Err(WorktreeError::Git {
+                command: "rev-list".to_string(),
+                stderr: orphans.stderr,
+            });
+        }
+        let orphan = orphans.stdout.trim();
+        Ok((!orphan.is_empty()).then(|| orphan.chars().take(12).collect()))
     }
 
     /// Bring a **surviving** worktree to its hinted start (#734).
@@ -850,6 +962,12 @@ impl<G: GitRunner> WorktreeManager<G> {
         worktree_path: &Path,
         hint: HintedStart<'_>,
     ) -> Result<(), WorktreeError> {
+        // Before a single command runs inside `worktree_path` (#694).
+        if !self.is_worktree_of(repo_path, worktree_path)? {
+            return Err(WorktreeError::HintedWorktreeUnregistered {
+                path: worktree_path.to_path_buf(),
+            });
+        }
         self.fetch_origin(repo_path)?;
         let branch = hint.branch();
         let origin_head = self.hinted_head(repo_path, branch)?;
@@ -878,6 +996,24 @@ impl<G: GitRunner> WorktreeManager<G> {
                 }
             }
         };
+        // `HEAD` is about to move. Commits **made in this worktree** that no
+        // branch, tag or remote reaches would be left to the reflog — a plan
+        // stage is meant to make none, and nothing enforces that for a
+        // workflow with no profile.
+        //
+        // "Made here" is the load-bearing qualifier, and it is why this reads
+        // the reflog instead of asking whether `HEAD` is reachable: a
+        // dependency bot rebases its branch routinely, and the commit a design
+        // stage was detached at then hangs off no ref either. Nobody made
+        // that one here. Refusing over it would wedge every such task on the
+        // bot's next rebase.
+        if let Some(orphan) = self.unreachable_commit_made_here(worktree_path)? {
+            return Err(WorktreeError::HintSyncBlocked {
+                path: worktree_path.to_path_buf(),
+                branch: branch.to_string(),
+                stderr: format!("commit {orphan} was made here and no branch reaches it"),
+            });
+        }
         let out = self.git.run(worktree_path, &switch)?;
         if !out.success() {
             return Err(WorktreeError::HintSyncBlocked {

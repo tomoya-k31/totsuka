@@ -1160,6 +1160,23 @@ fn a_hinted_branch_held_by_another_worktree_is_an_error_naming_it() {
     ))
     .unwrap();
 
+    // The operator's own checkout counts too: a `gh pr checkout` they are
+    // still sitting on holds the branch exactly as a task's worktree does.
+    someone_pushes(&base, "feat/y", "v1", false);
+    git(&clone, &["fetch", "origin"]);
+    git(
+        &clone,
+        &["switch", "--no-track", "-c", "feat/y", "origin/feat/y"],
+    );
+    let err = mgr
+        .create(&hinted(&clone, "pr-13", HintedStart::On("feat/y"), &env))
+        .unwrap_err();
+    assert!(
+        matches!(&err, WorktreeError::HintedBranchHeld { holder, .. }
+            if holder.canonicalize().unwrap() == clone.canonicalize().unwrap()),
+        "{err}"
+    );
+
     let _ = std::fs::remove_dir_all(&base);
 }
 
@@ -1252,6 +1269,148 @@ fn sync_refuses_to_overwrite_uncommitted_changes() {
         std::fs::read_to_string(wt.path.join("f.txt")).unwrap(),
         "notes the agent left"
     );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// The case `HintedBranchMissing`'s own message names: the pull request was
+/// merged and its branch deleted **after this clone had fetched it**. A plain
+/// `git fetch origin` does not prune, so `refs/remotes/origin/<branch>` lives
+/// on and would answer for a branch that is gone — the task would rebuild the
+/// dead branch from a stale commit and resurrect it on push.
+#[test]
+fn a_hinted_branch_deleted_on_origin_after_being_fetched_is_missing() {
+    let base = scratch("hint-deleted");
+    let clone = setup(&base);
+    let env = env(&base.join("state"));
+    let mgr = WorktreeManager::new(SystemGitRunner);
+    someone_pushes(&base, "renovate/x", "v1", false);
+    git(&clone, &["fetch", "origin"]);
+    git(
+        &base.join("seed"),
+        &["push", "origin", "--delete", "renovate/x"],
+    );
+    git(&clone, &["fetch", "origin"]);
+    assert!(
+        !git(&clone, &["branch", "-r", "--list", "origin/renovate/x"]).is_empty(),
+        "the stale remote-tracking ref is still here — that is the hazard"
+    );
+
+    for hint in [
+        HintedStart::On("renovate/x"),
+        HintedStart::DetachedAt("renovate/x"),
+    ] {
+        let err = mgr.create(&hinted(&clone, "pr-1", hint, &env)).unwrap_err();
+        assert!(
+            matches!(&err, WorktreeError::HintedBranchMissing { branch } if branch == "renovate/x"),
+            "{hint:?}: {err}"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// `sync_to_hint` runs `git switch` **inside** the recorded path, and a plain
+/// directory under a repository answers git as the *enclosing* repository
+/// (#694). The task row keeps its path after the worktree is removed, so a
+/// directory that reappears there — leftovers, a `mkdir` — would get the
+/// operator's own checkout switched out from under them.
+#[test]
+fn sync_refuses_a_path_that_is_not_this_repositorys_worktree() {
+    let base = scratch("hint-sync-unregistered");
+    let clone = setup(&base);
+    let mgr = WorktreeManager::new(SystemGitRunner);
+    someone_pushes(&base, "renovate/x", "v1", false);
+    let stray = clone.join("leftovers");
+    std::fs::create_dir_all(&stray).unwrap();
+    let before = git(&clone, &["rev-parse", "--abbrev-ref", "HEAD"]);
+
+    let err = mgr
+        .sync_to_hint(&clone, &stray, HintedStart::On("renovate/x"))
+        .unwrap_err();
+    assert!(
+        matches!(&err, WorktreeError::HintedWorktreeUnregistered { path } if path == &stray),
+        "{err}"
+    );
+    assert_eq!(
+        git(&clone, &["rev-parse", "--abbrev-ref", "HEAD"]),
+        before,
+        "the enclosing checkout was not touched"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// A plan stage is *meant* to make no commits, and nothing enforces that for a
+/// workflow with no profile. Commits made on the detached `HEAD` are reachable
+/// from no ref, so moving `HEAD` away would leave them to the reflog.
+#[test]
+fn sync_refuses_to_leave_detached_commits_behind() {
+    let base = scratch("hint-sync-detached-commits");
+    let clone = setup(&base);
+    let env = env(&base.join("state"));
+    let mgr = WorktreeManager::new(SystemGitRunner);
+    someone_pushes(&base, "renovate/x", "v1", false);
+    let wt = mgr
+        .create(&hinted(
+            &clone,
+            "pr-1",
+            HintedStart::DetachedAt("renovate/x"),
+            &env,
+        ))
+        .unwrap();
+    git(
+        &wt.path,
+        &["commit", "--allow-empty", "-m", "made while detached"],
+    );
+    let orphan = git(&wt.path, &["rev-parse", "HEAD"]);
+
+    let err = mgr
+        .sync_to_hint(&clone, &wt.path, HintedStart::On("renovate/x"))
+        .unwrap_err();
+    assert!(
+        matches!(&err, WorktreeError::HintSyncBlocked { .. }),
+        "{err}"
+    );
+    assert!(
+        err.to_string().contains(&orphan[..12]) && err.to_string().contains("no branch"),
+        "the error must name the commit that would be lost: {err}"
+    );
+    assert_eq!(git(&wt.path, &["rev-parse", "HEAD"]), orphan, "still there");
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// The guard above must not mistake a **stale base** for the agent's work. A
+/// dependency bot rebases its branch as a matter of routine; the commit a
+/// design stage was detached at then hangs off no ref at all, exactly like a
+/// commit made while detached — but nobody made it here, and refusing to move
+/// would wedge every such task on the bot's next rebase.
+#[test]
+fn sync_follows_a_force_push_away_from_a_stale_detached_base() {
+    let base = scratch("hint-sync-force-push");
+    let clone = setup(&base);
+    let env = env(&base.join("state"));
+    let mgr = WorktreeManager::new(SystemGitRunner);
+    someone_pushes(&base, "renovate/x", "v1", false);
+    let wt = mgr
+        .create(&hinted(
+            &clone,
+            "pr-1",
+            HintedStart::DetachedAt("renovate/x"),
+            &env,
+        ))
+        .unwrap();
+    let rebased = someone_pushes(&base, "renovate/x", "rebased", true);
+
+    mgr.sync_to_hint(&clone, &wt.path, HintedStart::DetachedAt("renovate/x"))
+        .unwrap();
+    assert_eq!(git(&wt.path, &["rev-parse", "HEAD"]), rebased);
+
+    let again = someone_pushes(&base, "renovate/x", "rebased again", true);
+    mgr.sync_to_hint(&clone, &wt.path, HintedStart::On("renovate/x"))
+        .unwrap();
+    assert_eq!(git(&wt.path, &["rev-parse", "HEAD"]), again);
 
     let _ = std::fs::remove_dir_all(&base);
 }

@@ -4,7 +4,7 @@ title: ADR-0085 ソースが既存ブランチを名指しできる Task.branch_
 description: GitHub Project 上の PR をタスクにして既存 PR のブランチ上で設計・追加修正させるために、Task に branch_hint（protocol 0.7.5）を足した決定。ソースはブランチ名を言うだけで、writable なステージはそのブランチ上に、plan のステージはその先頭 commit に detached で worktree を作るという使い分けは core が持つ。ヒントは助言ではなく、見つからない・分岐している・別の worktree が掴んでいる場合はフォールバックせずタスクを失敗させること、残っている worktree も dispatch のたびにヒントへ同期すること、ブランチの状態を語る不可視文面は core が持ちソースプラグインには書かせないこと、PR の取り込みに opt-in キーを設けないことを記録する。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/worktree/mod.rs
 tags: [decision, adr, protocol, worktree, branch, github, pull-request, prompts, profile]
-generated: { by: claude-code/fable-5-1, at: 2026-09-21T01:15:00+09:00 }
+generated: { by: claude-code/fable-5-1, at: 2026-09-21T12:30:00+09:00 }
 status: stable
 owner: tomoya-k31
 sources:
@@ -75,9 +75,14 @@ worktree 層の入口は `CreateRequest.hinted: Option<HintedStart>` の 1 つ�
 | `origin` にそのブランチが無い | `HintedBranchMissing` |
 | ローカルの同名ブランチが `origin` と分岐している | `HintedBranchDiverged` |
 | 別の worktree がそのブランチを掴んでいる | `HintedBranchHeld`（掴んでいる worktree のパスを示す） |
-| 残っている worktree を移せない（未コミット変更） | `HintSyncBlocked` |
+| 残っている worktree を移すと何かが失われる（switch が上書きする未コミット変更、この worktree の中で作られてどのブランチからも辿れない commit） | `HintSyncBlocked` |
+| 記録されたパスが、もうこのリポジトリの worktree ではない | `HintedWorktreeUnregistered` |
 
 フォールバックした場合に起きるのは、既定ブランチに detached な worktree と「新しいブランチを作れ」という指示で、その先は 2 本目の PR である。これはこの機能が防ごうとしている事故そのものなので、黙って進むより止まるほうが安い。
+
+**「`origin` に無い」は `origin` 自身に聞く。** リモート追跡 ref（`refs/remotes/origin/<branch>`）では判定しない。`git fetch origin` は prune しないので、この clone が一度 fetch したブランチは、リモートで消えたあとも追跡 ref として残り続ける —— マージされて head が消された PR、つまりこのエラーが名指ししている状況そのもので、検査が黙って通ってしまう。fetch を `--prune` にする案は採らなかった。リポジトリ全体で共有される ref を書き換えるうえ、記録されたブランチの再作成（`origin/{branch}` から作り直す経路）の挙動まで変わる。ヒントの経路でだけ `git ls-remote --exit-code --heads` を 1 回打つ。
+
+ブランチ名は外から来て `git switch` / `git worktree add` の素の引数になるので、同じ入口で `git check-ref-format --branch` を通す（先頭 `-` はオプションとして読まれる）。
 
 totsuka 自身が**記録した**ブランチ（`tasks.branch`）が消えていた場合のフォールバックは、今のまま残した。そちらは「記録した名前がもう何も指していないので、エージェントに付け直させる」という意図的な挙動である。
 
@@ -100,7 +105,11 @@ totsuka 自身が**記録した**ブランチ（`tasks.branch`）が消えてい
 
 `plan_cleanup = "immediate"` を前提にする案は採らなかった。その設定なら design の完了時に worktree が消え、implement で作り直されるので問題は出ない。しかし他の cleanup 設定や、未コミットのファイルで worktree が残った場合にだけ 2 本目の PR が開く、という失敗は原因を追えない。
 
-同期は何も捨てない。未コミット変更が switch を妨げたら `HintSyncBlocked` で止まる。
+同期は何も捨てない。未コミット変更が switch を妨げたら `HintSyncBlocked` で止まる。detached な worktree の中で commit が作られていて、どのブランチ・タグ・リモートからも辿れない場合も同じく止まる（plan は commit しない約束だが、profile を持たない workflow には deny list が無く、何も強制していない）。
+
+後者の判定は `HEAD` の reflog で「**この worktree の中で作られた** commit」に絞っている。単に「`HEAD` がどの ref からも辿れないか」を見ると、依存更新ボットが自分のブランチを rebase するたびに誤検出する —— design が detached していた commit は、force-push のあとはどの ref からも辿れないが、ここで作られたものではない。
+
+**同期は、記録されたパスの中で git を実行する前に、そこが今もこのリポジトリの worktree であることを確かめる**（`HintedWorktreeUnregistered`）。task の行は worktree を消したあともパスを持ち続けるので、同じ場所に普通のディレクトリが現れうる。リポジトリ配下の普通のディレクトリは、git に対して**外側のリポジトリ**として答える（#694）。確かめずに `git switch` すると、運用者自身の checkout が切り替わる。これは実装後のレビューで見つかり、実際にそうなることをテストで再現した。
 
 ## 6. PR は issue とは別のタスクである
 
@@ -133,6 +142,8 @@ PR タスクへの指示は、知っている者が違う 2 つに分かれる�
 - **`Task` を構造体リテラルで組むコードには source break。** 同梱プラグインと core の 16 か所を同じコミットで直した。wire 互換は保たれる。
 - **ヒントを持つタスクは、dispatch のたびに `git fetch` が 1 回増える。** これまで fetch するのは worktree を作るときだけだった。
 - **依存更新ボットとの相互作用は運用の問題として残る。** エージェントがボットのブランチに push すると、Renovate はそのブランチの更新を止める。その後 rebase ラベルを使うと Renovate は自分の commit でブランチを作り直し、エージェントの commit は消える。[^renovate-rebasing] implement のステージに変更内容を PR コメントとして残させるのは（2 本目の PR で実装）、この場合の記録にもなる。
+- **完全に publish 済みのローカルブランチは、タスク完了時の cleanup が消す。** 既存の規則（全 commit が `origin` から辿れるときだけ `branch -D`）をヒントのブランチにもそのまま当てている。commit は失われないが、運用者が以前 `gh pr checkout` で作って放置していた同名のブランチも対象になる（チェックアウト中なら、そもそも `HintedBranchHeld` でタスクが始まらない）。「totsuka が作ったブランチか、元からあったか」を区別するには state.db への永続化が要り、失われるものが無い問題に対しては重いと判断した。消さない案は、#266 で直した「ブランチが際限なく溜まる」を PR タスクでだけ再発させる。
+- **ヒントを持つタスクは、dispatch のたびに `git ls-remote` も 1 回増える。** 上の fetch と合わせて、ネットワーク往復は 2 回。
 - **fork からの PR は扱わない。** `refs/pull/N/head` の fetch、fork への push、`maintainerCanModify` の検査が要り、今回の動機には不要だった。
 
 [^issue-734]: GitHub Project 上の PR item をタスクとして取り込み、既存 PR のブランチ上で設計・追加修正させる — #734
