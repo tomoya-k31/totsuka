@@ -218,6 +218,44 @@ for why. CI's own flags stay exactly as they are:
 - No unrelated files or stray working-tree changes are included;
   `git add <explicit files>` only — never `-A` / `.` (→ git-conventions).
 
+**Over-engineering pass — `/ponytail-review`** (right before committing /
+opening the PR, when the diff contains code):
+
+- Run the `/ponytail-review` skill **inline in the main session**, on **the
+  current diff only**: `git diff` (plus `git diff --staged`) before a commit,
+  `git diff main...HEAD` before a PR. Not the whole repository — that is
+  `/ponytail-audit`, a different skill, and its findings are not this PR's to
+  fix.
+- Skip it when the diff has no code in it (docs-only, `ai-docs/**`-only, prose
+  `*.md`). The skill's own boundary is coding work; on prose it has nothing to
+  cut.
+- It **only lists** deletion candidates (`delete:` / `stdlib:` / `native:` /
+  `yagni:` / `shrink:`, ending in `net: -N lines possible`); it never applies
+  them. Go through the list and **decide each finding yourself**:
+  - **Apply** it when behaviour is unchanged and the cut is covered — dead
+    code, a hand-rolled stdlib equivalent, an abstraction with one caller.
+  - **Reject** it, with the reason, when the "bloat" is something this
+    repository requires: a regression test (the skill itself never counts a
+    smoke test as bloat), a docs obligation, a boundary that `arch-lint` or an
+    ADR mandates, a comment that carries the rationale for a decision, or
+    error handling at a plugin / process boundary.
+  - **Cannot tell → ask the user; do not guess.** Typical cases: the cut
+    changes observable behaviour or a public interface, it removes flexibility
+    that may have been asked for outside this conversation, or applying it
+    would grow the diff beyond what the PR is for. Put the finding and what is
+    unclear to the user, and wait for the answer before committing.
+- Report the outcome to the user as one list: each finding with
+  applied / rejected (why) / asked.
+- Its scope is complexity only. Correctness, security and performance are
+  explicitly out of scope for it, so it **never replaces** `/code-review`
+  (below, and step 5).
+- Applied cuts change the code, so run this **before the final pass of the
+  scoped checks above** — what gets checked should be what gets committed. If
+  the checks already ran, re-run the groups the cuts touched.
+- `ponytail` is a user-installed plugin, not one this repository declares. If
+  the skill is not available in the session, say so and move on — a missing
+  plugin must not block the PR.
+
 **Pre-PR review** (optional, best-effort — must NEVER block the PR):
 
 - Run it **inline in the main session** via the `/code-review` skill at
