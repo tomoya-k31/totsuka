@@ -222,10 +222,17 @@ for why. CI's own flags stay exactly as they are:
 opening the PR, when the diff contains code):
 
 - Run the `/ponytail-review` skill **inline in the main session**, on **the
-  current diff only**: `git diff` (plus `git diff --staged`) before a commit,
-  `git diff main...HEAD` before a PR. Not the whole repository — that is
+  current diff only**: `git diff --staged` before a commit, `git diff
+  main...HEAD` before a PR. Not the whole repository — that is
   `/ponytail-audit`, a different skill, and its findings are not this PR's to
   fix.
+- **Stage first (`git add <explicit files>`), then review.** A file that is
+  still untracked appears in **neither** `git diff` nor `git diff --staged`
+  (measured: a new file is `??` in `git status --short` and absent from both
+  diffs), and a brand-new file is exactly where a speculative abstraction
+  lives — so reviewing before staging silently skips the most likely finding.
+  `git status --short` must show no `??` entry that belongs in the commit
+  before the pass is worth anything.
 - Skip it when the diff has no code in it (docs-only, `ai-docs/**`-only, prose
   `*.md`). The skill's own boundary is coding work; on prose it has nothing to
   cut.
