@@ -474,6 +474,7 @@ impl<T: NotionTransport> NotionClient<T> {
             // renameable string into an identifier. `None` is the honest
             // answer; the task number and the digest still name the task.
             handle: None,
+            branch_hint: None,
             id,
             source: self.config.source_name.clone(),
             title,

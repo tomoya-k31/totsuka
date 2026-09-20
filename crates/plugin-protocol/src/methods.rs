@@ -1024,6 +1024,7 @@ mod tests {
             message_key: None,
             instructions: None,
             handle: None,
+            branch_hint: None,
         }
     }
 

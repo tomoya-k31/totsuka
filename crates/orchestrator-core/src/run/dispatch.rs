@@ -256,6 +256,26 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         record: &TaskRecord,
         repo: &RepoSettings,
     ) -> Result<Option<PathBuf>, EngineError> {
+        // The source's branch hint (0.7.5, #734), read back from the payload
+        // like the handle below. **This is the one place the hint meets the
+        // stage's mode**: a source names a branch and knows nothing of modes
+        // or profiles, so "on it" versus "detached at its head" is decided
+        // here and nowhere else.
+        //
+        // Plan gets detached because a read-only profile's worktree found on a
+        // named branch is failed as "the agent ran git" (ADR-0045). Keyed on
+        // the mode rather than the profile: every read-only profile resolves
+        // to plan, and a bare `mode = "plan"` workflow is promised no branch
+        // just the same (F-82) — it is only *warned* about one, but putting it
+        // on one ourselves would make that warning fire on every dispatch.
+        let task = task_from_record(record);
+        let hinted = task.branch_hint.as_deref().map(|branch| {
+            if record.mode == "plan" {
+                HintedStart::DetachedAt(branch)
+            } else {
+                HintedStart::On(branch)
+            }
+        });
         // Worktree: reuse a recorded one (retry without a live session), else
         // create fresh (F-20–F-22).
         //
@@ -274,7 +294,25 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         // a branchless task back through `create` to collide with its own
         // directory.
         let path = match &record.worktree_path {
-            Some(path) if Path::new(path).is_dir() => PathBuf::from(path),
+            Some(path) if Path::new(path).is_dir() => {
+                let path = PathBuf::from(path);
+                // A surviving worktree never goes through `create`, which is
+                // where a hint is applied — so it is brought to the hinted
+                // start here instead (#734). What this catches: a task handed
+                // from a read-only stage to a writable one while its worktree
+                // was kept (any `plan_cleanup` but `immediate`, or uncommitted
+                // files) would otherwise start the writable stage detached at
+                // a stale commit and be told to name a new branch.
+                if let Some(hint) = hinted
+                    && let Err(e) = self.worktrees.sync_to_hint(&repo.path, &path, hint)
+                {
+                    return self
+                        .fail_dispatch(record, e.to_string())
+                        .await
+                        .map(|()| None);
+                }
+                path
+            }
             _ => {
                 let location_template = repo
                     .worktree_location
@@ -285,7 +323,6 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                 // column — the same rebuild the dispatch itself does a few
                 // lines later, and the reason the worktree's leaf can carry
                 // the same name the agent will.
-                let handle = task_from_record(record).handle;
                 let request = CreateRequest {
                     repo_path: &repo.path,
                     repo_name: &repo.name,
@@ -293,9 +330,10 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                     task_id: &record.source_task_id,
                     existing_branch: record.branch.as_deref(),
                     task_number: Some(record.id),
-                    handle: handle.as_deref(),
+                    handle: task.handle.as_deref(),
                     location_template: &location_template,
                     base_branch: None,
+                    hinted,
                     env: &self.settings.env,
                 };
                 match self.worktrees.create(&request) {
@@ -425,8 +463,17 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                 // git, not about git being impossible. A task already on a
                 // branch is resuming onto one this task made earlier, and
                 // re-asking would invite a second branch mid-conversation.
-                if record.mode != "plan" && !on_a_branch {
-                    prompt_context.push_str(prompts.branch_convention());
+                //
+                // A task whose source hinted at an existing branch (#734)
+                // gets one of that instruction's two counterparts instead —
+                // see `branch_instruction`.
+                if let Some(text) = branch_instruction(
+                    prompts,
+                    &record.mode,
+                    on_a_branch,
+                    task.branch_hint.as_deref(),
+                ) {
+                    prompt_context.push_str(&text);
                     prompt_context.push_str("\n\n");
                 }
                 // The confirm-with-a-human self-report has a question-tool

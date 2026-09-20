@@ -1,5 +1,11 @@
 # Bundle Update Log
 
+## 2026-09-21
+
+* **Creation**: ソースが既存ブランチを名指しできる `Task.branch_hint`（protocol 0.7.5）を足し、どう使うか（implement はブランチ上、plan は先頭 commit に detached）は core がモードで決める決定を [ADR-0085](/decisions/adr-0085-branch-hint.md) に記録した（#734 の PR 1。ヒントを埋めるソースはまだ無く、挙動は変わらない）
+* **Creation**: 用語 [branch hint](/glossary/branch-hint.md) を追加した。repo hint と違って助言ではなく、honour できなければタスクが失敗する
+* **Update**: [plugin-protocol](/components/plugin-protocol.md) に `Task.branch_hint` と 0.7.5、[orchestrator-core](/components/orchestrator-core.md) に `HintedStart` / `sync_to_hint` / ヒント用の失敗 4 種と、不可視文面 `hinted_branch_on` / `hinted_branch_detached` を追記した
+
 ## 2026-09-19
 
 * **Creation**: [ADR-0084](/decisions/adr-0084-decisions-classifier.md) を追加（#723）。リポジトリ分類に判定専用モデル（TypeSafe Jev、OpenRouter の Decisions API）を `[llm].api = "decisions"` で選べるようにした。閾値と比べるのは選ばれた候補の確率、「どれも当てはまらない」を必ず選択肢に足す、alpha の endpoint は上書き可能にするだけ、プラグインへは decisions のとき空の `base_url` で渡す（protocol 0.7.4）。

@@ -60,6 +60,46 @@ start-point argument, so the branch is created exactly where HEAD already is. \
 Commit only after that.\
 """
 
+# The two counterparts of `branch_convention`, for a task whose SOURCE named an
+# existing branch (`Task.branch_hint`, #734) — a pull request's head, say.
+# Exactly one of the three is ever sent.
+#
+# They live here and not in a source plugin's own instructions because only
+# the orchestrator knows what it did with the hint: a plugin names the branch
+# and cannot see whether the worktree went ON it (a writable stage) or DETACHED
+# at its head (a read-only one). A plugin that wrote "you are on branch X"
+# would be transcribing a decision made here, and would be wrong the day that
+# decision changes. What the plugin does own is what the branch *is* — that it
+# belongs to a pull request, and which one.
+#
+# Placeholder: {branch}
+#
+# `hinted_branch_on` is load-bearing in the same way `branch_convention` is:
+#
+#  1. Say it is an EXISTING branch the agent was sent to continue. Without it
+#     an agent following the repository's own conventions names a fresh branch,
+#     and the usual result is a second pull request for the same change.
+#  2. Forbid creating AND switching. "Do not create a branch" alone leaves
+#     `git switch main` open.
+#  3. Say to push. The commits are only the deliverable once they are on the
+#     remote the branch came from.
+hinted_branch_on = """
+[orchestrator] Branch: this worktree is already on the EXISTING branch \
+`{branch}`, which you were sent here to continue. Do not create a branch and \
+do not switch to another one. Commit on `{branch}` and push it.\
+"""
+
+# Sent on a read-only stage, where `branch_convention` is never sent at all.
+# It exists because the agent is looking at a branch's code without being on
+# the branch, which is otherwise indistinguishable from looking at the default
+# branch — and a design written against the wrong one is confidently wrong.
+hinted_branch_detached = """
+[orchestrator] Branch: this worktree is on a DETACHED HEAD at the current head \
+of the existing branch `{branch}`. The files here are that branch's, not the \
+default branch's. This stage is read-only: do not switch branches, commit or \
+push.\
+"""
+
 # Appended to a `triage` task's instructions when a task source claims the
 # repository the task was routed to (#542, ADR-0056).
 #

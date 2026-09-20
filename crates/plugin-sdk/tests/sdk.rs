@@ -31,6 +31,7 @@ fn sample_task(id: &str) -> Task {
         message_key: None,
         instructions: None,
         handle: None,
+        branch_hint: None,
     }
 }
 
