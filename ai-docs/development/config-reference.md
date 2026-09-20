@@ -4,7 +4,7 @@ title: 設定リファレンス（config.toml）
 description: "config.toml の全キー・デフォルト値・意味の一覧。設定ファイルは 1 本で、プラグイン個別設定もトップレベルの [<name>] テーブルに入る。シークレット参照、設定スキーマのバージョニング方針、[[projects]] の domain 宣言とワークフローからの参照、プラグインが定義する追加プロパティ、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-github の [github]、task-source-notion の [notion]、task-source-slack の [slack]、agent-ide-herdr の [herdr] を含む。"
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
 tags: [config, reference, toml, secrets, workflow, worktree, github, notion, slack, hooks, versioning]
-generated: { by: claude-code/fable-5-1, at: 2026-09-21T02:10:00+09:00 }
+generated: { by: claude-code/fable-5-1, at: 2026-09-21T14:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -936,9 +936,21 @@ PR のタスクは、その PR を生んだ issue のタスクとは**別物**�
 
 成果物はどちらも PR へのコメントである。`design` は「この PR をマージ可能にするための**追加修正の設計**」（コードレビューではない）、`implement` は commit を push したうえで**何をなぜ変えたか**を書く。`implement` が報告するのは PR の URL ではなく**そのコメントの URL** —— PR の URL は実行前から存在するので、報告させても何の証拠にもならない。
 
+開始できないときは、理由を付けてタスクが失敗する（既定ブランチへはフォールバックしない。別の場所から始めると同じ変更に 2 本目の PR が開く）。
+
+| エラーメッセージ | 対処 |
+|---|---|
+| `the hinted branch … is not on origin` | PR が merge / close された可能性がある。カードを確認して、再実行するかキャンセルする |
+| `the local branch … has diverged from origin/…` | 手元に同名のブランチがあり、`origin` と分岐している（force-push された可能性）。手元のブランチを消すか `origin` に合わせてから再実行する |
+| `the hinted branch … is checked out in another worktree at …` | 別の worktree がそのブランチを使っている。別のタスクのものなら、そちらのカードを trigger 列へ戻して続きをやらせる。そうでなければその worktree を消して再実行する |
+| `… is recorded as this task's worktree but is not one of the repository's worktrees any more` | 記録された worktree のパスが、もう git の worktree ではない。そのディレクトリを消して再実行すれば作り直される |
+| `could not move the worktree at … to the hinted branch` | 残っていた worktree に、未コミットの変更か、どのブランチからも辿れない commit がある。commit・stash・ブランチを付ける、のいずれかで退避してから再実行する |
+
 **totsuka が issue から作った PR には、issue のカードを trigger 列へ戻すほうを使う。** 同じタスクが同じブランチ・同じセッションで再開される。その PR をボードに載せると別タスクになり、issue 側の worktree が保持ポリシー（`keep_7d` など）でブランチを掴んでいる間は `the hinted branch … is checked out in another worktree` で失敗する。PR item が効くのは、totsuka のタスクから生まれていない PR（依存更新ボットの bump、人間が開いた PR）である。
 
-**依存更新ボットのブランチに push した後の注意。** Renovate は、自分以外の commit が積まれたブランチの更新を止める。その後 rebase ラベルやチェックボックスを使うと、Renovate は自分の commit でブランチを作り直し、エージェントの commit は消える。`implement` が残すコメントが、その場合に何が失われたかの記録になる。
+**依存更新ボットのブランチに push した後の注意。** Renovate は、自分以外の commit が積まれたブランチの更新を止める。その後 rebase ラベルやチェックボックスを使うと、Renovate は自分の commit でブランチを作り直し、エージェントの commit は消える。`implement` が残すコメントが、その場合に何が失われたかの記録になる。（[Renovate: Updating and Rebasing Branches](https://docs.renovatebot.com/updating-rebasing/)）
+
+**タスク完了時の cleanup は、PR のローカルブランチも消す。** 条件は他のタスクと同じで、全 commit が `origin` から辿れるときだけである。commit は失われないが、以前 `gh pr checkout` で作って放置していた同名のローカルブランチも対象になる（チェックアウト中なら、上の 3 つ目のエラーでそもそも始まらない）。
 
 # `[notion]`（task-source-notion）
 

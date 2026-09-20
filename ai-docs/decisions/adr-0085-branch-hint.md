@@ -4,7 +4,7 @@ title: ADR-0085 ソースが既存ブランチを名指しできる Task.branch_
 description: GitHub Project 上の PR をタスクにして既存 PR のブランチ上で設計・追加修正させるために、Task に branch_hint（protocol 0.7.5）を足した決定。ソースはブランチ名を言うだけで、writable なステージはそのブランチ上に、plan のステージはその先頭 commit に detached で worktree を作るという使い分けは core が持つ。ヒントは助言ではなく、見つからない・分岐している・別の worktree が掴んでいる場合はフォールバックせずタスクを失敗させること、残っている worktree も dispatch のたびにヒントへ同期すること、ブランチの状態を語る不可視文面は core が持ちソースプラグインには書かせないこと、PR の取り込みに opt-in キーを設けないことを記録する。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/worktree/mod.rs
 tags: [decision, adr, protocol, worktree, branch, github, pull-request, prompts, profile]
-generated: { by: claude-code/fable-5-1, at: 2026-09-21T12:30:00+09:00 }
+generated: { by: claude-code/fable-5-1, at: 2026-09-21T14:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 sources:
@@ -47,7 +47,7 @@ GitHub Project のボードに載せた PR を、totsuka はタスクにでき�
 
 ## 1. `Task.branch_hint` を足す。ソースはブランチ名を言うだけ（protocol 0.7.5）
 
-`Task` に `branch_hint: Option<String>` を足した。`repo_hint` と対になるフィールドで、「どこで」に対する「どのブランチで」を運ぶ。`#[serde(default, skip_serializing_if)]` の加算フィールドなので、0.7.2 の `handle` と同じく patch 上げで済み、マニフェストの要求範囲は 1 つも動かない。
+`Task` に `branch_hint: Option<String>` を足した。`repo_hint` と対になるフィールドで、「どこで」に対する「どのブランチで」を運ぶ。`#[serde(default, skip_serializing_if)]` の加算フィールドなので、0.7.2 の `handle` と同じく patch 上げで済む。マニフェストの要求範囲は、フィールドを埋める github プラグインの下限だけが `>=0.7.5` へ動く（古い Orchestrator はキーを無視して既定ブランチから始めてしまうので、その組み合わせを起動時に止める）。埋めない他のプラグインは動かない。
 
 ソースが言うのはブランチ名だけで、それをどう使うかは言わない。フィールドを 2 つ（「このブランチ上で」と「このブランチの先頭を起点に」）に分けてプラグインに選ばせる案は採らなかった。read-only かどうかの判断がプラグインへ漏れ、同じ判断をソースの数だけ複製することになるためである。
 

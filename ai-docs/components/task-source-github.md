@@ -1,10 +1,10 @@
 ---
 type: Component
 title: task-source-github プラグイン
-description: GitHub Issues / ProjectsV2 をタスクソースとして接続する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。GraphQL で fetch→正規化、ProjectsV2 ステータス書き戻し、task/claim（Issue への self-assign + AssignedEvent 先着裁定による楽観排他）を行う。Issue への書き込みは claim の assignee 操作だけ。呼び出す 8 つの GraphQL 操作と、トークン権限（十分条件は実測済み・最小値は未実測。fine-grained PAT が user 所有ボードに使えない理由を含む）を扱う。
+description: GitHub Issues / ProjectsV2 をタスクソースとして接続する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。GraphQL で fetch→正規化、ProjectsV2 ステータス書き戻し、task/claim（Issue / PullRequest への self-assign + AssignedEvent 先着裁定による楽観排他）を行う。ボード上の OPEN な PullRequest も Issue と同じくタスクになる（#734）。Issue / PullRequest への書き込みは claim の assignee 操作だけ。呼び出す 8 つの GraphQL 操作と、トークン権限（十分条件は実測済み・最小値は未実測。fine-grained PAT が user 所有ボードに使えない理由を含む）を扱う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-github
 tags: [rust, crate, plugin, task-source, github, graphql, projectsv2]
-generated: { by: claude-code/fable-5-1, at: 2026-09-21T02:15:00+09:00 }
+generated: { by: claude-code/fable-5-1, at: 2026-09-21T14:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -104,13 +104,13 @@ manifest（`plugins/task-source-github/plugin.toml`、`protocol_version = ">=0.7
 
 | 操作 | 触るもの |
 |---|---|
-| Project アイテム取得 | `user`\|`organization` → `projectV2(number:)` → `items`。アイテムごとに Issue の `id number title body url`、`repository { name }`、`assignees`、`labels` |
-| Project / フィールド / アイテムの id 解決 | `projectV2 { id, field(name:) { options }, items { id } }` |
+| Project アイテム取得 | `user`\|`organization` → `projectV2(number:)` → `items`。アイテムごとに Issue / PullRequest の `id number title body url`、`repository { name }`、`assignees`、`labels`。PullRequest はさらに `state isCrossRepository headRefName`（取り込み可否と branch hint、#734） |
+| Project / フィールド / アイテムの id 解決 | `projectV2 { id, field(name:) { options }, items { id } }`。アイテムの `content` は Issue と PullRequest の両方の `id` を引く（#734。片方だけだと PR のカードが「ボードに無い」になる） |
 | カード移動 | `updateProjectV2ItemFieldValue` |
 | 疎通確認 | `viewer { login }` |
-| claim 読み（#556） | `node(id:)` → Issue の `assignees` + `timelineItems(last: 100, itemTypes: [ASSIGNED_EVENT])`（pre-read と読み戻しの両方で同じクエリ） |
+| claim 読み（#556） | `node(id:)` → Issue / PullRequest の `assignees` + `timelineItems(last: 100, itemTypes: [ASSIGNED_EVENT])`（pre-read と読み戻しの両方で同じクエリ） |
 | user id 解決（#556） | `user(login:) { id }`。プロセス内キャッシュ |
-| self-assign（#556） | `addAssigneesToAssignable`。**Issue node id = task_id を直接使う**のでボード逆引き不要 |
+| self-assign（#556） | `addAssigneesToAssignable`。**Issue / PullRequest の node id = task_id を直接使う**のでボード逆引き不要（`Assignable` は両方を含む） |
 | 自己除去（#556） | `removeAssigneesFromAssignable`。**自分の分だけ** — 他人の assignee には決して触れない |
 
 ## 実測できたこと（2026-08-23）

@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:0c76f161bda6b582d49f8b92a20e07474685615f4f9bed8e66df553d7f0fed8e -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:f45cb874325c4cf8330f3d0b5f55c64e0d79449b63b9e2b6dfbde7c53bcc4b54 -->
 
 # Configuration reference
 
@@ -845,18 +845,21 @@ The deliverable is a comment on the pull request either way.
 | `design` | Comments a **design for the additional changes** the pull request needs before it can merge. Not a code review |
 | `implement` | Commits and pushes the additional changes, then comments **what it changed and why**. It reports that comment's URL |
 
-When the task cannot start, it fails with the reason.
+When the task cannot start, it fails with the reason. It never falls back to the default branch: starting anywhere else opens a second pull request for the same change.
 
 | Error message | What to do |
 |---|---|
 | `the hinted branch … is not on origin` | The pull request may have been merged or closed. Check the card, then retry or cancel |
 | `the local branch … has diverged from origin/…` | You have a local branch of that name and it has diverged from `origin` (it may have been force-pushed). Delete it or reconcile it, then retry |
-| `the hinted branch … is checked out in another worktree at …` | Another worktree is using the branch. If it belongs to another task, move that task's card back to its trigger column and continue it there |
-| `could not move the worktree at … to the hinted branch` | The surviving worktree has uncommitted changes. Commit, stash or discard them, then retry |
+| `the hinted branch … is checked out in another worktree at …` | Another worktree is using the branch. If it belongs to another task, move that task's card back to its trigger column and continue it there. Otherwise remove that worktree and retry |
+| `… is recorded as this task's worktree but is not one of the repository's worktrees any more` | The recorded worktree path is no longer a git worktree. Remove that directory and retry; the worktree is re-created |
+| `could not move the worktree at … to the hinted branch` | The surviving worktree has uncommitted changes, or commits no branch reaches. Save them (commit, stash, or put a branch on them), then retry |
 
 **For a pull request totsuka itself opened from an issue, move the issue's card back to the trigger column instead.** The same task resumes on the same branch in the same agent session. Putting that pull request on the board makes a separate task, which fails with the third error above for as long as the issue's worktree is kept (`keep_7d` and the like) and still holds the branch. A pull request card earns its keep for pull requests that did not come from a totsuka task: a dependency bot's update, or one a person opened.
 
 **After pushing to a dependency bot's branch.** Renovate stops updating a branch once someone else has committed to it. Using the rebase label or checkbox afterwards makes Renovate rebuild the branch from its own commit, which discards the agent's. The comment `implement` leaves is the record of what was lost. See the [Renovate documentation](https://docs.renovatebot.com/updating-rebasing/).
+
+**Cleanup at the end of the task deletes the pull request's local branch too.** The condition is the same as for any other task: only when every commit is reachable from `origin`. No commit is lost, but a local branch of the same name that you once made with `gh pr checkout` and left behind goes with it. (If it is checked out, the task does not start at all: the third error above.)
 
 ## `[notion]`
 

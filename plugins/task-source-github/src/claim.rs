@@ -156,10 +156,11 @@ pub const REMOVE_ASSIGNEES_MUTATION: &str = r#"mutation($a: ID!, $u: [ID!]!) {
 }"#;
 
 /// Parse the [`CLAIM_READ_QUERY`] response's `data`. `None` when the node is
-/// missing or not an Issue (deleted, or the id is something else entirely).
+/// missing or neither an Issue nor a PullRequest (deleted, or the id is
+/// something else entirely).
 pub fn parse_claim_state(data: &Value) -> Option<ClaimState> {
     let node = data.get("node")?;
-    // A deleted issue answers `"node": null`; an id of another type answers
+    // A deleted item answers `"node": null`; an id of another type answers
     // an object without these fields. Both are "cannot read", not "empty".
     let assignee_nodes = node.get("assignees")?.get("nodes")?.as_array()?;
     let assignees = assignee_nodes

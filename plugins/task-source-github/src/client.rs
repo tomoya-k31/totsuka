@@ -390,16 +390,17 @@ impl<T: GithubTransport> GithubClient<T> {
                     }
                 })
                 .map(|template| {
-                    // Same number, two names: a pull request's template says
-                    // `{pr_number}` so that an override copied from the issue
-                    // text does not silently keep calling it an issue.
+                    // One number, named for what it is: an issue template
+                    // that says `{pr_number}` (or the reverse) is a copy-paste
+                    // slip, and leaving it unrendered is what makes it visible.
+                    let number_key = if is_pull_request {
+                        "pr_number"
+                    } else {
+                        "issue_number"
+                    };
                     crate::template::render(
                         template,
-                        &[
-                            ("issue_number", issue_number.as_str()),
-                            ("pr_number", issue_number.as_str()),
-                            ("repo", repo),
-                        ],
+                        &[(number_key, issue_number.as_str()), ("repo", repo)],
                     )
                 }),
         })
@@ -771,8 +772,8 @@ impl<T: GithubTransport> GithubClient<T> {
         let data = check_errors(&resp)?;
         parse_claim_state(data).ok_or_else(|| {
             GithubError::NotFound(format!(
-                "issue `{task_id}` cannot be read (deleted, or not an Issue node) → \
-                 `totsuka task cancel` the task if the issue is gone"
+                "item `{task_id}` cannot be read (deleted, or neither an Issue nor a PullRequest node) → \
+                 `totsuka task cancel` the task if it is gone"
             ))
         })
     }
@@ -1217,6 +1218,18 @@ mod tests {
     /// branch as the hint, and the pull request text rather than the issue
     /// one — which ends in "open a pull request", and on a pull request's own
     /// branch that means a second one.
+    /// `pull_request_branch` reads these three; the wiremock tests hand back a
+    /// canned body, so nothing else notices if the query stops asking for them
+    /// — and then every pull request reads as "not OPEN" and is skipped.
+    #[test]
+    fn the_fetch_query_selects_what_the_pull_request_gates_read() {
+        let query = fetch_query("user");
+        let fragment = &query[query.find("... on PullRequest").expect("PR fragment")..];
+        for field in ["state", "isCrossRepository", "headRefName"] {
+            assert!(fragment.contains(field), "`{field}` is not selected");
+        }
+    }
+
     #[test]
     fn a_pull_request_is_a_task_with_its_branch_and_its_own_instructions() {
         let client = client_for_tests();

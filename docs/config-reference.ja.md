@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:0c76f161bda6b582d49f8b92a20e07474685615f4f9bed8e66df553d7f0fed8e -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:f45cb874325c4cf8330f3d0b5f55c64e0d79449b63b9e2b6dfbde7c53bcc4b54 -->
 
 # 設定リファレンス
 
@@ -844,18 +844,21 @@ fine-grained PAT の場合（org 所有のボードのみ）:
 | `design` | このプルリクエストをマージ可能にするための**追加修正の設計**をコメントする。コードレビューではない |
 | `implement` | 追加修正を commit して push し、**何をなぜ変えたか**をコメントする。報告するのはそのコメントの URL |
 
-開始できないときは、理由を付けてタスクが失敗する。
+開始できないときは、理由を付けてタスクが失敗する。既定ブランチへはフォールバックしない（別の場所から始めると、同じ変更に 2 本目のプルリクエストが開く）。
 
 | エラーメッセージ | 対処 |
 |---|---|
 | `the hinted branch … is not on origin` | プルリクエストがマージ・クローズされた可能性がある。カードを確認して、再実行するかキャンセルする |
 | `the local branch … has diverged from origin/…` | 手元に同名のブランチがあり、`origin` と分岐している（force-push された可能性）。手元のブランチを消すか `origin` に合わせてから再実行する |
-| `the hinted branch … is checked out in another worktree at …` | 別の worktree がそのブランチを使っている。別のタスクのものなら、そちらのカードを trigger 列へ戻して続きをやらせる |
-| `could not move the worktree at … to the hinted branch` | 残っていた worktree に未コミットの変更がある。commit・stash・破棄のいずれかをしてから再実行する |
+| `the hinted branch … is checked out in another worktree at …` | 別の worktree がそのブランチを使っている。別のタスクのものなら、そちらのカードを trigger 列へ戻して続きをやらせる。そうでなければその worktree を消して再実行する |
+| `… is recorded as this task's worktree but is not one of the repository's worktrees any more` | 記録された worktree のパスが、もう git の worktree ではない。そのディレクトリを消して再実行すれば作り直される |
+| `could not move the worktree at … to the hinted branch` | 残っていた worktree に、未コミットの変更か、どのブランチからも辿れない commit がある。commit・stash・ブランチを付ける、のいずれかで退避してから再実行する |
 
 **totsuka が issue から作ったプルリクエストには、issue のカードを trigger 列へ戻すほうを使う。** 同じタスクが同じブランチ・同じエージェントのセッションで再開される。そのプルリクエストをボードに載せると別のタスクになり、issue 側の worktree が保持ポリシー（`keep_7d` など）でブランチを使っている間は、上の 3 つ目のエラーで失敗する。プルリクエストのカードが役に立つのは、totsuka のタスクから生まれていないもの（依存更新ボットの更新、人が開いたもの）である。
 
 **依存更新ボットのブランチに push した後の注意。** Renovate は、自分以外の commit が積まれたブランチの更新を止める。その後に rebase のラベルやチェックボックスを使うと、Renovate は自分の commit でブランチを作り直し、エージェントの commit は消える。`implement` が残すコメントが、そのとき何が失われたかの記録になる。詳しくは [Renovate のドキュメント](https://docs.renovatebot.com/updating-rebasing/)を参照。
+
+**タスク完了時の cleanup は、プルリクエストのローカルブランチも消す。** 条件は他のタスクと同じで、全 commit が `origin` から辿れるときだけである。commit は失われないが、以前 `gh pr checkout` で作って放置していた同名のローカルブランチも対象になる（チェックアウト中なら、上の 3 つ目のエラーでそもそも始まらない）。
 
 ## `[notion]`
 
