@@ -293,6 +293,8 @@
 # triage_instructions = "..."               # sent when the workflow's profile is `triage`
 # design_instructions = "..."               # …`design`
 # implement_instructions = "..."            # …`implement`
+# design_pr_instructions = "..."            # …`design`, when the task is a pull request
+# implement_pr_instructions = "..."         # …`implement`, when the task is a pull request
 
 # totsuka:section plugin=notion label=Notion databases
 # ============================================================================

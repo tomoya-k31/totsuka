@@ -24,4 +24,5 @@
 * [起動時バックフィル（startup backfill）](startup-backfill.md) - チャンネル監視ソースが起動時に、監視チャンネルの直近 N 件かつ年齢上限以内を無条件に再送してプラグイン停止中の取りこぼしを回収する仕組み。台帳が重複を Duplicate として無害化するため永続カーソルを持たず、取りすぎ側に倒してある。
 * [Event Gateway（イベントゲートウェイ）](event-gateway.md) - Slack の配信を HTTPS で受け、本文を保存せずに座標へ射影して Pub/Sub へ流す、totsuka の外で動く常駐しないサービス。event_source = "gateway" のときだけ経路に入る。ゲートウェイが健全に動いているかぎり、totsuka が止まっている間もイベントは失われず、Slack による購読の自動無効化も起きない。
 * [branch hint（ブランチヒント）](branch-hint.md) - タスクソースが Task に添える「この仕事が属する既存のブランチ」の名前（Task.branch_hint、protocol 0.7.5）。ソースは名前を言うだけで、implement のステージはそのブランチ上に、plan のステージはその先頭 commit に detached で worktree を作るという使い分けは core が持つ。repo hint と違って助言ではなく、honour できなければタスクは失敗する。
+* [PR タスク](pr-task.md) - GitHub Project 上の PullRequest item から取り込まれた Task。id は PR の node id で、その PR を生んだ issue のタスクとは別物。branch hint に PR の head ブランチを持ち、design はその先頭 commit に detached な worktree で追加修正を設計し、implement はそのブランチ上で commit を積む。成果物はどちらも PR へのコメント。
 <!-- okf:index:end -->

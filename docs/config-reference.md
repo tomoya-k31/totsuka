@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:7c73846386c8bff2b935d0f568303f81888277ca4007a0abd45ca6c0497160ef -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:f45cb874325c4cf8330f3d0b5f55c64e0d79449b63b9e2b6dfbde7c53bcc4b54 -->
 
 # Configuration reference
 
@@ -415,6 +415,8 @@ agent = "herdr"
 | `triage_instructions` | `profile = "triage"` | github: `{issue_number}`, `{repo}` / notion: `{page_url}`, `{title}` |
 | `design_instructions` | `profile = "design"` | as above |
 | `implement_instructions` | `profile = "implement"` | as above |
+| `design_pr_instructions` | `profile = "design"` and the task is a pull request (github only) | `{pr_number}`, `{repo}` |
+| `implement_pr_instructions` | `profile = "implement"` and the task is a pull request (github only) | `{pr_number}`, `{repo}` |
 
 All are optional. **Without profiles these keys are never used** and task instructions stay empty as before.
 
@@ -811,6 +813,53 @@ Built-in defaults are embedded in the binary; this table overrides them one key 
 | `triage_instructions` | The workflow's profile is `triage` |
 | `design_instructions` | The workflow's profile is `design` |
 | `implement_instructions` | The workflow's profile is `implement` |
+| `design_pr_instructions` | The profile is `design` and the task is a pull request. Sent **instead of** `design_instructions` |
+| `implement_pr_instructions` | The same for `implement`. The issue text ends in "open a pull request", which on a pull request's own branch opens a second one |
+
+The pull request texts take `{pr_number}` and `{repo}`. **Three things must survive an override:**
+
+- State that it is a pull request, as a fact.
+- Name the commands that read it (`gh pr view {pr_number} --comments` / `gh pr diff {pr_number}`). The task body is the pull request's description and nothing else — neither the diff nor the review comments.
+- Make the agent stop, changing nothing, if the pull request is not OPEN.
+
+**Say nothing about the branch.** Whether the worktree is on the pull request's branch or detached at its head is decided by totsuka from the profile, and totsuka tells the agent itself.
+
+### Pull requests on the board become tasks too
+
+A workflow with `profile = "design"` or `"implement"` takes pull request cards **with no configuration change**. The trigger (`status` / `label` / `assignee`) and the `[[repositories]].project` ingest filter apply exactly as they do to issues. A pull request has three further conditions.
+
+| Condition | Why |
+|---|---|
+| The workflow's profile is `design` or `implement` | The only two with a text for a pull request. A workflow that cannot take one passes silently, so another workflow on the same board can |
+| It is OPEN (a draft is fine) | Commits pushed to a merged or closed pull request's branch go nowhere |
+| It does not come from a fork | Its head branch is not on `origin`, and a branch of the same name may be there meaning something else (a fork's head is often `main`) |
+
+A pull request that fails either of the last two is logged as a warning, once.
+
+A pull request's task is **separate** from the task of the issue it came from. Under `implement` the worktree is created on the pull request's branch; under `design` it is detached at that branch's head commit.
+
+The deliverable is a comment on the pull request either way.
+
+| profile | What the agent does |
+|---|---|
+| `design` | Comments a **design for the additional changes** the pull request needs before it can merge. Not a code review |
+| `implement` | Commits and pushes the additional changes, then comments **what it changed and why**. It reports that comment's URL |
+
+When the task cannot start, it fails with the reason. It never falls back to the default branch: starting anywhere else opens a second pull request for the same change.
+
+| Error message | What to do |
+|---|---|
+| `the hinted branch … is not on origin` | The pull request may have been merged or closed. Check the card, then retry or cancel |
+| `the local branch … has diverged from origin/…` | You have a local branch of that name and it has diverged from `origin` (it may have been force-pushed). Delete it or reconcile it, then retry |
+| `the hinted branch … is checked out in another worktree at …` | Another worktree is using the branch. If it belongs to another task, move that task's card back to its trigger column and continue it there. Otherwise remove that worktree and retry |
+| `… is recorded as this task's worktree but is not one of the repository's worktrees any more` | The recorded worktree path is no longer a git worktree. Remove that directory and retry; the worktree is re-created |
+| `could not move the worktree at … to the hinted branch` | The surviving worktree has uncommitted changes, or commits no branch reaches. Save them (commit, stash, or put a branch on them), then retry |
+
+**For a pull request totsuka itself opened from an issue, move the issue's card back to the trigger column instead.** The same task resumes on the same branch in the same agent session. Putting that pull request on the board makes a separate task, which fails with the third error above for as long as the issue's worktree is kept (`keep_7d` and the like) and still holds the branch. A pull request card earns its keep for pull requests that did not come from a totsuka task: a dependency bot's update, or one a person opened.
+
+**After pushing to a dependency bot's branch.** Renovate stops updating a branch once someone else has committed to it. Using the rebase label or checkbox afterwards makes Renovate rebuild the branch from its own commit, which discards the agent's. The comment `implement` leaves is the record of what was lost. See the [Renovate documentation](https://docs.renovatebot.com/updating-rebasing/).
+
+**Cleanup at the end of the task deletes the pull request's local branch too.** The condition is the same as for any other task: only when every commit is reachable from `origin`. No commit is lost, but a local branch of the same name that you once made with `gh pr checkout` and left behind goes with it. (If it is checked out, the task does not start at all: the third error above.)
 
 ## `[notion]`
 

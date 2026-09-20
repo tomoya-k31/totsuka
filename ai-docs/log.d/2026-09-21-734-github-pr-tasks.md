@@ -1,0 +1,3 @@
+* **Update**: [task-source-github](/components/task-source-github.md) が GitHub Project 上の **PR item もタスクにする**ようになった（#734 の PR 2）。受けるのは `design` / `implement` の profile だけで opt-in 設定は無く、OPEN でない PR と fork の PR は取り込まない。head ブランチを `Task.branch_hint` に入れ、PR 用の指示文面 2 本を足した。`... on Issue` に限定されていた claim の読み取りと `update_status` の item 解決も直した（前者は全 PR に `forbidden` を返し、後者は列移動が届かなかった）。マニフェストの下限は `>=0.7.5` へ
+* **Creation**: 用語 [PR タスク](/glossary/pr-task.md) を追加し、[Task](/glossary/task.md) の例示に PR を足した
+* **Update**: [設定リファレンス](/development/config-reference.md) に `[github.prompts]` の `design_pr_instructions` / `implement_pr_instructions` と、「ボード上の PR もタスクになる」節（条件、issue 由来の PR との使い分け、依存更新ボットとの相互作用、開始できないときのエラーと対処、cleanup がローカルブランチを消すこと）を追記した

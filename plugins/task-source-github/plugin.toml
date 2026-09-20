@@ -9,7 +9,13 @@ version = "0.3.0"
 # owns several domains, and 0.7.0 is where `WorkflowInfo.projects` says which
 # of them a workflow watches. A 0.6-era build ignores that field and scans
 # every one — an operator's narrowing silently not happening.
-protocol_version = ">=0.7.0, <0.8"
+# #734 moved it to a **patch** for the same reason: this plugin now turns
+# pull requests into tasks and says which branch they belong on through
+# `Task.branch_hint` (0.7.5). An Orchestrator that ignores the field starts
+# such a task detached at the default branch and tells the agent to name a new
+# branch, while this plugin's own text tells it not to open another pull
+# request. Refusing to launch beats that contradiction.
+protocol_version = ">=0.7.5, <0.8"
 
 # No `[capabilities] outputs`: the deliverable is the agent's to write
 # itself, so this plugin publishes nothing. `task_claim` (#556): answers

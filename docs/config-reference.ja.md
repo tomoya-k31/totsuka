@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:7c73846386c8bff2b935d0f568303f81888277ca4007a0abd45ca6c0497160ef -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:f45cb874325c4cf8330f3d0b5f55c64e0d79449b63b9e2b6dfbde7c53bcc4b54 -->
 
 # 設定リファレンス
 
@@ -416,6 +416,8 @@ agent = "herdr"
 | `triage_instructions` | `profile = "triage"` | github: `{issue_number}` `{repo}` / notion: `{page_url}` `{title}` |
 | `design_instructions` | `profile = "design"` | 同上 |
 | `implement_instructions` | `profile = "implement"` | 同上 |
+| `design_pr_instructions` | `profile = "design"` で、タスクがプルリクエストのとき（github のみ） | `{pr_number}` `{repo}` |
+| `implement_pr_instructions` | `profile = "implement"` で、タスクがプルリクエストのとき（github のみ） | `{pr_number}` `{repo}` |
 
 いずれも省略可。**profile を使わない構成ではこのキー群は一切使われず**、タスクの指示は従来どおり空になる。
 
@@ -810,6 +812,53 @@ fine-grained PAT の場合（org 所有のボードのみ）:
 | `triage_instructions` | ワークフローの profile が `triage` のとき |
 | `design_instructions` | 同 `design` |
 | `implement_instructions` | 同 `implement` |
+| `design_pr_instructions` | profile が `design` で、タスクがプルリクエストのとき。`design_instructions` の**代わりに**送られる |
+| `implement_pr_instructions` | 同 `implement`。issue 用の文面は「プルリクエストを開け」で終わるので、プルリクエスト自身のブランチ上では 2 本目が開いてしまう |
+
+プルリクエスト用のプレースホルダは `{pr_number}` と `{repo}`。上書きするときに**落としてはいけない点が 3 つ**ある。
+
+- プルリクエストであると**断定形**で書く。
+- 読み取りコマンド（`gh pr view {pr_number} --comments` / `gh pr diff {pr_number}`）を名指しする。タスクの本文はプルリクエストの説明文だけで、差分もレビューコメントも含まれない。
+- OPEN でなければ何もせず止まらせる。
+
+**ブランチのことは書かない。** worktree がプルリクエストのブランチ上にあるか、その先頭に detached かは totsuka が profile から決めて、自分でエージェントに伝える。
+
+### ボード上のプルリクエストもタスクになる
+
+`profile = "design"` または `"implement"` のワークフローは、**設定を変えなくても**プルリクエストのカードを受ける。trigger（`status` / `label` / `assignee`）と `[[repositories]].project` による取り込みの絞り込みは、issue と同じものが効く。プルリクエストにはさらに 3 つの条件がある。
+
+| 条件 | 理由 |
+|---|---|
+| ワークフローの profile が `design` か `implement` | プルリクエスト用の指示文面を持つのはこの 2 つだけ。受けないワークフローは黙って見送るので、同じボードの別のワークフローが拾える |
+| OPEN である（draft は可） | マージ済み・クローズ済みのブランチに積んだ commit は行き先が無い |
+| fork からのプルリクエストではない | head ブランチが `origin` に無い。同じ名前のブランチが `origin` に別の意味で存在しうる（fork の head は `main` であることが多い） |
+
+後ろの 2 つに当たったプルリクエストは、1 件につき 1 回だけ警告をログに出す。
+
+プルリクエストのタスクは、そのプルリクエストを生んだ issue のタスクとは**別物**である。`implement` ではプルリクエストのブランチ上に、`design` ではその先頭 commit に detached で worktree が作られる。
+
+成果物はどちらもプルリクエストへのコメントになる。
+
+| profile | エージェントがすること |
+|---|---|
+| `design` | このプルリクエストをマージ可能にするための**追加修正の設計**をコメントする。コードレビューではない |
+| `implement` | 追加修正を commit して push し、**何をなぜ変えたか**をコメントする。報告するのはそのコメントの URL |
+
+開始できないときは、理由を付けてタスクが失敗する。既定ブランチへはフォールバックしない（別の場所から始めると、同じ変更に 2 本目のプルリクエストが開く）。
+
+| エラーメッセージ | 対処 |
+|---|---|
+| `the hinted branch … is not on origin` | プルリクエストがマージ・クローズされた可能性がある。カードを確認して、再実行するかキャンセルする |
+| `the local branch … has diverged from origin/…` | 手元に同名のブランチがあり、`origin` と分岐している（force-push された可能性）。手元のブランチを消すか `origin` に合わせてから再実行する |
+| `the hinted branch … is checked out in another worktree at …` | 別の worktree がそのブランチを使っている。別のタスクのものなら、そちらのカードを trigger 列へ戻して続きをやらせる。そうでなければその worktree を消して再実行する |
+| `… is recorded as this task's worktree but is not one of the repository's worktrees any more` | 記録された worktree のパスが、もう git の worktree ではない。そのディレクトリを消して再実行すれば作り直される |
+| `could not move the worktree at … to the hinted branch` | 残っていた worktree に、未コミットの変更か、どのブランチからも辿れない commit がある。commit・stash・ブランチを付ける、のいずれかで退避してから再実行する |
+
+**totsuka が issue から作ったプルリクエストには、issue のカードを trigger 列へ戻すほうを使う。** 同じタスクが同じブランチ・同じエージェントのセッションで再開される。そのプルリクエストをボードに載せると別のタスクになり、issue 側の worktree が保持ポリシー（`keep_7d` など）でブランチを使っている間は、上の 3 つ目のエラーで失敗する。プルリクエストのカードが役に立つのは、totsuka のタスクから生まれていないもの（依存更新ボットの更新、人が開いたもの）である。
+
+**依存更新ボットのブランチに push した後の注意。** Renovate は、自分以外の commit が積まれたブランチの更新を止める。その後に rebase のラベルやチェックボックスを使うと、Renovate は自分の commit でブランチを作り直し、エージェントの commit は消える。`implement` が残すコメントが、そのとき何が失われたかの記録になる。詳しくは [Renovate のドキュメント](https://docs.renovatebot.com/updating-rebasing/)を参照。
+
+**タスク完了時の cleanup は、プルリクエストのローカルブランチも消す。** 条件は他のタスクと同じで、全 commit が `origin` から辿れるときだけである。commit は失われないが、以前 `gh pr checkout` で作って放置していた同名のローカルブランチも対象になる（チェックアウト中なら、上の 3 つ目のエラーでそもそも始まらない）。
 
 ## `[notion]`
 

@@ -4,7 +4,7 @@
 //! There is no publish path — the agent writes the deliverable itself (#398). All GraphQL is built as plain JSON bodies so no GraphQL
 //! client dependency is needed (mirrors the LLM adapter in orchestrator-core).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
 
 use serde_json::{Value, json};
@@ -111,6 +111,12 @@ pub struct GithubClient<T> {
     /// board, which is what the memo is an optimisation over — never a
     /// precondition.
     item_project: Mutex<HashMap<String, usize>>,
+    /// Pull requests already reported as not ingestable, keyed by node id
+    /// (#734). The board is re-read on every poll, so without this the same
+    /// closed or fork pull request would warn every few seconds for as long as
+    /// its card sits in a trigger column. Process-local: one more line after a
+    /// restart is the cheaper side of that trade.
+    skipped_pull_requests: Mutex<HashSet<String>>,
     /// The operator's user node id, resolved once per process for the claim
     /// mutations (#556). A failed resolution is retried on the next claim.
     my_user_id: OnceLock<String>,
@@ -123,6 +129,7 @@ impl<T: GithubTransport> GithubClient<T> {
             config,
             transport,
             item_project: Mutex::new(HashMap::new()),
+            skipped_pull_requests: Mutex::new(HashSet::new()),
             my_user_id: OnceLock::new(),
         }
     }
@@ -256,8 +263,12 @@ impl<T: GithubTransport> GithubClient<T> {
         }
     }
 
-    /// Normalize one project item to a [`Task`], or `None` if it is not an
-    /// ingestable Issue (non-Issue content, or filtered out by trigger/gating).
+    /// Normalize one project item to a [`Task`], or `None` if it is not
+    /// ingestable (a draft item, or filtered out by trigger/gating).
+    ///
+    /// An Issue and a PullRequest (#734) go through the same trigger and
+    /// gating; a pull request then has three gates of its own, see
+    /// [`pull_request_branch`](Self::pull_request_branch).
     fn normalize_item(
         &self,
         node: &Value,
@@ -265,9 +276,11 @@ impl<T: GithubTransport> GithubClient<T> {
         filter: &TriggerFilter,
     ) -> Option<Task> {
         let content = &node["content"];
-        if content["__typename"].as_str() != Some("Issue") {
-            return None; // draft items and PRs are not tasks
-        }
+        let is_pull_request = match content["__typename"].as_str() {
+            Some("Issue") => false,
+            Some("PullRequest") => true,
+            _ => return None, // draft items are not tasks
+        };
         let status = node["status"]["name"].as_str();
         let status_updated_at = node["status"]["updatedAt"].as_str();
         let repo = content["repository"]["name"].as_str().unwrap_or_default();
@@ -308,6 +321,14 @@ impl<T: GithubTransport> GithubClient<T> {
         }
 
         let id = content["id"].as_str()?.to_string();
+        // After the trigger and the gating on purpose: a pull request that
+        // would not have matched anyway is none of this workflow's business,
+        // and warning about it would be noise from every workflow on the board.
+        let branch_hint = if is_pull_request {
+            Some(self.pull_request_branch(content, &id, filter)?)
+        } else {
+            None
+        };
         let body = content["body"].as_str().filter(|b| !b.is_empty());
         // Surface my own login when I'm an assignee, else the first assignee.
         let assignee = assignees
@@ -327,7 +348,7 @@ impl<T: GithubTransport> GithubClient<T> {
         Some(Task {
             id,
             handle,
-            branch_hint: None,
+            branch_hint,
             source: self.config.source_name.clone(),
             title: content["title"].as_str().unwrap_or_default().to_string(),
             body: body.map(str::to_string),
@@ -361,14 +382,86 @@ impl<T: GithubTransport> GithubClient<T> {
             instructions: filter
                 .instructions_kind
                 .as_deref()
-                .and_then(|kind| self.config.prompts.for_kind(kind))
+                .and_then(|kind| {
+                    if is_pull_request {
+                        self.config.prompts.for_pull_request(kind)
+                    } else {
+                        self.config.prompts.for_kind(kind)
+                    }
+                })
                 .map(|template| {
+                    // One number, named for what it is: an issue template
+                    // that says `{pr_number}` (or the reverse) is a copy-paste
+                    // slip, and leaving it unrendered is what makes it visible.
+                    let number_key = if is_pull_request {
+                        "pr_number"
+                    } else {
+                        "issue_number"
+                    };
                     crate::template::render(
                         template,
-                        &[("issue_number", issue_number.as_str()), ("repo", repo)],
+                        &[(number_key, issue_number.as_str()), ("repo", repo)],
                     )
                 }),
         })
+    }
+
+    /// The head branch of a pull request item this workflow may take (#734),
+    /// or `None` when it may not.
+    ///
+    /// | gate | why |
+    /// |---|---|
+    /// | the workflow's profile is `design` or `implement` | the only two with a text for a pull request; `triage` would file a new item for one |
+    /// | `state` is `OPEN` | commits pushed to a merged or closed pull request's branch go nowhere |
+    /// | not from a fork | its head branch is not on `origin`, and **a branch of the same name may be** — a fork's head is often `main` |
+    ///
+    /// The last two are reported once per pull request, because "I put it on
+    /// the board and nothing happened" is otherwise undiagnosable. The first is
+    /// silent: another workflow on the same board may well be the one to take
+    /// it, and this function is asked once per workflow.
+    fn pull_request_branch(
+        &self,
+        content: &Value,
+        id: &str,
+        filter: &TriggerFilter,
+    ) -> Option<String> {
+        filter
+            .instructions_kind
+            .as_deref()
+            .and_then(|kind| self.config.prompts.for_pull_request(kind))?;
+        let number = content["number"].as_i64().unwrap_or_default();
+        let skipped = |reason: &str| {
+            let first = self
+                .skipped_pull_requests
+                .lock()
+                .map(|mut seen| seen.insert(id.to_string()))
+                .unwrap_or(true);
+            if first {
+                tracing::warn!(
+                    pull_request = number,
+                    repo = content["repository"]["name"].as_str().unwrap_or_default(),
+                    "not ingesting this pull request: {reason}"
+                );
+            }
+        };
+        let state = content["state"].as_str().unwrap_or_default();
+        if state != "OPEN" {
+            skipped(&format!(
+                "it is {state}, and only an OPEN pull request can take more commits"
+            ));
+            return None;
+        }
+        if content["isCrossRepository"].as_bool() == Some(true) {
+            skipped(
+                "it comes from a fork, whose head branch is not on origin — fork pull \
+                 requests are not supported",
+            );
+            return None;
+        }
+        content["headRefName"]
+            .as_str()
+            .filter(|b| !b.is_empty())
+            .map(str::to_string)
     }
 
     /// Move a task's project status column to `status` (F-84). `status` is the
@@ -679,8 +772,8 @@ impl<T: GithubTransport> GithubClient<T> {
         let data = check_errors(&resp)?;
         parse_claim_state(data).ok_or_else(|| {
             GithubError::NotFound(format!(
-                "issue `{task_id}` cannot be read (deleted, or not an Issue node) → \
-                 `totsuka task cancel` the task if the issue is gone"
+                "item `{task_id}` cannot be read (deleted, or neither an Issue nor a PullRequest node) → \
+                 `totsuka task cancel` the task if it is gone"
             ))
         })
     }
@@ -963,6 +1056,13 @@ fn fetch_query(root: &str) -> String {
               assignees(first: 10) {{ nodes {{ login }} }}
               labels(first: 100) {{ nodes {{ name }} }}
             }}
+            ... on PullRequest {{
+              id number title body url
+              state isCrossRepository headRefName
+              repository {{ name }}
+              assignees(first: 10) {{ nodes {{ login }} }}
+              labels(first: 100) {{ nodes {{ name }} }}
+            }}
           }}
         }}
       }}
@@ -985,7 +1085,7 @@ fn resolve_query(root: &str) -> String {
       }}
       items(first: 100, after: $cursor) {{
         pageInfo {{ hasNextPage endCursor }}
-        nodes {{ id content {{ ... on Issue {{ id }} }} }}
+        nodes {{ id content {{ ... on Issue {{ id }} ... on PullRequest {{ id }} }} }}
       }}
     }}
   }}
@@ -1085,6 +1185,204 @@ mod tests {
     /// The board `item()` belongs to, for the `normalize_item` callers below.
     fn project_for_tests() -> ProjectConfig {
         ProjectConfig::new("board-0", "me", 1, &["web-app"])
+    }
+
+    /// A pull request item as the board returns it (#734). `overrides` is
+    /// merged over the content, so each test states only what it is about.
+    fn pull_request_item(status: &str, overrides: Value) -> Value {
+        let mut content = json!({
+            "__typename": "PullRequest",
+            "id": "PR_1",
+            "number": 59,
+            "title": "chore(deps): update setup-uv to v10.1.0",
+            "body": "This PR contains the following updates: ...",
+            "url": "https://github.com/me/web-app/pull/59",
+            "state": "OPEN",
+            "isCrossRepository": false,
+            "headRefName": "renovate/setup-uv-10.x",
+            "repository": { "name": "web-app" },
+            "labels": { "nodes": [] },
+            "assignees": { "nodes": [] }
+        });
+        for (k, v) in overrides.as_object().cloned().unwrap_or_default() {
+            content[k] = v;
+        }
+        json!({ "status": { "name": status }, "content": content })
+    }
+
+    fn filter_for(status: &str, kind: Option<&str>) -> TriggerFilter {
+        TriggerFilter::parse(&json!({ "status": status }), kind, "wf").unwrap()
+    }
+
+    /// A pull request becomes a task of its own (#734): its node id, its head
+    /// branch as the hint, and the pull request text rather than the issue
+    /// one — which ends in "open a pull request", and on a pull request's own
+    /// branch that means a second one.
+    /// `pull_request_branch` reads these three; the wiremock tests hand back a
+    /// canned body, so nothing else notices if the query stops asking for them
+    /// — and then every pull request reads as "not OPEN" and is skipped.
+    #[test]
+    fn the_fetch_query_selects_what_the_pull_request_gates_read() {
+        let query = fetch_query("user");
+        let fragment = &query[query.find("... on PullRequest").expect("PR fragment")..];
+        for field in ["state", "isCrossRepository", "headRefName"] {
+            assert!(fragment.contains(field), "`{field}` is not selected");
+        }
+    }
+
+    #[test]
+    fn a_pull_request_is_a_task_with_its_branch_and_its_own_instructions() {
+        let client = client_for_tests();
+        for (kind, must_say, must_not_say) in [
+            ("implement", "gh pr comment 59", "open a pull request."),
+            (
+                "design",
+                "gh issue comment 59",
+                "produce a detailed design, and post",
+            ),
+        ] {
+            let task = client
+                .normalize_item(
+                    &pull_request_item("Building", json!({})),
+                    &project_for_tests(),
+                    &filter_for("Building", Some(kind)),
+                )
+                .unwrap_or_else(|| panic!("{kind}: ingestable"));
+            assert_eq!(task.id, "PR_1");
+            assert_eq!(task.branch_hint.as_deref(), Some("renovate/setup-uv-10.x"));
+            assert_eq!(task.handle.as_deref(), Some("web-app-59"));
+            assert_eq!(task.repo_hint.as_deref(), Some("web-app"));
+            let text = task.instructions.expect("instructions");
+            assert!(
+                text.contains("IS pull request #59 (web-app)"),
+                "{kind}: {text}"
+            );
+            assert!(text.contains("gh pr view 59 --comments"), "{kind}: {text}");
+            assert!(text.contains("gh pr diff 59"), "{kind}: {text}");
+            assert!(text.contains("not OPEN"), "{kind}: {text}");
+            assert!(text.contains(must_say), "{kind}: {text}");
+            assert!(!text.contains(must_not_say), "{kind}: {text}");
+            assert!(
+                !text.contains('{'),
+                "{kind}: unrendered placeholder: {text}"
+            );
+            // The branch is the Orchestrator's to describe (ADR-0085): this
+            // plugin cannot see whether the worktree is on it or detached.
+            assert!(!text.contains("renovate/"), "{kind}: {text}");
+        }
+    }
+
+    /// An issue is exactly what it was: no hint, the issue text. The pull
+    /// request path must not leak into the one every existing board uses.
+    #[test]
+    fn an_issue_carries_no_branch_hint() {
+        let task = client_for_tests()
+            .normalize_item(
+                &item("Building"),
+                &project_for_tests(),
+                &filter_for("Building", Some("implement")),
+            )
+            .expect("ingestable");
+        assert_eq!(task.branch_hint, None);
+        let text = task.instructions.expect("instructions");
+        assert!(text.contains("open a pull request"), "{text}");
+        assert!(!text.contains("IS pull request"), "{text}");
+    }
+
+    /// Only a profile with a text for it takes a pull request. `triage` would
+    /// file a new item *from* one, and a workflow with no profile sends no
+    /// kind at all — both leave it for another workflow, silently.
+    #[test]
+    fn a_pull_request_is_taken_only_under_design_or_implement() {
+        let client = client_for_tests();
+        for kind in [Some("triage"), Some("answer"), None] {
+            assert!(
+                client
+                    .normalize_item(
+                        &pull_request_item("Building", json!({})),
+                        &project_for_tests(),
+                        &filter_for("Building", kind),
+                    )
+                    .is_none(),
+                "{kind:?} must not take a pull request"
+            );
+        }
+        // The same item under a workflow that may take it is still taken, so
+        // nothing above marked it as skipped for good.
+        assert!(
+            client
+                .normalize_item(
+                    &pull_request_item("Building", json!({})),
+                    &project_for_tests(),
+                    &filter_for("Building", Some("implement")),
+                )
+                .is_some()
+        );
+    }
+
+    /// Closed, merged and fork pull requests are not tasks. A fork is the
+    /// dangerous one: its head branch is not on `origin`, but a branch **of
+    /// the same name** may be — `main` here — and hinting it would send an
+    /// agent to commit on the default branch.
+    #[test]
+    fn a_pull_request_that_cannot_take_commits_is_not_a_task() {
+        let client = client_for_tests();
+        for overrides in [
+            json!({ "state": "MERGED" }),
+            json!({ "state": "CLOSED" }),
+            json!({ "isCrossRepository": true, "headRefName": "main" }),
+            json!({ "headRefName": "" }),
+        ] {
+            assert!(
+                client
+                    .normalize_item(
+                        &pull_request_item("Building", overrides.clone()),
+                        &project_for_tests(),
+                        &filter_for("Building", Some("implement")),
+                    )
+                    .is_none(),
+                "{overrides}"
+            );
+        }
+        // A draft is work in progress — a natural thing to continue.
+        assert!(
+            client
+                .normalize_item(
+                    &pull_request_item("Building", json!({ "isDraft": true })),
+                    &project_for_tests(),
+                    &filter_for("Building", Some("implement")),
+                )
+                .is_some()
+        );
+    }
+
+    /// A pull request goes through the same trigger and gating as an issue:
+    /// the wrong column, and a repository this board does not track, keep it
+    /// out — before any of the pull request gates get a say.
+    #[test]
+    fn a_pull_request_obeys_the_trigger_and_the_repository_gate() {
+        let client = client_for_tests();
+        assert!(
+            client
+                .normalize_item(
+                    &pull_request_item("Ready", json!({})),
+                    &project_for_tests(),
+                    &filter_for("Building", Some("implement")),
+                )
+                .is_none()
+        );
+        assert!(
+            client
+                .normalize_item(
+                    &pull_request_item(
+                        "Building",
+                        json!({ "repository": { "name": "someone-elses" } })
+                    ),
+                    &project_for_tests(),
+                    &filter_for("Building", Some("implement")),
+                )
+                .is_none()
+        );
     }
 
     /// The handle (0.7.2, #646) is what a person calls the issue, which the

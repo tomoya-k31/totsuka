@@ -47,3 +47,65 @@ The URL of the pull request you created MUST appear in your final message. \
 The orchestrator does not open pull requests, so that URL is its only way of knowing the deliverable exists. \
 Write the pull request title and description in the same language as the source issue.\
 """
+
+# --- A task that IS a pull request (#734) ------------------------------------
+#
+# Sent instead of `design_instructions` / `implement_instructions` when the
+# board item is a pull request. A separate text rather than a neutral rewrite
+# of the issue one, because this plugin knows which it is (`__typename`) and an
+# agent asked to work it out at run time guesses: `gh issue view <n>` succeeds
+# on a pull request number too.
+#
+# What these deliberately do NOT say is anything about the branch. Whether the
+# worktree is ON the pull request's branch or DETACHED at its head is decided
+# by the Orchestrator from the workflow's profile, which this plugin never
+# sees — so the Orchestrator says it (`hinted_branch_on` /
+# `hinted_branch_detached`, ADR-0085). Writing "you are on the branch" here
+# would transcribe that decision and be wrong the day it changes.
+#
+# Three things are load-bearing in both. Do not drop them when rewording:
+#
+#  1. State that it IS a pull request, as a fact. Not "if this is a pull
+#     request".
+#  2. Name the commands that read it. The task body is the pull request's
+#     description and nothing else — for a dependency bot that is a version
+#     table — so the diff and the review comments have to be fetched, and
+#     `gh api` is denied on a read-only profile.
+#  3. Stop if it is not OPEN. Ingest already filters on that, but a pull
+#     request can be merged between the poll and the dispatch, and where the
+#     repository keeps merged branches the push would land on a dead one.
+#
+# Placeholders: {pr_number} {repo}
+
+# The deliverable is a design for the ADDITIONAL changes, not a code review:
+# Copilot, `/code-review` and the human reviewer already review. It goes on the
+# pull request as a comment (`gh issue comment` accepts a pull request number),
+# so the implement stage below reads it the way it reads an issue's design.
+design_pr_instructions = """
+This task IS pull request #{pr_number} ({repo}), not an issue. Read it before anything else: \
+`gh pr view {pr_number} --comments` and `gh pr diff {pr_number}`. \
+If it is not OPEN, change nothing, say so, and stop. \
+Work out what ADDITIONAL changes this pull request needs before it can be merged, produce a detailed \
+design for them, and post it with `gh issue comment {pr_number}`. \
+This is a design for further work, not a review of the diff. \
+Do not change the repository's code. \
+The URL of the comment you posted MUST appear in your final message. \
+The orchestrator writes nothing back, so that URL is its only way of knowing the deliverable exists. \
+Write the design in the same language as the pull request.\
+"""
+
+# The reported URL is the COMMENT's, not the pull request's. A pull request's
+# URL exists before the run starts, so an agent that did nothing could report
+# it; a comment's URL is minted by this run. The comment also outlives the
+# commits where a dependency bot later regenerates its branch.
+implement_pr_instructions = """
+This task IS pull request #{pr_number} ({repo}), not an issue. Read it before anything else: \
+`gh pr view {pr_number} --comments` and `gh pr diff {pr_number}`. \
+If it is not OPEN, change nothing, say so, and stop. \
+Make the additional changes it needs — follow a design posted in its comments if there is one — \
+then commit and push them to this pull request. Do not open another pull request. \
+Then post what you changed and why with `gh pr comment {pr_number}`. \
+The URL of that comment MUST appear in your final message. \
+The orchestrator writes nothing back, so that URL is its only way of knowing the work was done. \
+Write the commits and the comment in the same language as the pull request.\
+"""
