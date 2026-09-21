@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](orchestrator-spec.ja.md)
 
-<!-- generated-from: ai-docs/product/orchestrator-spec.md sha256:c5f21825063be9ce4cf6a4b7aaea49d6a932e3fe634fbe9ad7c3a1ebb03a2658 -->
+<!-- generated-from: ai-docs/product/orchestrator-spec.md sha256:fc0b171adc5c5a6c2db2747b9770f8b1236b8c3ebf0110ce084419c1e264012f -->
 
 # What totsuka is
 
@@ -60,6 +60,8 @@ Agent IDEs are plugins too, and which one runs can be switched per task type and
 Agents report their state as one of idle, running, waiting for input, done, or failed. Completion itself is detected through a hook the agent CLI fires, which makes it deterministic rather than inferred from output.
 
 In workflows where a human approves completion at the pane, questions and the completion confirmation arrive through the tool's native question picker — claude's `AskUserQuestion`, opencode's `question` dialog. While the dialog is open totsuka treats the task as waiting for input, releases its slot, and notifies you with the question text. Tools without a picker ask with a numbered list instead.
+
+A task that stays silent for longer than its workflow's `timeout_secs` is escalated. By default there is no limit, and time spent waiting on a permission prompt never counts as silence.
 
 **Plugins declare what they support and totsuka only asks for that.** A plugin that does not implement plan mode is never asked to run one.
 

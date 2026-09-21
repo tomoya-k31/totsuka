@@ -27,8 +27,10 @@ pub const DEFAULT_GLOBAL_CONCURRENCY: u32 = 4;
 pub const DEFAULT_BLOCK_RETRY_LIMIT: u32 = 3;
 
 /// Default per-workflow silence limit in seconds (since the last hook signal)
-/// before escalation, when `timeout_secs` is omitted (D-03: 30 minutes).
-pub const DEFAULT_WORKFLOW_TIMEOUT_SECS: u64 = 1800;
+/// before escalation, when `timeout_secs` is omitted (D-03). `0`: the sweep is
+/// off unless a workflow sets a limit — silence alone cannot tell a hung agent
+/// from one waiting on a human.
+pub const DEFAULT_WORKFLOW_TIMEOUT_SECS: u64 = 0;
 
 /// Root of `config.toml`.
 ///

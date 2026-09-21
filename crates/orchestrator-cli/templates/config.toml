@@ -171,7 +171,8 @@
 # on_failure = { status = "Needs attention" }   # …on failure. Set this whenever on_start is set,
 #                                           #   or a failed task leaves the board saying "running"
 # timeout_secs = 1800                       # silence limit since the last hook signal, then escalate.
-#                                           #   `0` opts this workflow out of the sweep entirely
+#                                           #   Default `0` = no sweep. A pending permission prompt
+#                                           #   does not count as silence
 # rubric = "Tests pass and the diff is scoped to the issue"   # llm-verification criteria; the one
 #                                           #   prompt knob there is
 # tool = "claude"                           # pin the AI tool (workflow > repository > default_tool)

@@ -4,7 +4,7 @@ title: 設定リファレンス（config.toml）
 description: "config.toml の全キー・デフォルト値・意味の一覧。設定ファイルは 1 本で、プラグイン個別設定もトップレベルの [<name>] テーブルに入る。シークレット参照、設定スキーマのバージョニング方針、[[projects]] の domain 宣言とワークフローからの参照、プラグインが定義する追加プロパティ、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-github の [github]、task-source-notion の [notion]、task-source-slack の [slack]、agent-ide-herdr の [herdr] を含む。"
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
 tags: [config, reference, toml, secrets, workflow, worktree, github, notion, slack, hooks, versioning]
-generated: { by: claude-code/fable-5-1, at: 2026-09-21T14:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-21T13:30:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -196,7 +196,7 @@ project = "tomo-prj"
 | `on_success` | `{ status = "..." }`? | なし | 成功時にソース側ステータスを更新（F-84） |
 | `on_failure` | `{ status = "..." }`? | なし | 失敗時にソース側ステータスを更新（publish 失敗など retry 可能な失敗では書き戻さない） |
 | `verification` | enum | `llm` | 完了自己申告の検収方式（D-01）: `llm`（prompt 型 Stop フックで in-session 検収）/ `human`（`totsuka task verify` 待ち。有効な notifier が無いと警告）/ `none`（検収なし）。`profile` 指定時は書けない |
-| `timeout_secs` | int? | 1800 | 最終フックシグナルからの無応答上限秒。超過でエスカレーション（D-03）。**`0` はこのワークフローを掃引の対象外にする**（#439、[ADR-0042](/decisions/adr-0042-timeout-zero-opt-out.md)）— 人間が pane を見ている attended 運用向け。真にハングしたエージェントも検知されなくなるので、無人ワークフローには設定しないこと |
+| `timeout_secs` | int? | 0 | 最終フックシグナルからの無応答上限秒。超過でエスカレーション（D-03）。**`0`（既定）はこのワークフローを掃引の対象外にする**（#439、[ADR-0042](/decisions/adr-0042-timeout-zero-opt-out.md)、[ADR-0086](/decisions/adr-0086-timeout-default-off.md)）。止まったエージェントも検知されなくなるので、無人ワークフローには値を明示すること。権限 / idle プロンプト待ち（`Notification`）の間は数えない |
 | `rubric` | string? | なし | llm 検収の判定基準文（prompt 型フックに埋め込む）。`verification != "llm"` に設定すると警告。**唯一のプロンプト上書き面**（下記）で、profile の既定より強い |
 | `tool` | string? | なし | AI ツールの明示ピン（#196）。優先順位は workflow > repo > `default_tool`。`verification = "llm"` は Claude の prompt 型 Stop フックが必要なので、非 claude 系へ解決されうる構成では `tool = "claude"` のピンを警告で提案 |
 | `initial_prompt` | string? | なし | このワークフローのエージェントに渡す**追加の前置き指示**（#415、[ADR-0038](/decisions/adr-0038-workflow-initial-prompt.md)）。**可視**（pane に見える）・**タスク本文の前**・**新規会話のときだけ**。下記 |
@@ -308,7 +308,7 @@ initial_prompt = "/grill-me スキルを使用して、詳細設計を行って�
 | **リテラル** | `template::render` を通さない。`{` はそのまま書ける（JSON 例・コード断片） |
 | **未設定なら現状と同一** | 空文字列・空白のみは「未設定」と同じ扱いで無言で無視。設定していないワークフローの `extra_context` はバイト同一 |
 
-**無人ハングは設定した運用者の責任。** `AskUserQuestion` のように人間へ問いかけるツールを使わせる指示を書くと、無人 pane では Stop すら発火せず（ツール応答待ちで停止）、`timeout_secs` で Escalated になる。core は但し書きを自動で足さない — 足すと `initial_prompt` に書いた内容と矛盾する指示が混ざりうるため。
+**無人ハングは設定した運用者の責任。** `AskUserQuestion` のように人間へ問いかけるツールを使わせる指示を書くと、無人 pane では Stop すら発火せず（ツール応答待ちで停止）、`timeout_secs` を書いていればそこで Escalated になり、書いていなければ（既定 `0`）止まったままになる。core は但し書きを自動で足さない — 足すと `initial_prompt` に書いた内容と矛盾する指示が混ざりうるため。
 
 `rubric`（下記）とは**別レイヤ**。あちらは llm 検収の判定条件の置換で、プレースホルダ検査に照らして厳格に検証される。`initial_prompt` は指示の上乗せで、置換対象が存在せず、送り先も違う。
 
@@ -374,7 +374,7 @@ on_success = { status = "設計済み" }
 
 llm 検収の rubric も「この完了申告より前の会話で人間が明示的に承認しているか」の条件に差し替わる。ジャッジはセッション内で会話を見られるので、**確認を飛ばして COMPLETED を出したエージェントは、マーカー欠落を止めるのと同じ層でブロックされる**。確認依頼の停止自体は NEEDS_INPUT なので non-claim 枝（#389）を満たし、ブロックされない。
 
-長い自走中の誤エスカレートを避けたい attended workflow は `timeout_secs = 0`（D-03 掃引のオプトアウト、#439 / [ADR-0042](/decisions/adr-0042-timeout-zero-opt-out.md)）を併用する。
+長い自走中の誤エスカレートを避けたい attended workflow は `timeout_secs` を書かない（既定 `0` = D-03 掃引のオプトアウト、#439 / [ADR-0042](/decisions/adr-0042-timeout-zero-opt-out.md) / [ADR-0086](/decisions/adr-0086-timeout-default-off.md)）。
 
 既知の制限: `WaitingInput` 中の 2 回目の NEEDS_INPUT（修正指示 → 再確認）は冪等 no-op で**再通知が飛ばない**。attended pane では人間が会話の当事者なので実害は小さい（質問ツール経路は下記のとおり #487 で解消）。
 

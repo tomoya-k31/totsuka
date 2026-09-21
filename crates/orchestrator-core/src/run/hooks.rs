@@ -73,6 +73,13 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         // the touch behind `New` would let `sweep_signal_timeouts` falsely
         // escalate a task that is very much alive.
         self.db.touch_last_signal(task_id)?;
+        // Also before the dedup: a duplicate heartbeat after a permission
+        // prompt still proves the human answered and the agent moved on. Only
+        // a *new* prompt arms the pause (the `Notification` arm below), so a
+        // re-delivered old one cannot re-arm it after the agent moved on.
+        if !matches!(sig.event, SignalEvent::Notification { .. }) {
+            self.awaiting_approval.remove(&task_id);
+        }
 
         // Idempotent record (D-05): a repeated delivery (multi-fire, spool
         // re-send, curl retry) is dropped before any state change.
@@ -137,6 +144,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             // `QuestionPending` (#487, the arm below) move the task to
             // `WaitingInput`.
             SignalEvent::Notification { message } => {
+                self.awaiting_approval.insert(task_id);
                 notify_all(
                     &self.plugins.notifiers,
                     NotifierEvent::WaitingInput,
@@ -550,9 +558,12 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// timeout (D-03). Runs each `cycle()`. Only actively-executing states are
     /// swept — `WaitingInput`/`Verifying`/`Escalated` are intentionally paused
     /// on a human, not silent agents — and only tasks that have received at
-    /// least one signal (a set `last_signal_at` is the anchor). A workflow with
-    /// `timeout_secs = 0` opts out of the sweep entirely (#439): its tasks are
-    /// watched by a human at the pane, so silence is not evidence of anything.
+    /// least one signal (a set `last_signal_at` is the anchor). A task whose
+    /// latest signal was a permission / idle prompt stays `Running` (R-08) but
+    /// is just as blocked on a human, so it is skipped too until the next
+    /// signal. A workflow with `timeout_secs = 0` — the default — opts out of
+    /// the sweep entirely (#439): its tasks are watched by a human at the
+    /// pane, so silence is not evidence of anything.
     pub async fn sweep_signal_timeouts(&mut self) -> Result<(), EngineError> {
         let now = self.clock.now_utc();
         let mut timed_out: Vec<TaskRecord> = Vec::new();
@@ -562,6 +573,9 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             TaskState::Publishing,
         ] {
             for record in self.db.tasks_in_state(state)? {
+                if self.awaiting_approval.contains(&record.id) {
+                    continue;
+                }
                 let Some(last) = record.last_signal_at.as_deref() else {
                     continue;
                 };

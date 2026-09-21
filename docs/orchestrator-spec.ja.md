@@ -1,7 +1,7 @@
 > 🌐 [English](orchestrator-spec.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/product/orchestrator-spec.ja.md sha256:65f13e42fe3652803477780865cced4a75f29e138d338546131bf573ffa45953 -->
+<!-- generated-from: ai-docs/product/orchestrator-spec.ja.md sha256:172c2bcfeb7893eb440c7cf3523e6a8786de24f32826226b60c2120555f07387 -->
 
 # totsuka とは
 
@@ -61,6 +61,8 @@ worktree の置き場所は設定でき、ディレクトリ名はブランチ�
 エージェントは自身の状態を「待機中 / 実行中 / 入力待ち / 完了 / 失敗」の 5 値で報告する。完了そのものはエージェント CLI が発火するフックで検知するので、出力からの推測ではなく決定的である。
 
 人間が pane 上で完了を承認するワークフローでは、質問や完了確認はツール native の質問ピッカー（claude の `AskUserQuestion`、opencode の `question` ダイアログ）で届く。ダイアログが開いている間、totsuka はそのタスクを入力待ちとして扱い、枠を解放し、質問文つきで通知する。ピッカーを持たないツールは番号付きリストで訊いてくる。
+
+ワークフローの `timeout_secs` を超えて黙っているタスクはエスカレートされる。既定では上限が無く、権限プロンプトへの応答待ちの時間は沈黙に数えない。
 
 **プラグインは対応している機能を宣言し、totsuka はそれだけを要求する。** plan モードを実装していないプラグインに plan を要求することはない。
 

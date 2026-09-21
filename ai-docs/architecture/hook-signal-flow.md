@@ -4,7 +4,7 @@ title: フックシグナルフロー（Slack メンション → 完了検知 �
 description: Claude Code フック完了判定のエンドツーエンド経路。Slack メンションの dispatch から herdr pane 起動・env 注入・claude --settings、Stop フックのマーカー抽出・UDS POST、hook_uds の Bearer/冪等検証、SignalPort→Engine::on_signal の検収分岐（llm/human/none）と Publishing/Verifying/Escalated、スプールフォールバックと pane.exited デッドマン、通知クリック → pane フォーカス（click-to-focus、F-94）までを図示する。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/orchestrator-core
 tags: [architecture, diagram, hook, claude-code, uds, signal, verification, deadman, spool, click-to-focus, epic-131]
-generated: { by: claude-code/opus-5, at: 2026-08-04T00:20:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-21T13:30:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -84,7 +84,7 @@ flowchart TD
     UNK -->|"はい"| ESC["Escalated（非終端）+ diagnostics/snapshot + notify(escalated 🚨)"]
     UNK -->|"いいえ"| WAIT["遷移なし・次シグナル待ち"]
 
-    SWEEP["sweep_signal_timeouts()（各サイクル）"] -->|"now - last_signal_at > timeout_secs（既定1800, D-03）"| ESC
+    SWEEP["sweep_signal_timeouts()（各サイクル）"] -->|"now - last_signal_at > timeout_secs（既定0=掃引なし, D-03。権限プロンプト待ちは除外）"| ESC
     DISP["task/dispatch（新しい実行の開始）"] -->|"last_signal_at をクリア（#382）"| SWEEP
 
     DEAD["events.subscribe → pane.exited デッドマン専用（F-106）"] -->|"exit_code 非0 / コード無し"| FAIL

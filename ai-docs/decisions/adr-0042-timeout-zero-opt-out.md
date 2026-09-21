@@ -4,7 +4,7 @@ title: ADR-0042 timeout_secs = 0 は「即エスカレート」ではなく「D-
 description: "attended pane（人間が pane を見ている）前提の workflow では無音は異常の証拠にならないため、timeout_secs = 0 を D-03 無音掃引のオプトアウトとして定義した決定。従来の 0 は最初の掃引でほぼ必ずエスカレートする罠値で、意図して使える意味を持っていなかった。トレードオフとして、真にハングしたエージェントもその workflow では検知されない。"
 resource: https://github.com/tomoya-k31/totsuka/issues/439
 tags: [decision, timeout, escalation, attended-pane, adr]
-generated: { by: claude-code/fable-5, at: 2026-08-13T17:50:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-21T13:30:00+09:00 }
 status: stable
 verified:
   - { by: claude-code/fable-5, at: 2026-08-13T17:50:00+09:00 }
@@ -38,7 +38,7 @@ design / implement 系 workflow を attended pane（人間が pane を見てい�
 **`timeout_secs = 0` を「この workflow は D-03 掃引の対象外」と定義する。** `sweep_signal_timeouts` は解決したタイムアウトが 0 の workflow のタスクをスキップする。
 
 - profile とは無関係の汎用プロパティ変更。全 workflow（answer / triage 含む）で書ける
-- 省略時の既定（30 分）は不変。オプトアウトは明示的に `0` と書いたときだけ
+- 決定時点では省略時の既定（30 分）は不変で、オプトアウトは明示的に `0` と書いたときだけだった。**省略時の既定はその後 [ADR-0086](/decisions/adr-0086-timeout-default-off.md) で `0` に変わった**（明示的な `0` の意味は本 ADR のまま）
 
 # Consequences
 

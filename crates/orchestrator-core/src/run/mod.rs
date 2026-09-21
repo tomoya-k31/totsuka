@@ -373,6 +373,14 @@ pub struct Engine<G: GitRunner, L: RepoClassifier + 'static> {
     /// Accumulated agent output (streamed `log_chunk`s) per task, used as the
     /// `output = source` publish artifact (F-07).
     agent_output: HashMap<i64, String>,
+    /// Tasks whose latest hook signal was a `Notification` (a permission /
+    /// idle prompt): blocked on a human, so the silence sweep skips them until
+    /// any other signal arrives.
+    ///
+    /// ponytail: in memory only — a restart forgets it and the task is swept
+    /// from `last_signal_at` as before; persist it next to that column if
+    /// restarts mid-prompt start escalating real waits.
+    awaiting_approval: HashSet<i64>,
     /// Session rows whose pane has been released — or is known to be
     /// unreleasable — so a repeated cleanup never re-sends `session/release`
     /// for the same dispatch (#210).
@@ -510,6 +518,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             events_tx: tx,
             readme_cache,
             agent_output: HashMap::new(),
+            awaiting_approval: HashSet::new(),
             released_panes: HashSet::new(),
             last_worktree_sweep: None,
             clock,
