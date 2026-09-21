@@ -2,7 +2,11 @@
 # ref/ は参照用に他リポジトリのコピーを置くための枠（現状このリポジトリには無い。
 # 置く場合は .gitignore にも足すこと — 他人のコードを我々の規約で矯正しない）。
 # CHANGELOG.md は release-please の生成物。手で整形しても次のリリースで書き戻される。
-exclude = ["ref", "CHANGELOG.md"]
+# gh-stack は github/gh-stack からベンダリングした skill（SKILL.md の frontmatter
+# `metadata.github-repo` / `github-ref` が出所）。ref/ と同じく他人のファイルなので矯正しない —
+# 直しても次のベンダー更新で上書きされる。ルール id の per-file-ignores ではなくディレクトリ
+# ごと外すのは、ベンダー側の変更で別ルールに当たるたびに追記し直さないため（#733）。
+exclude = ["ref", "CHANGELOG.md", ".claude/skills/gh-stack", ".agents/skills/gh-stack"]
 respect-gitignore = true
 
 disable = [
