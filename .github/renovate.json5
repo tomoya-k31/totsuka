@@ -1,8 +1,10 @@
 // Renovate (Mend-hosted GitHub App). Decisions and rejected alternatives:
 // ai-docs/decisions/adr-0088-renovate.md (#728). Validate before pushing:
-//   npx --yes --package renovate -- renovate-config-validator --strict
+//   npx --yes --package renovate@latest -- renovate-config-validator --strict
 // (run from the repo root with no path: given a path, it validates the file
-// as *global* config instead.)
+// as *global* config instead. `@latest` because the hosted App runs a current
+// release; a bare `renovate` reuses whatever npx cached, which can lag a major
+// behind — the `renovate-config` manager below did not exist in 42.x.)
 {
   $schema: "https://docs.renovatebot.com/renovate-schema.json",
   extends: [
@@ -136,6 +138,18 @@
     {
       matchManagers: ["terraform"],
       matchDepTypes: ["required_version"],
+      enabled: false,
+    },
+
+    // The renovate-config manager reads `constraints.rust` above as a tool
+    // version and proposes bumping it to the latest Rust. That value is the
+    // MSRV filter, not a tool to keep current: raising it would let through
+    // exactly the releases the `msrv` job fails. It moves only with
+    // `rust-version`, by hand.
+    {
+      matchManagers: ["renovate-config"],
+      matchDepTypes: ["tool-constraint"],
+      matchDepNames: ["rust"],
       enabled: false,
     },
 

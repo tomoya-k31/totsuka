@@ -1,0 +1,1 @@
+* **Update**: [ADR-0088](/decisions/adr-0088-renovate.md) — App の `renovate-config` manager が `.github/renovate.json5` の `constraints.rust`（MSRV のフィルタ）を依存として読み、1.98.1 へ上げる PR を出そうとしていた（Dependency Dashboard #749 で発見）。`tool-constraint` の `rust` を `enabled: false` にし、ローカル検証を `renovate@latest` で行うよう改めた
