@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:b80fd071d6d2218d5b6682033cb189e556ac2ab280b1bbebad5e2f37d6cde5ef -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:3a0b44b69c35babeb08c15d1f59da78faa2f9752aebc670c14d539a0375875f1 -->
 
 # 設定リファレンス
 
@@ -150,7 +150,7 @@ project = "tomo-prj"
 |---|---|---|---|
 | `name` | string | 必須 | ワークフロー名 |
 | `projects` | 文字列配列 | 必須 | このワークフローが**タスクを引く先**の `[[projects]].name`。**タスクソースは書かない** —— 名指した domain の所有者がそれである。空配列はエラー（配る先が無い）。複数書くのは「それらの domain が同じレーン語彙を共有する」という意味で、異なるソースの domain を混ぜるのはエラー。複数形であることに注意: `[[repositories]].project` は 1 つ、こちらは配列 |
-| `trigger` | テーブル | `{}` | トリガー条件。**どのタスクが一致するかを決めるのはソースプラグインである** — プラグインが受け取り first-match を走らせる。github の `status` トリガーは**列への入場がリクエスト**: 完了後でも人間がカードをトリガー列へ差し戻せば同じワークフローが再実行される（誰が再実行するかは assignee と claim が決める）。**別のワークフローのトリガー列に入った場合は、その会話がそのワークフローへ引き渡される** — 列パイプラインの次の段が、同じ worktree・同じエージェントのセッションのまま始まる。引き渡されるのは完了済みの会話だけ。実行中に届いた配送は見送られ、**ポーリング型のソース（github / notion）なら次の tick で運び直されて引き渡しが成立する**が、ack を先に返す Slack は再配送しないのでそのトリガーは失われる（実行が終わってから付け直すこと）。**この表の未知キーは起動時の硬い失敗になる。** トリガーはキー単位で読まれるので、読み手の居ないキーは捨てられ、条件が 1 つ消える —— つまりタイポはトリガーを**狭めず広げる**（`assinee` と書くと「条件なし」になり、除外したかったタスクにこそ発火する）。エラーはそのソースが読む有効キーを列挙するので、移行案内も兼ねる。`trigger = {}` はキーが無いので未知キー検査は常に通るが、**それが「全マッチ」を意味するかはソース次第**で、Slack は「起動条件が 1 つも無い」として拒否する。**`mention` はメンショントリガ**（Slack のみ）で、`mention = true` を書いたワークフローが自分宛メンションの行き先になる。**宛先 ID は持たない** — 誰宛が「自分宛」かは `[slack] target_user_id` と自分が所属するユーザーグループで決まるので、ここに書き写して実態とずれることがない。`reaction` / `channel` との併記は拒否される（起動する種別が 2 つになり、設定からどちらか読めないため）。`mention = false` は真偽値として素直に読むので `reaction` の横に書いてよいが、`mention = false` だけの trigger は起動条件が無いので拒否される。**`to_group` はメンションの宛先による振り分け**で、`mention = true` と併記したときだけ意味を持つ。書いたユーザーグループ宛のメンションがこの workflow へ行き、**`to_group` を持つ workflow は素の `mention = true`（catch-all）より常に優先する —— `[[workflows]]` の並び順は影響しない**。定義順が効くのは、別々のグループを名指した 1 メッセージが 2 つの workflow に一致したとき（`@oncall @design`）の tie-break だけで、先に書いた方が勝つ。名指しされていない所属グループ宛は catch-all に落ちるので、`to_group` を 1 つ足しても他のグループのメンションは今までどおり来る。**書けるのは自分が所属しているグループだけ**で、所属外は起動時に拒否される（自分が関与していない会話がここでエージェントを走らせる経路を作らないため）。`repo` を併記するとリポジトリを固定し、解決（`task/lookup`・LLM 分類）を丸ごと飛ばす。会話が既に決めたリポジトリより優先する。**`repo` は `to_group` を伴わなくても書ける** —— `trigger = { mention = true, repo = "web-app" }` は「どのメンションもこのリポジトリ」になり、分類 LLM を一切呼ばない（候補が 1 つの構成向け）。`to_group` を書いた時点で `usergroups:read` スコープが必須になる。**所属の照合は `totsuka config validate` では行えない** —— ライブな `usergroups.list` が要り、このコマンドは意図的にオフラインだからで、失効トークンを検出できないのと同じ区分である。 **`channel` はチャンネル監視トリガ**で、そのチャンネルへのトップレベル投稿がそのままタスクになる。`channel_name`（改名検知のための照合用・必須）/ `repo`（タスクを向けるリポジトリ・必須）/ `from`（起動を許す投稿者を追加する。**既定は自分の投稿だけ**）を伴う。`reaction` との併記は拒否され、`channel` 抜きで残り 3 つだけ書くのも拒否される。監視ワークフローはそれ自体が 1 つの種別なので、`mention = true` を書く必要は無い（書くと併記として拒否される） 1 つだけ totsuka 自身のキーがある: **`status`** はソース側の状態列の値を指し、totsuka は閉路検査の列グラフを組むためにこれを読む —— `on_*` の書き戻し先と文字列を突き合わせるだけで、タスクの照合には使わない。受理するかは各ソースの自由で、状態列を持たない Slack は未知キーとして拒否する。 **`assignee` は「誰が持っているタスクを取るか」の取り込みゲートである。** `"@me"` / `"@none"` / `"@any"` / ログイン名 / それらの配列（OR）で書く。**省略時は `["@me", "@none"]`** で、これはこのキーが無かった頃の挙動と同じ。背後に第 2 のゲートは無いので、書いた条件が書いていない条件に上書きされることはない。`@` には意味がある —— `me` / `none` / `any` はどれも実在しうるアカウント名なので、`assignee = "any"` は「`any` というユーザー」を指す。**`@any` は他人のタスクも取り込む。** また `@any` は **assignee を読まない唯一の条件**なので、Notion で `property_map.assignee` が未マップでも書ける —— 「assignee で絞り込まない」と述べるための書き方である。他の値はマップが無いと起動時に落ちる。 名前を何と突き合わせるかはソースごとに違い、GitHub は issue 自身の assignee と `github_login`、Notion は `property_map.assignee` が名指すプロパティと `notion_user_id` を使う。GitHub では、`status` を併記しない `assignee` は配送に lane identity を与えないので、そのタスクは**高々 1 回**しか実行されず、アサインし直しても再実行されない（起動時に警告が出る）。Notion はどのトリガーでも lane identity を刻まないため、`status` を足しても再実行にはならない —— 効かない対処になるので、そちらでは警告も出さない。 |
+| `trigger` | テーブル | `{}` | トリガー条件。**どのタスクが一致するかを決めるのはソースプラグインである。** キー同士は AND・配列は OR・`exclude` はどれか 1 つに一致したら除外、という規則と、ソースごとに読めるキーは下の「`trigger` の語彙」にまとめてある |
 | `profile` | enum? | なし | `answer` / `triage` / `design` / `implement` のいずれか。`mode` / `output` / `verification` をまとめて決める |
 | `mode` | enum | `profile` が無ければ必須 | `plan` / `implement` |
 | `agent` | string | 必須 | agent_ide のインスタンス名 |
@@ -166,6 +166,90 @@ project = "tomo-prj"
 | `cleanup` | `[worktree]` と同じ語彙 | なし | この workflow のタスクの worktree 掃除を上書きし、`[worktree]` の mode 既定に勝つ。`manual` にするとタスク完了後も worktree と **pane** が残る。後から workflow を削除・改名すると、完了済みタスクは mode 既定へ戻る |
 
 ワークフローは定義順に照合され、最初に一致したものが使われる。**その照合を走らせるのはソースプラグインである。** 起動時にワークフローの一覧を受け取り、タスクがどれに属するかを決め、タスクを渡すときに名前で伝える。totsuka はその名前が実在し、そのソースのものかだけを確かめる。
+
+### `trigger` の語彙
+
+トリガーの意味を決めるのはソースプラグインで、起動時にワークフローの一覧を受け取り first-match を走らせる。1 つだけ totsuka 自身のキーがある: **`status`** はソース側の状態列の値を指し、totsuka は閉路検査の列グラフを組むためにこれを読む —— `on_*` の書き戻し先と文字列を突き合わせるだけで、タスクの照合には使わない。受理するかは各ソースの自由で、状態列を持たない Slack は未知キーとして拒否する。
+
+#### 共通規則
+
+GitHub / Notion のトリガーは次の規則で読む（Slack / Discord は起動の種別そのものを選ぶので、下の「Slack / Discord のキー」を参照）:
+
+- **キー同士は AND、配列は OR。** `trigger = { status = "Todo", label = ["bug", "chore"] }` は「`Todo` 列にあり、かつ `bug` か `chore` が付いている」。キー名は配列を取るものも単数形のまま（`label` / `assignee`）
+- **`exclude` はどれか 1 つに一致したら取り込まない。** 中身は trigger と同じキー・同じ値で書く（下記）
+- **trigger の未知キーは起動時の硬い失敗になる。** トリガーはキー単位で読まれるので、読み手の居ないキーは捨てられ、条件が 1 つ消える —— つまりタイポはトリガーを**狭めず広げる**（`assinee` と書くと「条件なし」になり、除外したかったタスクにこそ発火する）。エラーはそのソースが読む有効キーを列挙するので、移行案内も兼ねる。 **`exclude` の中のキーも同じ検査を受ける**
+- `trigger = {}` はキーが無いので未知キー検査は常に通るが、**それが「全マッチ」を意味するかはソース次第**で、Slack は「起動条件が 1 つも無い」として拒否する。
+
+| ソース | 取り込み条件のキー | `exclude` の中で書けるキー |
+|---|---|---|
+| github | `status`（文字列）/ `label`（文字列か配列）/ `assignee` / `exclude` | `status` / `label` / `assignee`（`status` / `label` は配列可） |
+| notion | `status`（文字列）/ `assignee` / `filter` / `exclude` | `status`（配列可）/ `assignee`。**`filter` は書けない**（下記） |
+| slack | `mention` / `to_group` / `reaction` / `from_bot` / `channel` / `channel_name` / `repo` / `from` | なし |
+| discord | `channel` / `channel_name` / `repo` / `from` | なし |
+
+#### `status`
+
+github の `status` トリガーは**列への入場がリクエスト**: 完了後でも人間がカードをトリガー列へ差し戻せば同じワークフローが再実行される（誰が再実行するかは assignee と claim が決める）。**別のワークフローのトリガー列に入った場合は、その会話がそのワークフローへ引き渡される** — 列パイプラインの次の段が、同じ worktree・同じエージェントのセッションのまま始まる。引き渡されるのは完了済みの会話だけ。実行中に届いた配送は見送られ、**ポーリング型のソース（github / notion）なら次の tick で運び直されて引き渡しが成立する**が、ack を先に返す Slack は再配送しないのでそのトリガーは失われる（実行が終わってから付け直すこと）。
+
+#### `label`（GitHub）
+
+Issue / PR に付いているラベルのどれかに一致すれば通る。文字列 1 つか配列（OR）。**大文字小文字を区別しない** —— GitHub はラベル名を大小無視で一意にしているので、`label = "Bug"` は `bug` ラベルに一致する。`label` 単独のトリガーは lane identity を持たないので、タスクごとに**高々 1 回**しか実行されない。
+
+#### `assignee`
+
+**`assignee` は「誰が持っているタスクを取るか」の取り込みゲートである。** `"@me"` / `"@none"` / `"@any"` / ログイン名 / それらの配列（OR）で書く。**省略時は `["@me", "@none"]`** で、これはこのキーが無かった頃の挙動と同じ。背後に第 2 のゲートは無いので、書いた条件が書いていない条件に上書きされることはない。`@` には意味がある —— `me` / `none` / `any` はどれも実在しうるアカウント名なので、`assignee = "any"` は「`any` というユーザー」を指す。**`@any` は他人のタスクも取り込む。** また `@any` は **assignee を読まない唯一の条件**なので、Notion で `property_map.assignee` が未マップでも書ける —— 「assignee で絞り込まない」と述べるための書き方である。他の値はマップが無いと起動時に落ちる。 名前を何と突き合わせるかはソースごとに違い、GitHub は issue 自身の assignee と `github_login`、Notion は `property_map.assignee` が名指すプロパティと `notion_user_id` を使う。GitHub では、`status` を併記しない `assignee` は配送に lane identity を与えないので、そのタスクは**高々 1 回**しか実行されず、アサインし直しても再実行されない（起動時に警告が出る）。Notion はどのトリガーでも lane identity を刻まないため、`status` を足しても再実行にはならない —— 効かない対処になるので、そちらでは警告も出さない。
+
+#### `exclude` — 除外条件
+
+```toml
+[[workflows]]
+name     = "spec"
+projects = ["my-board"]
+agent    = "herdr"
+profile  = "design"
+trigger  = { status = "🤖 Spec", assignee = "@none", exclude = { label = "waiting" } }
+```
+
+`🤖 Spec` 列にある未アサインの Issue のうち、`waiting` ラベルが付いたものを取り込まない。ラベルを外すと次のポーリングで取り込まれる。**取り込み後に `waiting` を付けても実行中のタスクは止まらない** —— `exclude` は取り込みの条件である。
+
+- 中身は trigger と同じキー・同じ値で、**どれか 1 つに一致したら除外**する。値の配列も OR なので、`exclude = { label = ["waiting", "blocked"], assignee = "bot" }` は「`waiting` か `blocked` が付いている、または `bot` がアサインされている」を除外する
+- `exclude.assignee` は `@me` / `@none` / ログイン名とその配列が書ける。取り込み側と違って**既定は無い**（書かなければ誰も除外しない）。評価に必要な設定（Notion の `property_map.assignee`、`@me` なら `notion_user_id`）が欠けていると起動時に落ちる
+- `exclude.status` は配列を書ける。取り込み側の `status` は文字列 1 つのまま
+- **検査するのはキーの綴りだけ。** `exclude = {}`（何も除外しない）や `exclude = { assignee = "@any" }`（全部除外する）は書いたとおりに動く。`exclude = { lable = "waiting" }` のようなタイポや、`exclude` の入れ子は起動時に落ちる
+- 取り込み条件を書かず `exclude` だけの trigger も書ける。取り込み側の既定（`assignee = ["@me", "@none"]`）はそのまま効く
+- **`in_progress_statuses` とは別物である。** あちらはボードの「実行中」列を全ワークフロー共通で弾く設定で、`exclude` を書いても消えない
+
+#### Notion の `filter` — 生の Notion filter
+
+`filter` は Notion の [database query filter](https://developers.notion.com/reference/post-database-query-filter) を書いたままクエリへ渡すキーである。プロパティの型ごとの演算子（`does_not_contain` / `does_not_equal` / `is_empty` / `and` / `or` の入れ子 …）が全部使えるので、**Notion では「〜を含まない」を `filter` の中に直接書ける**:
+
+```toml
+trigger = { assignee = "@none", filter = { and = [
+  { property = "Status", status = { equals = "🤖 Spec" } },
+  { property = "Tags",   multi_select = { does_not_contain = "waiting" } },
+] } }
+```
+
+`filter` を書くと `status` は Notion へは送られず、取得後の照合にだけ使われる。値に `@{name}` と書くと `[notion.dynamic.{name}]` で解決される（`[notion]` を参照）。
+
+`filter` と `exclude` は役割が違う:
+
+| | `filter`（Notion のみ） | `exclude`（GitHub / Notion） |
+|---|---|---|
+| 評価する場所 | Notion（クエリ） | totsuka（取得後） |
+| 語彙 | Notion の filter 構文 | totsuka 共通の `status` / `label` / `assignee` |
+| 否定の書き方 | 演算子ごと（`does_not_contain` 等） | `exclude` テーブル 1 つ |
+| 使いどころ | Notion で問い合わせられることなら何でも | どのソースでも同じに読める条件 |
+
+**`exclude` の中に `filter` は書けない。** Notion には生の filter を包む汎用の NOT が無いため。否定は `filter` の中で書く。
+
+#### Slack / Discord のキー
+
+**`mention` はメンショントリガ**（Slack のみ）で、`mention = true` を書いたワークフローが自分宛メンションの行き先になる。**宛先 ID は持たない** — 誰宛が「自分宛」かは `[slack] target_user_id` と自分が所属するユーザーグループで決まるので、ここに書き写して実態とずれることがない。`reaction` / `channel` との併記は拒否される（起動する種別が 2 つになり、設定からどちらか読めないため）。`mention = false` は真偽値として素直に読むので `reaction` の横に書いてよいが、`mention = false` だけの trigger は起動条件が無いので拒否される。
+
+**`to_group` はメンションの宛先による振り分け**で、`mention = true` と併記したときだけ意味を持つ。書いたユーザーグループ宛のメンションがこの workflow へ行き、**`to_group` を持つ workflow は素の `mention = true`（catch-all）より常に優先する —— `[[workflows]]` の並び順は影響しない**。定義順が効くのは、別々のグループを名指した 1 メッセージが 2 つの workflow に一致したとき（`@oncall @design`）の tie-break だけで、先に書いた方が勝つ。名指しされていない所属グループ宛は catch-all に落ちるので、`to_group` を 1 つ足しても他のグループのメンションは今までどおり来る。**書けるのは自分が所属しているグループだけ**で、所属外は起動時に拒否される（自分が関与していない会話がここでエージェントを走らせる経路を作らないため）。`repo` を併記するとリポジトリを固定し、解決（`task/lookup`・LLM 分類）を丸ごと飛ばす。会話が既に決めたリポジトリより優先する。**`repo` は `to_group` を伴わなくても書ける** —— `trigger = { mention = true, repo = "web-app" }` は「どのメンションもこのリポジトリ」になり、分類 LLM を一切呼ばない（候補が 1 つの構成向け）。`to_group` を書いた時点で `usergroups:read` スコープが必須になる。**所属の照合は `totsuka config validate` では行えない** —— ライブな `usergroups.list` が要り、このコマンドは意図的にオフラインだからで、失効トークンを検出できないのと同じ区分である。
+
+**`channel` はチャンネル監視トリガ**で、そのチャンネルへのトップレベル投稿がそのままタスクになる。`channel_name`（改名検知のための照合用・必須）/ `repo`（タスクを向けるリポジトリ・必須）/ `from`（起動を許す投稿者を追加する。**既定は自分の投稿だけ**）を伴う。`reaction` との併記は拒否され、`channel` 抜きで残り 3 つだけ書くのも拒否される。監視ワークフローはそれ自体が 1 つの種別なので、`mention = true` を書く必要は無い（書くと併記として拒否される）
 
 ### プラグインが定義するキー
 

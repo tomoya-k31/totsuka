@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 
 use plugin_protocol::Task;
 use plugin_protocol::methods::{TaskClaimOutcome, TaskClaimResult};
-use plugin_sdk::AssigneeFilter;
+use plugin_sdk::{AssigneeFilter, one_or_many};
 
 use crate::claim::{
     ADD_ASSIGNEES_MUTATION, AdjudicationError, CLAIM_READ_QUERY, ClaimState,
@@ -27,11 +27,14 @@ use crate::transport::GithubTransport;
 const MAX_FETCH_PAGES: usize = 40;
 
 /// A parsed trigger condition (workflow-defined shape, F-81), e.g.
-/// `{"status": "実装待ち"}` and/or `{"label": "bug"}`.
+/// `{"status": "実装待ち"}` and/or `{"label": "bug"}`, minus whatever its
+/// `exclude` table names (ADR-0091).
 #[derive(Debug, Default)]
 struct TriggerFilter {
     status: Option<String>,
-    label: Option<String>,
+    /// Any of these labels (an array is an OR). Compared ignoring ASCII case,
+    /// as GitHub keeps label names unique that way.
+    label: Option<Vec<String>>,
     /// Which instruction set this workflow's profile asks for (#398).
     ///
     /// Derived by the Orchestrator rather than here: `[[workflows]].profile`
@@ -47,7 +50,22 @@ struct TriggerFilter {
     /// so this is the *only* assignee gate — there is no plugin-wide one left
     /// behind it that could overrule what the operator wrote.
     assignee: AssigneeFilter,
+    /// `trigger.exclude` (ADR-0091): a task matching any one of these is
+    /// dropped.
+    exclude: Exclude,
 }
+
+/// The parsed `trigger.exclude` table. Every field absent excludes nothing.
+#[derive(Debug, Default)]
+struct Exclude {
+    status: Option<Vec<String>>,
+    label: Option<Vec<String>>,
+    assignee: Option<AssigneeFilter>,
+}
+
+/// The `trigger.exclude` keys this source reads (ADR-0091): all of
+/// [`TRIGGER_KEYS`] but `exclude` itself.
+pub const EXCLUDE_KEYS: &[&str] = &["assignee", "label", "status"];
 
 /// The `[[workflows]].trigger` keys this source reads (#574).
 ///
@@ -55,7 +73,7 @@ struct TriggerFilter {
 /// `initialize` rejects every other key, so a typo cannot silently widen a
 /// trigger — add a key here in the same edit that teaches the parser to read
 /// it.
-pub const TRIGGER_KEYS: &[&str] = &["assignee", "label", "status"];
+pub const TRIGGER_KEYS: &[&str] = &["assignee", "exclude", "label", "status"];
 
 impl TriggerFilter {
     /// `Err` only for a malformed `assignee`; everything else is parsed
@@ -70,27 +88,60 @@ impl TriggerFilter {
                 .get("status")
                 .and_then(Value::as_str)
                 .map(str::to_string),
-            label: trigger
-                .get("label")
-                .and_then(Value::as_str)
-                .map(str::to_string),
+            label: one_or_many(trigger.get("label")),
             instructions_kind: instructions_kind.map(str::to_string),
             assignee: AssigneeFilter::parse(trigger, workflow)?,
+            exclude: Exclude {
+                status: one_or_many(trigger.pointer("/exclude/status")),
+                label: one_or_many(trigger.pointer("/exclude/label")),
+                assignee: AssigneeFilter::parse_exclude(trigger, workflow)?,
+            },
         })
     }
 
     /// Whether a candidate task matches the trigger the workflow asked for.
+    /// The assignee gate and `exclude` are checked by the caller, as they need
+    /// the operator's login.
     fn matches(&self, status: Option<&str>, labels: &[String]) -> bool {
         let status_ok = match &self.status {
             Some(want) => status == Some(want.as_str()),
             None => true,
         };
         let label_ok = match &self.label {
-            Some(want) => labels.iter().any(|l| l == want),
+            Some(want) => has_label(labels, want),
             None => true,
         };
         status_ok && label_ok
     }
+
+    /// Whether `trigger.exclude` drops the task: any one condition is enough.
+    fn excludes(
+        &self,
+        status: Option<&str>,
+        labels: &[String],
+        assignees: &[&str],
+        me: &str,
+    ) -> bool {
+        let ex = &self.exclude;
+        ex.status
+            .as_ref()
+            .is_some_and(|want| status.is_some_and(|s| want.iter().any(|w| w == s)))
+            || ex
+                .label
+                .as_ref()
+                .is_some_and(|want| has_label(labels, want))
+            || ex
+                .assignee
+                .as_ref()
+                .is_some_and(|f| f.matches(assignees, Some(me)))
+    }
+}
+
+/// Whether the task carries any of `want`, ignoring ASCII case.
+fn has_label(labels: &[String], want: &[String]) -> bool {
+    labels
+        .iter()
+        .any(|l| want.iter().any(|w| l.eq_ignore_ascii_case(w)))
 }
 
 /// GitHub task-source client, generic over its transport for testability.
@@ -311,6 +362,7 @@ impl<T: GithubTransport> GithubClient<T> {
             || !filter
                 .assignee
                 .matches(&assignees, Some(&self.config.github_login))
+            || filter.excludes(status, &labels, &assignees, &self.config.github_login)
         {
             return None;
         }
@@ -1132,6 +1184,66 @@ mod tests {
         assert!(f.matches(Some("実装待ち"), &["bug".into()]));
         assert!(!f.matches(Some("実装中"), &["bug".into()])); // wrong status
         assert!(!f.matches(Some("実装待ち"), &["docs".into()])); // missing label
+    }
+
+    /// `label` takes an array (OR) and ignores case, as GitHub does (ADR-0091).
+    #[test]
+    fn label_is_any_of_and_ignores_case() {
+        let f = TriggerFilter::parse(&json!({ "label": ["bug", "Chore"] }), None, "wf").unwrap();
+        assert!(f.matches(None, &["BUG".into()]));
+        assert!(f.matches(None, &["chore".into(), "x".into()]));
+        assert!(!f.matches(None, &["docs".into()]));
+    }
+
+    /// The case this key exists for: the same issue in the trigger column, with
+    /// and without the `waiting` label (ADR-0091).
+    #[test]
+    fn exclude_drops_a_task_that_matches_any_one_condition() {
+        let f = TriggerFilter::parse(
+            &json!({
+                "status": "🤖 Spec",
+                "assignee": "@none",
+                "exclude": { "label": "waiting", "status": ["x"], "assignee": "bot" }
+            }),
+            None,
+            "wf",
+        )
+        .unwrap();
+        let excludes = |labels: &[&str], assignees: &[&str]| {
+            let labels: Vec<String> = labels.iter().map(|l| l.to_string()).collect();
+            f.excludes(Some("🤖 Spec"), &labels, assignees, "me")
+        };
+        assert!(!excludes(&[], &[]));
+        assert!(!excludes(&["bug"], &[]));
+        assert!(excludes(&["Waiting"], &[]), "label, ignoring case");
+        assert!(excludes(&[], &["bot"]), "assignee");
+        assert!(f.excludes(Some("x"), &[], &[], "me"), "status");
+
+        let none = TriggerFilter::parse(&json!({ "status": "🤖 Spec" }), None, "wf").unwrap();
+        assert!(!none.excludes(Some("🤖 Spec"), &["waiting".into()], &["bot"], "me"));
+    }
+
+    #[test]
+    fn exclude_is_applied_when_an_item_is_normalized() {
+        let client = client_for_tests();
+        let filter = TriggerFilter::parse(
+            &json!({ "status": "Todo", "exclude": { "label": "waiting" } }),
+            None,
+            "wf",
+        )
+        .unwrap();
+        let mut waiting = item("Todo");
+        waiting["content"]["labels"]["nodes"] = json!([{ "name": "waiting" }]);
+        assert!(
+            client
+                .normalize_item(&waiting, &project_for_tests(), &filter)
+                .is_none()
+        );
+        assert!(
+            client
+                .normalize_item(&item("Todo"), &project_for_tests(), &filter)
+                .is_some()
+        );
     }
 
     #[test]

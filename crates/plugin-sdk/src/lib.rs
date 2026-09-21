@@ -18,7 +18,9 @@
 //!   deprecated `tasks/fetch`.
 //! - [`trigger`] — [`unknown_trigger_keys`]: reject `[[workflows]].trigger`
 //!   keys the source does not read, so a typo fails startup instead of
-//!   silently widening the trigger (#574).
+//!   silently widening the trigger (#574); [`unknown_exclude_keys`] does the
+//!   same inside `trigger.exclude`, and [`one_or_many`] reads the
+//!   string-or-array values (ADR-0091).
 //! - [`assignee`] — [`AssigneeFilter`]: the `trigger.assignee` condition
 //!   (`@me` / `@none` / `@any` / a login / a list), which replaces the
 //!   plugin-wide F-08 gate so a workflow can leave the unassigned to people
@@ -48,5 +50,5 @@ pub use lookup::{Lookup, LookupClient};
 pub use poll::poll_loop;
 pub use runtime::{LineHandler, Stdio, Writer, serve};
 pub use submit::{SubmitClient, SubmitOutcome, Submitter};
-pub use trigger::unknown_trigger_keys;
+pub use trigger::{one_or_many, unknown_exclude_keys, unknown_trigger_keys};
 pub use watch::{BackfillLimits, WatchTrigger, resolve as resolve_watch_triggers};

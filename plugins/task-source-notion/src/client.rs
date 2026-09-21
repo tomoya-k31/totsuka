@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 
 use plugin_protocol::Task;
 use plugin_protocol::methods::WorkflowInfo;
-use plugin_sdk::AssigneeFilter;
+use plugin_sdk::{AssigneeFilter, one_or_many};
 
 use crate::blocks::{blocks_to_markdown, rich_text_plain};
 use crate::config::{BodySource, DatabaseConfig, DynamicRef, NotionConfig};
@@ -52,7 +52,16 @@ struct TriggerFilter {
     /// so this is the *only* assignee gate — there is no plugin-wide one left
     /// behind it that could overrule what the operator wrote.
     assignee: AssigneeFilter,
+    /// `trigger.exclude` (ADR-0091), evaluated here after the query: a task
+    /// matching any one of these is dropped.
+    exclude_status: Option<Vec<String>>,
+    exclude_assignee: Option<AssigneeFilter>,
 }
+
+/// The `trigger.exclude` keys this source reads (ADR-0091). Not `filter`: it
+/// goes to Notion verbatim, and Notion has no general negation to wrap it in —
+/// write the negation inside the filter (`does_not_equal`, …) instead.
+pub const EXCLUDE_KEYS: &[&str] = &["assignee", "status"];
 
 /// The `[[workflows]].trigger` keys this source reads (#574).
 ///
@@ -60,7 +69,7 @@ struct TriggerFilter {
 /// `initialize` rejects every other key, so a typo cannot silently widen a
 /// trigger — add a key here in the same edit that teaches the parser to read
 /// it.
-pub const TRIGGER_KEYS: &[&str] = &["assignee", "filter", "status"];
+pub const TRIGGER_KEYS: &[&str] = &["assignee", "exclude", "filter", "status"];
 
 impl TriggerFilter {
     /// `Err` only for a malformed `assignee`; everything else is parsed
@@ -79,6 +88,8 @@ impl TriggerFilter {
             raw: trigger.get("filter").cloned(),
             instructions_kind: instructions_kind.map(str::to_string),
             assignee: AssigneeFilter::parse(trigger, workflow)?,
+            exclude_status: one_or_many(trigger.pointer("/exclude/status")),
+            exclude_assignee: AssigneeFilter::parse_exclude(trigger, workflow)?,
         })
     }
 
@@ -423,9 +434,19 @@ impl<T: NotionTransport> NotionClient<T> {
             .as_deref()
             .map(|name| people_ids(&props[name]))
             .unwrap_or_default();
-        if !filter
-            .assignee
-            .matches(&assignee_ids, self.config.notion_user_id.as_deref())
+        let me = self.config.notion_user_id.as_deref();
+        if !filter.assignee.matches(&assignee_ids, me) {
+            return None;
+        }
+        // `trigger.exclude` (ADR-0091): any one condition drops the page.
+        if filter
+            .exclude_status
+            .as_ref()
+            .is_some_and(|want| status.is_some_and(|s| want.iter().any(|w| w == s)))
+            || filter
+                .exclude_assignee
+                .as_ref()
+                .is_some_and(|f| f.matches(&assignee_ids, me))
         {
             return None;
         }
@@ -936,6 +957,47 @@ mod tests {
         let empty = TriggerFilter::parse(&json!({}), None, "wf").unwrap();
         assert!(empty.matches(Some("anything")));
         assert!(empty.matches(None));
+    }
+
+    /// `trigger.exclude` drops a page matching any one of its conditions
+    /// (ADR-0091) — the same page with and without the excluded value.
+    #[test]
+    fn exclude_drops_a_page_matching_any_condition() {
+        let client = NotionClient::new(
+            config(json!({
+                "token": "secret_t", "notion_user_id": "me",
+                "databases": [{ "database_id": "db1", "repos": ["totsuka"] }],
+                "property_map": { "title": "Name", "status": "Status", "assignee": "Owner" }
+            })),
+            NeverCalled,
+        );
+        let with = |status: &str, owners: &[&str]| {
+            let mut p = page();
+            p["properties"]["Status"] = json!({ "status": { "name": status } });
+            p["properties"]["Owner"] = json!({ "people": owners.iter().map(|id| json!({ "id": id })).collect::<Vec<_>>() });
+            p
+        };
+        let filter = TriggerFilter::parse(
+            &json!({ "assignee": "@any", "exclude": { "status": ["保留", "待ち"], "assignee": "bot" } }),
+            None,
+            "wf",
+        )
+        .unwrap();
+        assert!(
+            client
+                .normalize_page(&with("設計待ち", &[]), &filter)
+                .is_some()
+        );
+        assert!(
+            client.normalize_page(&with("待ち", &[]), &filter).is_none(),
+            "status"
+        );
+        assert!(
+            client
+                .normalize_page(&with("設計待ち", &["bot"]), &filter)
+                .is_none(),
+            "assignee"
+        );
     }
 
     /// `normalize_page` never touches the transport, so a stub that refuses
