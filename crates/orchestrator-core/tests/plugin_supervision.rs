@@ -696,6 +696,50 @@ output = "none"
     engine.shutdown(Duration::from_secs(2)).await;
 }
 
+/// A poller re-delivers a task every tick while its card sits in the trigger
+/// column — for the whole run when no `on_start` moves it. The `Duplicate`
+/// ack for a task still in flight is audited at `debug`, not `info`, so it
+/// does not repeat one identical line per poll.
+#[tokio::test]
+async fn a_duplicate_submit_for_a_task_in_flight_is_not_logged_at_info() {
+    let logs = capture_logs();
+    let dir = test_support::scratch("supervise_quiet_duplicate");
+    let db = StateDb::open(&dir.join("state.db")).unwrap();
+
+    let mut plugins = PluginSet::default();
+    let task = json!({ "id": "resubmitted-while-queued", "source": "mock_src", "title": "a" });
+    install(
+        &mut plugins,
+        "task_source",
+        "mock_src",
+        json!({ "submit_workflow": "wf", "submit_tasks": [task.clone(), task] }),
+    )
+    .await;
+
+    let mut engine = Engine::new(
+        db,
+        settings(1),
+        plugins,
+        SystemGitRunner,
+        None::<GatewayClassifier>,
+    )
+    .await;
+    run_for(&mut engine, Duration::from_millis(500)).await;
+    engine.shutdown(Duration::from_secs(2)).await;
+
+    let task_id = "resubmitted-while-queued";
+    assert!(
+        logged_line_with(&logs, &[task_id, "Duplicate", "DEBUG"]),
+        "the duplicate is still audited, at debug:\n{}",
+        captured(&logs)
+    );
+    assert!(
+        !logged_line_with(&logs, &[task_id, "Duplicate", "INFO"]),
+        "a duplicate for a queued task must not be logged at info:\n{}",
+        captured(&logs)
+    );
+}
+
 /// #499: a task that arrives while its agent is between instances **waits**
 /// instead of burning its dispatch-retry budget.
 ///

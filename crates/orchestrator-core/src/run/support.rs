@@ -232,8 +232,43 @@ pub(super) fn task_from_record(record: &TaskRecord) -> Task {
         })
 }
 
+/// Whether a `task/submit` ack is routine enough to audit at `debug`.
+///
+/// Only a `Duplicate` for a task that is still in flight. A polling source
+/// keeps no seen-set, so while the card sits in its trigger column (no
+/// `on_start` moved it) every tick re-delivers it and gets `Duplicate` — at
+/// `info` that is one identical line per poll for the whole run. A duplicate
+/// for a finished task stays at `info`: it is what "the card is still in the
+/// trigger column but nothing re-ran" looks like in the log.
+pub(super) fn routine_submit_ack(status: TaskSubmitStatus, state: Option<TaskState>) -> bool {
+    status == TaskSubmitStatus::Duplicate && state.is_some_and(|s| !s.is_terminal())
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_a_duplicate_for_a_running_task_is_routine() {
+        use super::routine_submit_ack;
+        use super::{TaskState, TaskSubmitStatus};
+        assert!(routine_submit_ack(
+            TaskSubmitStatus::Duplicate,
+            Some(TaskState::Running)
+        ));
+        assert!(routine_submit_ack(
+            TaskSubmitStatus::Duplicate,
+            Some(TaskState::Queued)
+        ));
+        assert!(!routine_submit_ack(
+            TaskSubmitStatus::Duplicate,
+            Some(TaskState::Done)
+        ));
+        assert!(!routine_submit_ack(TaskSubmitStatus::Duplicate, None));
+        assert!(!routine_submit_ack(
+            TaskSubmitStatus::Accepted,
+            Some(TaskState::Running)
+        ));
+    }
+
     use super::*;
 
     /// One text at most, and the right one: a hinted task must never be told

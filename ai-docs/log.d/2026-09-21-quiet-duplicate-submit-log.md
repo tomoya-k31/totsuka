@@ -1,0 +1,1 @@
+* **Update**: [orchestrator-core](/components/orchestrator-core.md) — 実行中のタスクへの `task/submit` の `Duplicate` ack を `info` から `debug` に下げた。`on_start` の無い workflow ではカードがトリガー列に残り、ポーラーが毎 tick 再送するため、実行中ずっと同じ監査行が出続けていた。完了済みタスクへの `Duplicate` と、それ以外の ack は `info` のまま
