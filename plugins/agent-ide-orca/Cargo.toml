@@ -36,6 +36,9 @@ semver = { workspace = true, features = ["serde"] }
 # already includes `process` for spawning the orca CLI).
 tokio = { workspace = true, features = ["io-std"] }
 thiserror.workspace = true
+# `O_NONBLOCK` / `ENXIO` for the launch env FIFO's writer (#744, `handoff`) —
+# constants only, no `unsafe`.
+libc.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]

@@ -20,6 +20,7 @@ dependencies = [
 name = "agent-ide-orca"
 version = "0.8.2"
 dependencies = [
+ "libc",
  "plugin-protocol",
  "plugin-sdk",
  "semver",

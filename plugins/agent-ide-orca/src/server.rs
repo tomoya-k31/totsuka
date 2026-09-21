@@ -16,13 +16,17 @@ use plugin_protocol::methods::{
 };
 use plugin_protocol::{Capabilities, RequestId, method};
 use serde::de::DeserializeOwned;
+use std::path::PathBuf;
+use std::time::Duration;
+
 use serde_json::Value;
 use tokio::sync::mpsc;
 
-use crate::agent::OrcaAgent;
+use crate::agent::{HANDOFF_WAIT, OrcaAgent};
 use crate::cli::OrcaCli;
 use crate::config::OrcaConfig;
 use crate::error::OrcaError;
+use crate::handoff::EnvHandoff;
 
 /// Builds an orca CLI adapter from config. Abstracted so the server is tested
 /// against a fake orca.
@@ -38,6 +42,10 @@ pub struct Server<F: CliFactory> {
     factory: F,
     agent: Option<OrcaAgent<F::Cli>>,
     out: mpsc::UnboundedSender<String>,
+    /// Where the launch env FIFOs go (#744); `None` when no XDG base or
+    /// `HOME` names one, which fails `initialize`.
+    handoff_dir: Option<PathBuf>,
+    handoff_wait: Duration,
 }
 
 impl<F: CliFactory> Server<F> {
@@ -47,7 +55,18 @@ impl<F: CliFactory> Server<F> {
             factory,
             agent: None,
             out,
+            handoff_dir: crate::handoff::default_dir(|k| std::env::var(k).ok()),
+            handoff_wait: HANDOFF_WAIT,
         }
+    }
+
+    /// Put the launch env FIFOs in `dir` and wait `wait` for each to be read,
+    /// instead of the runtime dir and the startup budget. For tests: each
+    /// needs a directory of its own, since opening one sweeps it.
+    pub fn with_handoff(mut self, dir: PathBuf, wait: Duration) -> Self {
+        self.handoff_dir = Some(dir);
+        self.handoff_wait = wait;
+        self
     }
 
     /// Parse and dispatch one NDJSON line. Returns `false` when the server
@@ -126,8 +145,35 @@ impl<F: CliFactory> Server<F> {
                 ));
             }
         };
+        let wait = self.handoff_wait;
+        let handoff = match self
+            .handoff_dir
+            .clone()
+            .map(|dir| EnvHandoff::open(dir, wait))
+        {
+            Some(Ok(handoff)) => handoff,
+            Some(Err(e)) => {
+                return self.send(Response::error(
+                    id,
+                    Error::new(
+                        error_code::INTERNAL_ERROR,
+                        format!("cannot prepare the launch env directory: {e}"),
+                    ),
+                ));
+            }
+            None => {
+                return self.send(Response::error(
+                    id,
+                    Error::new(
+                        error_code::INTERNAL_ERROR,
+                        "cannot place the launch env directory: none of XDG_RUNTIME_DIR, \
+                         XDG_STATE_HOME or HOME is set to an absolute path",
+                    ),
+                ));
+            }
+        };
         let cli = self.factory.build(&config);
-        self.agent = Some(OrcaAgent::new(cli, config));
+        self.agent = Some(OrcaAgent::new(cli, config, handoff));
         self.send(Response::result(id, capabilities_result()));
     }
 

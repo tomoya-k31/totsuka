@@ -7,8 +7,8 @@
 //! login shell with their rc files. It does not exec it. Two consequences
 //! shape the string built here:
 //!
-//! - **Everything is quoted.** The argv and env arrive as opaque values
-//!   (hook settings paths, a `--resume` id, a job id) and must reach the
+//! - **Everything is quoted.** The argv arrives as opaque values (hook
+//!   settings paths, a `--resume` id) and must reach the
 //!   program byte for byte, so each word is single-quoted. `'…'\''…'` is the
 //!   one quoting form sh, bash, zsh and fish all read the same way.
 //! - **It starts with `exec`.** Typed as-is, the command runs *under* the shell
@@ -17,18 +17,45 @@
 //!   the shell, so the terminal's life is the agent's life (measured: an
 //!   `exec`ed process exiting ends the terminal; a plain one leaves the prompt).
 //!
-//! The env rides on `env K=V …` rather than on the terminal, because
-//! `terminal create` takes none — the same gap herdr's `agent.start` has,
-//! closed differently (herdr puts it on `workspace.create`).
+//! **The env is never typed** (#744). `terminal create` takes no env — the
+//! same gap herdr's `agent.start` has, which herdr closes on
+//! `workspace.create` — and an `env K=V …` prefix put every value (the hook
+//! token, the prompt context, `env_file` secrets) on the screen and in the
+//! scrollback. The env goes through a FIFO instead ([`crate::handoff`]), and
+//! the typed text only reads it:
+//!
+//! ```text
+//! exec sh -c 'e=$(cat "$1") || exit 1; rm -f "$1"; eval "$e" || exit 1; shift; exec "$@"' \
+//!     sh '<fifo>' '<program>' '<args>'…
+//! ```
+//!
+//! `cat` + `eval` rather than `. "$1"`: macOS's `/bin/sh` is bash 3.2, whose
+//! `.` sizes the file with `stat` and so reads **nothing** from a FIFO —
+//! measured, the variables arrived empty. `|| exit 1` keeps a shell that runs
+//! after the writer gave up (FIFO already removed) from starting the agent
+//! with no env. The script holds no `'`, so it survives the same single
+//! quoting as every other word.
 
-use std::collections::BTreeMap;
+use std::path::Path;
 
-/// The `--command` text for launching `program args…` with `env` set.
-pub fn shell_command(program: &str, args: &[String], env: &BTreeMap<String, String>) -> String {
+/// The script `sh -c` runs: read the env from `$1`, delete it, apply it, and
+/// replace itself with the program.
+const READ_ENV_SCRIPT: &str =
+    r#"e=$(cat "$1") || exit 1; rm -f "$1"; eval "$e" || exit 1; shift; exec "$@""#;
+
+/// The `--command` text for launching `program args…`, taking its env from
+/// the FIFO at `env_fifo` when there is one.
+pub fn launch_command(program: &str, args: &[String], env_fifo: Option<&Path>) -> String {
     let mut words = vec!["exec".to_string()];
-    if !env.is_empty() {
-        words.push("env".to_string());
-        words.extend(env.iter().map(|(k, v)| shell_quote(&format!("{k}={v}"))));
+    if let Some(fifo) = env_fifo {
+        let fifo = shell_quote(&fifo.to_string_lossy());
+        words.extend([
+            "sh".into(),
+            "-c".into(),
+            shell_quote(READ_ENV_SCRIPT),
+            "sh".into(),
+            fifo,
+        ]);
     }
     words.push(shell_quote(program));
     words.extend(args.iter().map(|a| shell_quote(a)));
@@ -45,25 +72,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn execs_env_then_the_program_with_every_word_quoted() {
-        let env = BTreeMap::from([
-            ("TOTSUKA_JOB_ID".to_string(), "7.3".to_string()),
-            ("TOTSUKA_HOOK_TOKEN".to_string(), "a b".to_string()),
-        ]);
+    fn a_fifo_means_only_the_reader_and_the_program_are_typed() {
         let args = vec!["--settings".to_string(), "/p/hooks.json".to_string()];
         assert_eq!(
-            shell_command("claude", &args, &env),
-            "exec env 'TOTSUKA_HOOK_TOKEN=a b' 'TOTSUKA_JOB_ID=7.3' 'claude' '--settings' \
-             '/p/hooks.json'"
+            launch_command(
+                "claude",
+                &args,
+                Some(Path::new("/run/totsuka/orca-env/1-0"))
+            ),
+            format!(
+                "exec sh -c {} sh '/run/totsuka/orca-env/1-0' 'claude' '--settings' \
+                 '/p/hooks.json'",
+                shell_quote(READ_ENV_SCRIPT)
+            )
+        );
+        assert!(
+            !READ_ENV_SCRIPT.contains('\''),
+            "the script must survive single quoting"
         );
     }
 
     #[test]
-    fn no_env_means_no_env_word() {
-        assert_eq!(
-            shell_command("codex", &[], &BTreeMap::new()),
-            "exec 'codex'"
-        );
+    fn no_fifo_means_a_bare_exec() {
+        assert_eq!(launch_command("codex", &[], None), "exec 'codex'");
     }
 
     #[test]

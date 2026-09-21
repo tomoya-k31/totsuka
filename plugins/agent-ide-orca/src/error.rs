@@ -62,6 +62,10 @@ pub enum OrcaError {
          is an Orchestrator-side tool resolution failure — check `[tools]` / `default_tool`."
     )]
     MissingToolLaunch,
+    /// The launch env could not be handed to the terminal through its FIFO
+    /// (#744) — the agent was not started without it.
+    #[error("cannot hand the launch env to the orca terminal: {0}")]
+    EnvHandoff(String),
     /// The resumed session could not be brought back (→ `SESSION_UNRESUMABLE`).
     #[error("the agent session could not be resumed: {0}")]
     SessionUnresumable(String),
