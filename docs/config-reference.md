@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:b80fd071d6d2218d5b6682033cb189e556ac2ab280b1bbebad5e2f37d6cde5ef -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:3a0b44b69c35babeb08c15d1f59da78faa2f9752aebc670c14d539a0375875f1 -->
 
 # Configuration reference
 
@@ -149,7 +149,7 @@ The roster is also what makes a `[<name>]` table legitimate: **a top-level table
 |---|---|---|---|
 | `name` | string | required | Workflow name |
 | `projects` | array of strings | required | The `[[projects]]` entries this workflow **draws tasks from**, by `name`. **The task source is not written here** — it is the owner of those domains. An empty list is an error (there would be nothing to route it to). Naming more than one states that those domains share a lane vocabulary; naming domains owned by different sources is an error. Note the plural: `[[repositories]].project` is a single value, this is a list |
-| `trigger` | table | `{}` | Trigger condition. **Deciding which tasks match is the source plugin's job** — it receives it and runs first-match. For GitHub's `status` triggers, **entering the column is the request**: even after completion, a human moving the card back into the trigger column re-runs the same workflow (who re-runs it is decided by the assignee and the claim). If the card lands in **another** workflow's trigger column, the conversation is handed over to that workflow — the next stage of a column pipeline continues with the same worktree and the same agent session. Only a finished conversation is handed over. A delivery that arrives while a stage is still running is passed over: with a **polling** source (github / notion) the next tick brings it back and the handoff happens then, but Slack acks first and never re-sends, so that trigger is lost — re-issue it once the run has finished. **An unknown key in this table is a hard startup failure.** A trigger is read key by key, so a key nobody reads is dropped and the condition simply goes away — which means a typo does not narrow the trigger, it *widens* it (write `assinee` and you get "no condition", firing on exactly the tasks you meant to exclude). The error lists the keys the source does read, so it doubles as migration guidance. `trigger = {}` has no keys, so the unknown-key check always passes it — but whether it *means* anything is up to the source, and Slack rejects it as naming no trigger at all. **`mention` is the mention trigger** (Slack only): the workflow that writes `mention = true` is where mentions addressed to you go. It carries no ids — who counts as "you" is `[slack] target_user_id` plus the user groups you belong to, so there is nothing here to drift from them. Writing it beside `reaction` or `channel` is rejected, because two kinds would start it and the config would not say which. `mention = false` reads as the boolean it is and may sit beside a `reaction`, but a trigger holding only `mention = false` names no kind and is rejected. **`to_group` routes mentions by who they are addressed to**, and only means anything beside `mention = true`. A mention of a user group you list goes to that workflow, and **a workflow with `to_group` always wins over a bare `mention = true` (the catch-all) — the order in `[[workflows]]` does not matter**. Order decides only the tie, when one message names two groups claimed by two workflows (`@oncall @design`): the one written first wins. Mentions of your other groups still fall to the catch-all, so adding one `to_group` does not stop the rest. **You may only list groups you belong to** — anything else is rejected at startup, so a conversation you are not part of cannot start an agent here. Adding `repo` pins the repository and skips resolution entirely (no `task/lookup`, no classifier), overriding whatever the conversation had settled on. **`repo` works without `to_group` too** — `trigger = { mention = true, repo = "web-app" }` sends every mention to that repository and never calls the classifier, which is what a single-repository setup wants. Writing `to_group` makes the `usergroups:read` scope required. **`totsuka config validate` cannot check membership** — that needs a live `usergroups.list`, and the command is deliberately offline, exactly as it cannot check a revoked token. **`channel` is the channel watch trigger**: every top-level post in that channel becomes a task. It takes `channel_name` (required, checked against the live name so a rename is reported), `repo` (required, the repository those tasks go to) and `from` (extra people allowed to trigger it — **by default only your own posts do**). Writing it beside `reaction` is rejected, and so is writing the other three without `channel`. A watch is a trigger kind of its own, so it needs no `mention = true` — writing both is rejected One key is totsuka's own: **`status`** names the source's status column, and totsuka reads it to build the column graph its cycle check walks — it only compares that string against an `on_*` write-back, and never uses it to match a task. Whether a source accepts the key is up to that source; Slack has no status column and rejects it as unknown. **`assignee` is the ingest gate for who may hold the task.** Write `"@me"`, `"@none"`, `"@any"`, a login, or a list of those (matched as an OR); **omitting it means `["@me", "@none"]`**, which is what totsuka did before the key existed. There is no second gate behind it, so a condition you write can never be overruled by one you did not. The `@` matters: `me`, `none` and `any` are all names a real account can have, so `assignee = "any"` means the user called `any`. **`@any` ingests other people's tasks too.** `@any` is also the one condition that does **not** read assignees, so on Notion you can write it even when `property_map.assignee` is unmapped — it is how you state that you do not filter by assignee. Every other value fails at startup without the mapping. What the names are matched against is source-specific — GitHub uses the issue's own assignees and `github_login`, Notion the property named by `property_map.assignee` and `notion_user_id`. On GitHub, an `assignee` with no `status` beside it gives its deliveries no lane identity, so that task runs **at most once** and re-assigning will not repeat it; a warning says so at startup. Notion mints no lane identity for any trigger, so adding a `status` there would not make a task repeatable — and no such warning is given, because it would not be advice that helps. |
+| `trigger` | table | `{}` | Trigger condition. **Deciding which tasks match is the source plugin's job.** Keys are ANDed, a list is an OR, and `exclude` drops a task matching any one of its conditions — the rules and the keys each source reads are in "The `trigger` vocabulary" below |
 | `profile` | enum? | none | One of `answer`, `triage`, `design`, `implement`. Decides `mode`, `output`, and `verification` together |
 | `mode` | enum | required without `profile` | `plan` or `implement` |
 | `agent` | string | required | Agent instance name |
@@ -165,6 +165,90 @@ The roster is also what makes a `[<name>]` table legitimate: **a top-level table
 | `cleanup` | same values as `[worktree]` | none | Worktree cleanup override for this workflow's tasks. Beats the mode default in `[worktree]`. `manual` keeps the worktree **and its pane** open after the task finishes. If you later remove or rename the workflow in config, finished tasks fall back to the mode default |
 
 Workflows are matched in definition order, first match wins — **and the source plugin is what runs that match**. It receives your workflows at startup, decides which one a task belongs to, and names it when it hands the task over. totsuka checks only that the name exists and belongs to that source.
+
+### The `trigger` vocabulary
+
+What a trigger means is up to the source plugin: it receives your workflows at startup and runs first-match. One key is totsuka's own: **`status`** names the source's status column, and totsuka reads it to build the column graph its cycle check walks — it only compares that string against an `on_*` write-back, and never uses it to match a task. Whether a source accepts the key is up to that source; Slack has no status column and rejects it as unknown.
+
+#### Common rules
+
+GitHub and Notion triggers follow these rules (Slack and Discord pick a *kind* of trigger instead — see "Slack / Discord keys" below):
+
+- **Keys are ANDed; a list is an OR.** `trigger = { status = "Todo", label = ["bug", "chore"] }` means "in the `Todo` column, and labelled `bug` or `chore`". Keys stay singular even when they take a list (`label`, `assignee`)
+- **`exclude` drops a task that matches any one of its conditions.** It uses the same keys and values as the trigger — see below
+- **An unknown key in a trigger is a hard startup failure.** A trigger is read key by key, so a key nobody reads is dropped and the condition simply goes away — which means a typo does not narrow the trigger, it *widens* it (write `assinee` and you get "no condition", firing on exactly the tasks you meant to exclude). The error lists the keys the source does read, so it doubles as migration guidance. **Keys inside `exclude` are checked the same way**
+- `trigger = {}` has no keys, so the unknown-key check always passes it — but whether it *means* anything is up to the source, and Slack rejects it as naming no trigger at all.
+
+| Source | Keys that select tasks | Keys allowed inside `exclude` |
+|---|---|---|
+| github | `status` (string) / `label` (string or list) / `assignee` / `exclude` | `status` / `label` / `assignee` (`status` and `label` take lists) |
+| notion | `status` (string) / `assignee` / `filter` / `exclude` | `status` (takes a list) / `assignee`. **Not `filter`** (below) |
+| slack | `mention` / `to_group` / `reaction` / `from_bot` / `channel` / `channel_name` / `repo` / `from` | none |
+| discord | `channel` / `channel_name` / `repo` / `from` | none |
+
+#### `status`
+
+For GitHub's `status` triggers, **entering the column is the request**: even after completion, a human moving the card back into the trigger column re-runs the same workflow (who re-runs it is decided by the assignee and the claim). If the card lands in **another** workflow's trigger column, the conversation is handed over to that workflow — the next stage of a column pipeline continues with the same worktree and the same agent session. Only a finished conversation is handed over. A delivery that arrives while a stage is still running is passed over: with a **polling** source (github / notion) the next tick brings it back and the handoff happens then, but Slack acks first and never re-sends, so that trigger is lost — re-issue it once the run has finished.
+
+#### `label` (GitHub)
+
+Passes when the issue or PR carries any of the named labels. A string or a list (OR). **Matching ignores case** — GitHub keeps label names unique regardless of case, so `label = "Bug"` matches the `bug` label. A `label`-only trigger has no lane identity, so it runs **at most once** per task.
+
+#### `assignee`
+
+**`assignee` is the ingest gate for who may hold the task.** Write `"@me"`, `"@none"`, `"@any"`, a login, or a list of those (matched as an OR); **omitting it means `["@me", "@none"]`**, which is what totsuka did before the key existed. There is no second gate behind it, so a condition you write can never be overruled by one you did not. The `@` matters: `me`, `none` and `any` are all names a real account can have, so `assignee = "any"` means the user called `any`. **`@any` ingests other people's tasks too.** `@any` is also the one condition that does **not** read assignees, so on Notion you can write it even when `property_map.assignee` is unmapped — it is how you state that you do not filter by assignee. Every other value fails at startup without the mapping. What the names are matched against is source-specific — GitHub uses the issue's own assignees and `github_login`, Notion the property named by `property_map.assignee` and `notion_user_id`. On GitHub, an `assignee` with no `status` beside it gives its deliveries no lane identity, so that task runs **at most once** and re-assigning will not repeat it; a warning says so at startup. Notion mints no lane identity for any trigger, so adding a `status` there would not make a task repeatable — and no such warning is given, because it would not be advice that helps.
+
+#### `exclude` — conditions that keep a task out
+
+```toml
+[[workflows]]
+name     = "spec"
+projects = ["my-board"]
+agent    = "herdr"
+profile  = "design"
+trigger  = { status = "🤖 Spec", assignee = "@none", exclude = { label = "waiting" } }
+```
+
+Unassigned issues in the `🤖 Spec` column are picked up, except those labelled `waiting`. Remove the label and the next poll picks the issue up. **Adding `waiting` after a task was picked up does not stop it** — `exclude` is a condition on picking tasks up.
+
+- Same keys and values as the trigger, and **any one match excludes** the task. A list is an OR here too, so `exclude = { label = ["waiting", "blocked"], assignee = "bot" }` excludes tasks labelled `waiting` or `blocked`, or assigned to `bot`
+- `exclude.assignee` takes `@me`, `@none`, a login, or a list of those. Unlike the trigger's own `assignee` it has **no default** — leave it out and nobody is excluded. It needs the same settings to be evaluated (on Notion, `property_map.assignee`, and `notion_user_id` for `@me`); without them startup fails
+- `exclude.status` takes a list. The trigger's own `status` stays a single string
+- **Only key names are checked.** `exclude = {}` (excludes nothing) and `exclude = { assignee = "@any" }` (excludes everything) do what they say. A misspelt key such as `exclude = { lable = "waiting" }`, or an `exclude` nested inside `exclude`, fails at startup
+- A trigger with only `exclude` is allowed; the default `assignee = ["@me", "@none"]` still applies
+- **`in_progress_statuses` is separate.** It skips a board's "in progress" columns for every workflow, and writing `exclude` does not turn it off
+
+#### Notion's `filter` — a raw Notion filter
+
+`filter` is a Notion [database query filter](https://developers.notion.com/reference/post-database-query-filter), passed to the query as written. Every per-type operator works (`does_not_contain`, `does_not_equal`, `is_empty`, nested `and` / `or` …), so **on Notion you can write "does not contain" right inside `filter`**:
+
+```toml
+trigger = { assignee = "@none", filter = { and = [
+  { property = "Status", status = { equals = "🤖 Spec" } },
+  { property = "Tags",   multi_select = { does_not_contain = "waiting" } },
+] } }
+```
+
+With `filter` present, `status` is not sent to Notion; it is only checked against the results. A value written as `@{name}` is resolved through `[notion.dynamic.{name}]` (see `[notion]`).
+
+`filter` and `exclude` do different jobs:
+
+| | `filter` (Notion only) | `exclude` (GitHub / Notion) |
+|---|---|---|
+| Evaluated by | Notion (in the query) | totsuka (after fetching) |
+| Vocabulary | Notion's filter syntax | totsuka's `status` / `label` / `assignee` |
+| How you negate | per operator (`does_not_contain`, …) | one `exclude` table |
+| Use it for | anything Notion can query | conditions that read the same on every source |
+
+**`filter` is not allowed inside `exclude`**: Notion has no general NOT to wrap a raw filter in. Write the negation inside `filter` instead.
+
+#### Slack / Discord keys
+
+**`mention` is the mention trigger** (Slack only): the workflow that writes `mention = true` is where mentions addressed to you go. It carries no ids — who counts as "you" is `[slack] target_user_id` plus the user groups you belong to, so there is nothing here to drift from them. Writing it beside `reaction` or `channel` is rejected, because two kinds would start it and the config would not say which. `mention = false` reads as the boolean it is and may sit beside a `reaction`, but a trigger holding only `mention = false` names no kind and is rejected.
+
+**`to_group` routes mentions by who they are addressed to**, and only means anything beside `mention = true`. A mention of a user group you list goes to that workflow, and **a workflow with `to_group` always wins over a bare `mention = true` (the catch-all) — the order in `[[workflows]]` does not matter**. Order decides only the tie, when one message names two groups claimed by two workflows (`@oncall @design`): the one written first wins. Mentions of your other groups still fall to the catch-all, so adding one `to_group` does not stop the rest. **You may only list groups you belong to** — anything else is rejected at startup, so a conversation you are not part of cannot start an agent here. Adding `repo` pins the repository and skips resolution entirely (no `task/lookup`, no classifier), overriding whatever the conversation had settled on. **`repo` works without `to_group` too** — `trigger = { mention = true, repo = "web-app" }` sends every mention to that repository and never calls the classifier, which is what a single-repository setup wants. Writing `to_group` makes the `usergroups:read` scope required. **`totsuka config validate` cannot check membership** — that needs a live `usergroups.list`, and the command is deliberately offline, exactly as it cannot check a revoked token.
+
+**`channel` is the channel watch trigger**: every top-level post in that channel becomes a task. It takes `channel_name` (required, checked against the live name so a rename is reported), `repo` (required, the repository those tasks go to) and `from` (extra people allowed to trigger it — **by default only your own posts do**). Writing it beside `reaction` is rejected, and so is writing the other three without `channel`. A watch is a trigger kind of its own, so it needs no `mention = true` — writing both is rejected
 
 ### Keys a plugin defines
 

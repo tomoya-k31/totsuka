@@ -353,6 +353,33 @@ async fn an_unknown_trigger_key_fails_initialize() {
     harness.assert_no_task(Duration::from_millis(200)).await;
 }
 
+/// `filter` cannot be negated — Notion has no general NOT to wrap a raw
+/// filter in — so `trigger.exclude` refuses it rather than ignoring it
+/// (ADR-0091).
+#[tokio::test]
+async fn a_filter_inside_exclude_fails_initialize() {
+    let shared = Shared::default();
+    let (mut srv, mut harness) = server_with_harness(&shared);
+
+    let params = json!({
+        "protocol_version": "0.5.1",
+        "config": init_config(),
+        "projects": two_databases().0,
+        "repositories": two_databases().1,
+        "workflows": [
+            { "workflow": "design", "trigger": {
+                "status": "実装待ち",
+                "exclude": { "filter": { "property": "Tags", "multi_select": { "contains": "waiting" } } }
+            } }
+        ],
+    });
+    let resp = call(&mut srv, 1, "initialize", params).await;
+    let error = resp.error.expect("initialize must fail");
+    assert!(error.message.contains("trigger.exclude"), "{error:?}");
+    assert!(error.message.contains("`filter`"), "{error:?}");
+    harness.assert_no_task(Duration::from_millis(200)).await;
+}
+
 /// A poll visits every configured database, and each one's `repos` gates its
 /// own pages (#542).
 #[tokio::test]

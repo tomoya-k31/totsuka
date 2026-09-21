@@ -115,6 +115,20 @@ impl AssigneeFilter {
         })
     }
 
+    /// Parse `trigger.exclude.assignee` (ADR-0091): `None` when not written.
+    ///
+    /// Same vocabulary as [`parse`](Self::parse), but no default — an absent
+    /// key excludes nobody. A match here drops the task.
+    pub fn parse_exclude(trigger: &Value, workflow: &str) -> Result<Option<Self>, String> {
+        match trigger.get("exclude") {
+            Some(exclude) if exclude.get("assignee").is_some() => Self::parse(exclude, workflow)
+                .map(Some)
+                // `parse` names the ingest key; say which one is actually wrong.
+                .map_err(|e| e.replace("`trigger.assignee", "`trigger.exclude.assignee")),
+            _ => Ok(None),
+        }
+    }
+
     fn term(s: &str, workflow: &str) -> Result<Term, String> {
         match s {
             "@me" => Ok(Term::Me),
@@ -217,6 +231,49 @@ pub fn check(
     let mut errors = Vec::new();
     let mut warnings = Vec::new();
     for wf in workflows {
+        let evaluable = |filter: &AssigneeFilter, key: &str| {
+            let mut errors = Vec::new();
+            // `@any` reads no assignees, so an unmapped property cannot stop it
+            // from being evaluated (#582). Rejecting it too would leave no way
+            // to state "no assignee filtering" other than omitting the key.
+            if people_property == Some(false) && filter.reads_assignees() {
+                // `@any` is the way out only on the ingest side: inside
+                // `exclude` it would drop every task.
+                let way_out = if key == "trigger.assignee" {
+                    ", or write `assignee = \"@any\"` if you do not filter by assignee"
+                } else {
+                    ""
+                };
+                errors.push(format!(
+                    "workflow `{}` sets `{key}`, but `{property_key}` is not set → every task \
+                     would read as unassigned, so the condition could not do anything; map the \
+                     property or drop the key{way_out}",
+                    wf.workflow
+                ));
+            }
+            if filter.needs_self_identity() && self_identity.is_none() {
+                errors.push(format!(
+                    "workflow `{}` uses `@me` in `{key}`, but `{identity_key}` is not set → \
+                     there is nobody to compare the assignees against, so the condition would \
+                     never match; set `{identity_key}`, or name the holder explicitly",
+                    wf.workflow
+                ));
+            }
+            errors
+        };
+        // The exclude side (ADR-0091) needs the same settings to be evaluated:
+        // left unevaluable it excludes nobody, which is as silent as a
+        // condition that never fires.
+        let exclude = match AssigneeFilter::parse_exclude(&wf.trigger, &wf.workflow) {
+            Ok(f) => f,
+            Err(e) => {
+                errors.push(e);
+                None
+            }
+        };
+        if let Some(filter) = &exclude {
+            errors.extend(evaluable(filter, "trigger.exclude.assignee"));
+        }
         let filter = match AssigneeFilter::parse(&wf.trigger, &wf.workflow) {
             Ok(f) => f,
             Err(e) => {
@@ -227,26 +284,7 @@ pub fn check(
         if !filter.is_explicit() {
             continue;
         }
-        // `@any` reads no assignees, so an unmapped property cannot stop it
-        // from being evaluated (#582). Rejecting it too would leave no way to
-        // state "no assignee filtering" other than omitting the key.
-        if people_property == Some(false) && filter.reads_assignees() {
-            errors.push(format!(
-                "workflow `{}` sets `trigger.assignee`, but `{property_key}` is not set → every \
-                 task would read as unassigned, so the condition could not do anything; map the \
-                 property, drop the key, or write `assignee = \"@any\"` if you do not filter by \
-                 assignee",
-                wf.workflow
-            ));
-        }
-        if filter.needs_self_identity() && self_identity.is_none() {
-            errors.push(format!(
-                "workflow `{}` uses `@me` in `trigger.assignee`, but `{identity_key}` is not set \
-                 → there is nobody to compare the assignees against, so the workflow would never \
-                 fire; set `{identity_key}`, or name the holder explicitly",
-                wf.workflow
-            ));
-        }
+        errors.extend(evaluable(&filter, "trigger.assignee"));
         if status_mints_lane_identity && wf.trigger.get("status").is_none() {
             warnings.push(format!(
                 "workflow `{}` triggers on `assignee` with no `status`, so its deliveries carry no \
@@ -526,6 +564,69 @@ mod tests {
         );
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert!(errors[0].contains("@any"), "{errors:?}");
+    }
+
+    /// `exclude.assignee` has no default: absent excludes nobody, written it
+    /// is the same vocabulary, and it needs the same settings (ADR-0091).
+    #[test]
+    fn exclude_assignee_is_optional_and_checked_like_the_trigger() {
+        assert_eq!(
+            AssigneeFilter::parse_exclude(&json!({ "exclude": { "label": "x" } }), "wf"),
+            Ok(None)
+        );
+        assert_eq!(AssigneeFilter::parse_exclude(&json!({}), "wf"), Ok(None));
+        let f = AssigneeFilter::parse_exclude(&json!({ "exclude": { "assignee": "bot" } }), "wf")
+            .unwrap()
+            .expect("written");
+        assert!(f.matches(&["bot"], Some("me")));
+        assert!(!f.matches(&[], Some("me")));
+
+        let (errors, _) = check(
+            &[WorkflowInfo {
+                workflow: "wf".into(),
+                projects: vec![],
+                status_writebacks: vec![],
+                trigger: json!({ "status": "Todo", "exclude": { "assignee": "@me" } }),
+                instructions_kind: None,
+                task_id_prefix: None,
+                options: serde_json::Map::new(),
+            }],
+            None,
+            "`notion_user_id`",
+            Some(true),
+            "`property_map.assignee`",
+            false,
+        );
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("trigger.exclude.assignee"), "{errors:?}");
+
+        // Unmapped property: `@any` would exclude everything here, so it must
+        // not be offered as the fix.
+        let (errors, _) = check(
+            &[WorkflowInfo {
+                workflow: "wf".into(),
+                projects: vec![],
+                status_writebacks: vec![],
+                trigger: json!({ "assignee": "@any", "exclude": { "assignee": "bot" } }),
+                instructions_kind: None,
+                task_id_prefix: None,
+                options: serde_json::Map::new(),
+            }],
+            Some("me"),
+            "`notion_user_id`",
+            Some(false),
+            "`property_map.assignee`",
+            false,
+        );
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("trigger.exclude.assignee"), "{errors:?}");
+        assert!(!errors[0].contains("@any"), "{errors:?}");
+
+        // A malformed value names the exclude key, not the ingest one.
+        let err =
+            AssigneeFilter::parse_exclude(&json!({ "exclude": { "assignee": "@mee" } }), "wf")
+                .unwrap_err();
+        assert!(err.contains("`trigger.exclude.assignee"), "{err}");
     }
 
     /// `reads_assignees` is the distinction the check now turns on, so it is

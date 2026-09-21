@@ -19,12 +19,13 @@ use plugin_protocol::methods::{
 };
 use plugin_protocol::{Capabilities, RequestId, method};
 use plugin_sdk::{
-    LineHandler, Reply, SubmitClient, check_assignee_triggers, poll_loop, unknown_trigger_keys,
+    LineHandler, Reply, SubmitClient, check_assignee_triggers, poll_loop, unknown_exclude_keys,
+    unknown_trigger_keys,
 };
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use crate::client::{GithubClient, TRIGGER_KEYS, static_config_errors};
+use crate::client::{EXCLUDE_KEYS, GithubClient, TRIGGER_KEYS, static_config_errors};
 use crate::config::GithubConfig;
 use crate::transport::GithubTransport;
 
@@ -174,6 +175,7 @@ where
         // place that can tell a typo from a condition (#574). Without it an
         // unread key is dropped and the trigger matches *more* than written.
         let mut config_errors = unknown_trigger_keys(&init.workflows, TRIGGER_KEYS);
+        config_errors.extend(unknown_exclude_keys(&init.workflows, EXCLUDE_KEYS));
         // `github_login` is required, so `@me` always has something to compare
         // against; Issue assignees are built in, so there is no property to map
         // (#572).

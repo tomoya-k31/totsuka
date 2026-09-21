@@ -1289,6 +1289,30 @@ async fn an_unknown_trigger_key_fails_initialize() {
     harness.assert_no_task(Duration::from_millis(200)).await;
 }
 
+/// `trigger.exclude` gets the same key check (ADR-0091): a typo inside it
+/// would exclude nothing, which is as silent as the widening above.
+#[tokio::test]
+async fn an_unknown_exclude_key_fails_initialize() {
+    let shared = Shared::default();
+    let (mut srv, mut harness) = server_with_harness(&shared);
+
+    let (projects, repositories) = one_board();
+    let params = json!({
+        "protocol_version": "0.1.6",
+        "config": init_config(),
+        "projects": projects,
+        "repositories": repositories,
+        "workflows": [
+            { "workflow": "spec", "trigger": { "status": "🤖 Spec", "exclude": { "lable": "waiting" } } }
+        ],
+    });
+    let resp = call(&mut srv, 1, "initialize", params).await;
+    let error = resp.error.expect("initialize must fail");
+    assert!(error.message.contains("`lable`"), "{error:?}");
+    assert!(error.message.contains("trigger.exclude"), "{error:?}");
+    harness.assert_no_task(Duration::from_millis(200)).await;
+}
+
 /// A label-only trigger has no lane, so *any* column move would re-run it:
 /// those keep the at-most-once `None` key (#556).
 #[tokio::test]

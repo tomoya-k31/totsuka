@@ -189,6 +189,11 @@
 # trigger = { reaction = "hammer" }                # slack: you react with :hammer:
 # trigger = { reaction = "mag", from_bot = ["B0000000000"] }   # slack: that emoji also works on posts by those bots
 # trigger = { assignee = ["@me", "@none"] }        # the ingest assignee gate; this is the default
+# trigger = { label = ["bug", "chore"] }          # github: any of these labels (case-insensitive)
+# trigger = { status = "Spec", assignee = "@none", exclude = { label = "waiting" } }
+#                                                 #   github / notion: drop a task matching ANY one
+#                                                 #   `exclude` condition (github: status / label /
+#                                                 #   assignee, notion: status / assignee)
 # trigger = { filter = { property = "Sprint", status = { equals = "Active" } } }   # notion: a raw Notion filter, passed through untouched   lint:raw
 # trigger = { channel = "C0000000000", channel_name = "team-support", repo = "my-repo", from = ["U0000000000"] }
 #                                                 #   slack: every top-level post in that channel.

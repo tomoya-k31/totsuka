@@ -19,12 +19,15 @@ use plugin_protocol::methods::{
 };
 use plugin_protocol::{Capabilities, RequestId, method};
 use plugin_sdk::{
-    LineHandler, Reply, SubmitClient, check_assignee_triggers, poll_loop, unknown_trigger_keys,
+    LineHandler, Reply, SubmitClient, check_assignee_triggers, poll_loop, unknown_exclude_keys,
+    unknown_trigger_keys,
 };
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use crate::client::{NotionClient, TRIGGER_KEYS, static_config_errors, unknown_dynamic_refs};
+use crate::client::{
+    EXCLUDE_KEYS, NotionClient, TRIGGER_KEYS, static_config_errors, unknown_dynamic_refs,
+};
 use crate::config::NotionConfig;
 use crate::transport::{NotionTransport, TransportSettings};
 
@@ -183,6 +186,7 @@ where
         // place that can tell a typo from a condition (#574). Without it an
         // unread key is dropped and the trigger matches *more* than written.
         let mut config_errors = unknown_trigger_keys(&init.workflows, TRIGGER_KEYS);
+        config_errors.extend(unknown_exclude_keys(&init.workflows, EXCLUDE_KEYS));
         // A `@<name>` no `[notion.dynamic.*]` declares must fail here: left
         // alone it goes to Notion verbatim, matches nothing, and ingests zero
         // tasks with no error anywhere (#606).

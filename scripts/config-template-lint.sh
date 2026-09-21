@@ -64,6 +64,8 @@ channel=[[workflows]].trigger。チャンネル監視トリガの宣言そのも
 channel_name=[[workflows]].trigger。監視対象チャンネルの照合名（ADR-0068）
 repo=[[workflows]].trigger。監視トリガが固定するリポジトリ（ADR-0068）
 from=[[workflows]].trigger。監視トリガで起動を許す投稿者（ADR-0068）
+label=[[workflows]].trigger。github のラベル条件（文字列か配列、OR）（ADR-0091）
+exclude=[[workflows]].trigger。どれか 1 つに一致したら取り込まない除外条件（ADR-0091）
 publish=[[workflows]] の追加プロパティ。slack の承認フロー切り替え（ADR-0057）
 "
 

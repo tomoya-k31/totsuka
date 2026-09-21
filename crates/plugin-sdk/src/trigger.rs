@@ -14,9 +14,17 @@
 //! *value*, which is why this check has to live in the plugin.
 //!
 //! [`unknown_trigger_keys`] turns that into a startup error. A source calls it
-//! from `initialize` with the keys it actually reads.
+//! from `initialize` with the keys it actually reads, and
+//! [`unknown_exclude_keys`] does the same for the `exclude` table inside it.
+//!
+//! `exclude` is the trigger's negation (ADR-0091): a table in the trigger's own
+//! vocabulary, and a task matching **any one** of its conditions is dropped.
+//! The keys outside it are ANDed and an array value is an OR, so `exclude`
+//! reads as `NOT (a OR b)`. Each source decides which of its keys it can
+//! negate; [`one_or_many`] reads the string-or-array values they share.
 
 use plugin_protocol::methods::WorkflowInfo;
+use serde_json::Value;
 
 /// One message per `trigger` key that is not in `valid`, plus one per trigger
 /// that is not a table at all.
@@ -62,6 +70,65 @@ pub fn unknown_trigger_keys(workflows: &[WorkflowInfo], valid: &[&str]) -> Vec<S
         }
     }
     errors
+}
+
+/// [`unknown_trigger_keys`] for the `trigger.exclude` table (ADR-0091).
+///
+/// `valid` is the keys this source can negate — not always its whole trigger
+/// vocabulary: notion's raw `filter` goes to the server verbatim and has no
+/// negation to wrap it in. `exclude` is not in it either, so a nested
+/// `exclude` is reported like any other unread key.
+///
+/// Only the keys are checked. What a key's value means is not: an `exclude`
+/// that drops every task is the operator's to write.
+pub fn unknown_exclude_keys(workflows: &[WorkflowInfo], valid: &[&str]) -> Vec<String> {
+    let known = valid
+        .iter()
+        .map(|k| format!("`{k}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut errors = Vec::new();
+    for wf in workflows {
+        let Some(exclude) = wf.trigger.get("exclude") else {
+            continue;
+        };
+        let Some(table) = exclude.as_object() else {
+            errors.push(format!(
+                "workflow `{}` has a `trigger.exclude` that is not a table ({exclude}) → write it \
+                 as a table, `exclude = {{ <key> = … }}`, keyed by {known}",
+                wf.workflow
+            ));
+            continue;
+        };
+        for key in table.keys() {
+            if !valid.contains(&key.as_str()) {
+                errors.push(format!(
+                    "workflow `{}` has an unknown `trigger.exclude` key `{key}` → this source can \
+                     exclude on {known}. An unread key is dropped, which would leave the trigger \
+                     excluding less than written",
+                    wf.workflow
+                ));
+            }
+        }
+    }
+    errors
+}
+
+/// A trigger value that is one string or an array of them, as its
+/// alternatives (an array is an OR). `None` when the key is absent; anything
+/// that is not a string is skipped, as the scalar keys have always done.
+pub fn one_or_many(value: Option<&Value>) -> Option<Vec<String>> {
+    match value? {
+        Value::String(s) => Some(vec![s.clone()]),
+        Value::Array(items) => Some(
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect(),
+        ),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -122,5 +189,40 @@ mod tests {
         let errors = unknown_trigger_keys(&workflows, &["status"]);
         assert_eq!(errors.len(), 1, "got {errors:?}");
         assert!(errors[0].contains("not a table"), "got {errors:?}");
+    }
+
+    #[test]
+    fn exclude_keys_are_checked_like_the_trigger_itself() {
+        let workflows = [
+            workflow(
+                "ok",
+                json!({ "status": "Todo", "exclude": { "label": "waiting" } }),
+            ),
+            workflow("typo", json!({ "exclude": { "lable": "waiting" } })),
+            workflow(
+                "nested",
+                json!({ "exclude": { "exclude": { "label": "x" } } }),
+            ),
+            workflow("scalar", json!({ "exclude": "waiting" })),
+            workflow("none", json!({ "status": "Todo" })),
+        ];
+        let errors = unknown_exclude_keys(&workflows, &["label", "status"]);
+        assert_eq!(errors.len(), 3, "got {errors:?}");
+        assert!(errors[0].contains("`typo`") && errors[0].contains("`lable`"));
+        assert!(errors[1].contains("`nested`") && errors[1].contains("`exclude`"));
+        assert!(errors[2].contains("`scalar`") && errors[2].contains("not a table"));
+        // The fix names this source's keys, not a key another source reads.
+        assert!(errors[2].contains("`label`, `status`"), "got {errors:?}");
+    }
+
+    #[test]
+    fn one_or_many_reads_a_string_or_an_array() {
+        assert_eq!(one_or_many(None), None);
+        assert_eq!(one_or_many(Some(&json!("a"))), Some(vec!["a".into()]));
+        assert_eq!(
+            one_or_many(Some(&json!(["a", 1, "b"]))),
+            Some(vec!["a".into(), "b".into()])
+        );
+        assert_eq!(one_or_many(Some(&json!(1))), None);
     }
 }
