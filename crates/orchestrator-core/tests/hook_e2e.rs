@@ -134,6 +134,7 @@ fn settings_with(
     };
     EngineSettings {
         health_path: None,
+        tool_env: Default::default(),
         workflows,
         repos: vec![RepoSettings {
             name: "clone".to_string(),

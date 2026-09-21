@@ -512,6 +512,7 @@ pub fn run(cx: &Cx, args: DoctorArgs) -> Result<(), CliError> {
             bitwarden: check_bitwarden(cx, cfg, &env, &mut checks),
         };
         check_worktree_location(cfg, &env, &mut checks);
+        check_tool_env_files(cfg, &env, &mut checks);
         check_hooks(cx, cfg, config_ok, &env, secrets, args, &mut checks);
         check_plugins(cx, cfg, &env, secrets, &mut checks);
         check_llm_key(cfg, &env, args, secrets, &mut checks);
@@ -1674,6 +1675,40 @@ fn check_spool(
             ),
             "run `totsuka run` to drain the spool (idempotent); inspect any *.corrupt files by hand",
         ));
+    }
+}
+
+/// `[tools.<name>].env_file` (#744): each file read and checked — syntax,
+/// reference shapes, no `TOTSUKA_` names — and **nothing resolved**.
+/// Resolving would reach 1Password / Bitwarden / `cmd:`, and `doctor` stays
+/// non-interactive; `totsuka run` resolves them once at startup. One line per
+/// file rather than per value: a file can hold dozens.
+fn check_tool_env_files(cfg: &RootConfig, env: &HashMap<String, String>, checks: &mut Vec<Check>) {
+    if cfg.tools.values().all(|tool| tool.env_file.is_none()) {
+        return;
+    }
+    let env_fn = |k: &str| env.get(k).cloned();
+    match orchestrator_core::config::env_file::load_all(&cfg.tools, &env_fn) {
+        Ok(files) => {
+            for file in files {
+                checks.push(Check::ok(
+                    "tool-env-file",
+                    format!(
+                        "{} ({} variable(s), for {}) parses — values are resolved when \
+                         `totsuka run` starts",
+                        file.path.display(),
+                        file.entries.len(),
+                        file.tools.join(", ")
+                    ),
+                ));
+            }
+        }
+        Err(e) => checks.push(Check::fail(
+            "tool-env-file",
+            e.to_string(),
+            "fix the env_file: `KEY=value` lines, `#` comments; no `export`, no `{{ }}` \
+             templates, no `TOTSUKA_` names, an absolute path",
+        )),
     }
 }
 
@@ -2919,6 +2954,51 @@ mod tests {
         let mut checks = Vec::new();
         check_worktree_location(&cfg, &env, &mut checks);
         checks
+    }
+
+    fn tool_env_file_checks(file_body: &str) -> Vec<Check> {
+        let dir = std::env::temp_dir().join(format!(
+            "totsuka-doctor-env-file-{}-{}",
+            std::process::id(),
+            file_body.len()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("env.tpl"), file_body).unwrap();
+        let cfg = RootConfig::from_toml_str(&format!(
+            "[tools.claude-opus]\nkind = \"claude\"\nenv_file = \"{}\"\n",
+            dir.join("env.tpl").display()
+        ))
+        .unwrap();
+        let mut checks = Vec::new();
+        check_tool_env_files(&cfg, &HashMap::new(), &mut checks);
+        checks
+    }
+
+    /// An `op://` value passes without being resolved — resolving it here
+    /// would run `op read`, which doctor must never do.
+    #[test]
+    fn tool_env_file_is_checked_without_resolving() {
+        let checks = tool_env_file_checks("A=op://Dev/X/field\nB=plain\n");
+        assert_eq!(checks.len(), 1, "{checks:?}");
+        assert!(checks[0].ok, "{checks:?}");
+        assert!(checks[0].detail.contains("2 variable(s)"), "{checks:?}");
+        assert!(checks[0].detail.contains("claude-opus"), "{checks:?}");
+    }
+
+    #[test]
+    fn tool_env_file_fails_on_a_reserved_name() {
+        let checks = tool_env_file_checks("TOTSUKA_HOOK_TOKEN=x\n");
+        assert_eq!(checks.len(), 1, "{checks:?}");
+        assert!(!checks[0].ok, "{checks:?}");
+        assert!(checks[0].detail.contains("reserved"), "{checks:?}");
+    }
+
+    #[test]
+    fn no_env_file_means_no_line() {
+        let cfg = RootConfig::from_toml_str("").unwrap();
+        let mut checks = Vec::new();
+        check_tool_env_files(&cfg, &HashMap::new(), &mut checks);
+        assert!(checks.is_empty());
     }
 
     #[test]

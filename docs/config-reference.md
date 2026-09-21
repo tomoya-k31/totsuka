@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:e4b86dc19bc60457b4910cf89e7c8dd2c185f5a12afc5b701f34babd8dadebe1 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:e8f3c2207aa77e9ff0fc5a9fd9044e79a94044e2debddf756462e71438fd703a -->
 
 # Configuration reference
 
@@ -450,6 +450,7 @@ Defines the AI tool CLI launched inside the pane. `claude`, `codex`, and `openco
 | `command` | string? | the kind's name | Space-separated command line: the program plus base arguments, e.g. `"claude --model haiku"` |
 | `mode_args` | string[]? | per kind | Extra arguments in implement mode. codex: `["--sandbox", "workspace-write", "--ask-for-approval", "never"]`; opencode: `["--auto"]`; claude: none |
 | `plan_args` | string[]? | per kind | Extra arguments in plan mode. claude: `["--permission-mode", "plan"]`; codex: `["--sandbox", "read-only", "--ask-for-approval", "never"]`; opencode: `["--agent", "totsuka-plan", "--auto"]` |
+| `env_file` | string? | none | A file of `KEY=value` lines whose values are added to the environment of every agent this tool launches (see below). After `~` / `${VAR}` expansion it must be an absolute path |
 
 Using `kind = "codex"` needs a one-time trust setup in the tool itself. `kind = "opencode"` needs no trust step but degrades in more places.
 
@@ -457,10 +458,10 @@ The adapters differ in how they resume and how they receive hook configuration. 
 
 ### Choosing a model and a reasoning effort
 
-**There is no dedicated `model` or `effort` key in `[tools.{name}]`.** The four keys above are the only ones accepted; anything else fails when the configuration is parsed:
+**There is no dedicated `model` or `effort` key in `[tools.{name}]`.** The five keys above are the only ones accepted; anything else fails when the configuration is parsed:
 
 ```text
-unknown field `model`, expected one of `kind`, `command`, `mode_args`, `plan_args`
+unknown field `model`, expected one of `kind`, `command`, `mode_args`, `plan_args`, `env_file`
 ```
 
 Model and reasoning effort go into `command`, **as flags of the tool CLI itself**.
@@ -508,6 +509,27 @@ Those two **replace the kind's default wholesale**. Writing `plan_args = ["--eff
 #### `command` is not a shell
 
 `command` is only split on whitespace; shell quoting is not interpreted. **A single argument containing a space therefore cannot be written in `command`.** If you need one, use `mode_args` / `plan_args`, which are arrays — but then you have to restate the kind's defaults yourself, as above.
+
+### Passing environment variables (`env_file`)
+
+The agent process is started by the herdr / orca server, not by totsuka, so running `op run -- totsuka run` does not pass totsuka's own environment on to agents. Put the variables an agent needs (API keys, `GIT_CONFIG_*` for commit signing, …) in an `env_file`. It can point at the same file you already hand to `op run --env-file=… -- claude`:
+
+```toml
+[tools.claude-opus]
+kind = "claude"
+command = "claude --model opus"
+env_file = "~/.claude/.env.tpl"
+```
+
+- **Syntax**: `KEY=value` lines, comment lines starting with `#`, and blank lines. One pair of surrounding `"…"` / `'…'` is stripped from a value (no escapes, no expansion). There are no trailing comments — anything after `#` is part of the value
+- **Refused** (reported with the file and line number, never skipped): an `export ` prefix, multi-line values (an unclosed quote), `op run` templates (`{{ … }}`), duplicate keys, key names that do not match `[A-Za-z_][A-Za-z0-9_]*`, and **names starting with `TOTSUKA_`** (reserved for totsuka). Error messages never include a value
+- **Values** are resolved like every other secret reference: `op://` / `keychain:` / `cmd:` / `bw:` come from their store, and anything else is a literal with `${VAR}` expanded (an unset variable is an error). A literal value cannot contain `${`
+- **Differences from `op run`**: `op run` only treats `op://` as a reference. totsuka also resolves values starting with `keychain:` / `cmd:` / `bw:` and expands `${VAR}` in literals. If both read the same file, do not write literal values that start with those prefixes
+- **When**: resolved once, when `totsuka run` starts, for **every** `[tools]` entry that has an `env_file` (including tools no workflow uses; a shared file is read once). The 1Password approval is the same single one at startup as for other `op://` references — nothing is resolved when an agent launches. If any value fails to resolve, `totsuka run` does not start. The values are kept for the life of the run and never re-read: **restart `totsuka run` after changing the file or the stored values**. `--dry-run` resolves nothing
+- **Delivery**: the values are added to the launch environment of every agent that tool starts. herdr receives them as an API parameter and orca through a named pipe, so they never appear on the terminal screen
+- **`totsuka doctor`** stays non-interactive and **resolves nothing**. Its `tool-env-file` check covers only that the file exists, its syntax, the shape of references, and `TOTSUKA_` names
+- File permissions are not checked (the file normally holds references, not secrets)
+- **Not covered**: resolved values stay in the memory of the `totsuka run` process. Anything that calls 1Password outside the agent launch — commit signing through the 1Password SSH agent, `op` in an rc file the orca terminal reads — is not affected by this setting
 
 ### Not stopping at approval prompts
 

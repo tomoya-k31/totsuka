@@ -696,7 +696,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             profile: wf_profile,
             initial_prompt,
             repo,
-            tool_name: _tool_name,
+            tool_name,
             tool_profile,
         } = match target {
             Ok(target) => target,
@@ -981,10 +981,10 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                 profile: wf_profile,
                 settings_path: hook_spec.as_ref().map(|(path, _)| path.as_str()),
                 resume_session_id: resume.as_deref(),
-                env: hook_spec
-                    .as_ref()
-                    .map(|(_, env)| env.clone())
-                    .unwrap_or_default(),
+                env: launch_env(
+                    hook_spec.as_ref().map(|(_, env)| env),
+                    self.settings.tool_env.get(&tool_name),
+                ),
             }),
             resume_session_id: resume,
             // 0.4.1 (#417): for the IDE plugin to show which repository the
@@ -1508,6 +1508,24 @@ pub(super) fn resolve_dispatch_target(
     })
 }
 
+/// The launch env: the hook runtime's `TOTSUKA_*` (when there is one) plus
+/// the tool's resolved `env_file` (#744) — the latter whether or not the
+/// dispatch is hook-wired, since it belongs to the tool. The two never share a
+/// key (`env_file` refuses `TOTSUKA_*`), so the order is immaterial.
+fn launch_env(
+    hook_env: Option<&std::collections::BTreeMap<String, String>>,
+    tool_env: Option<&std::collections::BTreeMap<String, crate::ports::SecretString>>,
+) -> std::collections::BTreeMap<String, String> {
+    let mut env = hook_env.cloned().unwrap_or_default();
+    env.extend(
+        tool_env
+            .into_iter()
+            .flatten()
+            .map(|(key, value)| (key.clone(), value.expose().to_string())),
+    );
+    env
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1516,6 +1534,7 @@ mod tests {
     fn settings(workflows: Vec<Workflow>, repos: Vec<RepoSettings>) -> EngineSettings {
         EngineSettings {
             health_path: None,
+            tool_env: Default::default(),
             workflows,
             repos,
             limits: Limits::global(1),

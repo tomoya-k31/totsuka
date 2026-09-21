@@ -195,6 +195,11 @@ async fn run_async(cx: &Cx, args: RunArgs) -> Result<(), CliError> {
         settings.health_path = Some(orchestrator_core::adapters::run_health::path_in(
             paths.state_dir(),
         ));
+        // `[tools.<name>].env_file` (#744): resolved once, here, like the hook
+        // token above — startup's one secret-store approval covers it, and no
+        // agent launch touches the store again. Any failure stops the run.
+        settings.tool_env =
+            config::env_file::resolve_tool_env(&cfg.tools, &env_fn, &secret_resolver(&env))?;
     }
 
     let mut engine = Engine::new(db, settings, plugins, SystemGitRunner, llm).await;

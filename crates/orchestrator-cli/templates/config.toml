@@ -207,6 +207,9 @@
 # command = "claude --model sonnet"         # whitespace-split command line; first word is the program
 # mode_args = ["--verbose"]                 # extra args in implement mode
 # plan_args = ["--permission-mode", "plan"] # extra args in plan mode
+# env_file = "~/.claude/.env.tpl"           # KEY=value lines added to the agent's env.
+#                                           #   op:// / keychain: / cmd: / bw: values are
+#                                           #   resolved once when `totsuka run` starts
 
 # ============================================================================
 # [llm] — the classifier used for repository selection

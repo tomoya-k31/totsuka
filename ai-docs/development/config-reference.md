@@ -4,7 +4,7 @@ title: 設定リファレンス（config.toml）
 description: "config.toml の全キー・デフォルト値・意味の一覧。設定ファイルは 1 本で、プラグイン個別設定もトップレベルの [<name>] テーブルに入る。シークレット参照、設定スキーマのバージョニング方針、[[projects]] の domain 宣言とワークフローからの参照、プラグインが定義する追加プロパティ、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-github の [github]、task-source-notion の [notion]、task-source-slack の [slack]、agent-ide-herdr の [herdr] を含む。"
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
 tags: [config, reference, toml, secrets, workflow, worktree, github, notion, slack, hooks, versioning]
-generated: { by: claude-code/opus-5, at: 2026-09-21T13:30:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-21T17:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -515,15 +515,16 @@ pane 内で起動する AI ツール CLI の定義。`{name}` は `default_tool`
 | `command` | string? | kind 名 | 空白区切りのコマンドライン。先頭 = プログラム、残り = 基本引数（例 `"claude --model haiku"`） |
 | `mode_args` | string[]? | kind 既定 | implement モードで追加する引数（codex 既定: `["--sandbox", "workspace-write", "--ask-for-approval", "never"]`、opencode 既定: `["--auto"]`、claude 既定: なし） |
 | `plan_args` | string[]? | kind 既定 | plan モードで追加する引数（claude 既定: `["--permission-mode", "plan"]`、codex 既定: `["--sandbox", "read-only", "--ask-for-approval", "never"]` — plan permission mode 不在の縮退、opencode 既定: `["--agent", "totsuka-plan", "--auto"]` — 全 deny の plan エージェント） |
+| `env_file` | string? | なし | `KEY=value` を並べたファイル。値はこの tool が起動するエージェントの環境変数に加わる（#744、下記）。`~` / `${VAR}` を展開した結果が絶対パスであること |
 
 kind ごとの argv 組立の差分: claude はフック設定を `--settings <path>` で受け、resume は `--resume <id>` フラグ。codex はフックがグローバル登録（`~/.codex/hooks.json`、`TOTSUKA_*` env でゲート）のため `--settings` 相当は付かず、resume は `resume <id>` **サブコマンド**（基本引数の直後・モード引数の前に挿入）。 opencode もグローバル配置の JS プラグイン（env ゲート）で完了検知するため `--settings` 相当は無く、resume は `-s <id>` フラグ。opencode は不可視注入が無いため、タスク指示 + マーカー規約は**可視の extra_context** として pane に渡る。
 
 ## モデルと推論強度の指定
 
-**`[tools.{name}]` に `model` / `effort` の専用キーは無い。** 受け付けるのは上表の 4 キーだけで、`ToolConfig` は `deny_unknown_fields` なので書くと設定のパース時点で落ちる:
+**`[tools.{name}]` に `model` / `effort` の専用キーは無い。** 受け付けるのは上表の 5 キーだけで、`ToolConfig` は `deny_unknown_fields` なので書くと設定のパース時点で落ちる:
 
 ```text
-unknown field `model`, expected one of `kind`, `command`, `mode_args`, `plan_args`
+unknown field `model`, expected one of `kind`, `command`, `mode_args`, `plan_args`, `env_file`
 ```
 
 モデルと推論強度は、**ツール CLI 自身のフラグとして `command` に書く**。
@@ -571,6 +572,29 @@ tool = "claude-deep"
 ### `command` はシェルではない
 
 `command` は `split_whitespace()` で分割されるだけで、シェル的なクォートは解釈されない。したがって**空白を含む単一引数は `command` に書けない**。必要な場合は配列である `mode_args` / `plan_args` を使うことになるが、その場合は上記のとおり kind 既定を自分で書き足す必要がある。
+
+## 環境変数を渡す（`env_file`、#744）
+
+エージェントのプロセスを起動するのは herdr / orca のサーバーで、totsuka ではない。そのため `op run -- totsuka run` としても、totsuka 自身の環境はエージェントに届かない。エージェントに渡したい環境変数（API キー、コミット署名の `GIT_CONFIG_*` など）は `env_file` に書く。手元で `op run --env-file=… -- claude` に渡しているファイルを、そのまま指せる:
+
+```toml
+[tools.claude-opus]
+kind = "claude"
+command = "claude --model opus"
+env_file = "~/.claude/.env.tpl"
+```
+
+- **書式**: `KEY=value` の行、`#` で始まるコメント行、空行。値の両端の `"…"` / `'…'` は 1 組だけ外す（エスケープも展開もしない）。行末コメントは無い（`#` 以降も値になる）
+- **拒否する書式**（黙って読み飛ばさず、行番号付きのエラーにする）: `export ` の接頭辞、複数行の値（閉じないクォート）、`op run` のテンプレート（`{{ … }}`）、重複キー、`[A-Za-z_][A-Za-z0-9_]*` に合わないキー名、**`TOTSUKA_` で始まる名前**（totsuka の予約）。エラーの文言に値は出さない
+- **値の解決**: 他の `*_ref` と同じ。`op://` / `keychain:` / `cmd:` / `bw:` はそれぞれのストアから取り、それ以外は `${VAR}` を展開したリテラルになる（未定義の変数はエラー）。リテラル値に `${` は書けない
+- **`op run` との違い**: `op run` は `op://` だけを参照として扱う。totsuka は `keychain:` / `cmd:` / `bw:` で始まる値も解決し、リテラル値の `${VAR}` も展開する。同じファイルを両方に読ませるなら、これらで始まるリテラル値を書かないこと
+- **タイミング**: `totsuka run` の起動時に 1 回だけ、`env_file` を持つ `[tools]` エントリ**すべて**を解決する（ワークフローから参照されていない tool も含む。同じファイルは 1 回だけ読む）。1Password の承認は、既存の `op://`（hook のトークンなど）と同じ起動時の 1 回で済み、エージェントの起動時には呼ばない。1 つでも解決できなければ `totsuka run` は起動しない。値は run のプロセスが持ち続け、途中で読み直さない — **ファイルや 1Password の値を変えたら `totsuka run` を再起動する**。`--dry-run` では解決しない
+- **受け渡し**: 解決した値は、その tool で起動するエージェントの `ToolLaunchSpec.env` に、hook の有無にかかわらず入る。herdr は API の `env` パラメータで、orca は FIFO で渡すので（[ADR-0089](/decisions/adr-0089-orca-env-fifo.md)）、どちらも端末の画面には出ない
+- **`totsuka doctor`**: 非対話を保つため**何も解決しない**。ファイルの存在、書式、参照の形、`TOTSUKA_` との衝突だけを `tool-env-file` として検査する
+- ファイルのパーミッションは検査しない（普通は参照しか書かれていない）
+- 残る制約: 解決した値は `totsuka run` のメモリに残る。エージェントの起動とは別の場所で 1Password を呼ぶもの（1Password の SSH エージェントによるコミット署名、orca の端末で読まれる rc の中の `op` など）は、この設定では止まらない
+
+判断の経緯は [ADR-0090](/decisions/adr-0090-tools-env-file.md)。
 
 ## 承認プロンプトで止まらないこと（#420）
 

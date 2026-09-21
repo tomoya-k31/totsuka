@@ -109,6 +109,11 @@ pub struct EngineSettings {
     /// about XDG paths. `None` keeps every test and embedder that never asked
     /// for it from writing files.
     pub health_path: Option<std::path::PathBuf>,
+    /// Each tool's resolved `[tools.<name>].env_file` (#744), keyed by tool
+    /// name: added to the env of every agent that tool launches, hook runtime
+    /// or not. Supplied by the CLI like [`hook`](Self::hook) — resolving means
+    /// the secret store, once at startup — and empty for `--dry-run`.
+    pub tool_env: HashMap<String, std::collections::BTreeMap<String, SecretString>>,
 }
 
 /// Everything the engine needs to drive hook-based agents for one run
@@ -180,6 +185,7 @@ pub fn settings_from_config(
     Ok(EngineSettings {
         // Supplied by the caller (the CLI) after this returns, like `hook`.
         health_path: None,
+        tool_env: Default::default(),
         workflows: Workflow::from_configs(&cfg.workflows, &cfg.projects),
         repos,
         limits,

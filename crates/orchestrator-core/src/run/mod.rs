@@ -1143,6 +1143,7 @@ pub(crate) async fn test_engine_with<L: RepoClassifier + 'static>(
 ) -> Engine<crate::adapters::git::SystemGitRunner, L> {
     let settings = EngineSettings {
         health_path: None,
+        tool_env: Default::default(),
         workflows: Vec::new(),
         repos: Vec::new(),
         limits: Limits::global(1),
