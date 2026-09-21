@@ -78,7 +78,7 @@ owner: tomoya-k31
 
 チェック内容は #45 のまま、実行タイミングはコスト最適化のため [ADR-0007](/decisions/adr-0007-ci-cost-optimization.md) で再設計し、実行時間そのものは [ADR-0018](/decisions/adr-0018-ci-test-time.md) で削減した。
 
-- **毎 PR**（`ci.yml`）: `clippy / rustfmt`（rustfmt・arch-lint・`cargo-machete` をステップとして含む 1 ジョブ。7 秒の machete を独立ジョブにすると切り上げ課金 1 分が固定費になるため #281 で吸収した）と `test`（全層）。`okf-lint.yml`（`lint` ジョブ、唯一の必須チェック）は全 PR で OKF lint を実行する。
+- **毎 PR**（`ci.yml`）: `clippy / rustfmt`（rustfmt・arch-lint・`cargo-machete` をステップとして含む 1 ジョブ。7 秒の machete を独立ジョブにすると切り上げ課金 1 分が固定費になるため #281 で吸収した）と `test`（全層）、`msrv`（`rust-version` の toolchain で workspace とゲートウェイを `cargo check` する。[ADR-0087](/decisions/adr-0087-msrv-gate.md)）。`okf-lint.yml`（`lint` ジョブ、唯一の必須チェック）は全 PR で OKF lint を実行する。
 - **週次 cron**（`cache-cleanup.yml`）: クローズ済み PR の Actions キャッシュを回収する。PR ごとに約 350 MB を PR スコープで作り捨てるため放置すると 10 GB 上限に張り付き、main のベースラインまで退避されてビルドが温まらなくなる。
 - **main への push**（`ci.yml`）: `coverage (llvm-cov)` のみ。計装ビルドで全テストスイートを実行するため、マージごとのテスト検証を兼ねる（カバレッジはアーティファクト化のみ、閾値ゲートなし）。
 - **日次 cron + 依存ファイル変更 PR**（`audit.yml`）: `cargo-audit` / `cargo-deny`。
