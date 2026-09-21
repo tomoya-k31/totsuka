@@ -38,7 +38,7 @@ design / implement 系 workflow を attended pane（人間が pane を見てい�
 **`timeout_secs = 0` を「この workflow は D-03 掃引の対象外」と定義する。** `sweep_signal_timeouts` は解決したタイムアウトが 0 の workflow のタスクをスキップする。
 
 - profile とは無関係の汎用プロパティ変更。全 workflow（answer / triage 含む）で書ける
-- 省略時の既定（30 分）は不変。オプトアウトは明示的に `0` と書いたときだけ
+- 省略時の既定（30 分）は不変。オプトアウトは明示的に `0` と書いたときだけ（→ 既定は [ADR-0086](/decisions/adr-0086-timeout-default-off.md) で `0` に変わった）
 
 # Consequences
 

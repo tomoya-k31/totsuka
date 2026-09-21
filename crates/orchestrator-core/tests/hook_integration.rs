@@ -1032,7 +1032,7 @@ async fn timeout_sweep_escalates_silent_task() {
     let clock = manual_clock();
     let db = StateDb::open_with_clock(&base.join("state.db"), clock.clone()).unwrap();
     // Seed a task that proves itself alive *after* being dispatched, then let
-    // the test drive the clock across the 30-minute default timeout (#174).
+    // the test drive the clock across a 30-minute timeout (#174).
     // The signal has to come after the dispatch: a dispatch starts a new
     // execution and clears the anchor (#382), and seeding one beforehand would
     // build a state that never occurs.
@@ -1044,7 +1044,7 @@ async fn timeout_sweep_escalates_silent_task() {
 
     let mut engine = Engine::with_clock(
         db,
-        engine_settings(workflows("llm", "none"), None),
+        engine_settings(workflows_with_timeout(1800), None),
         plugin_set(json!({}), &notify_log).await,
         SystemGitRunner,
         no_llm(),
@@ -1104,7 +1104,7 @@ async fn a_redispatched_task_is_not_escalated_for_the_previous_attempts_silence(
 
     let mut engine = Engine::with_clock(
         db,
-        engine_settings(workflows("llm", "none"), None),
+        engine_settings(workflows_with_timeout(1800), None),
         plugin_set(json!({}), &notify_log).await,
         SystemGitRunner,
         no_llm(),
@@ -1204,6 +1204,65 @@ async fn a_zero_timeout_disables_the_silence_sweep() {
         !notes.iter().any(|n| n["params"]["event"] == "escalated"),
         "no escalation notification may fire for an opted-out workflow"
     );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+fn notification(task_id: i64, row: i64, prompt_id: &str) -> AgentSignal {
+    AgentSignal {
+        source: SignalSource::AgentHook,
+        job_id: JobId::new(task_id, row),
+        tool_session_id: "cc-1".into(),
+        prompt_id: prompt_id.into(),
+        event: SignalEvent::Notification {
+            message: Some("permission_prompt: Bash".to_string()),
+        },
+        payload: json!({ "hook_event_name": "Notification" }),
+    }
+}
+
+/// A pending permission prompt keeps the task `Running` (R-08), but the agent
+/// is blocked on a human, so the silence sweep must not count that wait. The
+/// next signal after the prompt re-arms it.
+#[tokio::test]
+async fn a_pending_permission_prompt_pauses_the_silence_sweep() {
+    let base = scratch("hook_timeout_permission");
+    let notify_log = base.join("notify.ndjson");
+    let clock = manual_clock();
+    let db = StateDb::open_with_clock(&base.join("state.db"), clock.clone()).unwrap();
+    let id = db.upsert_task(&new_task("1", None)).unwrap();
+    db.apply_event(id, TaskEvent::Dispatch, None).unwrap();
+    db.apply_event(id, TaskEvent::Start, None).unwrap();
+    let row = db.record_session(id, "mock_agent", "sess-1").unwrap();
+
+    let mut engine = Engine::with_clock(
+        db,
+        engine_settings(workflows_with_timeout(1800), None),
+        plugin_set(json!({}), &notify_log).await,
+        SystemGitRunner,
+        no_llm(),
+        clock.clone(),
+    )
+    .await;
+
+    engine.on_signal(notification(id, row, "p1")).await.unwrap();
+    clock.advance(time::Duration::days(1));
+    engine.sweep_signal_timeouts().await.unwrap();
+    assert_eq!(
+        engine.db().get_task(id).unwrap().unwrap().state,
+        TaskState::Running,
+        "a day waiting on a permission prompt is not silence"
+    );
+
+    // The human answered and the agent moved on: the sweep is armed again.
+    engine.on_signal(heartbeat(id, row, "p1")).await.unwrap();
+    clock.advance(time::Duration::seconds(1801));
+    engine.sweep_signal_timeouts().await.unwrap();
+    assert_eq!(
+        engine.db().get_task(id).unwrap().unwrap().state,
+        TaskState::Escalated,
+        "silence after the prompt was answered still escalates (D-03)"
+    );
+    engine.shutdown(GRACE).await;
     let _ = std::fs::remove_dir_all(&base);
 }
 

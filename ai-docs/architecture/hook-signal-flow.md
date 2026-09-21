@@ -84,7 +84,7 @@ flowchart TD
     UNK -->|"はい"| ESC["Escalated（非終端）+ diagnostics/snapshot + notify(escalated 🚨)"]
     UNK -->|"いいえ"| WAIT["遷移なし・次シグナル待ち"]
 
-    SWEEP["sweep_signal_timeouts()（各サイクル）"] -->|"now - last_signal_at > timeout_secs（既定1800, D-03）"| ESC
+    SWEEP["sweep_signal_timeouts()（各サイクル）"] -->|"now - last_signal_at > timeout_secs（既定0=掃引なし, D-03。権限プロンプト待ちは除外）"| ESC
     DISP["task/dispatch（新しい実行の開始）"] -->|"last_signal_at をクリア（#382）"| SWEEP
 
     DEAD["events.subscribe → pane.exited デッドマン専用（F-106）"] -->|"exit_code 非0 / コード無し"| FAIL

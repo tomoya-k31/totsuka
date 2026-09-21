@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:f45cb874325c4cf8330f3d0b5f55c64e0d79449b63b9e2b6dfbde7c53bcc4b54 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:d92509e95e3b920a89abd6b22d1e841f20f056779dab8936db0e88e166b3aafd -->
 
 # Configuration reference
 
@@ -158,7 +158,7 @@ The roster is also what makes a `[<name>]` table legitimate: **a top-level table
 | `on_success` | `{ status = "..." }`? | none | Update the status in the source on success |
 | `on_failure` | `{ status = "..." }`? | none | Update the status in the source on failure. Retryable failures do not write back |
 | `verification` | enum | `llm` | How a completion claim is checked: `llm` (checked in session), `human` (waits for `totsuka task verify`), or `none`. Cannot be combined with `profile` |
-| `timeout_secs` | int? | 1800 | Seconds of silence after the last signal before escalating. **`0` opts this workflow out of the timeout sweep entirely** |
+| `timeout_secs` | int? | 0 | Seconds of silence after the last signal before escalating. **`0` (the default) opts this workflow out of the timeout sweep entirely**. Time spent waiting on a permission or idle prompt does not count as silence |
 | `rubric` | string? | none | The criteria used for `llm` verification. **The only prompt override there is** (see below); it beats the profile's default |
 | `tool` | string? | none | Pins the AI tool. Workflow beats repository beats `default_tool` |
 | `initial_prompt` | string? | none | Extra instructions prepended for this workflow's agent. See below |
@@ -199,7 +199,7 @@ Keys that exist today:
 |---|---|---|
 | `publish` | slack | `draft` (present it for approval first — the default) or `direct` (post immediately). A value neither of those **fails at startup**, so a typo cannot silently leave the approval gate in place — or take it away |
 
-Setting `timeout_secs = 0` is for attended workflows where a human is watching the pane. A genuinely hung agent stops being detected too, so do not set it on unattended workflows.
+The default `timeout_secs = 0` suits attended workflows where a human is watching the pane. A genuinely hung agent is not detected either, so set a limit on unattended workflows.
 
 If `verification = "llm"` may resolve to a non-Claude tool, you get a warning suggesting `tool = "claude"` — in-session verification needs Claude's stop hook.
 
@@ -279,7 +279,7 @@ initial_prompt = "Use the /grill-me skill and produce a detailed design."
 | **Literal** | No placeholder expansion, so `{` is safe to write |
 | **Unset means unchanged** | An empty or whitespace-only value is treated as unset, and workflows without one are byte-for-byte identical to before |
 
-**If you write instructions that make the agent ask a human something, an unattended pane will hang** until `timeout_secs` escalates it — nothing fires while a tool waits for an answer. totsuka does not append a caveat automatically, because that could contradict what you wrote.
+**If you write instructions that make the agent ask a human something, an unattended pane will hang** — nothing fires while a tool waits for an answer, so it stays stuck until `timeout_secs` escalates it, or indefinitely if you left `timeout_secs` at its default of `0`. totsuka does not append a caveat automatically, because that could contradict what you wrote.
 
 ### `profile` — the four archetypes
 
@@ -341,7 +341,7 @@ A profile also decides several behaviours beyond those three keys:
 
 Verification criteria change to match: the judge, which can see the conversation, checks whether a human approved before the claim — an answer you selected in a question dialog counts. **An agent that skips the confirmation and claims completion is blocked by the same layer that catches a missing marker.** Stopping to ask is not a completion claim, so it is never blocked.
 
-Pair this with `timeout_secs = 0` if you want to avoid spurious escalation during a long unattended stretch.
+Leave `timeout_secs` at its default of `0` if you want to avoid spurious escalation during a long unattended stretch.
 
 A known limitation: a second "needs input" stop while already waiting — you send corrections, the agent asks again in plain text — does not send another notification. In an attended pane you are part of the conversation anyway, so the impact is small. Questions asked through the picker below **do** re-notify.
 

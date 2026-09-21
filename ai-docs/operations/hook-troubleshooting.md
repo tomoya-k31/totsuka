@@ -69,7 +69,7 @@ parse 不能行を含むスプールファイルは**削除されず** `<name>.c
 タスクは次のいずれかで `Escalated`（**非終端**）へ遷移し、notifier 通知（🚨 エスカレーション）と `diagnostics/snapshot` を伴う（[notifier-macos](/components/notifier-macos.md)）:
 
 - **UNKNOWN 連続 ≥ `block_retry_limit`（既定 3）**: マーカー無し完了が続いた（DB から再計算・フック自己申告は不使用, D-02）。
-- **タイムアウト**: 最後のシグナルから `workflow.timeout_secs`（既定 1800 秒）無音（`sweep_signal_timeouts`, D-03）。
+- **タイムアウト**: 最後のシグナルから `workflow.timeout_secs` 秒無音（`sweep_signal_timeouts`, D-03）。既定 `0` は掃引なし。最後のシグナルが権限 / idle プロンプト（`Notification`）なら数えない（[ADR-0086](/decisions/adr-0086-timeout-default-off.md)）。
 - **相関の異常**。
 
 `Escalated` は人間対応待ちで**スロットを解放**する（F-45）。pane は診断のため保持される（F-107）。
@@ -80,7 +80,7 @@ parse 不能行を含むスプールファイルは**削除されず** `<name>.c
 2. **pane で直接解消**: エージェントは herdr の pane に生きている（保持される）。pane に attach し、詰まりを人手で解く（質問に答える・指示を出し直す・許可を与える等）。
 3. **自然復帰**: pane 側で作業が進み次の `Stop` フックが正常なマーカー付きで発火すれば、Engine は次シグナルで `Escalated` から `Verifying`/`Publishing`/`WaitingInput`/`Running` へ**自然復帰**する（Escalated は全非終端から到達し、そこから復帰できる設計）。特別なコマンドは不要。
 4. **回復しない/見切る場合**: これ以上進めないなら `totsuka task cancel <id>`（→ 次 run でセッション/スロット解放）。原因が明確な失敗なら、pane を潰さず調査してから cancel する（Failed/Escalated pane は保持されるので後追い調査可）。
-5. **タイムアウトの頻発**: 正常でも時間のかかる workflow なら、その `[[workflows]]` の `timeout_secs` を延ばす（既定 1800）。UNKNOWN 連発なら `block_retry_limit` ではなく**マーカー未出力の根本**（rubric・指示文・`orchestrator-<workflow>.json`）を疑う。
+5. **タイムアウトの頻発**: 正常でも時間のかかる workflow なら、その `[[workflows]]` の `timeout_secs` を延ばす（`0` にすると掃引しない）。UNKNOWN 連発なら `block_retry_limit` ではなく**マーカー未出力の根本**（rubric・指示文・`orchestrator-<workflow>.json`）を疑う。
 
 # 3. human 検収（totsuka task verify）
 
