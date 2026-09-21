@@ -54,7 +54,7 @@ for why. CI's own flags stay exactly as they are:
   (plugins → protocol/sdk only, protocol is a leaf, no cycles). Cheap
   (`cargo metadata --no-deps`, seconds); especially relevant when a
   `Cargo.toml` changed. CI runs it as a step inside the `clippy / rustfmt` job.
-- `bash scripts/config-template-lint.sh` — the other fitness function in that
+- `bash scripts/config-template-lint.sh` — another fitness function in that
   same CI job: every field of a config struct must appear in
   `crates/orchestrator-cli/templates/config.toml`, and every key in the
   template must exist in a struct
@@ -62,8 +62,11 @@ for why. CI's own flags stay exactly as they are:
   **It fires on a config struct you did not think of as "the template's
   business"** — PR #736 added two keys to a *plugin's* config and CI failed on
   the `orchestrator-cli` template, because the template carries all 7 plugins'
-  keys too. Cheap (0.7s, POSIX awk/grep, no build), so run it whenever any
-  `config.rs` changed.
+  keys too. Cheap (0.7s, POSIX awk/grep, no build), so run it whenever an
+  input of its own changed: **`crates/orchestrator-core/src/config/schema.rs`**
+  (not named `config.rs`, and holds the majority of the keys), any
+  `plugins/*/src/config.rs`, or the template itself. Naming only `config.rs`
+  would leave the core schema — the side that keeps growing — uncovered.
 - `cargo clippy --workspace --all-targets -- -D warnings` — CI passes
   `--all-features` here; locally it is dropped for the same reason as in the
   test bullet below (zero `[features]` in the workspace, so it selects nothing).
