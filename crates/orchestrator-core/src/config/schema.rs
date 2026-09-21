@@ -673,6 +673,12 @@ pub struct ToolConfig {
     /// Extra args appended in plan mode (overrides the kind default).
     #[serde(default)]
     pub plan_args: Option<Vec<String>>,
+    /// A `KEY=value` file whose values are added to the env of every agent
+    /// this tool launches (#744). `~` / `${VAR}` expand; the result must be
+    /// absolute. Resolved once when `totsuka run` starts — see
+    /// [`env_file`](crate::config::env_file).
+    #[serde(default)]
+    pub env_file: Option<String>,
 }
 
 /// Repository classifier settings — `[llm]` (F-11–F-14).

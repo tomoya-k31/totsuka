@@ -138,6 +138,7 @@ on_failure = {{ status = "failed" }}
 fn engine_settings(wfs: Vec<Workflow>, hook: Option<HookRuntime>) -> EngineSettings {
     EngineSettings {
         health_path: None,
+        tool_env: Default::default(),
         workflows: wfs,
         repos: vec![RepoSettings {
             name: "clone".to_string(),
@@ -3206,4 +3207,105 @@ async fn an_unresumable_session_is_dispatched_once_more_without_it() {
 
     engine.shutdown(GRACE).await;
     let _ = std::fs::remove_dir_all(&base);
+}
+
+/// Dispatch one task to a repo pinned to `codex` whose resolved `env_file`
+/// (#744) is `{ BRAVE_API_KEY: brave-key }`, with or without a hook runtime,
+/// and return the `tool_launch.env` the agent plugin received.
+async fn dispatched_env_with_tool_env(
+    name: &str,
+    with_hook: bool,
+) -> serde_json::Map<String, serde_json::Value> {
+    let base = scratch(name);
+    let repo = setup_repo(&base);
+    let dispatch_log = base.join("dispatch.ndjson");
+    let db_path = base.join("state.db");
+
+    let mut plugins = PluginSet::default();
+    plugins.sources.insert(
+        "mock_src".to_string(),
+        launch(
+            "task_source",
+            "mock_src",
+            json!({ "task_submit": true, "submit_workflow": "wf", "submit_tasks": [{ "id": "1", "source": "github", "title": "t" }] }),
+        )
+        .await,
+    );
+    plugins.agents.insert(
+        "mock_agent".to_string(),
+        launch(
+            "agent_ide",
+            "mock_agent",
+            json!({ "resume_session": true, "stream_states": ["running"], "dispatch_log": dispatch_log }),
+        )
+        .await,
+    );
+
+    let hook = with_hook.then(|| HookRuntime {
+        socket_path: base.join("agent-events.sock"),
+        auth_token: None,
+        spool_dir: None,
+        settings_paths: HashMap::from([("wf".to_string(), base.join("orchestrator-wf.json"))]),
+        block_retry_limit: 3,
+    });
+    let mut settings = engine_settings(workflows("none", "none"), hook);
+    settings.repos = vec![RepoSettings {
+        name: "clone".to_string(),
+        path: repo.clone(),
+        summary: None,
+        worktree_location: None,
+        tool: Some("codex".to_string()),
+    }];
+    settings.location_template = "{repo}/../wt/{worktree_name}".to_string();
+    settings.tool_env = HashMap::from([(
+        "codex".to_string(),
+        std::collections::BTreeMap::from([(
+            "BRAVE_API_KEY".to_string(),
+            orchestrator_core::ports::SecretString::new("brave-key"),
+        )]),
+    )]);
+
+    let mut engine = Engine::new(
+        StateDb::open(&db_path).unwrap(),
+        settings,
+        plugins,
+        SystemGitRunner,
+        no_llm(),
+    )
+    .await;
+
+    let dispatch_probe = dispatch_log.clone();
+    run_until(&mut engine, move || !read_log(&dispatch_probe).is_empty()).await;
+    engine.shutdown(GRACE).await;
+
+    let dispatches = read_log(&dispatch_log);
+    let env = dispatches
+        .iter()
+        .find(|d| d["method"] == "task/dispatch")
+        .expect("dispatch recorded")["params"]["tool_launch"]["env"]
+        .as_object()
+        .cloned()
+        .unwrap_or_default();
+    let _ = std::fs::remove_dir_all(&base);
+    env
+}
+
+/// #744: the tool's resolved `env_file` rides `tool_launch.env` next to the
+/// hook env.
+#[tokio::test]
+async fn a_tools_env_file_rides_the_launch_env_with_the_hook_env() {
+    let env = dispatched_env_with_tool_env("tool_env_hook", true).await;
+    assert_eq!(env["BRAVE_API_KEY"], "brave-key", "{env:?}");
+    assert!(env.contains_key("TOTSUKA_JOB_ID"), "{env:?}");
+    assert!(env.contains_key("TOTSUKA_HOOK_ENDPOINT"), "{env:?}");
+}
+
+/// #744: it belongs to the tool, not to the hook wiring — a dispatch without
+/// a hook runtime still carries it.
+#[tokio::test]
+async fn a_tools_env_file_rides_the_launch_env_without_a_hook_runtime() {
+    let env = dispatched_env_with_tool_env("tool_env_no_hook", false).await;
+    let keys: Vec<&str> = env.keys().map(String::as_str).collect();
+    assert_eq!(keys, ["BRAVE_API_KEY"], "{env:?}");
+    assert_eq!(env["BRAVE_API_KEY"], "brave-key");
 }

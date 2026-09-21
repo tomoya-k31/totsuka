@@ -116,6 +116,17 @@ async fn run_async(cx: &Cx, args: RunArgs) -> Result<(), CliError> {
     let opencode_dir = orchestrator_core::hooks::opencode::opencode_config_dir(env_fn);
     orchestrator_core::hooks::opencode::sync_assets(opencode_dir.as_deref(), &cfg)?;
 
+    // `[tools.<name>].env_file` (#744): resolved once, at startup — the same
+    // secret-store approval as every other reference covers it, and no agent
+    // launch touches the store again. Before the plugins launch, so a file that
+    // cannot be used stops the run before anything has been started (Copilot
+    // review, #746). A dry run launches no agent and resolves nothing.
+    let tool_env = if dry_run {
+        Default::default()
+    } else {
+        config::env_file::resolve_tool_env(&cfg.tools, &env_fn, &secret_resolver(&env))?
+    };
+
     let db = StateDb::open(&paths.state_dir().join("state.db"))?;
     let plugins = launch_plugins(cx, &cfg, &env).await?;
 
@@ -133,6 +144,7 @@ async fn run_async(cx: &Cx, args: RunArgs) -> Result<(), CliError> {
 
     let mut settings = settings_from_config(&cfg, &env, paths)?;
     settings.readme_cache_dir = Some(paths.cache_dir().to_path_buf());
+    settings.tool_env = tool_env;
     // CLI flags are layer 1 of the precedence stack (see config/env_overrides),
     // so a value that is neither config nor environment belongs here (#281).
     if let Some(ms) = one_shot_grace_ms {

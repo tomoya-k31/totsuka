@@ -16,6 +16,9 @@
 * **Update**: [agent-ide-orca](/components/agent-ide-orca.md) に `handoff` モジュールを足し、`launch` とディスパッチの写像、テストの説明を FIFO 方式に合わせた。起動方式が変わったので `verified` を外した
 * **Creation**: `[[workflows]].timeout_secs` の既定を `0`（掃引なし）にし、権限 / idle プロンプト待ちを無音に数えないことにした [ADR-0086](/decisions/adr-0086-timeout-default-off.md)
 * **Update**: 既定値と除外条件を [設定リファレンス](/development/config-reference.md)・[仕様 F-103](/product/orchestrator-spec.md)・[フック信号の流れ](/architecture/hook-signal-flow.md)・[フックのトラブルシュート](/operations/hook-troubleshooting.md) に反映
+* **Creation**: [ADR-0090](/decisions/adr-0090-tools-env-file.md) — `[tools.<name>].env_file` を足した（#744）。`KEY=value` の最小 dotenv サブセットで、それ以外は行番号付きのエラーにする。値は既存の `SecretResolver` で `op://` / `keychain:` / `cmd:` / `bw:` と `${VAR}` を解決する。解決は `totsuka run` の起動時に 1 回だけで、hook の有無にかかわらず `ToolLaunchSpec.env` に入れる。`TOTSUKA_` で始まる名前は拒否し、`doctor` は何も解決しない
+* **Update**: [設定リファレンス](/development/config-reference.md) の `[tools.{name}]` に `env_file` の行と「環境変数を渡す」節を足した（`op run` との違い、再起動が要ること、残る制約）
+* **Update**: [orchestrator-core](/components/orchestrator-core.md) の `config` に `env_file` モジュールを足した
 
 ## 2026-09-19
 

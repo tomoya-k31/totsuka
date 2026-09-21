@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:e4b86dc19bc60457b4910cf89e7c8dd2c185f5a12afc5b701f34babd8dadebe1 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:b80fd071d6d2218d5b6682033cb189e556ac2ab280b1bbebad5e2f37d6cde5ef -->
 
 # 設定リファレンス
 
@@ -451,6 +451,7 @@ pane 内で起動する AI ツール CLI の定義。組み込みとして `clau
 | `command` | string? | kind 名 | 空白区切りのコマンドライン。先頭がプログラムで残りが基本引数（例 `"claude --model haiku"`） |
 | `mode_args` | string[]? | kind ごと | implement モードで追加する引数。codex: `["--sandbox", "workspace-write", "--ask-for-approval", "never"]`、opencode: `["--auto"]`、claude: なし |
 | `plan_args` | string[]? | kind ごと | plan モードで追加する引数。claude: `["--permission-mode", "plan"]`、codex: `["--sandbox", "read-only", "--ask-for-approval", "never"]`、opencode: `["--agent", "totsuka-plan", "--auto"]` |
+| `env_file` | string? | なし | `KEY=value` を並べたファイル。値はこの tool が起動するエージェントの環境変数に加わる（下記）。`~` / `${VAR}` を展開した結果が絶対パスであること |
 
 `kind = "codex"` はツール側での一回きりの信頼設定が要る。`kind = "opencode"` は信頼設定こそ不要だが、縮退する箇所が多い。
 
@@ -458,10 +459,10 @@ pane 内で起動する AI ツール CLI の定義。組み込みとして `clau
 
 ### モデルと推論強度の指定
 
-**`[tools.{name}]` に `model` / `effort` の専用キーは無い。** 受け付けるのは上表の 4 キーだけで、他のキーを書くと設定のパース時点で落ちる:
+**`[tools.{name}]` に `model` / `effort` の専用キーは無い。** 受け付けるのは上表の 5 キーだけで、他のキーを書くと設定のパース時点で落ちる:
 
 ```text
-unknown field `model`, expected one of `kind`, `command`, `mode_args`, `plan_args`
+unknown field `model`, expected one of `kind`, `command`, `mode_args`, `plan_args`, `env_file`
 ```
 
 モデルと推論強度は、**ツール CLI 自身のフラグとして `command` に書く**。
@@ -509,6 +510,27 @@ tool = "claude-deep"
 #### `command` はシェルではない
 
 `command` は空白で分割されるだけで、シェル的なクォートは解釈されない。したがって**空白を含む単一の引数は `command` に書けない**。必要な場合は配列である `mode_args` / `plan_args` を使うことになるが、その場合は上記のとおり kind の既定を自分で書き足す必要がある。
+
+### 環境変数を渡す（`env_file`）
+
+エージェントのプロセスを起動するのは herdr / orca のサーバーで、totsuka ではない。そのため `op run -- totsuka run` としても、totsuka 自身の環境はエージェントに届かない。エージェントに渡したい環境変数（API キー、コミット署名の `GIT_CONFIG_*` など）は `env_file` に書く。手元で `op run --env-file=… -- claude` に渡しているファイルを、そのまま指せる:
+
+```toml
+[tools.claude-opus]
+kind = "claude"
+command = "claude --model opus"
+env_file = "~/.claude/.env.tpl"
+```
+
+- **書式**: `KEY=value` の行、`#` で始まるコメント行、空行。値の両端の `"…"` / `'…'` は 1 組だけ外す（エスケープも展開もしない）。行末コメントは無い（`#` 以降も値になる）
+- **拒否する書式**（黙って読み飛ばさず、ファイル名と行番号付きのエラーにする）: `export ` の接頭辞、複数行の値（閉じないクォート）、`op run` のテンプレート（`{{ … }}`）、重複キー、`[A-Za-z_][A-Za-z0-9_]*` に合わないキー名、**`TOTSUKA_` で始まる名前**（totsuka の予約）。エラーの文言に値は出さない
+- **値の解決**: 他のシークレット参照と同じ。`op://` / `keychain:` / `cmd:` / `bw:` はそれぞれのストアから取り、それ以外はリテラルで、その中の `${VAR}` は展開される（未定義の変数はエラー）。そのため `${` という文字の並びそのものは値に書けない（`$` 単独や `$VAR` はそのまま残る）
+- **`op run` との違い**: `op run` は `op://` だけを参照として扱う。totsuka は `keychain:` / `cmd:` / `bw:` で始まる値も解決し、リテラル値の `${VAR}` も展開する。同じファイルを両方に読ませるなら、これらで始まるリテラル値を書かないこと
+- **タイミング**: `totsuka run` の起動時に 1 回だけ、プラグインを起動する前に、`env_file` を持つ `[tools]` エントリ**すべて**を解決する（ワークフローから使われていない tool も含む。同じファイルは 1 回だけ読む）。1Password の承認は、他の `op://` と同じ起動時の 1 回で済み、エージェントの起動時には何も解決しない。1 つでも解決できなければ `totsuka run` は起動しない。値は run が生きている間持ち続け、読み直さない — **ファイルや保管している値を変えたら `totsuka run` を再起動する**。`--dry-run` では何も解決しない
+- **受け渡し**: 解決した値は、その tool で起動するすべてのエージェントの起動時の環境に入る。herdr は API のパラメータで、orca は名前付きパイプで受け取るので、端末の画面には出ない
+- **`totsuka doctor`** は非対話を保つため**何も解決しない**。`tool-env-file` のチェックで検査するのは、ファイルの存在、書式、参照の形、`TOTSUKA_` の名前だけ
+- ファイルのパーミッションは検査しない（普通は秘密そのものではなく参照が書かれている）
+- **対象外**: 解決した値は `totsuka run` のプロセスのメモリに残る。エージェントの起動とは別の場所で 1Password を呼ぶもの（1Password の SSH エージェントによるコミット署名、orca の端末で読まれる rc の中の `op` など）は、この設定では止まらない
 
 ### 承認プロンプトで止まらないこと
 

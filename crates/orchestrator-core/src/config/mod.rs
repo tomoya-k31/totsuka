@@ -3,11 +3,13 @@
 //!
 //! - [`schema`]: `config.toml` types and parsing.
 //! - [`resolve`]: `${ENV}` / `keychain:` secret resolution and path expansion.
+//! - [`env_file`]: `[tools.<name>].env_file` parsing and startup resolution.
 //! - [`env_overrides`]: `TOTSUKA_*` overrides, layer 2 of the CLI > env >
 //!   config-file > config-default precedence (F-66).
 //! - [`mod@validate`]: static (offline) validation (F-63, F-58).
 
 pub mod edit;
+pub mod env_file;
 pub mod env_overrides;
 pub mod resolve;
 pub mod schema;

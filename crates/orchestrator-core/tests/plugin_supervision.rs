@@ -116,6 +116,7 @@ fn settings_publishing_health(max_attempts: u32, dir: &Path) -> EngineSettings {
 fn settings_with_backoff(max_attempts: u32, first_backoff: Duration) -> EngineSettings {
     EngineSettings {
         health_path: None,
+        tool_env: Default::default(),
         workflows: workflows(),
         repos: vec![RepoSettings {
             name: "clone".to_string(),
