@@ -1189,7 +1189,7 @@ async fn a_zero_timeout_disables_the_silence_sweep() {
     )
     .await;
 
-    // A week of silence: far past the default 30 minutes, and past the old
+    // A week of silence: far past any plausible timeout, and past the old
     // behaviour's instant trip point.
     clock.advance(time::Duration::days(7));
     engine.sweep_signal_timeouts().await.unwrap();

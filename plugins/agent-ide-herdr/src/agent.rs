@@ -147,8 +147,8 @@ const PROMPT_CONFIRM_MS: u64 = 60_000;
 ///
 /// Raised from 60s because a single `agent.start` attempt can now cost
 /// [`AGENT_START_TIMEOUT_MS`], so 60s bought only a handful of tries. The
-/// workflow's own `timeout_secs` (default 1800s, 900s in the E2E config) is the
-/// outer bound that matters, so there is room. Past this the refusal is
+/// workflow's own `timeout_secs` (900s in the E2E config; the default `0`
+/// sets no bound at all) is the outer bound that matters, so there is room. Past this the refusal is
 /// reported as-is — at that point "it is still starting" has stopped being a
 /// plausible reading.
 const STARTUP_RETRY_BUDGET: Duration = Duration::from_secs(180);
