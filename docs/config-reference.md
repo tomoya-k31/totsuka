@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:e8f3c2207aa77e9ff0fc5a9fd9044e79a94044e2debddf756462e71438fd703a -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:b80fd071d6d2218d5b6682033cb189e556ac2ab280b1bbebad5e2f37d6cde5ef -->
 
 # Configuration reference
 
@@ -523,9 +523,9 @@ env_file = "~/.claude/.env.tpl"
 
 - **Syntax**: `KEY=value` lines, comment lines starting with `#`, and blank lines. One pair of surrounding `"…"` / `'…'` is stripped from a value (no escapes, no expansion). There are no trailing comments — anything after `#` is part of the value
 - **Refused** (reported with the file and line number, never skipped): an `export ` prefix, multi-line values (an unclosed quote), `op run` templates (`{{ … }}`), duplicate keys, key names that do not match `[A-Za-z_][A-Za-z0-9_]*`, and **names starting with `TOTSUKA_`** (reserved for totsuka). Error messages never include a value
-- **Values** are resolved like every other secret reference: `op://` / `keychain:` / `cmd:` / `bw:` come from their store, and anything else is a literal with `${VAR}` expanded (an unset variable is an error). A literal value cannot contain `${`
+- **Values** are resolved like every other secret reference: `op://` / `keychain:` / `cmd:` / `bw:` come from their store, and anything else is a literal in which `${VAR}` is expanded (an unset variable is an error). The character sequence `${` itself therefore cannot appear in a value (a lone `$` or `$VAR` is kept as written)
 - **Differences from `op run`**: `op run` only treats `op://` as a reference. totsuka also resolves values starting with `keychain:` / `cmd:` / `bw:` and expands `${VAR}` in literals. If both read the same file, do not write literal values that start with those prefixes
-- **When**: resolved once, when `totsuka run` starts, for **every** `[tools]` entry that has an `env_file` (including tools no workflow uses; a shared file is read once). The 1Password approval is the same single one at startup as for other `op://` references — nothing is resolved when an agent launches. If any value fails to resolve, `totsuka run` does not start. The values are kept for the life of the run and never re-read: **restart `totsuka run` after changing the file or the stored values**. `--dry-run` resolves nothing
+- **When**: resolved once, when `totsuka run` starts and before any plugin is launched, for **every** `[tools]` entry that has an `env_file` (including tools no workflow uses; a shared file is read once). The 1Password approval is the same single one at startup as for other `op://` references — nothing is resolved when an agent launches. If any value fails to resolve, `totsuka run` does not start. The values are kept for the life of the run and never re-read: **restart `totsuka run` after changing the file or the stored values**. `--dry-run` resolves nothing
 - **Delivery**: the values are added to the launch environment of every agent that tool starts. herdr receives them as an API parameter and orca through a named pipe, so they never appear on the terminal screen
 - **`totsuka doctor`** stays non-interactive and **resolves nothing**. Its `tool-env-file` check covers only that the file exists, its syntax, the shape of references, and `TOTSUKA_` names
 - File permissions are not checked (the file normally holds references, not secrets)
