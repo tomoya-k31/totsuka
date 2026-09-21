@@ -4,7 +4,7 @@ title: 依存関係ハイジーン（未使用依存と Cargo.lock ドリフト�
 description: cargo-machete による毎 PR の未使用依存チェックの運用、誤検知の抑制手順（package.metadata.cargo-machete）、高精度な cargo-shear / cargo-udeps の定期手動実行手順、cargo metadata --locked による Cargo.lock ドリフト検出、および配布するコンテナイメージのベースイメージ監視方針と供給鎖の説明。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/.github/workflows/ci.yml
 tags: [rust, ci, dependencies, cargo-machete, cargo-shear, cargo-udeps, cargo-lock, drift]
-generated: { by: claude-code/opus-5, at: 2026-09-13T21:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-21T17:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -92,7 +92,7 @@ clippy / test は `--all-features` を付けているのに、このステップ
 
 これは誤検出ではなく**正しい検出**で、`sync-lockfile` ジョブの追従コミットが次の run で解消する。加えて `clippy / rustfmt` は**必須チェックではない**（ruleset が要求するのは `okf-lint` の `lint` のみ）ため、リリースがブロックされることはない。
 
-Renovate の PR は `Cargo.toml` と `Cargo.lock` を同時に更新するので影響を受けない。
+Renovate の PR もこのステップで落ちない。Cargo の `rangeStrategy` は `update-lockfile`（[ADR-0088](/decisions/adr-0088-renovate.md)）なので、宣言の範囲内の更新は **`Cargo.lock` だけ**を変え、範囲外に出る更新は `Cargo.toml` の要求と `Cargo.lock` を同じ commit で書き換える。どちらの形でも lock と宣言が食い違った状態は作らない。
 
 ## 罠
 
@@ -140,8 +140,8 @@ cargo +nightly udeps --workspace --all-targets --all-features
 | 対象 | どう追うか |
 |---|---|
 | `services/slack-event-gateway/Cargo.lock` | `cargo audit` / `cargo deny`。**ただし workspace 外なので `audit.yml` の既定では回らない** —— このディレクトリで別途実行する |
-| ビルダーイメージ（`rust:…-alpine`） | Dockerfile が**ダイジェストで固定**している。Rust のリリースに追随して手で上げる。コメントにタグ名が書いてあるのはそのため |
-| ランタイムイメージ（`gcr.io/distroless/static-debian12`） | 同じくダイジェスト固定。distroless の `static` は **libc すら持たない**（バイナリは musl で静的リンク）ので、面は実質「Google が再ビルドしたときに変わる CA 証明書と tzdata」だけになる |
+| ビルダーイメージ（`rust:…-alpine`） | Dockerfile が **`タグ@ダイジェスト`で固定**している（pull はダイジェストで行われ、タグはラベルでしかない）。Renovate がタグとダイジェストを一緒に上げる。ただし `alpine3.24` のような接尾辞は別系統のタグ扱いなので、Alpine の版上げだけは手で行う |
+| ランタイムイメージ（`gcr.io/distroless/static-debian12:nonroot`） | 同じく`タグ@ダイジェスト`固定で、Renovate がダイジェストを追う（automerge）。distroless の `static` は **libc すら持たない**（バイナリは musl で静的リンク）ので、面は実質「Google が再ビルドしたときに変わる CA 証明書と tzdata」だけになる |
 
 **イメージの中にはパッケージマネージャもシェルも無い。** CVE を当てる先はこの 3 つ以外に存在せず、
 逆に言えば**再ビルドしない限り何も直らない**。これは「面が小さい」のと引き換えに受け入れた性質である。
@@ -152,7 +152,7 @@ cargo +nightly udeps --workspace --all-targets --all-features
 「何から作ったか」はサプライチェーンの起点になる。**Slack の signing secret を持つコンテナ**の
 起点をタグに委ねる理由が無い。
 
-更新は `Dockerfile` のコメントにあるタグから新しいダイジェストを引いて差し替える:
+更新は Renovate が行う（[ADR-0088](/decisions/adr-0088-renovate.md)）。手で上げるとき（Alpine の版上げなど）は、`FROM` 行のタグから新しいダイジェストを引いて差し替える:
 
 ```bash
 curl -s "https://hub.docker.com/v2/repositories/library/rust/tags/<tag>" | jq -r .digest

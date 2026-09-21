@@ -4,6 +4,10 @@
 
 - Format: `<type>/<slug>`, all lowercase, `-` as separator (not `_`).
 - `type` ∈ `feat|fix|docs|style|refactor|perf|test|chore|revert` (same taxonomy as commit types).
+- Exception: branches created by bots keep the bot's own naming —
+  `renovate/…` (Renovate) and `release-please--branches--main` (release-please).
+  Do not push to them by hand: Renovate stops updating a branch once someone
+  else has committed to it.
 - Before creating/switching branches: run `git status` (no uncommitted changes) and confirm the target branch name with the user.
 - To catch up with `main`: `git rebase main` (never `git merge main` — keeps history linear), then push with `--force-with-lease`. Only on your own feature branch that no one else has pushed to.
 

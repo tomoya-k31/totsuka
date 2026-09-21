@@ -1,0 +1,150 @@
+// Renovate (Mend-hosted GitHub App). Decisions and rejected alternatives:
+// ai-docs/decisions/adr-0088-renovate.md (#728). Validate before pushing:
+//   npx --yes --package renovate -- renovate-config-validator --strict
+// (run from the repo root with no path: given a path, it validates the file
+// as *global* config instead.)
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+  extends: [
+    "config:recommended",
+    // Actions are SHA-pinned with a `# vX.Y.Z` comment; keep new ones that way.
+    "helpers:pinGitHubActionDigests",
+  ],
+
+  timezone: "Asia/Tokyo",
+  // Every PR that touches Cargo.lock misses rust-cache and builds cold
+  // (ADR-0029), so batch them into one weekly window instead of a trickle.
+  schedule: ["before 6am on monday"],
+  prConcurrentLimit: 5,
+  prHourlyLimit: 2,
+  // Automerged updates must not be yanked or hijacked releases.
+  minimumReleaseAge: "3 days",
+
+  // Commit type drives release-please: `chore` is hidden from the CHANGELOG
+  // and cuts no release; `fix` is reserved for security (see vulnerabilityAlerts).
+  semanticCommits: "enabled",
+  semanticCommitType: "chore",
+  semanticCommitScope: "deps",
+
+  // Renovate merges by itself, after EVERY status on the branch is green.
+  // Never GitHub's native auto-merge: the ruleset requires only `lint`, which
+  // is green on almost every PR, so native auto-merge would land a PR with
+  // `clippy / rustfmt`, `test` or `msrv` still red (same reason dev-flow bans
+  // `gh pr merge --auto`). The ruleset allows squash and rebase, not merge.
+  platformAutomerge: false,
+  automergeType: "pr",
+  automergeStrategy: "squash",
+
+  // MSRV. Keep in step with `rust-version` in Cargo.toml; the `msrv` CI job
+  // (ADR-0087) is the gate, this only avoids opening PRs bound to fail it.
+  constraints: { rust: "1.88" },
+  constraintsFiltering: "strict",
+
+  labels: ["renovate"],
+  dependencyDashboardTitle: "Renovate Dashboard 🤖",
+  dependencyDashboardLabels: ["renovate"],
+
+  lockFileMaintenance: {
+    enabled: true,
+    automerge: true,
+  },
+
+  vulnerabilityAlerts: {
+    semanticCommitType: "fix",
+    addLabels: ["renovate:security"],
+  },
+  osvVulnerabilityAlerts: true,
+
+  packageRules: [
+    // config:recommended makes `dependencies` fix(deps) — for Cargo that is
+    // every crate, i.e. a release per bump. Reset to chore; security PRs are
+    // turned back into fix by vulnerabilityAlerts, which is applied after this.
+    {
+      matchPackageNames: ["*"],
+      semanticCommitType: "chore",
+    },
+
+    // In-range updates touch Cargo.lock only; Cargo.toml changes when a new
+    // version falls outside the declared requirement.
+    {
+      matchManagers: ["cargo"],
+      rangeStrategy: "update-lockfile",
+    },
+
+    // ---- automerge -------------------------------------------------------
+    {
+      matchUpdateTypes: ["patch"],
+      automerge: true,
+    },
+    {
+      matchManagers: ["github-actions"],
+      matchUpdateTypes: ["minor", "patch", "digest", "pinDigest"],
+      automerge: true,
+    },
+    {
+      matchManagers: ["dockerfile"],
+      matchUpdateTypes: ["digest", "pinDigest"],
+      automerge: true,
+    },
+    // These four run only in release-please.yml, which PR CI never executes:
+    // green CI proves nothing about them, and a broken bump would first fail
+    // at the next release. Human review, and kept out of the automerged group.
+    {
+      matchPackageNames: [
+        "googleapis/release-please-action",
+        "docker/setup-buildx-action",
+        "docker/login-action",
+        "docker/build-push-action",
+      ],
+      automerge: false,
+      groupName: "release workflow actions",
+    },
+
+    // minimumReleaseAge needs a release timestamp, and by default an update
+    // without one is never raised. The docker datasource has timestamps only
+    // on Docker Hub, so gcr.io distroless — the image with no other way to
+    // get CVE fixes — would silently stop updating. Same for digest updates
+    // on a branch ref like `dtolnay/rust-toolchain@… # v1`.
+    {
+      matchManagers: ["dockerfile", "github-actions"],
+      minimumReleaseAgeBehaviour: "timestamp-optional",
+    },
+
+    // ---- grouping --------------------------------------------------------
+    {
+      matchManagers: ["cargo"],
+      matchUpdateTypes: ["patch"],
+      groupName: "cargo patch",
+    },
+    {
+      matchManagers: ["github-actions"],
+      matchUpdateTypes: ["minor", "patch", "digest", "pinDigest"],
+      matchPackageNames: [
+        "!googleapis/release-please-action",
+        "!docker/setup-buildx-action",
+        "!docker/login-action",
+        "!docker/build-push-action",
+      ],
+      groupName: "github-actions non-major",
+    },
+
+    // The tofu stack runs on OpenTofu; `required_version` would be looked up
+    // against hashicorp/terraform releases, which says nothing about it.
+    {
+      matchManagers: ["terraform"],
+      matchDepTypes: ["required_version"],
+      enabled: false,
+    },
+
+    // ---- labels ----------------------------------------------------------
+    { matchUpdateTypes: ["major"], addLabels: ["renovate:major"] },
+    { matchUpdateTypes: ["minor"], addLabels: ["renovate:minor"] },
+    { matchUpdateTypes: ["patch"], addLabels: ["renovate:patch"] },
+    { matchUpdateTypes: ["digest", "pinDigest"], addLabels: ["renovate:digest"] },
+    { matchUpdateTypes: ["lockFileMaintenance"], addLabels: ["renovate:lockfile"] },
+    { matchManagers: ["cargo"], addLabels: ["renovate:cargo"] },
+    { matchManagers: ["github-actions"], addLabels: ["renovate:github-actions"] },
+    { matchManagers: ["dockerfile"], addLabels: ["renovate:dockerfile"] },
+    { matchManagers: ["terraform"], addLabels: ["renovate:terraform"] },
+  ],
+}

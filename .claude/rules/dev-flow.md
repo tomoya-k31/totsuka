@@ -484,11 +484,25 @@ that was already proven each time.
 | **banked green が無い** | CI が緑になったことが一度も無いなら park する対象がない。まず緑にする |
 | **自分か `main` の進みが `Cargo.*` を触る** | lockfile はマージ時に機械的に解決できない。早く突き合わせるほど安い |
 | **`main` の進みが自分の変更ファイルと重なる**（元帳は除く） | 論理的な衝突は merge ref の green では捕まらない。同じ関数を両側が触ったら早く見る |
-| **bot PR**（release-please） | Release PR は release-please が force-push し、`sync-lockfile` ジョブが `Cargo.lock` を書き戻す。人間の park の前提（ブランチが動かない）が成り立たない |
+| **bot PR**（release-please / Renovate） | Renovate は自分でブランチを rebase する。Release PR は release-please が force-push し、`sync-lockfile` ジョブが `Cargo.lock` を書き戻す。人間の park の前提（ブランチが動かない）が成り立たない |
 | **park が 3 回 / 1 日を超えた** | 「証明済みの green」が古くなりすぎると、2 の "up to date でなくてよい" が形式的にしか正しくなくなる |
 
 **Parking makes "no checks reported" the normal state**, because the PR's last
 CI run belongs to an older head. Do not read that as pass — see below.
+
+### Renovate PRs — which of the steps apply
+
+Renovate PRs are not yours to drive through steps 1-8
+(→ [pr-conventions](pr-conventions.md), ADR-0088):
+
+- **Automerged ones** (patch, Actions non-major, Docker digests, lock file
+  maintenance): **none of the steps**. Renovate merges on its own once every
+  status on the branch is green, so CI is the whole gate. Do not press
+  GitHub's Auto-merge button on them (→ Two merge shortcuts below).
+- **Manually merged ones** (majors, Cargo minor, the `release-please.yml`
+  actions): steps 1-4 (CI + vetting Copilot's review) and 8 apply; **skip
+  step 5** (`/code-review`). A version bump rarely carries this repository's
+  written obligations, which is the gap step 5 exists to cover.
 
 ### Handling findings (steps 4 & 6)
 
