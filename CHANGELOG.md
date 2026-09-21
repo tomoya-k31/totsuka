@@ -11,6 +11,18 @@ Note: the plugin protocol is versioned independently of the application (see
 `crates/plugin-protocol`); a totsuka release does not imply a protocol-version
 change.
 
+## [0.8.2](https://github.com/tomoya-k31/totsuka/compare/v0.8.1...v0.8.2) (2026-09-21)
+
+
+### Features
+
+* **core:** 権限プロンプト待ちを無音に数えず、timeout_secs の既定を 0 にする ([#740](https://github.com/tomoya-k31/totsuka/issues/740)) ([530acd2](https://github.com/tomoya-k31/totsuka/commit/530acd2532c980123a010a5157a538e75e983218))
+
+
+### Documentation
+
+* **rules:** dev-flow の Rust セットに config-template-lint.sh を足す ([#738](https://github.com/tomoya-k31/totsuka/issues/738)) ([2d66ebd](https://github.com/tomoya-k31/totsuka/commit/2d66ebd4a59a7a9601b948907410aa32f7787781))
+
 ## [0.8.1](https://github.com/tomoya-k31/totsuka/compare/v0.8.0...v0.8.1) (2026-09-20)
 
 
