@@ -1164,47 +1164,53 @@ on_failure = {{ status = "failed" }}
 
 /// `timeout_secs = 0` opts a workflow out of the D-03 sweep (#439). Before
 /// this, a written-out `0` meant "escalate on the first sweep" — `> 0` is true
-/// for any positive silence — which no config could have wanted.
+/// for any positive silence — which no config could have wanted. Omitting the
+/// key means the same since the default became `0` (ADR-0086).
 #[tokio::test]
 async fn a_zero_timeout_disables_the_silence_sweep() {
-    let base = scratch("hook_timeout_zero");
-    let notify_log = base.join("notify.ndjson");
-    let clock = manual_clock();
-    let db = StateDb::open_with_clock(&base.join("state.db"), clock.clone()).unwrap();
-    // Same shape as `timeout_sweep_escalates_silent_task`: alive after the
-    // dispatch, then silent for far longer than any plausible timeout.
-    let id = db.upsert_task(&new_task("1", None)).unwrap();
-    db.apply_event(id, TaskEvent::Dispatch, None).unwrap();
-    db.apply_event(id, TaskEvent::Start, None).unwrap();
-    db.touch_last_signal(id).unwrap();
-    db.record_session(id, "mock_agent", "sess-1").unwrap();
+    for (label, workflows) in [
+        ("written-out 0", workflows_with_timeout(0)),
+        ("omitted", workflows("llm", "none")),
+    ] {
+        let base = scratch("hook_timeout_zero");
+        let notify_log = base.join("notify.ndjson");
+        let clock = manual_clock();
+        let db = StateDb::open_with_clock(&base.join("state.db"), clock.clone()).unwrap();
+        // Same shape as `timeout_sweep_escalates_silent_task`: alive after the
+        // dispatch, then silent for far longer than any plausible timeout.
+        let id = db.upsert_task(&new_task("1", None)).unwrap();
+        db.apply_event(id, TaskEvent::Dispatch, None).unwrap();
+        db.apply_event(id, TaskEvent::Start, None).unwrap();
+        db.touch_last_signal(id).unwrap();
+        db.record_session(id, "mock_agent", "sess-1").unwrap();
 
-    let mut engine = Engine::with_clock(
-        db,
-        engine_settings(workflows_with_timeout(0), None),
-        plugin_set(json!({}), &notify_log).await,
-        SystemGitRunner,
-        no_llm(),
-        clock.clone(),
-    )
-    .await;
+        let mut engine = Engine::with_clock(
+            db,
+            engine_settings(workflows, None),
+            plugin_set(json!({}), &notify_log).await,
+            SystemGitRunner,
+            no_llm(),
+            clock.clone(),
+        )
+        .await;
 
-    // A week of silence: far past any plausible timeout, and past the old
-    // behaviour's instant trip point.
-    clock.advance(time::Duration::days(7));
-    engine.sweep_signal_timeouts().await.unwrap();
-    assert_eq!(
-        engine.db().get_task(id).unwrap().unwrap().state,
-        TaskState::Running,
-        "timeout_secs = 0 must exempt the task from the D-03 sweep"
-    );
-    engine.shutdown(GRACE).await;
-    let notes = read_log(&notify_log);
-    assert!(
-        !notes.iter().any(|n| n["params"]["event"] == "escalated"),
-        "no escalation notification may fire for an opted-out workflow"
-    );
-    let _ = std::fs::remove_dir_all(&base);
+        // A week of silence: far past any plausible timeout, and past the old
+        // behaviour's instant trip point.
+        clock.advance(time::Duration::days(7));
+        engine.sweep_signal_timeouts().await.unwrap();
+        assert_eq!(
+            engine.db().get_task(id).unwrap().unwrap().state,
+            TaskState::Running,
+            "{label}: the task must be exempt from the D-03 sweep"
+        );
+        engine.shutdown(GRACE).await;
+        let notes = read_log(&notify_log);
+        assert!(
+            !notes.iter().any(|n| n["params"]["event"] == "escalated"),
+            "{label}: no escalation notification may fire for an opted-out workflow"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }
 
 fn notification(task_id: i64, row: i64, prompt_id: &str) -> AgentSignal {
@@ -1261,6 +1267,43 @@ async fn a_pending_permission_prompt_pauses_the_silence_sweep() {
         engine.db().get_task(id).unwrap().unwrap().state,
         TaskState::Escalated,
         "silence after the prompt was answered still escalates (D-03)"
+    );
+    engine.shutdown(GRACE).await;
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// A re-delivered (duplicate) permission prompt that lands after the agent
+/// moved on must not re-arm the pause — only a new prompt does.
+#[tokio::test]
+async fn a_duplicate_permission_prompt_does_not_re_arm_the_pause() {
+    let base = scratch("hook_timeout_permission_dup");
+    let notify_log = base.join("notify.ndjson");
+    let clock = manual_clock();
+    let db = StateDb::open_with_clock(&base.join("state.db"), clock.clone()).unwrap();
+    let id = db.upsert_task(&new_task("1", None)).unwrap();
+    db.apply_event(id, TaskEvent::Dispatch, None).unwrap();
+    db.apply_event(id, TaskEvent::Start, None).unwrap();
+    let row = db.record_session(id, "mock_agent", "sess-1").unwrap();
+
+    let mut engine = Engine::with_clock(
+        db,
+        engine_settings(workflows_with_timeout(1800), None),
+        plugin_set(json!({}), &notify_log).await,
+        SystemGitRunner,
+        no_llm(),
+        clock.clone(),
+    )
+    .await;
+
+    engine.on_signal(notification(id, row, "p1")).await.unwrap();
+    engine.on_signal(heartbeat(id, row, "p1")).await.unwrap();
+    engine.on_signal(notification(id, row, "p1")).await.unwrap();
+    clock.advance(time::Duration::seconds(1801));
+    engine.sweep_signal_timeouts().await.unwrap();
+    assert_eq!(
+        engine.db().get_task(id).unwrap().unwrap().state,
+        TaskState::Escalated,
+        "a re-delivered prompt must not pause the sweep again"
     );
     engine.shutdown(GRACE).await;
     let _ = std::fs::remove_dir_all(&base);
@@ -2477,8 +2520,8 @@ async fn duplicate_heartbeat_refreshes_liveness_and_prevents_false_escalation() 
     let notify_log = base.join("notify.ndjson");
     let clock = manual_clock();
     let db = StateDb::open_with_clock(&base.join("state.db"), clock.clone()).unwrap();
-    // Seed the anchor at T0, then move past the 30-minute default timeout:
-    // without the refresh below, the sweep WOULD escalate (#174).
+    // Seed the anchor at T0, then move past a 30-minute timeout: without the
+    // refresh below, the sweep WOULD escalate (#174).
     let id = db.upsert_task(&new_task("1", Some(T0))).unwrap();
     db.apply_event(id, TaskEvent::Dispatch, None).unwrap();
     db.apply_event(id, TaskEvent::Start, None).unwrap();
@@ -2486,7 +2529,7 @@ async fn duplicate_heartbeat_refreshes_liveness_and_prevents_false_escalation() 
 
     let mut engine = Engine::with_clock(
         db,
-        engine_settings(workflows("llm", "none"), None),
+        engine_settings(workflows_with_timeout(1800), None),
         plugin_set(json!({}), &notify_log).await,
         SystemGitRunner,
         no_llm(),

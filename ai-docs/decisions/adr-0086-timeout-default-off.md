@@ -3,7 +3,7 @@ type: Decision
 title: ADR-0086 timeout_secs の既定を 0（掃引なし）にし、権限プロンプト待ちを無音に数えない
 description: "D-03 無音掃引は人間の応答待ちと止まったエージェントを見分けられないため、[[workflows]].timeout_secs の既定を 1800 から 0（掃引なし）へ変え、明示的に上限を書いた workflow でも権限 / idle プロンプト（Notification）待ちの間は掃引を止めることにした決定。"
 tags: [decision, timeout, escalation, hooks, adr]
-generated: { by: claude-code/opus-5, at: 2026-09-21T00:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-21T13:30:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -37,6 +37,7 @@ herdr / orca プラグインは pane の `blocked` / `permission` を `WaitingIn
 - この判定はエンジンのメモリ上にしか持たない（`Engine.awaiting_approval`）。プロンプト待ちの途中で `totsuka run` を再起動すると判定が消え、以前と同じく `last_signal_at` から数え直す。問題になったら `last_signal_at` の隣に永続化する
 - プロンプトに答えたあと次の信号が届くまでの作業時間も掃引の対象外になる。claude が作業途中に出すフック信号は少なく、承認の瞬間そのものを捉える信号は無い。そのため、ここが無音検知の限界になる
 - `hook_events` の最新行は判定に使わない。重複配信は記録されずに捨てられるので、プロンプト後の heartbeat が重複だった場合に最新行が `notification` のまま残るため
+- フラグを立てるのは**新規の** `Notification` だけで、外すのは重複を含むすべての非 `Notification` 信号である。再送された古いプロンプトは、エージェントが先へ進んだ後にフラグを立て直せない。それでも、spool から遅れて再生された初回配信のプロンプトだけは区別できない。その場合も次の信号 1 つで解除される
 
 # 不採用案
 

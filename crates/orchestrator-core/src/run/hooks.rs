@@ -73,12 +73,11 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         // the touch behind `New` would let `sweep_signal_timeouts` falsely
         // escalate a task that is very much alive.
         self.db.touch_last_signal(task_id)?;
-        // Also before the dedup: a repeated permission prompt is still a
-        // prompt, and a duplicate heartbeat after it still proves the human
-        // answered and the agent moved on.
-        if matches!(sig.event, SignalEvent::Notification { .. }) {
-            self.awaiting_approval.insert(task_id);
-        } else {
+        // Also before the dedup: a duplicate heartbeat after a permission
+        // prompt still proves the human answered and the agent moved on. Only
+        // a *new* prompt arms the pause (the `Notification` arm below), so a
+        // re-delivered old one cannot re-arm it after the agent moved on.
+        if !matches!(sig.event, SignalEvent::Notification { .. }) {
             self.awaiting_approval.remove(&task_id);
         }
 
@@ -145,6 +144,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             // `QuestionPending` (#487, the arm below) move the task to
             // `WaitingInput`.
             SignalEvent::Notification { message } => {
+                self.awaiting_approval.insert(task_id);
                 notify_all(
                     &self.plugins.notifiers,
                     NotifierEvent::WaitingInput,
