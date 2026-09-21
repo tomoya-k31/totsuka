@@ -3,7 +3,7 @@ type: Decision
 title: ADR-0088 Renovate を Mend の GitHub App で入れ、automerge を Renovate 自身に持たせる
 description: "規約と ADR が前提にしていたのに実体が無かった Renovate を、Mend ホストの GitHub App と .github/renovate.json5 で導入した決定。必須チェックが lint だけの ruleset では GitHub の auto-merge が赤の PR を通すので automerge は Renovate 自身が全ステータスを待って行い、対象は patch・Actions の非 major・Docker digest・lockFileMaintenance に限り、PR の CI が実行しない release-please.yml の 4 action は人間レビューに残す。コミット type（chore / security は fix）、ブランチ名とラベル、週次スケジュールとグルーピング、minimumReleaseAge 3 日、Cargo の update-lockfile、MSRV の constraints、Dockerfile の tag@digest 化を記録する。"
 tags: [decision, ci, dependencies, renovate, release-please, automerge, adr]
-generated: { by: claude-code/opus-5, at: 2026-09-21T17:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-21T21:40:00+09:00 }
 status: stable
 owner: tomoya-k31
 sources:
@@ -13,13 +13,19 @@ sources:
   - id: renovate-source
     resource: "renovate 42.99.0 の配布物（npm）"
     title: "Renovate の実装（generate.js の automerge 合成、vulnerability.js の force、crate datasource の rust_version、docker datasource の releaseTimestamp）"
+  - id: renovate-config-manager
+    resource: "renovate 44.105.4 の配布物（npm）dist/modules/manager/renovate-config/extract.js"
+    title: "Renovate の renovate-config manager（constraints のツール名を depType tool-constraint の依存として登録する）"
+  - id: dashboard-749
+    resource: https://github.com/tomoya-k31/totsuka/issues/749
+    title: Renovate Dashboard 🤖（App 導入直後の Dependency Dashboard）
 ---
 
 # Status
 
 stable。#728 の 2 本目の PR。1 本目は MSRV ゲート（[ADR-0087](/decisions/adr-0087-msrv-gate.md)）。
 
-**実 PR での確認はマージ後に行う**（下の「マージ後に確かめること」）。この ADR の設定は `renovate-config-validator --strict` を通してあり、挙動の要点は Renovate 42.99.0 のソースで確かめた。ただし App が実際に出す PR はまだ 1 本も見ていない。
+**実 PR での確認はマージ後に行う**（下の「マージ後に確かめること」）。この ADR の設定は `renovate-config-validator --strict` を通してあり、挙動の要点は Renovate 42.99.0 のソースで確かめた。App が実際に出す PR はまだ 1 本も見ていない。導入直後の Dependency Dashboard（#749）は確認済みで、そこで見つかった `constraints.rust` の追従を止めた（下の Consequences）。
 
 # Context
 
@@ -70,6 +76,7 @@ stable。#728 の 2 本目の PR。1 本目は MSRV ゲート（[ADR-0087](/deci
 - **`lockFileMaintenance` は `cargo patch` グループとは別の PR になる。** lock を書き換える PR は週に最大 2 本（`cargo patch` と lockFileMaintenance）になる。lockFileMaintenance は `cargo update` 相当なので、範囲内の minor も含めて最新まで上げ、`minimumReleaseAge` も効かない。範囲内の minor は semver 互換という Cargo の約束に乗っている
 - **`minimumReleaseAge` はリリース時刻を要求する。** 既定（`timestamp-required`）のままだと、時刻の取れない更新は永久に出ない。docker datasource が時刻を持つのは Docker Hub だけなので[^renovate-source]、gcr.io の distroless は黙って止まってしまう。そこで Docker と Actions だけ `timestamp-optional` にした。代償として、時刻の取れない更新には 3 日の猶予が効かない
 - **MSRV の版は 2 箇所に書かれる**（`Cargo.toml` の `rust-version` と `constraints.rust`）。上げるときは同じ PR で両方を直す。**`constraints.rust` は必ず `x.y.z` の 3 要素で書く。** strict filtering はリリースの `rust_version` を範囲として `matches(<設定値>, <rust_version>)` で判定し、cargo versioning は `"1.88"` を版として解釈しない。そのため `"1.88"` と書くと、`rust_version` を宣言する crate のほぼ全リリースが黙って候補から消える（1.70 も 1.88.0 も落ちる）。`"1.88.0"` なら 1.70 / 1.88 は通り、1.90 は落ちる（renovate 42.99.0 の cargo versioning で実測）[^renovate-source]
+- **`constraints.rust` そのものは Renovate の追従対象から外す。** App（Renovate 44.x）の `renovate-config` manager は、設定ファイルの `constraints` を依存として読み（`depType: "tool-constraint"`）、`rust 1.88.0 → 1.98.1` のような PR を出そうとする。導入直後の Dependency Dashboard（#749）で見つかった。[^renovate-config-manager][^dashboard-749]この値は MSRV のフィルタで、上げると `msrv` ジョブが落とす版を候補に戻してしまう。そこで `matchManagers: ["renovate-config"]` + `matchDepTypes: ["tool-constraint"]` + `matchDepNames: ["rust"]` を `enabled: false` にした。上げるのは上の規則どおり `rust-version` と同じ PR で、手で行う。ローカルの検証も `renovate@latest` で行う（npx のキャッシュに残る 42.x にはこの manager が無く、効いているかを確かめられない）
 - **Alpine の接尾辞（`alpine3.24`）は Renovate では上がらない。** 別系統のタグとして扱われるので、手で上げる
 - **`warm-cache.yml` の `env: RUSTFLAGS` は触られない。** github-actions manager が書き換えるのは `uses:` 行だけである
 - Renovate のブランチに人間やエージェントが commit を積むと、Renovate はそのブランチの更新を止める（[ADR-0085](/decisions/adr-0085-branch-hint.md)）
@@ -104,3 +111,5 @@ App のインストールは人間が行う。以下は実際の PR を見て #7
 
 [^issue-728]: chore(ci): Renovate を導入し、SHA ピン・release-please・必須チェック 1 本の ruleset に合わせて設定する
 [^renovate-source]: Renovate の実装
+[^renovate-config-manager]: Renovate の renovate-config manager
+[^dashboard-749]: Renovate Dashboard 🤖
