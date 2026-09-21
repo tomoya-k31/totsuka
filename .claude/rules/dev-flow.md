@@ -22,6 +22,7 @@ docs-only change cannot fail `cargo clippy`, so the Rust set is pointless there.
 | one of the 5 generation sources under `ai-docs/` (see the `human-docs` skill) | regenerate the matching `docs/` pages with the **`human-docs` skill** in the same PR, then `bash scripts/docs-freshness.sh` |
 | `docs/**` | `bash scripts/docs-freshness.sh` to zero errors + `rumdl check .`. Do **not** run `okf-lint` on it — it is not an OKF bundle |
 | a prose `*.md` outside the OKF/vendored exclusions and outside `.claude/**` | update its `.ja.md` sibling (→ [documentation-i18n.md](documentation-i18n.md)) |
+| `crates/orchestrator-cli/templates/config.toml` and no `*.rs` | `bash scripts/config-template-lint.sh` alone — the rest of the Rust set cannot see a template-only edit |
 | `.github/workflows/**` | read the SHA-pin + `ubuntu-slim` rules, validate YAML (`yq . <file>`); if you changed `ci.yml`'s commands, also run the affected Rust set |
 | `.claude/**` (settings / hooks / rules) | validate JSON (`python3 -m json.tool .claude/settings.json`); no Rust, no `.ja.md` |
 | none of the above touch Rust/Cargo (docs-only, `.claude`-only, …) | **skip the Rust set entirely** |
@@ -53,6 +54,19 @@ for why. CI's own flags stay exactly as they are:
   (plugins → protocol/sdk only, protocol is a leaf, no cycles). Cheap
   (`cargo metadata --no-deps`, seconds); especially relevant when a
   `Cargo.toml` changed. CI runs it as a step inside the `clippy / rustfmt` job.
+- `bash scripts/config-template-lint.sh` — another fitness function in that
+  same CI job: every field of a config struct must appear in
+  `crates/orchestrator-cli/templates/config.toml`, and every key in the
+  template must exist in a struct
+  (→ [config-template](../../ai-docs/development/config-template.md)).
+  **It fires on a config struct you did not think of as "the template's
+  business"** — PR #736 added two keys to a *plugin's* config and CI failed on
+  the `orchestrator-cli` template, because the template carries all 7 plugins'
+  keys too. Cheap (0.7s, POSIX awk/grep, no build), so run it whenever an
+  input of its own changed: **`crates/orchestrator-core/src/config/schema.rs`**
+  (not named `config.rs`, and holds the majority of the keys), any
+  `plugins/*/src/config.rs`, or the template itself. Naming only `config.rs`
+  would leave the core schema — the side that keeps growing — uncovered.
 - `cargo clippy --workspace --all-targets -- -D warnings` — CI passes
   `--all-features` here; locally it is dropped for the same reason as in the
   test bullet below (zero `[features]` in the workspace, so it selects nothing).
@@ -64,8 +78,8 @@ for why. CI's own flags stay exactly as they are:
   1,201 tests. Extra arguments are forwarded to `cargo nextest run` verbatim, so
   narrowing is nextest's filterset and nothing of ours:
   `bash scripts/dev-test.sh -E 'package(=agent-ide-herdr)'`.
-  - it covers **tests only**. `fmt` / `arch-lint` / `clippy` / `cargo doc` are
-    the other bullets in this list and stay manual
+  - it covers **tests only**. `fmt` / `arch-lint` / `config-template-lint` /
+    `clippy` / `cargo doc` are the other bullets in this list and stay manual
   - **Do not add `RUSTFLAGS="-D warnings"` or `--all-features` to local
     commands.** `--all-features` is a no-op in this workspace (zero `[features]`
     declarations, → ADR-0029), and the deny is already permanent: root
