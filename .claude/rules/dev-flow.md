@@ -175,6 +175,11 @@ for why. CI's own flags stay exactly as they are:
 - `rumdl check .` to zero issues. Configuration is `.rumdl.toml` at the repo
   root; every disabled rule and per-file ignore carries its rationale inline, so
   read it before adding an ignore of your own.
+- **Requires rumdl >= 0.2.42** (`rumdl --version`). Older releases panic
+  (`end byte index … is not a char boundary`, exit 2) on an unterminated `<`
+  such as `<<EOF` whose 4096-byte lookahead ends inside a multi-byte character
+  — Japanese prose hits this, and one file aborts the whole run
+  (rvben/rumdl#757, fixed in 0.2.42; #733).
 - `rumdl check --fix .` auto-fixes most formatting findings. **Read the diff
   before accepting it** — the autofix is not always the right answer:
   - `MD040` (missing code-fence language) is filled in as `text` regardless of
