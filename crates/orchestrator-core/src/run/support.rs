@@ -247,7 +247,7 @@ pub(super) fn routine_submit_ack(status: TaskSubmitStatus, state: Option<TaskSta
 #[cfg(test)]
 mod tests {
     #[test]
-    fn only_a_duplicate_for_a_running_task_is_routine() {
+    fn only_a_duplicate_for_a_task_in_flight_is_routine() {
         use super::routine_submit_ack;
         use super::{TaskState, TaskSubmitStatus};
         assert!(routine_submit_ack(
