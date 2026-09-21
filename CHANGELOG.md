@@ -11,6 +11,20 @@ Note: the plugin protocol is versioned independently of the application (see
 `crates/plugin-protocol`); a totsuka release does not imply a protocol-version
 change.
 
+## [0.8.3](https://github.com/tomoya-k31/totsuka/compare/v0.8.2...v0.8.3) (2026-09-21)
+
+
+### Features
+
+* **core:** [tools.X].env_file の値を起動時に 1 回だけ解決し、エージェントの起動 env に渡す ([#746](https://github.com/tomoya-k31/totsuka/issues/746)) ([d72b4a6](https://github.com/tomoya-k31/totsuka/commit/d72b4a6cf702f5bcde3a139b00c3640c97f18377))
+* **orca:** 起動時の環境変数を端末に打ち込まず FIFO で渡す ([#745](https://github.com/tomoya-k31/totsuka/issues/745)) ([446399a](https://github.com/tomoya-k31/totsuka/commit/446399a9596a3166611c9758f99e053cfcde537d))
+* **plugins:** trigger に exclude を足し、否定条件を書けるようにする ([#750](https://github.com/tomoya-k31/totsuka/issues/750)) ([67d0717](https://github.com/tomoya-k31/totsuka/commit/67d07173d0bc078f6969cd6bd1d537c289018c41))
+
+
+### Bug Fixes
+
+* **core:** 実行中タスクへの task/submit の Duplicate を debug で記録する ([#751](https://github.com/tomoya-k31/totsuka/issues/751)) ([3d0cf3d](https://github.com/tomoya-k31/totsuka/commit/3d0cf3d3f2f209d88afae2a4e72d6305a3a62476))
+
 ## [0.8.2](https://github.com/tomoya-k31/totsuka/compare/v0.8.1...v0.8.2) (2026-09-21)
 
 
