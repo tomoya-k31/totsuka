@@ -28,7 +28,8 @@ docs-only change cannot fail `cargo clippy`, so the Rust set is pointless there.
 | none of the above touch Rust/Cargo (docs-only, `.claude`-only, …) | **skip the Rust set entirely** |
 
 Note: on every PR, CI runs `clippy / rustfmt` + `test` + `machete (unused
-deps)` (`ci.yml`, no path filter) and the `lint` check (`okf-lint.yml`)
+deps)` + `msrv` + `gateway (slack-event-gateway)` (`ci.yml`, no path filter;
+`gateway` builds the image only when `services/slack-event-gateway/` changed) and the `lint` check (`okf-lint.yml`)
 regardless of what changed. If `machete` fails, remove the unused dependency
 or suppress a false positive per
 [dependency-hygiene](../../ai-docs/development/dependency-hygiene.md).
