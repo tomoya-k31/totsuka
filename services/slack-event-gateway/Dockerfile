@@ -22,9 +22,11 @@
 # Pinned by digest, for the same reason every GitHub Action in this repository
 # is pinned by SHA: a tag is mutable, and "the image we build from" is the
 # start of the supply chain for a container that holds Slack signing secrets.
-# The tag is in the comment so the next person knows what to bump.
-FROM rust@sha256:1716b3aa042d735f4566d14dc54e8037de9d69556e2d5dd58131d93a613d173d AS build
-# rust:1.98-alpine3.24
+# The tag sits next to the digest (`tag@digest` pulls by digest; the tag is
+# only a label) so Renovate can see which version this is and bump both
+# together (#728 / ADR-0088). It cannot move `alpine3.24` to the next Alpine
+# release on its own — that suffix is a different tag line, bumped by hand.
+FROM rust:1.98-alpine3.24@sha256:1716b3aa042d735f4566d14dc54e8037de9d69556e2d5dd58131d93a613d173d AS build
 
 RUN apk add --no-cache musl-dev
 
@@ -60,8 +62,7 @@ RUN touch src/main.rs src/lib.rs \
 # required to ship `ca-certificates` — swapping it for `scratch` would still
 # work, which is deliberate: a base-image change must not be able to break TLS
 # at runtime only.
-FROM gcr.io/distroless/static-debian12@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
-# gcr.io/distroless/static-debian12:nonroot
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 
 COPY --from=build /src/target/release/slack-event-gateway /slack-event-gateway
 

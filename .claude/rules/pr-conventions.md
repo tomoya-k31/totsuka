@@ -26,9 +26,27 @@
 
 ## Dependency update PRs (Renovate)
 
-- Patch: auto-merge is fine once CI passes.
-- Minor: normal review flow, no auto-merge.
-- Major: human review required — confirm breaking changes described in the PR body before merging.
+Config: `.github/renovate.json5`; decisions in
+[ADR-0088](../../ai-docs/decisions/adr-0088-renovate.md).
+
+- **Automerged by Renovate itself** (`platformAutomerge: false`), only after
+  every status on the branch is green: patch (all managers), GitHub Actions
+  minor / patch / digest, Docker digests, and the weekly lock file
+  maintenance. **Never use GitHub's Auto-merge button or `gh pr merge --auto`
+  on them** — the ruleset requires only `lint`, so native auto-merge would
+  land a red `clippy / rustfmt`, `test` or `msrv` (→ dev-flow).
+- **Human review**: every major; Cargo minor; the four actions that run only
+  in `release-please.yml` (`googleapis/release-please-action`,
+  `docker/setup-buildx-action`, `docker/login-action`,
+  `docker/build-push-action`) — PR CI never executes them, so green CI proves
+  nothing about them. For a major, confirm the breaking changes in the PR body
+  before merging.
+- Commit type: `chore(deps)` (hidden from the CHANGELOG, no release);
+  security updates are `fix(deps)` and cut a patch release.
+- Labels: `renovate` on every PR, plus `renovate:<major|minor|patch|digest|lockfile|security>`
+  and `renovate:<cargo|github-actions|dockerfile|terraform>`.
+- Bot PRs (Renovate, release-please) are exempt from the PR description
+  template above.
 
 ## Releases
 

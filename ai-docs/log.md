@@ -4,6 +4,8 @@
 
 * **Creation**: MSRV（`rust-version`）を CI の `msrv` ジョブで検査することにした [ADR-0087](/decisions/adr-0087-msrv-gate.md)
 * **Update**: PR で走る CI ジョブの一覧に `msrv` を足した [テスト戦略](/quality/test-strategy.md)
+* **Creation**: Renovate を Mend の GitHub App で入れ、automerge を Renovate 自身に持たせることにした [ADR-0088](/decisions/adr-0088-renovate.md)
+* **Update**: Renovate の PR が `Cargo.toml` と `Cargo.lock` をどう変えるか（`update-lockfile`）と、ベースイメージを Renovate が追うことを反映した [依存関係ハイジーン](/development/dependency-hygiene.md)
 * **Creation**: ソースが既存ブランチを名指しできる `Task.branch_hint`（protocol 0.7.5）を足し、どう使うか（implement はブランチ上、plan は先頭 commit に detached）は core がモードで決める決定を [ADR-0085](/decisions/adr-0085-branch-hint.md) に記録した（#734 の PR 1。ヒントを埋めるソースはまだ無く、挙動は変わらない）
 * **Creation**: 用語 [branch hint](/glossary/branch-hint.md) を追加した。repo hint と違って助言ではなく、honour できなければタスクが失敗する
 * **Update**: [plugin-protocol](/components/plugin-protocol.md) に `Task.branch_hint` と 0.7.5、[orchestrator-core](/components/orchestrator-core.md) に `HintedStart` / `sync_to_hint` / ヒント用の失敗 4 種と、不可視文面 `hinted_branch_on` / `hinted_branch_detached` を追記した
