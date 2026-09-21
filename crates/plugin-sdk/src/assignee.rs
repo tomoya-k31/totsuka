@@ -121,9 +121,10 @@ impl AssigneeFilter {
     /// key excludes nobody. A match here drops the task.
     pub fn parse_exclude(trigger: &Value, workflow: &str) -> Result<Option<Self>, String> {
         match trigger.get("exclude") {
-            Some(exclude) if exclude.get("assignee").is_some() => {
-                Self::parse(exclude, workflow).map(Some)
-            }
+            Some(exclude) if exclude.get("assignee").is_some() => Self::parse(exclude, workflow)
+                .map(Some)
+                // `parse` names the ingest key; say which one is actually wrong.
+                .map_err(|e| e.replace("`trigger.assignee", "`trigger.exclude.assignee")),
             _ => Ok(None),
         }
     }
@@ -236,11 +237,17 @@ pub fn check(
             // from being evaluated (#582). Rejecting it too would leave no way
             // to state "no assignee filtering" other than omitting the key.
             if people_property == Some(false) && filter.reads_assignees() {
+                // `@any` is the way out only on the ingest side: inside
+                // `exclude` it would drop every task.
+                let way_out = if key == "trigger.assignee" {
+                    ", or write `assignee = \"@any\"` if you do not filter by assignee"
+                } else {
+                    ""
+                };
                 errors.push(format!(
                     "workflow `{}` sets `{key}`, but `{property_key}` is not set → every task \
                      would read as unassigned, so the condition could not do anything; map the \
-                     property, drop the key, or write `assignee = \"@any\"` if you do not \
-                     filter by assignee",
+                     property or drop the key{way_out}",
                     wf.workflow
                 ));
             }
@@ -592,6 +599,34 @@ mod tests {
         );
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert!(errors[0].contains("trigger.exclude.assignee"), "{errors:?}");
+
+        // Unmapped property: `@any` would exclude everything here, so it must
+        // not be offered as the fix.
+        let (errors, _) = check(
+            &[WorkflowInfo {
+                workflow: "wf".into(),
+                projects: vec![],
+                status_writebacks: vec![],
+                trigger: json!({ "assignee": "@any", "exclude": { "assignee": "bot" } }),
+                instructions_kind: None,
+                task_id_prefix: None,
+                options: serde_json::Map::new(),
+            }],
+            Some("me"),
+            "`notion_user_id`",
+            Some(false),
+            "`property_map.assignee`",
+            false,
+        );
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("trigger.exclude.assignee"), "{errors:?}");
+        assert!(!errors[0].contains("@any"), "{errors:?}");
+
+        // A malformed value names the exclude key, not the ingest one.
+        let err =
+            AssigneeFilter::parse_exclude(&json!({ "exclude": { "assignee": "@mee" } }), "wf")
+                .unwrap_err();
+        assert!(err.contains("`trigger.exclude.assignee"), "{err}");
     }
 
     /// `reads_assignees` is the distinction the check now turns on, so it is

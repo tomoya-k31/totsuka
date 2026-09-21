@@ -95,7 +95,7 @@ pub fn unknown_exclude_keys(workflows: &[WorkflowInfo], valid: &[&str]) -> Vec<S
         let Some(table) = exclude.as_object() else {
             errors.push(format!(
                 "workflow `{}` has a `trigger.exclude` that is not a table ({exclude}) → write it \
-                 as `exclude = {{ label = \"…\" }}`",
+                 as a table, `exclude = {{ <key> = … }}`, keyed by {known}",
                 wf.workflow
             ));
             continue;
@@ -211,6 +211,8 @@ mod tests {
         assert!(errors[0].contains("`typo`") && errors[0].contains("`lable`"));
         assert!(errors[1].contains("`nested`") && errors[1].contains("`exclude`"));
         assert!(errors[2].contains("`scalar`") && errors[2].contains("not a table"));
+        // The fix names this source's keys, not a key another source reads.
+        assert!(errors[2].contains("`label`, `status`"), "got {errors:?}");
     }
 
     #[test]
