@@ -55,8 +55,18 @@ impl FakeCli {
             .collect()
     }
 
-    fn handoffs(&self) -> Vec<String> {
-        self.handoffs.lock().unwrap().clone()
+    /// What the fake shells read, once `n` of them have finished. The reader
+    /// is a detached thread and the plugin only joins its own writer, so the
+    /// read can land just after the dispatch returns (Copilot review, #745).
+    fn handoffs(&self, n: usize) -> Vec<String> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let read = self.handoffs.lock().unwrap().clone();
+            if read.len() >= n || std::time::Instant::now() >= deadline {
+                return read;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
     }
 
     /// Stand in for the terminal's shell: a real orca types `--command` into
@@ -154,7 +164,8 @@ struct Driver {
     handoff_dir: std::path::PathBuf,
 }
 
-/// A launch env directory of this test's own: opening one sweeps it.
+/// A launch env base directory of this test's own, so each test's FIFOs can
+/// be inspected apart from the others'.
 fn handoff_dir() -> std::path::PathBuf {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     std::env::temp_dir().join(format!(
@@ -381,7 +392,7 @@ async fn dispatch_launches_tool_launch_in_the_tasks_worktree_and_submits_the_pro
     );
     // The env is handed over through the FIFO, never typed (#744).
     assert!(!command.contains("TOTSUKA_JOB_ID"), "{command}");
-    assert_eq!(cli.handoffs(), vec!["export TOTSUKA_JOB_ID='3.1'\n"]);
+    assert_eq!(cli.handoffs(1), vec!["export TOTSUKA_JOB_ID='3.1'\n"]);
 
     // Ownership lives on the worktree, not the tab: the agent retitles the
     // tab as soon as it works.
@@ -455,8 +466,9 @@ async fn dispatch_without_tool_launch_is_invalid_params() {
     );
 }
 
-/// Nothing is left behind in the FIFO directory.
-fn assert_no_fifo_left(dir: &std::path::Path) {
+/// Nothing is left behind in this process's FIFO directory.
+fn assert_no_fifo_left(base: &std::path::Path) {
+    let dir = base.join(std::process::id().to_string());
     let left: Vec<_> = std::fs::read_dir(dir).unwrap().flatten().collect();
     assert!(left.is_empty(), "leftover in the handoff dir: {left:?}");
 }

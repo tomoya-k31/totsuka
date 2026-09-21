@@ -42,7 +42,8 @@ pub struct Server<F: CliFactory> {
     factory: F,
     agent: Option<OrcaAgent<F::Cli>>,
     out: mpsc::UnboundedSender<String>,
-    /// Where the launch env FIFOs go (#744); `None` when no XDG base or
+    /// The base the launch env FIFO directory goes under (#744, one
+    /// subdirectory per process); `None` when no XDG base or
     /// `HOME` names one, which fails `initialize`.
     handoff_dir: Option<PathBuf>,
     handoff_wait: Duration,
@@ -62,7 +63,7 @@ impl<F: CliFactory> Server<F> {
 
     /// Put the launch env FIFOs in `dir` and wait `wait` for each to be read,
     /// instead of the runtime dir and the startup budget. For tests: each
-    /// needs a directory of its own, since opening one sweeps it.
+    /// wants its FIFOs apart from the others' to inspect them.
     pub fn with_handoff(mut self, dir: PathBuf, wait: Duration) -> Self {
         self.handoff_dir = Some(dir);
         self.handoff_wait = wait;

@@ -6,8 +6,8 @@
 //! the hook token, the whole prompt context, any secret an `env_file` adds —
 //! on the screen and in the scrollback. Instead:
 //!
-//! 1. [`EnvHandoff::start`] makes a `0600` FIFO in a `0700` directory of
-//!    totsuka's runtime dir and starts writing the env to it as
+//! 1. [`EnvHandoff::start`] makes a `0600` FIFO in this process's `0700`
+//!    directory under totsuka's runtime dir and starts writing the env to it as
 //!    `export K='v'` lines — the write completes once a reader opens it.
 //! 2. The terminal gets only a command that reads the FIFO, deletes it, and
 //!    `exec`s the agent ([`crate::launch::launch_command`]).
@@ -26,7 +26,7 @@
 
 use std::collections::BTreeMap;
 use std::io::{ErrorKind, Write};
-use std::os::unix::fs::{FileTypeExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -59,7 +59,15 @@ pub fn default_dir(env: impl Fn(&str) -> Option<String>) -> Option<PathBuf> {
     Some(base.join("totsuka").join(DIR_NAME))
 }
 
-/// The FIFO directory, created `0700` and swept of leftovers.
+/// This process's FIFO directory: `<base>/<pid>`, both `0700`.
+///
+/// **Per process, not shared.** `totsuka doctor` and `config validate` launch
+/// and initialize an orca plugin of their own while `totsuka run`'s may be
+/// mid-dispatch, so a directory every plugin process sweeps would let a probe
+/// unlink the run's live FIFO (Copilot review, #745). Each process removes
+/// only its own directory, on open (a leftover under a reused pid) and on
+/// drop. A crashed process leaves its directory behind, but a FIFO holds no
+/// data on disk, so what is left carries no secret.
 #[derive(Debug)]
 pub struct EnvHandoff {
     dir: PathBuf,
@@ -68,28 +76,18 @@ pub struct EnvHandoff {
 }
 
 impl EnvHandoff {
-    /// Create (or tighten) the directory and remove any FIFO a previous run
-    /// left behind. Only one `totsuka run` holds `run.lock`, so there is only
-    /// one orca plugin to own this directory. Each FIFO then waits up to
-    /// `wait` for the terminal's shell to read it.
-    pub fn open(dir: PathBuf, wait: Duration) -> std::io::Result<Self> {
-        std::fs::create_dir_all(&dir)?;
+    /// Create `<base>/<pid>` (`0700`), emptied of anything a dead process
+    /// with the same pid left there. Each FIFO then waits up to `wait` for
+    /// the terminal's shell to read it.
+    pub fn open(base: PathBuf, wait: Duration) -> std::io::Result<Self> {
+        std::fs::create_dir_all(&base)?;
+        std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o700))?;
+        let dir = base.join(std::process::id().to_string());
+        // Our pid, so whoever made it is gone.
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir(&dir)?;
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
-        let handoff = Self { dir, wait };
-        handoff.sweep();
-        Ok(handoff)
-    }
-
-    /// Remove every FIFO in the directory. Best-effort.
-    fn sweep(&self) {
-        let Ok(entries) = std::fs::read_dir(&self.dir) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            if entry.file_type().is_ok_and(|t| t.is_fifo()) {
-                let _ = std::fs::remove_file(entry.path());
-            }
-        }
+        Ok(Self { dir, wait })
     }
 
     /// Make a FIFO for `env` and start writing it on a thread: the lines go
@@ -108,11 +106,9 @@ impl EnvHandoff {
             content.push_str(&format!("export {key}={}\n", shell_quote(value)));
         }
         static NEXT: AtomicU64 = AtomicU64::new(0);
-        let path = self.dir.join(format!(
-            "{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
+        let path = self
+            .dir
+            .join(NEXT.fetch_add(1, Ordering::Relaxed).to_string());
         // `mkfifo(1)` rather than `mkfifo(3)`: POSIX, no `unsafe`, no new
         // dependency, and `-m` sets the mode regardless of the umask.
         let status = tokio::process::Command::new("mkfifo")
@@ -136,7 +132,7 @@ impl EnvHandoff {
 
 impl Drop for EnvHandoff {
     fn drop(&mut self) {
-        self.sweep();
+        let _ = std::fs::remove_dir_all(&self.dir);
     }
 }
 
@@ -287,30 +283,40 @@ mod tests {
         assert!(!is_env_name("A-B"));
     }
 
+    /// Another plugin process — `doctor`'s probe next to a live run — has a
+    /// directory of its own, and nothing this process does touches it.
     #[tokio::test]
-    async fn open_makes_a_private_dir_and_sweeps_leftover_fifos() {
-        let dir = scratch("sweep");
-        std::fs::create_dir_all(&dir).unwrap();
-        // A crashed run's FIFO: nothing removed it.
-        let leftover = dir.join("123-0");
+    async fn each_process_owns_a_private_dir_and_removes_only_that() {
+        let base = scratch("owned");
+        let sibling = base.join("1"); // another process's directory
+        std::fs::create_dir_all(&sibling).unwrap();
+        let theirs = sibling.join("0");
         let made = std::process::Command::new("mkfifo")
-            .arg(&leftover)
+            .arg(&theirs)
             .status()
             .unwrap();
         assert!(made.success());
-        std::fs::write(dir.join("keep.txt"), "not a fifo").unwrap();
+        // A dead process that had our pid left something behind.
+        let own = base.join(std::process::id().to_string());
+        std::fs::create_dir_all(&own).unwrap();
+        std::fs::write(own.join("stale"), "").unwrap();
 
-        let _handoff = EnvHandoff::open(dir.clone(), WAIT).unwrap();
-        assert!(!leftover.exists(), "the leftover FIFO is swept");
-        assert!(dir.join("keep.txt").exists(), "only FIFOs are removed");
-        let mode = std::fs::metadata(&dir).unwrap().permissions().mode();
-        assert_eq!(mode & 0o777, 0o700);
+        let handoff = EnvHandoff::open(base.clone(), WAIT).unwrap();
+        assert!(!own.join("stale").exists(), "our pid's leftover is cleared");
+        for dir in [&base, &own] {
+            let mode = std::fs::metadata(dir).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o700, "{}", dir.display());
+        }
+        drop(handoff);
+        assert!(!own.exists(), "our directory goes on drop");
+        assert!(theirs.exists(), "another process's FIFO is never touched");
     }
 
     #[tokio::test]
     async fn a_bad_name_is_refused_before_any_fifo_exists() {
         let dir = scratch("badname");
         let handoff = EnvHandoff::open(dir.clone(), WAIT).unwrap();
+        let dir = dir.join(std::process::id().to_string());
         let err = handoff
             .start(&BTreeMap::from([("A B".to_string(), "1".to_string())]))
             .await

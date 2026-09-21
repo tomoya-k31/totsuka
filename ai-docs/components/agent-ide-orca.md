@@ -4,7 +4,7 @@ title: agent-ide-orca プラグイン
 description: orca を Agent IDE として接続する公式 agent_ide プラグイン。herdr プラグインと同じ契約（tool_launch をそのまま起動・hook で完了報告・exit の deadman・pane_control・diagnostics_snapshot）を、orca CLI（--json）の端末操作で実現する。セッションは Orchestrator の worktree に開いた orca 端末。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/agent-ide-orca
 tags: [rust, crate, plugin, agent-ide, orca, cli, terminal, hooks]
-generated: { by: claude-code/opus-5, at: 2026-09-21T16:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-21T18:00:00+09:00 }
 stale_after: 2027-03-19
 status: stable
 owner: tomoya-k31
@@ -25,7 +25,7 @@ orca は公開 REST/ソケット API を持たず、**`orca` CLI（`--json`）�
 | `cli` | `OrcaCli` trait（`run(args) → result`）＋ `ProcessCli`。orca の `--json` envelope（`{id, ok, result}` / `{id, ok: false, error: {code, message}}`）を剥がし、`ok: false` は `OrcaError::Orca { code }` にする。**トップレベルの `id` は CLI リクエストの id** で、変更前のプラグインはこれを worktree id と取り違えていた。1 回の呼び出しは `request_timeout_secs` で打ち切り（`kill_on_drop`）、`terminal wait --timeout-ms` と `terminal send --wait-submit` にはその待ち時間＋10 秒を与える |
 | `error` | `OrcaError`。orca のエラーコードで判定する: `is_missing`（`terminal_handle_stale` / `*_not_found`）・`is_exited`（`terminal_exited`）・`is_gone`（どちらか）・`is_wait_timeout`（`timeout`）。`WorktreeUnknown`（repo 未登録の案内）・`MissingToolLaunch`・`EnvHandoff`（env を FIFO で渡せなかった）・`SessionUnresumable` |
 | `launch` | `tool_launch` を `terminal create --command` の文字列にする: `exec sh -c '<FIFO を読んで消し eval して exec>' sh '<fifo>' 'program' 'arg' …`（env が空なら `exec 'program' …`）。**env は打ち込まない**（[ADR-0089](/decisions/adr-0089-orca-env-fifo.md)）。orca は `--command` をログインシェルに**打ち込む**ので全語を単一引用符でクォートし、`exec` でシェルを置き換えて端末の寿命をエージェントに一致させる。クォートは実際の `sh` で読み戻すテストで固定 |
-| `handoff` | 起動時の env を FIFO で渡す（ADR-0089）。`EnvHandoff::open` は `${XDG_RUNTIME_DIR:-<state_dir>}/totsuka/orca-env` を `0700` で作り、残った FIFO を掃除する（終了時も同じ）。`start` はキーがシェルの識別子であることを確かめ、`mkfifo -m 600` で FIFO を作り、`export K='v'` 行を別スレッドで書き始める。書き手は非ブロッキングの open と書き込みをポーリングし、起動の待ち時間（60 秒）で諦める。`Delivery` を drop すると書き手を止めて FIFO を消す |
+| `handoff` | 起動時の env を FIFO で渡す（ADR-0089）。`EnvHandoff::open` は `${XDG_RUNTIME_DIR:-<state_dir>}/totsuka/orca-env/<pid>` を `0700` で作り（同じ pid の残骸は消す）、終了時にディレクトリごと消す。**プロセスごとに分けるのは、`doctor` / `config validate` も自分の orca プラグインを起動するため**で、他のプロセスのディレクトリには触らない。`start` はキーがシェルの識別子であることを確かめ、`mkfifo -m 600` で FIFO を作り、`export K='v'` 行を別スレッドで書き始める。書き手は非ブロッキングの open と書き込みをポーリングし、起動の待ち時間（60 秒）で諦める。`Delivery` を drop すると書き手を止めて FIFO を消す |
 | `config` | `[orca]` = `orca_bin` / `request_timeout_secs`（既定 30）/ `[orca.layout]`（`shell` 既定 **false**・`direction` は `horizontal` / `vertical` の閉じた集合）/ `[orca.identity]`（`enabled` 既定 true）。`deny_unknown_fields`。廃止キー（`agent` / `setup` / `repo_selector` / `plan_prompt_prefix` / `poll_interval_ms`）は `removed_keys_in` が名指しで代替を案内する |
 | `state` | orca の worktree `status`（state dots 由来）→ `AgentState`。**`session/attach` 専用**で、完了判定には使わない。`active` など不明値は呼び出し側が渡す前値（`running`）を保つ |
 | `agent` | `OrcaAgent<C: OrcaCli>`。下のメソッド写像のすべて |
@@ -65,7 +65,7 @@ herdr と同じ `pane_control` / `state_stream` / `hook_completion` / `diagnosti
 
 # テスト
 
-- 単体: envelope の解釈（`id` を漏らさない・`ok: false` のコード・envelope 無しの失敗）、`terminal wait` の打ち切り時間、エラー分類、起動コマンドの組み立てと `sh` による読み戻し、env の FIFO を本物の FIFO と `/bin/sh` で往復させる（値が届く・FIFO が消える・クォートや改行を含む値が壊れない・`. "$1"` に戻すと落ちる）、読み手が来ないときの時間切れと FIFO の削除、FIFO が無いときにエージェントを起動しないこと、残った FIFO の掃除、廃止キーの案内、状態写像、表示名の文字境界での切り詰め、`resume_failure` の狭さ。
+- 単体: envelope の解釈（`id` を漏らさない・`ok: false` のコード・envelope 無しの失敗）、`terminal wait` の打ち切り時間、エラー分類、起動コマンドの組み立てと `sh` による読み戻し、env の FIFO を本物の FIFO と `/bin/sh` で往復させる（値が届く・FIFO が消える・クォートや改行を含む値が壊れない。`. "$1"` に戻すと落ちるのは `/bin/sh` が bash 3.2 の macOS だけ）、読み手が来ないときの時間切れと FIFO の削除、FIFO が無いときにエージェントを起動しないこと、プロセスごとのディレクトリ（自分の残骸だけを消し、他のプロセスのものには触らない）、廃止キーの案内、状態写像、表示名の文字境界での切り詰め、`resume_failure` の狭さ。
 - 結合（`tests/integration.rs`、fake orca CLI に実測の応答形を返させる）: capability 宣言と `plugin.toml` の一致、dispatch の引数（`path:` セレクタ・env を打ち込まないこと・fake が FIFO から読んだ中身・タイトル・`--wait-submit`）、env を読まない端末でのディスパッチ失敗とタブの後片付け、`terminal create` 失敗時の FIFO の削除、識別子でない env 名の拒否と**呼び出し順**（`tui-idle` → `show` → `send`、rename はしない）、`worktree create` / `worktree rm` を呼ばないこと、`tool_launch` 欠落、repo 未登録、resume 失敗の `SESSION_UNRESUMABLE` と後片付け、認識されないエージェント（一時停止クロックで 30 秒）、deadman、attach / cancel / release（一致・消失・終了済み・不一致）/ list / focus / snapshot、`config/validate`（`runtime.reachable`）。
 - **実機（orca 1.4.205 + Claude Code 2.1.277）**: ビルドしたバイナリを stdio で駆動し、dispatch → プロンプトが 1 ターンとして届き応答 → `session/list` に出る → `diagnostics/snapshot` → `session/release` で閉じる → deadman が `failed` → attach が `attached: false`、まで通した。**Orchestrator を含む通し（hook による完了報告）は未実施**で、[live-e2e-orca スキル](/components/live-e2e-orca.md) の O1〜O6 で確認する。
 
