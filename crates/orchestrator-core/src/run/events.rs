@@ -71,13 +71,38 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                         // The task row that results is the after-the-fact
                         // trace; a `duplicate` or `rejected` leaves no row at
                         // all.
-                        tracing::info!(
-                            plugin = %source,
-                            method = "task/submit",
-                            task_id = %task_id,
-                            ack = ?result.status,
-                            "plugin request"
-                        );
+                        //
+                        // A re-delivery of a task still in flight is the
+                        // exception: a poller sends it every tick while the
+                        // card sits in its trigger column, so it goes to
+                        // `debug` (`routine_submit_ack`). The lookup runs only
+                        // for a duplicate, and a failed one keeps `info`.
+                        let state = if result.status == TaskSubmitStatus::Duplicate {
+                            self.db
+                                .find_by_source(&source, &task_id)
+                                .ok()
+                                .flatten()
+                                .map(|t| t.state)
+                        } else {
+                            None
+                        };
+                        if routine_submit_ack(result.status, state) {
+                            tracing::debug!(
+                                plugin = %source,
+                                method = "task/submit",
+                                task_id = %task_id,
+                                ack = ?result.status,
+                                "plugin request"
+                            );
+                        } else {
+                            tracing::info!(
+                                plugin = %source,
+                                method = "task/submit",
+                                task_id = %task_id,
+                                ack = ?result.status,
+                                "plugin request"
+                            );
+                        }
                         let _ = respond.send(Ok(result));
                         self.select_repos().await
                     }
