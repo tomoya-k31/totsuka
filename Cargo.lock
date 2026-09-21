@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "agent-ide-herdr"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "plugin-protocol",
  "plugin-sdk",
@@ -18,7 +18,7 @@ dependencies = [
 
 [[package]]
 name = "agent-ide-orca"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "plugin-protocol",
  "plugin-sdk",
@@ -887,7 +887,7 @@ dependencies = [
 
 [[package]]
 name = "notifier-macos"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "plugin-protocol",
  "plugin-sdk",
@@ -971,7 +971,7 @@ dependencies = [
 
 [[package]]
 name = "orchestrator-cli"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "clap",
  "clap_complete",
@@ -994,7 +994,7 @@ dependencies = [
 
 [[package]]
 name = "orchestrator-core"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "keyring",
  "libc",
@@ -1037,7 +1037,7 @@ checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
 
 [[package]]
 name = "plugin-protocol"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "semver",
  "serde",
@@ -1049,7 +1049,7 @@ dependencies = [
 
 [[package]]
 name = "plugin-sdk"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "plugin-protocol",
  "semver",
@@ -1147,7 +1147,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "repo-classifier"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "reqwest",
  "serde",
@@ -1486,7 +1486,7 @@ dependencies = [
 
 [[package]]
 name = "task-source-discord"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "futures-util",
  "plugin-protocol",
@@ -1503,7 +1503,7 @@ dependencies = [
 
 [[package]]
 name = "task-source-github"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "plugin-protocol",
  "plugin-sdk",
@@ -1519,7 +1519,7 @@ dependencies = [
 
 [[package]]
 name = "task-source-notion"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "plugin-protocol",
  "plugin-sdk",
@@ -1535,7 +1535,7 @@ dependencies = [
 
 [[package]]
 name = "task-source-slack"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "futures-util",
  "plugin-protocol",
@@ -1567,7 +1567,7 @@ dependencies = [
 
 [[package]]
 name = "test-support"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "serde_json",
  "toml",

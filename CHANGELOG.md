@@ -11,6 +11,24 @@ Note: the plugin protocol is versioned independently of the application (see
 `crates/plugin-protocol`); a totsuka release does not imply a protocol-version
 change.
 
+## [0.8.1](https://github.com/tomoya-k31/totsuka/compare/v0.8.0...v0.8.1) (2026-09-20)
+
+
+### Features
+
+* **core:** ソースが名指しした既存ブランチから始める Task.branch_hint を足す ([#735](https://github.com/tomoya-k31/totsuka/issues/735)) ([f5dd749](https://github.com/tomoya-k31/totsuka/commit/f5dd7497ed153db0ed48f698c668aa74a3d1c0aa)), closes [#734](https://github.com/tomoya-k31/totsuka/issues/734)
+* **github:** GitHub Project 上の PR item をタスクとして取り込む ([#736](https://github.com/tomoya-k31/totsuka/issues/736)) ([4f3fa9b](https://github.com/tomoya-k31/totsuka/commit/4f3fa9bc8dea95e02b9a7c49027b9e485a9f73e8))
+
+
+### Bug Fixes
+
+* **rules:** ponytail-review の staging 検査を 1 条件に直し、記述を削る ([#732](https://github.com/tomoya-k31/totsuka/issues/732)) ([af5a0ce](https://github.com/tomoya-k31/totsuka/commit/af5a0ce31b8152561eed68a934d2eb81c7fd46cf))
+
+
+### Documentation
+
+* **rules:** コミット / PR 直前に /ponytail-review で過剰実装を検出する手順を足す ([#730](https://github.com/tomoya-k31/totsuka/issues/730)) ([17be330](https://github.com/tomoya-k31/totsuka/commit/17be3304772377efe65fef54a4d663a3fd19ab32))
+
 ## [0.8.0](https://github.com/tomoya-k31/totsuka/compare/v0.7.11...v0.8.0) (2026-09-19)
 
 
