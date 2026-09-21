@@ -37,7 +37,10 @@
 
   // MSRV. Keep in step with `rust-version` in Cargo.toml; the `msrv` CI job
   // (ADR-0087) is the gate, this only avoids opening PRs bound to fail it.
-  constraints: { rust: "1.88" },
+  // Must be a full `x.y.z`: strict filtering keeps a release when
+  // `matches(<this>, <its rust_version>)`, and cargo versioning treats "1.88"
+  // as no version at all — every crate declaring rust_version would be dropped.
+  constraints: { rust: "1.88.0" },
   constraintsFiltering: "strict",
 
   labels: ["renovate"],

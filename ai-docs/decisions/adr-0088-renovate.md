@@ -55,7 +55,7 @@ stable。#728 の 2 本目の PR。1 本目は MSRV ゲート（[ADR-0087](/deci
 8. **PR を出す時間帯と数**: `before 6am on monday`（Asia/Tokyo）、`prConcurrentLimit: 5`、`prHourlyLimit: 2`。Cargo の patch は `cargo patch` の 1 グループにまとめる。Actions の非 major は（4 action を除いて）1 グループにまとめる。脆弱性の PR は時間帯も待ち期間も無視して即座に出る（`vulnerabilityAlerts` の既定）
 9. **`minimumReleaseAge: "3 days"`。** automerge を入れる以上、yank された版や乗っ取られた版を取り込まないための猶予が要る。ただし Docker と Actions は `minimumReleaseAgeBehaviour: "timestamp-optional"` にする（下の Consequences を参照）
 10. **Cargo の `rangeStrategy` は `update-lockfile`。** 宣言の範囲内の更新は `Cargo.lock` だけを変える
-11. **MSRV**: `constraints: { rust: "1.88" }` と `constraintsFiltering: "strict"` を入れる。crate datasource は crates.io index の `rust_version` を `constraints.rust` として読むので、MSRV を超える版を候補から外せる[^renovate-source]。ゲートは [ADR-0087](/decisions/adr-0087-msrv-gate.md) の `msrv` ジョブで、こちらは赤になることが確実な PR を出さないための工夫である
+11. **MSRV**: `constraints: { rust: "1.88.0" }` と `constraintsFiltering: "strict"` を入れる。crate datasource は crates.io index の `rust_version` を `constraints.rust` として読むので、MSRV を超える版を候補から外せる[^renovate-source]。ゲートは [ADR-0087](/decisions/adr-0087-msrv-gate.md) の `msrv` ジョブで、こちらは赤になることが確実な PR を出さないための工夫である
 12. **Dockerfile の `FROM` を `タグ@ダイジェスト` の形に書き換える。** 以前はタグがコメント行にしか無く、Renovate が現在の版を特定できなかった
 13. **Terraform の `required_version` は追わない。** スタックは OpenTofu で動くのに、Renovate は hashicorp/terraform のリリースと照合するからである。provider（`hashicorp/google`）は追う
 14. **Dependency Dashboard を有効にする。** タイトルは `Renovate Dashboard 🤖`、ラベルは `renovate`
@@ -69,7 +69,7 @@ stable。#728 の 2 本目の PR。1 本目は MSRV ゲート（[ADR-0087](/deci
 - **グループの automerge は「全 upgrade が automerge」のときだけ成立する**（`config.automerge = upgrades.every(u => u.automerge)`）[^renovate-source]。automerge しない upgrade が 1 つでも混ざると、グループ全体が人間待ちになる。4 action を別グループに分けたのはこのためである
 - **`lockFileMaintenance` は `cargo patch` グループとは別の PR になる。** lock を書き換える PR は週に最大 2 本（`cargo patch` と lockFileMaintenance）になる。lockFileMaintenance は `cargo update` 相当なので、範囲内の minor も含めて最新まで上げ、`minimumReleaseAge` も効かない。範囲内の minor は semver 互換という Cargo の約束に乗っている
 - **`minimumReleaseAge` はリリース時刻を要求する。** 既定（`timestamp-required`）のままだと、時刻の取れない更新は永久に出ない。docker datasource が時刻を持つのは Docker Hub だけなので[^renovate-source]、gcr.io の distroless は黙って止まってしまう。そこで Docker と Actions だけ `timestamp-optional` にした。代償として、時刻の取れない更新には 3 日の猶予が効かない
-- **MSRV の版は 2 箇所に書かれる**（`Cargo.toml` の `rust-version` と `constraints.rust`）。上げるときは同じ PR で両方を直す
+- **MSRV の版は 2 箇所に書かれる**（`Cargo.toml` の `rust-version` と `constraints.rust`）。上げるときは同じ PR で両方を直す。**`constraints.rust` は必ず `x.y.z` の 3 要素で書く。** strict filtering はリリースの `rust_version` を範囲として `matches(<設定値>, <rust_version>)` で判定し、cargo versioning は `"1.88"` を版として解釈しない。そのため `"1.88"` と書くと、`rust_version` を宣言する crate のほぼ全リリースが黙って候補から消える（1.70 も 1.88.0 も落ちる）。`"1.88.0"` なら 1.70 / 1.88 は通り、1.90 は落ちる（renovate 42.99.0 の cargo versioning で実測）[^renovate-source]
 - **Alpine の接尾辞（`alpine3.24`）は Renovate では上がらない。** 別系統のタグとして扱われるので、手で上げる
 - **`warm-cache.yml` の `env: RUSTFLAGS` は触られない。** github-actions manager が書き換えるのは `uses:` 行だけである
 - Renovate のブランチに人間やエージェントが commit を積むと、Renovate はそのブランチの更新を止める（[ADR-0085](/decisions/adr-0085-branch-hint.md)）
