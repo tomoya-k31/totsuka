@@ -13,7 +13,8 @@
 //! # Method mapping ([`agent::OrcaAgent`])
 //!
 //! - `task/dispatch`  → `orca terminal create --worktree path:<worktree>
-//!   --command "exec env … <tool_launch>"`, `terminal wait --for tui-idle`,
+//!   --command "exec sh -c … <tool_launch>"` (the env through a FIFO, #744),
+//!   `terminal wait --for tui-idle`,
 //!   `terminal send --wait-submit`
 //! - `task/cancel` / `session/release` → `orca terminal close --tab`
 //! - `session/attach` → `orca terminal show` (+ `worktree ps` for the state)
@@ -34,6 +35,7 @@ pub mod agent;
 pub mod cli;
 pub mod config;
 pub mod error;
+pub mod handoff;
 pub mod launch;
 pub mod server;
 pub mod state;

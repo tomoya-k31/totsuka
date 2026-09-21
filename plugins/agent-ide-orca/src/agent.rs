@@ -20,7 +20,9 @@
 //!   worktree the Orchestrator knew nothing about, and `task/cancel` then
 //!   deleted it with `worktree rm --force`.
 //! - **The launch is `tool_launch`, verbatim** (#196): typed into the
-//!   terminal's shell as `exec env K=V… program args…` (see [`crate::launch`]).
+//!   terminal's shell as `exec … program args…` (see [`crate::launch`]), with
+//!   the env handed over through a FIFO rather than typed (#744, see
+//!   [`crate::handoff`]).
 //!   With the Orchestrator's hook settings and env on it, Claude Code reports
 //!   completion through its hooks, exactly as under herdr — which is why this
 //!   plugin can declare `hook_completion`.
@@ -49,7 +51,8 @@ use tokio::sync::mpsc;
 use crate::cli::OrcaCli;
 use crate::config::OrcaConfig;
 use crate::error::OrcaError;
-use crate::launch::shell_command;
+use crate::handoff::EnvHandoff;
+use crate::launch::launch_command;
 use crate::state::map_orca_state;
 
 /// The marker that says an orca worktree — and so every terminal in it —
@@ -64,6 +67,11 @@ const OWNED_PREFIX: &str = "totsuka ";
 /// rather than a gate — a tool that never reports `tui-idle` (anything orca
 /// has no state-dot integration for) still gets its prompt, only later.
 const STARTUP_WAIT_MS: u64 = 60_000;
+
+/// How long the launch env's FIFO waits for the terminal's shell to read it
+/// (#744) — the startup budget again: the shell reads it before the agent
+/// starts, so a terminal that has not got that far by now never will.
+pub const HANDOFF_WAIT: Duration = Duration::from_millis(STARTUP_WAIT_MS);
 
 /// How long, after `tui-idle`, orca is given to recognise the agent in the
 /// terminal before the prompt is sent anyway (see `wait_for_agent`).
@@ -110,12 +118,18 @@ const DISPLAY_NAME_CHARS: usize = 80;
 pub struct OrcaAgent<C> {
     cli: C,
     config: OrcaConfig,
+    handoff: EnvHandoff,
 }
 
 impl<C: OrcaCli> OrcaAgent<C> {
-    /// A new adapter over `cli` using `config`.
-    pub fn new(cli: C, config: OrcaConfig) -> Self {
-        Self { cli, config }
+    /// A new adapter over `cli` using `config`, handing launch envs over
+    /// through `handoff`'s FIFOs.
+    pub fn new(cli: C, config: OrcaConfig, handoff: EnvHandoff) -> Self {
+        Self {
+            cli,
+            config,
+            handoff,
+        }
     }
 
     /// Dispatch a task (F-31/F-37): open a terminal in the task's worktree
@@ -129,8 +143,20 @@ impl<C: OrcaCli> OrcaAgent<C> {
             .tool_launch
             .as_ref()
             .ok_or(OrcaError::MissingToolLaunch)?;
-        let command = shell_command(&tool.program, &tool.args, &tool.env);
         self.wait_for_worktree(&params.worktree_path).await?;
+        // The writer starts before the terminal exists: the shell's read of
+        // the FIFO blocks until a writer opens it. Dropping `delivery` on any
+        // failure below releases the writer and removes the FIFO.
+        let delivery = if tool.env.is_empty() {
+            None
+        } else {
+            Some(self.handoff.start(&tool.env).await?)
+        };
+        let command = launch_command(
+            &tool.program,
+            &tool.args,
+            delivery.as_ref().map(|d| d.path()),
+        );
         let created = self
             .cli
             .run(args([
@@ -176,6 +202,12 @@ impl<C: OrcaCli> OrcaAgent<C> {
         // From here on the terminal exists, so every failure has to take it
         // back down: a failed dispatch reports no session id, which leaves the
         // Orchestrator nothing to cancel with — and the agent would run on.
+        if let Some(delivery) = delivery
+            && let Err(e) = delivery.finish().await
+        {
+            self.abandon(&handle).await;
+            return Err(e);
+        }
         self.mark_owned(&params).await;
         self.apply_layout(&handle).await;
         if let Err(e) = self.start(&params, &handle).await {

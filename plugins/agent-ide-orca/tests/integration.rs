@@ -31,6 +31,10 @@ enum Canned {
 struct FakeCli {
     scripts: Arc<Mutex<HashMap<String, Vec<Canned>>>>,
     calls: Arc<Mutex<Vec<Vec<String>>>>,
+    /// What the "shell" of each created terminal read from its env FIFO.
+    handoffs: Arc<Mutex<Vec<String>>>,
+    /// Play the shell that never runs the command (no reader for the FIFO).
+    no_reader: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl FakeCli {
@@ -49,6 +53,43 @@ impl FakeCli {
             .filter(|c| cli_key(c) == key)
             .cloned()
             .collect()
+    }
+
+    /// What the fake shells read, once `n` of them have finished. The reader
+    /// is a detached thread and the plugin only joins its own writer, so the
+    /// read can land just after the dispatch returns (Copilot review, #745).
+    fn handoffs(&self, n: usize) -> Vec<String> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let read = self.handoffs.lock().unwrap().clone();
+            if read.len() >= n || std::time::Instant::now() >= deadline {
+                return read;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    /// Stand in for the terminal's shell: a real orca types `--command` into
+    /// a shell, which reads the env FIFO named after `sh`. Read it on a
+    /// thread, as that shell would, so the plugin's writer can finish.
+    fn read_env_fifo(&self, args: &[String]) {
+        if self.no_reader.load(std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
+        let Some(command) = flag_value(args, "--command") else {
+            return;
+        };
+        let Some((_, rest)) = command.split_once(" sh '") else {
+            return;
+        };
+        let fifo = rest.split('\'').next().unwrap().to_string();
+        let handoffs = self.handoffs.clone();
+        std::thread::spawn(move || {
+            if let Ok(content) = std::fs::read_to_string(&fifo) {
+                let _ = std::fs::remove_file(&fifo);
+                handoffs.lock().unwrap().push(content);
+            }
+        });
     }
 
     fn keys(&self) -> Vec<String> {
@@ -79,13 +120,18 @@ fn cli_key(args: &[String]) -> String {
 impl OrcaCli for FakeCli {
     fn run(&self, args: Vec<String>) -> impl Future<Output = Result<Value, OrcaError>> + Send {
         let key = cli_key(&args);
-        self.calls.lock().unwrap().push(args);
-        let mut scripts = self.scripts.lock().unwrap();
-        let outcome = match scripts.get_mut(&key) {
-            Some(queue) if queue.len() > 1 => queue.remove(0),
-            Some(queue) => queue.first().cloned().unwrap_or(Canned::Ok(Value::Null)),
-            None => Canned::Ok(Value::Null),
+        let outcome = {
+            let mut scripts = self.scripts.lock().unwrap();
+            match scripts.get_mut(&key) {
+                Some(queue) if queue.len() > 1 => queue.remove(0),
+                Some(queue) => queue.first().cloned().unwrap_or(Canned::Ok(Value::Null)),
+                None => Canned::Ok(Value::Null),
+            }
         };
+        if key == "terminal create" && matches!(outcome, Canned::Ok(_)) {
+            self.read_env_fifo(&args);
+        }
+        self.calls.lock().unwrap().push(args);
         async move {
             match outcome {
                 Canned::Ok(v) => Ok(v),
@@ -114,15 +160,34 @@ struct Driver {
     server: Server<FakeFactory>,
     out: mpsc::UnboundedReceiver<String>,
     next_id: i64,
+    /// This driver's launch env FIFO directory.
+    handoff_dir: std::path::PathBuf,
+}
+
+/// A launch env base directory of this test's own, so each test's FIFOs can
+/// be inspected apart from the others'.
+fn handoff_dir() -> std::path::PathBuf {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    std::env::temp_dir().join(format!(
+        "totsuka-orca-it-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ))
 }
 
 impl Driver {
     fn new(cli: FakeCli) -> Self {
+        Self::with_handoff_wait(cli, std::time::Duration::from_secs(10))
+    }
+
+    fn with_handoff_wait(cli: FakeCli, wait: std::time::Duration) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
+        let dir = handoff_dir();
         Self {
-            server: Server::new(FakeFactory { cli }, tx),
+            server: Server::new(FakeFactory { cli }, tx).with_handoff(dir.clone(), wait),
             out: rx,
             next_id: 0,
+            handoff_dir: dir,
         }
     }
 
@@ -319,10 +384,15 @@ async fn dispatch_launches_tool_launch_in_the_tasks_worktree_and_submits_the_pro
         "the terminal opens in totsuka's worktree"
     );
     assert_eq!(flag_value(create, "--title"), Some("totsuka T-1"));
-    assert_eq!(
-        flag_value(create, "--command"),
-        Some("exec env 'TOTSUKA_JOB_ID=3.1' 'claude' '--settings' '/cfg/hooks settings.json'"),
+    let command = flag_value(create, "--command").unwrap();
+    assert!(command.starts_with("exec sh -c "), "{command}");
+    assert!(
+        command.ends_with("'claude' '--settings' '/cfg/hooks settings.json'"),
+        "{command}"
     );
+    // The env is handed over through the FIFO, never typed (#744).
+    assert!(!command.contains("TOTSUKA_JOB_ID"), "{command}");
+    assert_eq!(cli.handoffs(1), vec!["export TOTSUKA_JOB_ID='3.1'\n"]);
 
     // Ownership lives on the worktree, not the tab: the agent retitles the
     // tab as soon as it works.
@@ -394,6 +464,66 @@ async fn dispatch_without_tool_launch_is_invalid_params() {
         "nothing is launched: {:?}",
         cli.keys()
     );
+}
+
+/// Nothing is left behind in this process's FIFO directory.
+fn assert_no_fifo_left(base: &std::path::Path) {
+    let dir = base.join(std::process::id().to_string());
+    let left: Vec<_> = std::fs::read_dir(dir).unwrap().flatten().collect();
+    assert!(left.is_empty(), "leftover in the handoff dir: {left:?}");
+}
+
+/// A terminal whose shell never reads the env (failed, stopped in an rc file,
+/// closed first) fails the dispatch — the agent must not run without its
+/// hook env — takes the terminal down, and leaves no FIFO (#744).
+#[tokio::test]
+async fn an_env_the_terminal_never_reads_fails_the_dispatch_and_closes_it() {
+    let cli = FakeCli::default();
+    cli.on("terminal create", vec![created()]);
+    cli.no_reader
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    let mut d = Driver::with_handoff_wait(cli.clone(), std::time::Duration::from_millis(200));
+    d.init().await;
+    let disp = d.call("task/dispatch", dispatch_params(None)).await;
+    let message = disp["error"]["message"].as_str().unwrap();
+    assert!(message.contains("launch env"), "{message}");
+    let close = &cli.calls_to("terminal close")[0];
+    assert_eq!(flag_value(close, "--terminal"), Some(HANDLE));
+    assert!(
+        cli.calls_to("terminal send").is_empty(),
+        "no prompt goes to an agent without its env"
+    );
+    assert_no_fifo_left(&d.handoff_dir);
+}
+
+/// A terminal that is never created leaves no FIFO either.
+#[tokio::test]
+async fn a_failed_terminal_create_removes_the_fifo() {
+    let cli = FakeCli::default();
+    cli.on("terminal create", vec![Canned::Err("selector_not_found")]);
+    let mut d = Driver::new(cli);
+    d.init().await;
+    let disp = d.call("task/dispatch", dispatch_params(None)).await;
+    assert!(disp["error"].is_object(), "{disp}");
+    assert_no_fifo_left(&d.handoff_dir);
+}
+
+/// An env name that is not a shell identifier would be code in the
+/// `export` line; the dispatch is refused before any terminal exists.
+#[tokio::test]
+async fn an_env_name_that_is_not_an_identifier_is_refused() {
+    let cli = FakeCli::default();
+    let mut d = Driver::new(cli.clone());
+    d.init().await;
+    let mut params = dispatch_params(None);
+    params["tool_launch"]["env"] = json!({ "A;touch /tmp/x": "1" });
+    let disp = d.call("task/dispatch", params).await;
+    let message = disp["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains("not a valid environment variable name"),
+        "{message}"
+    );
+    assert!(cli.calls_to("terminal create").is_empty());
 }
 
 #[tokio::test]
