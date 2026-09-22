@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](orchestrator-spec.ja.md)
 
-<!-- generated-from: ai-docs/product/orchestrator-spec.md sha256:fc0b171adc5c5a6c2db2747b9770f8b1236b8c3ebf0110ce084419c1e264012f -->
+<!-- generated-from: ai-docs/product/orchestrator-spec.md sha256:07534bb4999e940f506808c4689e2347d12736cce7f5772183af88ab78b7d8b3 -->
 
 # What totsuka is
 
@@ -59,7 +59,7 @@ Agent IDEs are plugins too, and which one runs can be switched per task type and
 
 Agents report their state as one of idle, running, waiting for input, done, or failed. Completion itself is detected through a hook the agent CLI fires, which makes it deterministic rather than inferred from output.
 
-In workflows where a human approves completion at the pane, questions and the completion confirmation arrive through the tool's native question picker — claude's `AskUserQuestion`, opencode's `question` dialog. While the dialog is open totsuka treats the task as waiting for input, releases its slot, and notifies you with the question text. Tools without a picker ask with a numbered list instead.
+In workflows where a human approves completion at the pane, questions and the completion confirmation arrive through the tool's native question picker — claude's `AskUserQuestion`, opencode's `question` dialog. While the dialog is open totsuka treats the task as waiting for input and notifies you with the question text. Tools without a picker ask with a numbered list instead.
 
 A task that stays silent for longer than its workflow's `timeout_secs` is escalated. By default there is no limit, and time spent waiting on a permission prompt never counts as silence.
 
@@ -67,7 +67,7 @@ A task that stays silent for longer than its workflow's `timeout_secs` is escala
 
 ### Running things in parallel
 
-Concurrency is limited globally, per repository, and per agent plugin. A task waiting for input releases its slot, so a conversation that is waiting on you does not hold up the queue.
+Concurrency is limited globally, per repository, and per agent plugin. A task counts against these limits from dispatch until it finishes — including while it waits for your input — so the limit is how many tasks are open at once. When every slot is taken by tasks waiting on you, new tasks start only after you answer or cancel one.
 
 ### Notifications
 

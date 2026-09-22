@@ -204,11 +204,13 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                 for &event in events {
                     self.db.apply_event(task_id, event, Some(detail.clone()))?;
                 }
-                if resuming {
-                    // F-45: resuming re-acquires a slot. Reality wins over the
-                    // cap: the agent *is* running, so a full tier only logs —
-                    // but the ledger stays empty, so this task's completion
-                    // will not release a slot another task holds.
+                if resuming && !self.slot_holders.contains_key(&task_id) {
+                    // A waiting task keeps its slot (F-45), so this is
+                    // only for one that holds none — waiting since before the
+                    // run that tracks it. Reality wins over the cap: the agent
+                    // *is* running, so a full tier only logs — but the ledger
+                    // stays empty, so this task's completion will not release
+                    // a slot another task holds.
                     if self.slots.acquire(&repo, agent_plugin) {
                         self.slot_holders
                             .insert(task_id, (repo.clone(), agent_plugin.to_string()));
@@ -230,8 +232,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                     for &event in events {
                         self.db.apply_event(task_id, event, Some(detail.clone()))?;
                     }
-                    // F-45: a waiting task frees its slot.
-                    self.release_slot(task_id);
+                    // A waiting task keeps its slot (F-45).
                     tracing::info!(task_id, "agent is waiting for input (F-35)");
                     notify_all(
                         &self.plugins.notifiers,

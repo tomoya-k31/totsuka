@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:df29beb59b1c886951241d2bd54775e53e69237d6c0fc0492106980813f5a8ae -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:0cce1e8ac9efd0aecbdc7a25cf384d84ba48a286ad3e41a919a8d6b425b6ea12 -->
 
 # 設定リファレンス
 
@@ -421,7 +421,7 @@ profile はこの 3 キー以外にも次を決める。
 `design` と `implement` は人間が pane を見ている前提の profile で、**完了の最終判断は人間が行う**。
 
 1. エージェントは作業を終えたと思っても完了を**申告せず**、内容を要約して確認を求める
-2. totsuka はタスクを入力待ちとして park する（掃引の対象外・並列枠の解放・通知の送信）
+2. totsuka はタスクを入力待ちとして park する（掃引の対象外・並列枠は保持したまま・通知の送信）
 3. 人間が pane 上で明示的に承認すると、エージェントが完了を申告してタスクが終わる
 
 検収基準もこれに合わせて変わり、会話を見られるジャッジが「申告より前に人間が承認しているか」を判定する — 質問ダイアログで選択した回答も承認として数えられる。**確認を飛ばして完了を申告したエージェントは、マーカー欠落を止めるのと同じ層でブロックされる。** 確認のための停止は完了申告ではないので、ブロックされない。
@@ -434,7 +434,7 @@ profile はこの 3 キー以外にも次を決める。
 
 上記の完了確認や、作業途中の意思決定をエージェントがどう訊いてくるかは、pane で動くツールによって変わる:
 
-- **claude**: `AskUserQuestion`（pane 内の単一選択ピッカー。「Approve completion / Request changes」等の選択肢）で訊く。ピッカーが開いている間、タスクは入力待ちとして park され（並列枠は解放）、届く通知には質問文が入る。pane 上で回答すれば会話が続く。
+- **claude**: `AskUserQuestion`（pane 内の単一選択ピッカー。「Approve completion / Request changes」等の選択肢）で訊く。ピッカーが開いている間、タスクは入力待ちとして park され（並列枠は保持したまま）、届く通知には質問文が入る。pane 上で回答すれば会話が続く。
 - **opencode**: native の `question` ダイアログを使う。park の挙動は claude と同じ。
 - **codex**: plan mode 以外に質問ダイアログが無いため、従来どおり「入力待ち」で停止する — ただし選択肢を短い番号付きリストで提示するので、番号を打つだけで回答できる。
 

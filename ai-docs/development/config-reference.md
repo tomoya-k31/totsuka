@@ -4,7 +4,7 @@ title: 設定リファレンス（config.toml）
 description: "config.toml の全キー・デフォルト値・意味の一覧。設定ファイルは 1 本で、プラグイン個別設定もトップレベルの [<name>] テーブルに入る。シークレット参照、設定スキーマのバージョニング方針、[[projects]] の domain 宣言とワークフローからの参照、プラグインが定義する追加プロパティ、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-github の [github]、task-source-notion の [notion]、task-source-slack の [slack]、agent-ide-herdr の [herdr] を含む。"
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
 tags: [config, reference, toml, secrets, workflow, worktree, github, notion, slack, hooks, versioning]
-generated: { by: claude-code/opus-5, at: 2026-09-22T12:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-23T12:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -455,7 +455,7 @@ on_success = { status = "設計済み" }
 `design` / `implement` は attended pane（人間が pane を見ている）前提の profile で、**完了の最終判断は人間が行う**（[ADR-0043](/decisions/adr-0043-human-approved-completion.md)）。エージェントへの完了自己申告の指示が差し替わり、次の流れになる:
 
 1. エージェントは作業を終えたと思ったら `COMPLETED` を**出さず**、内容を要約して確認を求め、`NEEDS_INPUT reason="awaiting completion confirmation"` で停止する。**この reason は運用者の目に届く** — `WaitingInput` の通知本文としてそのまま Slack へ出る
-2. totsuka はタスクを `waiting_input` に park する（D-03 掃引対象外・並列 slot 解放・notifier 通知 — すべて従来動作）
+2. totsuka はタスクを `waiting_input` に park する（D-03 掃引対象外・notifier 通知 — 従来動作。並列 slot は保持する → [ADR-0093](/decisions/adr-0093-waiting-holds-slot.md)）
 3. 人間が pane 上で明示的に承認すると、エージェントが `COMPLETED` を出して終端する
 
 llm 検収の rubric も「この完了申告より前の会話で人間が明示的に承認しているか」の条件に差し替わる。ジャッジはセッション内で会話を見られるので、**確認を飛ばして COMPLETED を出したエージェントは、マーカー欠落を止めるのと同じ層でブロックされる**。確認依頼の停止自体は NEEDS_INPUT なので non-claim 枝（#389）を満たし、ブロックされない。

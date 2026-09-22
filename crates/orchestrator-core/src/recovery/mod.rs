@@ -294,7 +294,6 @@ pub fn active_slot_claims(
         let RecoveryResult::Resumed { state } = recovery.result else {
             continue;
         };
-        // `WaitingInput` frees its slot (F-45); `counts_toward_slot` excludes it.
         if !counts_toward_slot(state) {
             continue;
         }
@@ -693,7 +692,7 @@ mod tests {
         let db = StateDb::open_in_memory().unwrap();
         task_in(&db, "1", TaskState::Running, Some("sess-1"));
         task_in(&db, "2", TaskState::Publishing, Some("sess-2"));
-        task_in(&db, "3", TaskState::WaitingInput, Some("sess-3")); // frees its slot
+        task_in(&db, "3", TaskState::WaitingInput, Some("sess-3")); // blocked, still holds
         task_in(&db, "4", TaskState::Dispatched, Some("sess-4"));
         // Agent states that resume each task into its slot-holding state.
         let attacher = FakeAttacher::new(&[
@@ -707,14 +706,10 @@ mod tests {
         let mut claims = active_slot_claims(&db, &report).unwrap();
         claims.sort();
 
-        // Running, Publishing, Dispatched->Running hold slots; WaitingInput does not.
+        // All four hold a slot — WaitingInput too (F-45).
         assert_eq!(
             claims,
-            vec![
-                ("totsuka".to_string(), "herdr".to_string()),
-                ("totsuka".to_string(), "herdr".to_string()),
-                ("totsuka".to_string(), "herdr".to_string()),
-            ]
+            vec![("totsuka".to_string(), "herdr".to_string()); 4]
         );
     }
 

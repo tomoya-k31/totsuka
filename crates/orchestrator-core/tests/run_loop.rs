@@ -1290,6 +1290,61 @@ output = "none"
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// F-45: a task waiting for input keeps its slot. With room for one task, the
+/// first one parking in `waiting_input` must not let the second one start —
+/// freeing the slot there let every queued task get half-way and then wait on
+/// a human all at once.
+#[tokio::test]
+async fn a_task_waiting_for_input_keeps_its_slot() {
+    let base = scratch("waiting_slot");
+    let repo = setup_repo(&base);
+    let source_log = base.join("source.ndjson");
+    let notify_log = base.join("notify.ndjson");
+    let db_path = base.join("state.db");
+
+    let plugins = plugin_set(
+        json!([mock_task("w1"), mock_task("w2")]),
+        json!({ "stream_states": ["running", "waiting_input"] }),
+        &source_log,
+        &notify_log,
+    )
+    .await;
+    let mut settings = engine_settings(&repo);
+    settings.limits = Limits::global(1);
+    let mut engine = Engine::new(
+        StateDb::open(&db_path).unwrap(),
+        settings,
+        plugins,
+        SystemGitRunner::default(),
+        no_llm(),
+    )
+    .await;
+
+    let state_of =
+        |db: &StateDb, id: &str| db.find_by_source("mock_src", id).unwrap().map(|t| t.state);
+    let db_probe = db_path.clone();
+    run_watch_until(&mut engine, move || {
+        let db = StateDb::open(&db_probe).unwrap();
+        [state_of(&db, "w1"), state_of(&db, "w2")].contains(&Some(TaskState::WaitingInput))
+    })
+    .await;
+    // Cycles in which a freed slot would have been handed to the other task.
+    for _ in 0..3 {
+        engine.cycle().await.unwrap();
+    }
+    engine.shutdown(Duration::from_secs(5)).await;
+
+    let db = StateDb::open(&db_path).unwrap();
+    let mut states = [state_of(&db, "w1"), state_of(&db, "w2")];
+    states.sort_by_key(|s| s.map(|s| s.to_string()));
+    assert_eq!(
+        states,
+        [Some(TaskState::Queued), Some(TaskState::WaitingInput)],
+        "the waiting task must still hold the only slot"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 #[tokio::test]
 async fn a_retry_releases_the_stale_pane_before_dispatching_again() {
     // #481: `totsuka task cancel` only writes the DB — the CLI has no plugin
