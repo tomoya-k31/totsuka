@@ -202,7 +202,13 @@ impl Driver {
     }
 
     async fn recv(&mut self) -> Option<Value> {
-        let line = tokio::time::timeout(std::time::Duration::from_secs(5), self.out.recv())
+        self.recv_within(std::time::Duration::from_secs(5)).await
+    }
+
+    /// [`recv`](Self::recv) with a longer deadline, for a paused-clock test
+    /// whose backoffs add up past the default 5s.
+    async fn recv_within(&mut self, deadline: std::time::Duration) -> Option<Value> {
+        let line = tokio::time::timeout(deadline, self.out.recv())
             .await
             .expect("timed out waiting for plugin output")?;
         Some(serde_json::from_str(&line).expect("valid JSON line"))
@@ -756,7 +762,7 @@ async fn a_spurious_end_from_wait_is_not_reported_as_failed() {
     d.init().await;
     d.call("state/subscribe", json!({ "session_id": HANDLE }))
         .await;
-    let note = d.recv().await.expect("a notification");
+    let note = d.recv_within(MINUTE).await.expect("a notification");
     assert_eq!(note["params"]["state"], "failed");
     assert_eq!(
         cli.calls_to("terminal wait").len(),
@@ -764,6 +770,95 @@ async fn a_spurious_end_from_wait_is_not_reported_as_failed() {
         "both spurious claims were waited through"
     );
     assert_eq!(cli.calls_to("terminal show").len(), 3);
+}
+
+const MINUTE: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Subscribe, and return the one notification plus the (paused) time it took.
+async fn deadman(cli: &FakeCli) -> (Value, std::time::Duration) {
+    let mut d = Driver::new(cli.clone());
+    d.init().await;
+    d.call("state/subscribe", json!({ "session_id": HANDLE }))
+        .await;
+    let start = tokio::time::Instant::now();
+    let note = d.recv_within(60 * MINUTE).await.expect("a notification");
+    (note, start.elapsed())
+}
+
+/// #768: a host that sleeps and wakes every ~16 minutes gets one
+/// `runtime_timeout` per wake, with no successful wait in between. Counted as
+/// "consecutive", five of them failed a live agent (task 12). A failed wait
+/// only says orca could not be asked, so it is checked with `terminal show`
+/// like any claim of the end — and a connected terminal is waited on again,
+/// however many times that happens.
+///
+/// The pauses double from 2s and stop at 60s: 2+4+8+16+32+60.
+#[tokio::test(start_paused = true)]
+async fn failed_waits_on_a_live_terminal_are_never_reported_as_failed() {
+    let cli = FakeCli::default();
+    let mut waits = vec![Canned::Err("runtime_timeout"); 3];
+    waits.extend(vec![Canned::Err("runtime_unavailable"); 3]);
+    waits.push(Canned::Ok(
+        json!({ "wait": { "satisfied": true, "status": "exited" } }),
+    ));
+    cli.on("terminal wait", waits);
+    let mut shows = vec![shown(true, WORKTREE); 6];
+    shows.push(shown(false, WORKTREE));
+    cli.on("terminal show", shows);
+
+    let (note, took) = deadman(&cli).await;
+    assert_eq!(note["params"]["state"], "failed");
+    assert!(
+        note["params"]["log_chunk"]
+            .as_str()
+            .unwrap()
+            .contains("exited"),
+        "only the real exit fails the task: {note}"
+    );
+    assert_eq!(cli.calls_to("terminal wait").len(), 7);
+    assert_eq!(cli.calls_to("terminal show").len(), 7);
+    assert_eq!(took, std::time::Duration::from_secs(122));
+}
+
+/// While orca answers nothing at all, nothing is concluded: the deadman keeps
+/// asking, once a minute at most, and reports `failed` exactly when
+/// `terminal show` can say the terminal is gone. 2+4+8+16+32+60+60.
+#[tokio::test(start_paused = true)]
+async fn an_unreachable_orca_fails_the_task_only_once_it_confirms_the_end() {
+    let cli = FakeCli::default();
+    cli.on("terminal wait", vec![Canned::Err("runtime_unavailable")]);
+    let mut shows = vec![Canned::Err("runtime_unavailable"); 7];
+    shows.push(Canned::Err("terminal_handle_stale"));
+    cli.on("terminal show", shows);
+
+    let (note, took) = deadman(&cli).await;
+    assert_eq!(note["params"]["state"], "failed");
+    assert_eq!(cli.calls_to("terminal show").len(), 8);
+    assert_eq!(took, std::time::Duration::from_secs(182));
+}
+
+/// A wait that returns normally (orca's own `timeout`) means orca is
+/// answering again, so the pause starts over from 2s: 2+4, then 2.
+#[tokio::test(start_paused = true)]
+async fn a_wait_that_returns_normally_resets_the_backoff() {
+    let cli = FakeCli::default();
+    cli.on(
+        "terminal wait",
+        vec![
+            Canned::Err("runtime_timeout"),
+            Canned::Err("runtime_timeout"),
+            Canned::Err("timeout"),
+            Canned::Err("runtime_timeout"),
+            Canned::Ok(json!({ "wait": { "satisfied": true, "status": "exited" } })),
+        ],
+    );
+    let mut shows = vec![shown(true, WORKTREE); 3];
+    shows.push(shown(false, WORKTREE));
+    cli.on("terminal show", shows);
+
+    let (note, took) = deadman(&cli).await;
+    assert_eq!(note["params"]["state"], "failed");
+    assert_eq!(took, std::time::Duration::from_secs(8));
 }
 
 #[tokio::test]

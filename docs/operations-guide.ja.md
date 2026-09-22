@@ -1,7 +1,7 @@
 > 🌐 [English](operations-guide.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/operations-guide.md sha256:d4f46127022f4064fc8ec093c5a18f52f16e0e335603e1fd0caaf9e2ff155782 -->
+<!-- generated-from: ai-docs/operations/operations-guide.md sha256:5c6979d15ed8e176a1ea2ffdd2d40647984791bef24b13f22991ee05f3f9bfa5 -->
 
 # 運用ガイド
 
@@ -260,7 +260,7 @@ EOF
 | リポジトリ選択が `pending` のまま | `[llm]` が未設定か、判定の確信度が低い。リポジトリが 1 つなら自動選択される。複数なら `[llm]` を設定するか、依頼に `repo_hint` を付ける |
 | `task show` にブランチが出ない | エージェントがブランチを切っていない（worktree は detached HEAD で渡される）。コミットがあれば worktree は残るので、そこから作業を拾える。plan モードでは常にこの状態が正常 |
 | ``git … did not finish within <N>s and was killed`` | git のコマンドが totsuka の上限時間（`[worktree].git_timeout_secs`）内に終わらず、止められた。dispatch 中なら自動で再キューされる。多くは ssh の死んだ接続なので、[SSH の keepalive](#ssh-の-keepalive推奨設定) を設定する。続けて出るなら `git fetch origin` を手で実行して、ネットワークと remote への接続を確かめる |
-| スリープ明けに複数のタスクがまとめて `failed` になっている | orca の見張り役が、スリープ中の短い起床（約 16 分ごとに数秒）のたびに「Orca が応答しない」を 1 回数え、5 回でエージェントが死んだと判断していた。実際には生きている。0.8.5 で、失敗と失敗の間にスリープが挟まれば数え直すようにした。`totsuka logs` に `terminal wait failed … runtime_timeout` が起床ごとに 1 行ずつ並んでいたらこれ。こうして失敗したタスクは、カードをトリガーの列へ戻せば同じ会話から再開する |
+| スリープ明けに複数のタスクがまとめて `failed` になっている | orca の見張り役が、スリープ中の短い起床（約 16 分ごとに数秒）のたびに「Orca が応答しない」を 1 回数え、5 回でエージェントが死んだと判断していた。実際には生きている。0.8.5 で、Orca が応答しないだけではタスクを `failed` にしないようにした（Orca がエージェントの端末の終了を確かめられたときだけ `failed` になる）。`totsuka logs` に `terminal wait failed … runtime_timeout` が起床ごとに 1 行ずつ並んでいたらこれ。こうして失敗したタスクは、カードをトリガーの列へ戻せば同じ会話から再開する |
 | 通知が来ない | 通知プラグインが有効かと疎通を `doctor` で確認する。配送に失敗してもタスクの実行は止まらない |
 
 ---

@@ -4,7 +4,7 @@ title: agent-ide-orca プラグイン
 description: orca を Agent IDE として接続する公式 agent_ide プラグイン。herdr プラグインと同じ契約（tool_launch をそのまま起動・hook で完了報告・exit の deadman・pane_control・diagnostics_snapshot）を、orca CLI（--json）の端末操作で実現する。セッションは Orchestrator の worktree に開いた orca 端末。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/agent-ide-orca
 tags: [rust, crate, plugin, agent-ide, orca, cli, terminal, hooks]
-generated: { by: claude-code/opus-5, at: 2026-09-23T12:00:00+09:00 }
+generated: { by: claude-code/opus-5-5, at: 2026-09-23T15:00:00+09:00 }
 stale_after: 2027-03-19
 status: stable
 owner: tomoya-k31
@@ -43,7 +43,7 @@ orca は公開 REST/ソケット API を持たず、**`orca` CLI（`--json`）�
 | `session/list` | `terminal list` の各端末の `worktreeId` を `worktree list --repo id:<repoId>` の comment と突き合わせ、comment が `totsuka ` で始まる worktree の端末を 1 worktree 1 行（エージェントを認識している端末を優先）|
 | `session/focus` | `terminal switch`（`terminal_exited` / stale は `focused: false`） |
 | `diagnostics/snapshot` | `terminal read --screen`、描画できなければ（`source: screen-unavailable`）`terminal read --limit 200`。失敗は `text: None` |
-| `state/subscribe` | `terminal wait --for exit` を繰り返す deadman。満たされたら／handle が消えたら、**`terminal show` で裏を取ってから** `failed` を 1 回送って終了（`connected: true` なら誤報として待ち直す — 実機 e2e で `wait` が生きている端末を「消えた」と答え、動いていたタスクが 5 秒で `failed` にされた）。orca の `timeout` は再試行、それ以外の失敗が**起きている間に** 5 回続いたら `failed`（`ErrorRun`。失敗と失敗の間でホストが眠っていたら — 壁時計がプロセス時計より 30 秒以上先に進んでいたら — 数え直す。dark wake のたびに Orca が `runtime_timeout` を 1 回返し、成功を挟まずに眠るため、素直に数えると約 80 分の睡眠で生きているエージェントが全部 `failed` にされた。2026-09-22 に実測、7 タスクが同じ 1 秒で失敗） |
+| `state/subscribe` | `terminal wait --for exit` を繰り返す deadman。満たされたら／handle が消えたら、**`terminal show` で裏を取ってから** `failed` を 1 回送って終了（`connected: true` なら誤報として待ち直す — 実機 e2e で `wait` が生きている端末を「消えた」と答え、動いていたタスクが 5 秒で `failed` にされた）。orca の `timeout` は再試行。**それ以外の失敗も `terminal show` で確かめ、終了を確認できたときだけ `failed`**（connected なら、`show` も失敗して確かめられないなら、何回でも待ち直す。#768: 失敗の回数で打ち切っていた頃は、スリープ中の dark wake のたびに Orca が `runtime_timeout` を 1 回返し、成功を挟まずに眠るため回数が積み上がり、生きているエージェントが `failed` にされた。2026-09-21〜22 に実測、task 12 と 7 タスクが同じ 1 秒で失敗）。待ち直しの間隔は 2 秒から倍々で最長 60 秒、`wait` が正常に返ったら 2 秒に戻す（`wait` だけが壊れ続けても CLI を空回りさせない） |
 
 ## プロンプトを「認識後」に送る理由
 
