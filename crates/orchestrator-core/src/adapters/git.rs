@@ -2,7 +2,7 @@
 
 use std::io::Read;
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -16,9 +16,9 @@ use crate::ports::git::{GitOutput, GitRunner};
 /// returns stops dispatch, completion signals, the timeout sweep and health
 /// publishing all at once — with nothing left to notice. The case that made it
 /// real is `git fetch` over SSH after the host woke from sleep: ssh waited on
-/// a dead connection for six hours. Past the deadline the whole process group
-/// is killed and the call fails as [`std::io::ErrorKind::TimedOut`], which a
-/// dispatch turns into its ordinary failure → automatic requeue.
+/// a dead connection for six hours. Past the deadline git is killed and the
+/// call fails as [`std::io::ErrorKind::TimedOut`], which a dispatch turns into
+/// its ordinary failure → automatic requeue.
 ///
 /// Generous on purpose: it caps a hang, it does not police a slow-but-live
 /// fetch. A dead SSH connection is better caught earlier, and precisely, by
@@ -52,24 +52,18 @@ impl GitRunner for SystemGitRunner {
     }
 }
 
-/// Run `git <args>` in `cwd`, killing it (and everything it spawned) once
-/// `timeout` has passed (never, when it is zero).
+/// Run `git <args>` in `cwd`, killing it once `timeout` has passed (never,
+/// when it is zero).
 fn run_with_timeout(cwd: &Path, args: &[&str], timeout: Duration) -> std::io::Result<GitOutput> {
     let mut cmd = Command::new("git");
+    // The same stdio as `Command::output()`. git stays in our process group
+    // on purpose: Ctrl-C on `totsuka run` must still reach a hung git, since
+    // the loop that would notice the signal is the one waiting on it.
     cmd.current_dir(cwd)
         .args(args)
-        // Nobody is there to answer a credential prompt, and in its own
-        // process group git cannot read the terminal anyway — it would stop
-        // on SIGTTIN and sit out the whole timeout. Fail at once instead.
-        .env("GIT_TERMINAL_PROMPT", "0")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    // Its own group, so the kill below also takes the `ssh` git spawned: ssh
-    // holds git's stderr, and killing git alone would leave the read of that
-    // pipe blocked for as long as ssh lives.
-    #[cfg(unix)]
-    crate::platform::unix::own_process_group(&mut cmd);
     let mut child = cmd.spawn()?;
 
     let deadline = (!timeout.is_zero()).then(|| Instant::now() + timeout);
@@ -86,12 +80,14 @@ fn run_with_timeout(cwd: &Path, args: &[&str], timeout: Duration) -> std::io::Re
         None => finished.recv().is_err(),
     });
     if timed_out {
-        kill(&mut child);
-    }
-    let status = child.wait()?;
-    let stdout = stdout.join().unwrap_or_default();
-    let stderr = stderr.join().unwrap_or_default();
-    if timed_out {
+        let _ = child.kill();
+        let _ = child.wait();
+        // The readers are left behind, not joined: the `ssh` git spawned
+        // survives git and still holds its stderr, so a join would wait for
+        // as long as that ssh lives — the hang this exists to cut.
+        // ponytail: an ssh on a dead connection lingers (with its reader
+        // thread) until ServerAlive or the OS TCP keepalive drops it — at most
+        // one per timed-out call; kill its process group if that ever piles up.
         return Err(std::io::Error::new(
             std::io::ErrorKind::TimedOut,
             format!(
@@ -103,6 +99,9 @@ fn run_with_timeout(cwd: &Path, args: &[&str], timeout: Duration) -> std::io::Re
             ),
         ));
     }
+    let status = child.wait()?;
+    let stdout = stdout.join().unwrap_or_default();
+    let stderr = stderr.join().unwrap_or_default();
     Ok(GitOutput {
         status: status.code(),
         stdout: String::from_utf8_lossy(&stdout).into_owned(),
@@ -122,13 +121,6 @@ fn drain<R: Read + Send + 'static>(pipe: Option<R>, done: mpsc::Sender<()>) -> J
     })
 }
 
-fn kill(child: &mut Child) {
-    #[cfg(unix)]
-    crate::platform::unix::kill_process_group(child.id());
-    #[cfg(not(unix))]
-    let _ = child.kill();
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -138,8 +130,9 @@ mod tests {
         // `core.sshCommand` stands in for an ssh stuck on a dead connection:
         // git hands it to a shell, the `#` comments out the host and command
         // git appends, and what is left sleeps far past the deadline. It is
-        // git's *child*, so this also proves the group kill reaches it — kill
-        // git alone and the sleep keeps stderr open for the full 30s.
+        // git's *child* and outlives the kill holding git's stderr, so this
+        // also proves the call does not wait on that pipe — join the readers
+        // and it returns only after the full 30s.
         let started = Instant::now();
         let err = run_with_timeout(
             &std::env::temp_dir(),

@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:e2232faf7ede270e449781f5101a0c71c4d82d9339956c4de9e79ed95e083b82 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:df29beb59b1c886951241d2bd54775e53e69237d6c0fc0492106980813f5a8ae -->
 
 # 設定リファレンス
 
@@ -762,7 +762,7 @@ confidence_threshold = 0.7
 | `location` | string? | `<state dir>/worktrees/{repo_name}/{worktree_name}` | 配置テンプレート。`{repo}` `{repo_name}` `{worktree_name}` `{task_id}` `{source}` `{task_number}` `{hash}` `{handle}` `${ENV}` `~` を展開する。`{worktree_name}` は `<task 番号>[-<handle>]-<8 桁 hex>` — `totsuka status` や `totsuka task retry <n>` が使う番号、ソースが付ける短い名前（GitHub は `repo-番号`、Slack と Discord はチャンネル名、Notion は無し）、ソース名とソース側 id から取ったダイジェストの先頭 8 桁である。各部分は個別にも使えるので、区切りを変えたり一部だけ使ったりできる。`{handle}` はソースが出さなければ**空文字**になるので、単独でディレクトリ名にしない。また `{handle}` だけは埋める前に**正規化**される（英数字と `-` `_` 以外は潰す）— プラグインが書く文字列なので `../` のようなものが worktree の外へ出ないようにするためで、`{task_id}` と `{source}` は既存のテンプレートの出力を変えないよう生のままである。`{task_id}` は**ソース側の** id（Slack なら `{channel}:{ts}`）。**`{branch}` は廃止された** — ブランチは worktree ができた後にエージェントが決めるので、ディレクトリ名には使えない。残っていると起動しない |
 | `cleanup` | policy? | `manual` | implement モードの掃除ポリシー |
 | `plan_cleanup` | policy? | `immediate` | plan モードの掃除ポリシー |
-| `git_timeout_secs` | int? | `300` | totsuka が実行する git のコマンド 1 回の上限秒数。超えたら git を、それが起動したものごと止め、そのコマンドを失敗させる。dispatch 中なら自動で再キューされる。`0` で上限なし |
+| `git_timeout_secs` | int? | `300` | totsuka が実行する git のコマンド 1 回の上限秒数。超えたら git を止め、そのコマンドを失敗させる。dispatch 中なら自動で再キューされる。`0` で上限なし |
 
 `cleanup` / `plan_cleanup` はどちらも **mode で選ばれる既定**であり、workflow 自身の `cleanup` が書かれていればそちらが勝つ。
 
