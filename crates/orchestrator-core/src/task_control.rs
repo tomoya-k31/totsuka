@@ -37,7 +37,11 @@ pub fn cancel(
             task.state
         )));
     }
-    let to = db.apply_event(id, TaskEvent::Cancel, Some(detail))?;
+    let to = match db.apply_event(id, TaskEvent::Cancel, Some(detail)) {
+        Ok(to) => to,
+        Err(StateError::Transition(e)) => return Ok(lost_race(id, &e)),
+        Err(e) => return Err(e),
+    };
     Ok(TaskControlOutcome::applied(task.state, to, None))
 }
 
@@ -70,8 +74,22 @@ pub fn retry(
     }
     // `retry_task`, not `apply_event(Retry)`: requeueing the task without the
     // messages its failed run was given would dispatch an empty prompt (#242).
-    let (to, requeued) = db.retry_task(id, Some(detail))?;
+    let (to, requeued) = match db.retry_task(id, Some(detail)) {
+        Ok(applied) => applied,
+        Err(StateError::Transition(e)) => return Ok(lost_race(id, &e)),
+        Err(e) => return Err(e),
+    };
     Ok(TaskControlOutcome::applied(task.state, to, Some(requeued)))
+}
+
+/// The state moved between the check above and the write — another writer
+/// (the CLI writing the DB directly, until #760's CLI switch-over) got there
+/// first. A refusal, not an error: inside the engine an `Err` is run-fatal,
+/// and losing this race must not stop `run`.
+fn lost_race(id: i64, e: &impl std::fmt::Display) -> TaskControlOutcome {
+    TaskControlOutcome::refused(format!(
+        "task {id} changed state while this was being applied ({e}) → `totsuka task show {id}` and try again"
+    ))
 }
 
 /// The refusal for an id the DB does not know.
