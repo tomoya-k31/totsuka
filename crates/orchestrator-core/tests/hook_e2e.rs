@@ -11,7 +11,7 @@
 //!
 //! One-shot `run` (`watch = false`) settles once every dispatched task reaches a
 //! terminal or waiting state, so each test terminates deterministically:
-//! `Done`/`WaitingInput` free their slot (`counts_toward_slot` is false), while a
+//! `Done`/`WaitingInput` count as settled (`Engine::settled`), while a
 //! still-`Running` task would keep the loop alive — hence these cover only the
 //! settling outcomes (COMPLETED → Done, NEEDS_INPUT → WaitingInput). The
 //! non-settling paths (UNKNOWN escalation, timeout, Verifying) are covered by

@@ -29,8 +29,9 @@ F-45 は `dispatched → running → verifying → publishing` だけをスロ�
 2. **入力待ち・エスカレーションへの遷移でスロットを解放しない。** 解放していた 3 か所（`run::events` の `WaitInput`、`run::hooks` の `escalate` と escalated → waiting_input）から `release_slot` を外した
 3. **再開は、保持しているスロットのまま行う。** `ResumeInput` での再取得は、スロットを持っていないタスク（再起動の境目など）にだけ行う。二重に取得すると、他のタスクの枠を食う
 4. **再起動時の再構築（`recovery::active_slot_claims`）も同じ集合を使う。** `counts_toward_slot` を共有しているので、別の変更は要らない
-5. **one-shot の `run` の終了判定（`Engine::settled`）は、人間待ちを「落ち着いた」とみなし続ける。** これまで `counts_toward_slot` を流用していたので、そのままだと入力待ちのタスクがある限り one-shot の `run` が終わらなくなる。判定から `WaitingInput` / `Escalated` を明示的に除く
-6. **設定での切り替えは設けない。** 既定の挙動そのものを変える（利用者の判断）
+5. **run の外で終わったタスクのスロットは、サイクルごとに回収する**（`Engine::release_slots_of_settled_tasks`）。`totsuka task cancel` は DB を書くだけで、実行中の Engine には知らせない。人間待ちのタスクがスロットを持つ以上、それをキャンセルするのは運用者が枠を空ける手段なので、次の再起動まで枠が埋まったままでは困る。保持台帳（`slot_holders`）の各タスクの DB 上の状態を毎サイクル確かめ、スロットを持たない状態になっていれば解放する（`/code-review` の指摘）。以前から実行中タスクの CLI キャンセルでも同じ漏れがあった
+6. **one-shot の `run` の終了判定（`Engine::settled`）は、人間待ちを「落ち着いた」とみなし続ける。** これまで `counts_toward_slot` を流用していたので、そのままだと入力待ちのタスクがある限り one-shot の `run` が終わらなくなる。判定から `WaitingInput` / `Escalated` を明示的に除く
+7. **設定での切り替えは設けない。** 既定の挙動そのものを変える（利用者の判断）
 
 # 代替案と不採用理由
 
@@ -42,5 +43,5 @@ F-45 は `dispatched → running → verifying → publishing` だけをスロ�
 
 - 入力待ちが `max_concurrency` 個たまると、人間が答えるか `totsuka task cancel` するまで、新しいタスクは起動しない
 - Slack の対話のように「答えを待つ会話」が多い運用では、以前よりキューが進みにくくなる。枠を広げたければ `max_concurrency` を上げる
-- `totsuka status` で見える「実行中」と「スロットの使用数」が一致するようになる。メニューバーの要対応表示（[attention](/glossary/attention.md)）は、枠だけでは見えない人間待ちを数えるものとして引き続き意味がある
-- 検証: `tests/run_loop.rs` の `a_task_waiting_for_input_keeps_its_slot`。枠 1 で最初のタスクが入力待ちに入った後、2 つ目が `queued` のままであることを確かめる。入力待ちでの解放を戻すと、2 つ目が `dispatched` になって落ちる
+- メニューバーの要対応表示（[attention](/glossary/attention.md)）は、枠の使用数だけでは「作業中か人間待ちか」が分からないため、人間待ちを数えるものとして引き続き意味がある
+- 検証: `tests/run_loop.rs` の `a_task_waiting_for_input_keeps_its_slot`。枠 1 で最初のタスクが入力待ちに入った後、2 つ目が `queued` のままであることを確かめる。入力待ちでの解放を戻すと、2 つ目が `dispatched` になって落ちる。続けて入力待ちのタスクを DB 上でキャンセルし、次のサイクルで 2 つ目が起動することも確かめる（回収を外すと落ちる）

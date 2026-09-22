@@ -23,7 +23,7 @@ use orchestrator_core::adapters::git::SystemGitRunner;
 use orchestrator_core::adapters::llm::GatewayClassifier;
 use orchestrator_core::adapters::plugin_host::{Plugin, PluginSpec};
 use orchestrator_core::config::RootConfig;
-use orchestrator_core::domain::state::TaskState;
+use orchestrator_core::domain::state::{TaskEvent, TaskState};
 use orchestrator_core::domain::workflow::Workflow;
 use orchestrator_core::repo_select::SelectConfig;
 use orchestrator_core::run::{Engine, EngineSettings, PluginSet, RepoSettings};
@@ -1332,15 +1332,28 @@ async fn a_task_waiting_for_input_keeps_its_slot() {
     for _ in 0..3 {
         engine.cycle().await.unwrap();
     }
-    engine.shutdown(Duration::from_secs(5)).await;
-
     let db = StateDb::open(&db_path).unwrap();
-    let mut states = [state_of(&db, "w1"), state_of(&db, "w2")];
-    states.sort_by_key(|s| s.map(|s| s.to_string()));
+    let (waiting, queued) = if state_of(&db, "w1") == Some(TaskState::WaitingInput) {
+        ("w1", "w2")
+    } else {
+        ("w2", "w1")
+    };
     assert_eq!(
-        states,
-        [Some(TaskState::Queued), Some(TaskState::WaitingInput)],
+        state_of(&db, queued),
+        Some(TaskState::Queued),
         "the waiting task must still hold the only slot"
+    );
+
+    // `totsuka task cancel` only writes the DB; the running engine must still
+    // notice and hand the slot on.
+    let id = db.find_by_source("mock_src", waiting).unwrap().unwrap().id;
+    db.apply_event(id, TaskEvent::Cancel, None).unwrap();
+    engine.cycle().await.unwrap();
+    engine.shutdown(Duration::from_secs(5)).await;
+    assert_ne!(
+        state_of(&db, queued),
+        Some(TaskState::Queued),
+        "cancelling the waiting task must free its slot"
     );
     let _ = std::fs::remove_dir_all(&base);
 }

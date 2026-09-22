@@ -842,6 +842,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         // same cycle rather than the next one (#242).
         self.requeue_conversations_with_unsent_messages().await?;
         self.select_repos().await?;
+        self.release_slots_of_settled_tasks()?;
         self.dispatch_ready().await?;
         // Escalate hook-dispatched tasks that have gone silent past their
         // workflow timeout (D-03).

@@ -79,7 +79,7 @@ parse 不能行を含むスプールファイルは**削除されず** `<name>.c
 1. **状況把握**: `totsuka task show <id>` でイベント履歴を見る。Escalate 時に記録された `diagnostics/snapshot`（herdr `pane.read` の画面テキスト、R-10）が `events.detail` に入っているので、pane で何が起きていたか（承認待ち・ループ・クラッシュ手前など）を確認する。
 2. **pane で直接解消**: エージェントは herdr の pane に生きている（保持される）。pane に attach し、詰まりを人手で解く（質問に答える・指示を出し直す・許可を与える等）。
 3. **自然復帰**: pane 側で作業が進み次の `Stop` フックが正常なマーカー付きで発火すれば、Engine は次シグナルで `Escalated` から `Verifying`/`Publishing`/`WaitingInput`/`Running` へ**自然復帰**する（Escalated は全非終端から到達し、そこから復帰できる設計）。特別なコマンドは不要。
-4. **回復しない/見切る場合**: これ以上進めないなら `totsuka task cancel <id>`（→ 次 run でセッション/スロット解放）。原因が明確な失敗なら、pane を潰さず調査してから cancel する（Failed/Escalated pane は保持されるので後追い調査可）。
+4. **回復しない/見切る場合**: これ以上進めないなら `totsuka task cancel <id>`（→ 実行中の run が次のサイクルでスロットを解放し、セッションは次の run で片付く）。原因が明確な失敗なら、pane を潰さず調査してから cancel する（Failed/Escalated pane は保持されるので後追い調査可）。
 5. **タイムアウトの頻発**: 正常でも時間のかかる workflow なら、その `[[workflows]]` の `timeout_secs` を延ばす（`0` にすると掃引しない）。UNKNOWN 連発なら `block_retry_limit` ではなく**マーカー未出力の根本**（rubric・指示文・`orchestrator-<workflow>.json`）を疑う。
 
 # 3. human 検収（totsuka task verify）
