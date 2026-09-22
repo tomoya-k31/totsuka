@@ -11,6 +11,7 @@ use std::io::Write;
 use clap::Subcommand;
 use orchestrator_core::adapters::state_db::EventExportFilter;
 use orchestrator_core::domain::state::{TaskEvent, TaskState};
+use orchestrator_core::task_control;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -438,34 +439,25 @@ fn is_broken_pipe(e: &CliError) -> bool {
 
 fn cancel(cx: &Cx, id: i64) -> Result<(), CliError> {
     let db = cx.open_state_db()?;
-    let task = db.get_task(id)?.ok_or_else(|| not_found(id))?;
-    if task.state.is_terminal() {
-        // The advice has to match what `retry` actually accepts: it refuses a
-        // `done` task, and since #242 the way to carry a finished conversation
-        // forward is another message in it, not a re-run of the old one.
-        let next = if task.state == TaskState::Done {
-            "it finished; send another message in the conversation (the reply in its thread/issue) to continue it".to_string()
-        } else {
-            format!("use `totsuka task retry {id}` to re-run it")
-        };
-        return Err(format!(
-            "task {id} is already {} → nothing to cancel; {next}",
-            task.state
-        )
-        .into());
-    }
-    db.apply_event(
+    // The rules and the refusal advice are shared with the running engine's
+    // control endpoint (#760).
+    let outcome = task_control::cancel(
+        &db,
         id,
-        TaskEvent::Cancel,
-        Some(serde_json::json!({ "kind": "cli", "command": "task cancel" })),
+        serde_json::json!({ "kind": "cli", "command": "task cancel" }),
     )?;
+    if !outcome.ok {
+        return Err(outcome.reason.unwrap_or_default().into());
+    }
     println!("task {id} cancelled");
     if matches!(
-        task.state,
-        TaskState::Dispatched
-            | TaskState::Running
-            | TaskState::WaitingInput
-            | TaskState::Publishing
+        outcome.from,
+        Some(
+            TaskState::Dispatched
+                | TaskState::Running
+                | TaskState::WaitingInput
+                | TaskState::Publishing
+        )
     ) {
         println!(
             "note: the worktree is kept per the cleanup policy; the pane is not closed here — `totsuka doctor` lists it"
@@ -476,40 +468,27 @@ fn cancel(cx: &Cx, id: i64) -> Result<(), CliError> {
 
 fn retry(cx: &Cx, id: i64) -> Result<(), CliError> {
     let db = cx.open_state_db()?;
-    let task = db.get_task(id)?.ok_or_else(|| not_found(id))?;
-    if !matches!(
-        task.state,
-        TaskState::Failed | TaskState::Cancelled | TaskState::Skipped
-    ) {
-        let action = if task.state == TaskState::Done {
-            // Since #242 `done` means "no unprocessed messages", not "closed
-            // forever": a new message reopens the conversation. Re-running the
-            // same instructions is a different thing, and not what anyone
-            // asking about a finished task wants.
-            "it finished; send another message in the conversation (the reply in its thread/issue) to continue it — a re-run of the same instructions is not what `retry` is for"
-        } else {
-            "only failed/cancelled/skipped tasks can be retried; `totsuka task cancel` it first if you want a re-run"
-        };
-        return Err(format!("task {id} is {} → {action}", task.state).into());
+    let outcome = task_control::retry(
+        &db,
+        id,
+        serde_json::json!({ "kind": "cli", "command": "task retry" }),
+    )?;
+    if !outcome.ok {
+        return Err(outcome.reason.unwrap_or_default().into());
     }
     // A skipped task (#556) is another member's: they claimed it, this
     // instance stepped aside. Retrying is the deliberate override, so say
     // what it re-enters rather than refusing.
-    if task.state == TaskState::Skipped {
+    if outcome.from == Some(TaskState::Skipped) {
         println!(
             "task {id} was skipped because another member claimed it — retrying re-enters \
              the claim: it runs here only if they have since released the task"
         );
     }
-    // `retry_task`, not `apply_event(Retry)`: requeueing the task without the
-    // messages its failed run was given would dispatch an empty prompt (#242).
-    let (_, requeued) = db.retry_task(
-        id,
-        Some(serde_json::json!({ "kind": "cli", "command": "task retry" })),
-    )?;
     println!(
         "task {id} re-queued → `totsuka run` dispatches it (reusing its worktree/session when possible)"
     );
+    let requeued = outcome.requeued.unwrap_or(0);
     if requeued > 0 {
         println!("  {requeued} message(s) from the last dispatch will be sent again");
     }
@@ -596,7 +575,7 @@ fn one_line(body: &str, limit: usize) -> String {
 }
 
 fn not_found(id: i64) -> CliError {
-    format!("task {id} not found → `totsuka task list` shows known ids").into()
+    task_control::not_found(id).into()
 }
 
 #[cfg(test)]

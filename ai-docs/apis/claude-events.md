@@ -19,7 +19,7 @@ owner: tomoya-k31
 
 | 旧 | 新 |
 |---|---|
-| `POST /claude-events` | `POST /agent-events`（旧パスも引き続き受理: 受信側は `/focus` 完全一致以外の全パスをシグナル受信として扱う E-08） |
+| `POST /claude-events` | `POST /agent-events`（旧パスも引き続き受理: 受信側は制御パス（`/focus`・`/task/cancel`・`/task/retry`）の完全一致以外の全パスをシグナル受信として扱う E-08） |
 | ソケット `claude-events.sock` | `agent-events.sock`（旧 stale ソケットは `totsuka run` 起動時に掃除） |
 | `SignalSource::ClaudeHook` | `SignalSource::AgentHook`（内部 enum） |
 | state.db `claude_session_id` 列 | `tool_session_id`（マイグレーション v4、[state.db スキーマ](/data/state-db.md)） |

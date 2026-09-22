@@ -19,4 +19,6 @@ pub use git::{GitOutput, GitRunner};
 pub use llm::{ClassifyError, RepoClassifier};
 pub use process::ProcessProbe;
 pub use secret::{SecretError, SecretRef, SecretStore, SecretString, is_secret_reference};
-pub use signal_ingress::{FocusOutcome, FocusPort, SignalAck, SignalError, SignalPort};
+pub use signal_ingress::{
+    ControlPort, FocusOutcome, SignalAck, SignalError, SignalPort, TaskControlOutcome, TaskOp,
+};

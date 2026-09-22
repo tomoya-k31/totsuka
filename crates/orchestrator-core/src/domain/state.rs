@@ -87,6 +87,14 @@ impl fmt::Display for TaskState {
     }
 }
 
+/// Serialized as the same string the DB stores, e.g. in a control answer
+/// (#760).
+impl serde::Serialize for TaskState {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
 /// Error returned when parsing an unknown state string from the DB.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 #[error("unknown task state: {0:?}")]

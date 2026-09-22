@@ -11,7 +11,9 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 
 use crate::domain::signal::AgentSignal;
-use crate::ports::signal_ingress::{FocusOutcome, FocusPort, SignalAck, SignalError, SignalPort};
+use crate::ports::signal_ingress::{
+    ControlPort, FocusOutcome, SignalAck, SignalError, SignalPort, TaskControlOutcome, TaskOp,
+};
 use crate::run::PluginEvent;
 
 /// Submits normalized hook signals onto the engine's event channel.
@@ -49,7 +51,7 @@ impl SignalPort for EngineSignalSink {
     }
 }
 
-impl FocusPort for EngineSignalSink {
+impl ControlPort for EngineSignalSink {
     fn focus(
         &self,
         task_id: i64,
@@ -62,6 +64,27 @@ impl FocusPort for EngineSignalSink {
         let sent = self
             .tx
             .send(PluginEvent::Focus { task_id, respond })
+            .map_err(|_| SignalError::Closed);
+        async move {
+            sent?;
+            outcome.await.map_err(|_| SignalError::Closed)
+        }
+    }
+
+    fn task(
+        &self,
+        op: TaskOp,
+        task_id: i64,
+    ) -> impl std::future::Future<Output = Result<TaskControlOutcome, SignalError>> + Send {
+        // The same request-response trip as `focus` (#760).
+        let (respond, outcome) = oneshot::channel();
+        let sent = self
+            .tx
+            .send(PluginEvent::TaskControl {
+                op,
+                task_id,
+                respond,
+            })
             .map_err(|_| SignalError::Closed);
         async move {
             sent?;
