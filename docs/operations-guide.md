@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](operations-guide.ja.md)
 
-<!-- generated-from: ai-docs/operations/operations-guide.md sha256:6d9c91377facb42c756b6169c4b2a9245259688647b6bf73648a10a487423771 -->
+<!-- generated-from: ai-docs/operations/operations-guide.md sha256:d4f46127022f4064fc8ec093c5a18f52f16e0e335603e1fd0caaf9e2ff155782 -->
 
 # Operations guide
 
@@ -261,6 +261,7 @@ EOF
 | Repository selection stays `pending` | `[llm]` is unset, or the decision was low-confidence. With a single repository it is chosen automatically; with several, configure `[llm]` or add a `repo_hint` to the request |
 | `task show` shows no branch | The agent did not create one — worktrees are handed over on a detached HEAD. If there are commits, the worktree is kept, so you can pick the work up there. In plan mode this is always the normal state |
 | ``git … did not finish within <N>s and was killed`` | A git command did not finish within totsuka's limit (`[worktree].git_timeout_secs`) and was stopped. During a dispatch the task is requeued automatically. The usual cause is a dead SSH connection — set up the [SSH keepalive](#ssh-keepalive-recommended). If it keeps happening, run `git fetch origin` by hand to check the network and your access to the remote |
+| Several tasks turn up `failed` together after the machine slept | The orca watchdog counted one unanswered Orca call per dark wake (the machine wakes for a few seconds every ~16 minutes while asleep) and gave up after five of them, although the agents were alive. Fixed in 0.8.5, which restarts the count whenever a sleep falls between two failures. The fingerprint is one `terminal wait failed … runtime_timeout` line per wake in `totsuka logs`. A task that failed this way resumes its own conversation when you move its card back into the trigger column |
 | No notifications arrive | Check that the notifier plugin is enabled and reachable with `doctor`. A failed delivery does not stop the task |
 
 ---

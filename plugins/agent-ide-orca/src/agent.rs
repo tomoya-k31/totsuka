@@ -133,7 +133,7 @@ impl ErrorRun {
     fn record(&mut self, now: (SystemTime, Instant)) -> u32 {
         if let Some((wall, mono)) = self.last {
             let wall_gap = now.0.duration_since(wall).unwrap_or_default();
-            if wall_gap.saturating_sub(now.1 - mono) > SLEEP_SLACK {
+            if wall_gap.saturating_sub(now.1 - mono) >= SLEEP_SLACK {
                 self.count = 0;
             }
         }
@@ -1239,6 +1239,12 @@ mod tests {
             1,
             "a sleep in between is not \"consecutive\""
         );
+
+        // Exactly at the threshold is a sleep, like the engine's own resume
+        // detection (`>=`, not `>`).
+        let mut run = ErrorRun::default();
+        run.record((wall, mono));
+        assert_eq!(run.record((wall + SLEEP_SLACK, mono)), 1);
     }
 
     fn params(body: Option<&str>, extra: Option<Value>) -> TaskDispatchParams {
