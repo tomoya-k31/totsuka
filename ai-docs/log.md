@@ -9,6 +9,9 @@
 * **Update**: [運用ガイド](/operations/operations-guide.md) — 「スリープ明けに複数タスクがまとめて failed」の FAQ を、0.8.5 の直し方に合わせて書き直した
 * **Update**: [agent-ide-orca](/components/agent-ide-orca.md) — deadman の連続エラーを「起きている間に連続した」ものだけ数えるようにした。スリープ中の dark wake ごとに Orca が `runtime_timeout` を返し、それが積み上がって生きているエージェントが `failed` にされていた
 * **Update**: [運用ガイド](/operations/operations-guide.md) — 「スリープ明けに複数タスクがまとめて failed」の切り分けを FAQ に足した
+* **Update**: [運用ガイド](/operations/operations-guide.md) — `run --watch` が SIGINT だけでなく SIGTERM / SIGHUP でも graceful 停止するようにした（#753）。launchd・`brew services`・`kill` の SIGTERM や端末を閉じたときの SIGHUP で即死し、`health.json` などが残っていた。修正前後の実測（プラグインは親の死で stdin EOF を受けて抜けるので孤児にならない）と、固まった git による停止遅延の注意も載せた
+* **Update**: [orchestrator-spec](/product/orchestrator-spec.md) / [ja](/product/orchestrator-spec.ja.md) — F-74 に停止シグナル 3 種を明記した
+* **Update**: [orchestrator-cli](/components/orchestrator-cli.md) / [リリースチェックリスト](/quality/release-checklist.md) — `run` の停止シグナルと、起動中に届いた停止では初回 dispatch をしないことを反映した
 * **Creation**: [ADR-0093](/decisions/adr-0093-waiting-holds-slot.md) — 人間待ち（`waiting_input` / `escalated`）のタスクもスロットを保持するようにした。入力待ちで枠が空くため `max_concurrency` が上限として働かず、キューのタスクが次々に中途半端に進んでいた。設定での切り替えは設けず、既定の挙動を変えた
 * **Update**: [orchestrator-spec](/product/orchestrator-spec.md) / [ja](/product/orchestrator-spec.ja.md) — F-45 を書き換え、F-108 の「スロット解放」を「保持」にした
 * **Update**: [orchestrator-core](/components/orchestrator-core.md) / [設定リファレンス](/development/config-reference.md) / [プラグイン開発ガイド](/development/plugin-dev-guide.md) / [フック完了判定のトラブルシューティング](/operations/hook-troubleshooting.md) / [要対応（用語）](/glossary/attention.md) / [状態 DB](/data/state-db.md) — 「人間待ちでスロットを解放する」前提の記述を直した

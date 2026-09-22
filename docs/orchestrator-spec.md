@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](orchestrator-spec.ja.md)
 
-<!-- generated-from: ai-docs/product/orchestrator-spec.md sha256:07534bb4999e940f506808c4689e2347d12736cce7f5772183af88ab78b7d8b3 -->
+<!-- generated-from: ai-docs/product/orchestrator-spec.md sha256:8029d74a3277e4d2055cdaa5b4b6a7fedd0d54338d8418f61892870a1c416486 -->
 
 # What totsuka is
 
@@ -133,6 +133,8 @@ Read-only commands like `status` start in under a second.
 **Configuration, state, and logs follow the XDG Base Directory specification**, so you can relocate them with the usual environment variables.
 
 **Output respects `NO_COLOR` and non-interactive terminals.**
+
+**Stopping is graceful on every stop signal.** `run` stops the same way on SIGINT (Ctrl-C), SIGTERM (launchd, `brew services`, `kill`) and SIGHUP (a closed terminal): running tasks stay in the state database and the lock is released.
 
 **Recovery is explicit.** After an abnormal exit, totsuka restores sessions from its state database and tries to reattach. Tasks it cannot reattach are not failed automatically — they wait for you to retry or cancel them.
 

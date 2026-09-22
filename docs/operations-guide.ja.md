@@ -1,7 +1,7 @@
 > 🌐 [English](operations-guide.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/operations-guide.md sha256:5c6979d15ed8e176a1ea2ffdd2d40647984791bef24b13f22991ee05f3f9bfa5 -->
+<!-- generated-from: ai-docs/operations/operations-guide.md sha256:f423d5e20ca37c67c98805539f25ee992b097aff687d3fa60887aa41610f2831 -->
 
 # 運用ガイド
 
@@ -146,7 +146,11 @@ worktree と pane の連動が破れると、pane だけが残る（手動での
 
 ## 停止と回復
 
-- `run --watch` は Ctrl-C で穏やかに停止する。実行中のタスクは状態 DB に残り、ロックは解放される
+- `run --watch` は SIGINT（Ctrl-C）・SIGTERM・SIGHUP のどれでも穏やかに停止する。launchd・`brew services`・`kill <pid>` は SIGTERM を、端末ウィンドウを閉じると SIGHUP を送る（設定の再読込ではない）。実行中のタスクは状態 DB に残り、ロック・`health.json`・フックソケットは片付けられる。終了コードはどれも 0（`--json` の `interrupted` は `true`）で、どのシグナルで止まったかはログの `stop requested` 行に出る
+  - `run` の起動中に届いた停止は保持され、ループが始まった時点で何もディスパッチせずに止まる
+  - 停止処理中の 2 回目のシグナルは無視される。すぐに止めたいときは SIGKILL
+  - git が固まっている間、`run` はシグナルを処理できない。Ctrl-C は git にも届くのですぐ戻るが、`kill -TERM <pid>` は totsuka にしか届かないので、git の上限（既定 300 秒）まで停止が遅れうる。launchd は `ExitTimeOut`（既定 20 秒）を過ぎると SIGKILL を送る
+  - プラグインのプロセスは `run` が強制終了されても残らない。`run` 側の入力が閉じると終了する。herdr ペインで動くエージェントは totsuka ではなく herdr の子なので動き続け、次回起動時に再接続される
 - 異常終了した後の再起動では、状態 DB からセッションを復元して再接続を試みる。再接続できなかったタスクは**自動で失敗にはせず**「継続確認待ち」として残るので、`totsuka task retry <id>` か `totsuka task cancel <id>` を選ぶ
 - `run` の多重起動はロックファイルと PID で防いでいる。`totsuka status` は `run` が止まっている間、情報が古いことを明示する
 

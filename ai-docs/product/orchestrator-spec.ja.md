@@ -3,7 +3,7 @@ type: Spec
 title: totsuka — ローカルAIエージェント Orchestrator 要件定義（v1）
 description: totsuka Orchestrator CLI の要件定義 — タスクソース/Agent IDE/Notifier プラグイン、git worktree ライフサイクル、ワークフロー、並列実行制御、v1 スコープ。
 tags: [orchestrator, requirements, plugin, worktree, cli, rust]
-generated: { by: claude-code/opus-5, at: 2026-09-23T12:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-23T03:45:00+09:00 }
 status: draft
 owner: tomoya-k31
 ---
@@ -208,7 +208,7 @@ request_timeout_secs = 30
 | F-71 | 状態遷移を明示的なステートマシンとして実装する。共通遷移: `queued → dispatched → running → publishing → done / failed / cancelled`。`running` の実体(plan / implement)と `publishing` の実体(PR 作成 / ソース書き戻し)はワークフロー定義(§4.9)が決める | M |
 | F-72 | 各遷移をイベントログとして記録(監査・デバッグ用) | S |
 | F-73 | 取り込みの冪等性: `(source, source_task_id)` のユニーク制約により同一タスクの二重取り込みを防止する | M |
-| F-74 | `run` の多重起動防止: `$XDG_STATE_HOME/totsuka/` のロックファイル + PID で制御。`status` はプロセス生存確認を行い、run が停止中なら「orchestrator not running」と stale 状態を明示する | M |
+| F-74 | `run` の多重起動防止: `$XDG_STATE_HOME/totsuka/` のロックファイル + PID で制御。`status` はプロセス生存確認を行い、run が停止中なら「orchestrator not running」と stale 状態を明示する。SIGINT / SIGTERM / SIGHUP のどれでも `run` は graceful に停止してロックを解放する（#753） | M |
 
 ### 4.9 ワークフロー定義(トリガー × 実行モード × 出力ポリシー)
 

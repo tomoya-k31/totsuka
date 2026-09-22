@@ -99,6 +99,14 @@ async fn run_async(cx: &Cx, args: RunArgs) -> Result<(), CliError> {
         )?)
     };
 
+    // Stop requests (#753), installed right after the lock rather than where
+    // the loop awaits them: once installed, a signal that arrives during the
+    // startup below (plugin launch, recovery) is buffered and ends the run
+    // gracefully as soon as it starts, instead of killing the process with
+    // `health.json` and the lock left behind. Dry runs stop at startup and
+    // keep the default actions.
+    let stop = (!dry_run).then(stop_requested).transpose()?;
+
     // Refresh the static hook scripts + per-workflow settings under
     // $XDG_DATA_HOME/totsuka/hooks/ (H-01/H-03, #137). Idempotent by content
     // hash, so a matching second startup rewrites nothing.
@@ -240,13 +248,43 @@ async fn run_async(cx: &Cx, args: RunArgs) -> Result<(), CliError> {
     engine.warn_orphan_worktrees()?;
 
     let summary = engine
-        .run(watch, async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
+        .run(watch, stop.expect("installed for every non-dry run"))
         .await?;
     engine.shutdown(SHUTDOWN_GRACE).await;
     print_summary(&summary, json)?;
     Ok(())
+}
+
+/// Resolves on the first stop request: SIGINT, SIGTERM or SIGHUP (#753).
+///
+/// All three mean the same graceful stop. SIGTERM is what launchd /
+/// `brew services` / `kill` send, and SIGHUP is a closed terminal; `ctrl_c()`
+/// alone left both on their default action, which kills the process before
+/// `engine.shutdown` runs. SIGHUP is not "reload" — there is nothing to reload.
+///
+/// The listeners are registered here, not when the future is first polled, so
+/// a signal that arrives before then is kept (tokio buffers it).
+#[cfg(unix)]
+fn stop_requested() -> std::io::Result<impl std::future::Future<Output = ()>> {
+    use tokio::signal::unix::{SignalKind, signal};
+    let mut interrupt = signal(SignalKind::interrupt())?;
+    let mut terminate = signal(SignalKind::terminate())?;
+    let mut hangup = signal(SignalKind::hangup())?;
+    Ok(async move {
+        let name = tokio::select! {
+            _ = interrupt.recv() => "SIGINT",
+            _ = terminate.recv() => "SIGTERM",
+            _ = hangup.recv() => "SIGHUP",
+        };
+        tracing::info!(signal = name, "stop requested; shutting down gracefully");
+    })
+}
+
+#[cfg(not(unix))]
+fn stop_requested() -> std::io::Result<impl std::future::Future<Output = ()>> {
+    Ok(async {
+        let _ = tokio::signal::ctrl_c().await;
+    })
 }
 
 /// Launch every enabled plugin from the store (F-58), passing its

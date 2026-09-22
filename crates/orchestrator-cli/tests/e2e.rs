@@ -8,11 +8,14 @@
 //!
 //! Flake control: every run is **one-shot** (deterministic, no `--watch`
 //! timing) and wrapped in a wall-clock guard; poll intervals are irrelevant to
-//! one-shot runs.
+//! one-shot runs. The one exception is the stop-signal tests (#753): only a
+//! `--watch` run is still running when the signal lands. They wait for
+//! `health.json` (written by every cycle) instead of sleeping, and every wait
+//! is capped.
 
 use std::io::Read;
 use std::path::PathBuf;
-use std::process::{Command, Output};
+use std::process::{Child, Command, Output};
 use std::time::{Duration, Instant};
 
 use test_support::{plugin_section, scratch};
@@ -65,8 +68,13 @@ impl Env {
     /// never deadlock on a full pipe, and a timed-out child is killed (not
     /// leaked as an orphan holding the run lock).
     fn run(&self, args: &[&str]) -> Output {
-        let start = Instant::now();
-        let mut child = Command::new(totsuka())
+        self.wait(self.spawn(args), args)
+    }
+
+    /// Start `totsuka <args>` with XDG pointed at the scratch dirs, without
+    /// waiting for it.
+    fn spawn(&self, args: &[&str]) -> Child {
+        Command::new(totsuka())
             .args(args)
             .env("XDG_CONFIG_HOME", self.base.join("cfg"))
             .env("XDG_DATA_HOME", self.base.join("data"))
@@ -76,8 +84,12 @@ impl Env {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
-            .unwrap();
+            .unwrap()
+    }
 
+    /// Collect a [`spawn`](Self::spawn)ed child under the 60s wall-clock guard.
+    fn wait(&self, mut child: Child, args: &[&str]) -> Output {
+        let start = Instant::now();
         let mut out_pipe = child.stdout.take().unwrap();
         let mut err_pipe = child.stderr.take().unwrap();
         let out_reader = std::thread::spawn(move || {
@@ -707,4 +719,83 @@ fn doctor_human_output_cannot_repaint_the_terminal_yet_json_stays_verbatim() {
         panes["detail"].as_str().unwrap().contains(&label),
         "--json must carry the label verbatim, not the escaped form: {panes}"
     );
+}
+
+/// `run --watch` stops gracefully on every stop request, not just Ctrl-C
+/// (#753): launchd / `brew services` / `kill` send SIGTERM and a closed
+/// terminal sends SIGHUP. Their default action kills the process before
+/// `engine.shutdown`, leaving `health.json` behind — the file `menu` reads.
+fn stops_gracefully_on(signal: &str) {
+    let env = setup(
+        &format!("stop_{signal}"),
+        "stream_states = [\"running\", \"done\"]\n",
+        "source",
+        "plan",
+    );
+    let health = env.state_dir().join("health.json");
+    let lock = env.state_dir().join("run.lock");
+    // Not under the scratch dir: macOS caps a socket path at 104 bytes, and
+    // `$TMPDIR` there is already most of that.
+    let socket = PathBuf::from(format!("/tmp/totsuka-{}-{signal}.sock", std::process::id()));
+    let config = env.cfg_dir().join("config.toml");
+    let mut toml = std::fs::read_to_string(&config).unwrap();
+    toml.push_str(&format!(
+        "\n[hooks]\nsocket_path = \"{}\"\n",
+        socket.display()
+    ));
+    std::fs::write(&config, toml).unwrap();
+
+    let args = ["run", "--watch", "--json"];
+    let mut child = env.spawn(&args);
+    // Readiness: the first cycle writes health.json, and it runs
+    // after the socket is bound and the stop listeners are installed.
+    let start = Instant::now();
+    while !health.exists() {
+        if let Some(status) = child.try_wait().unwrap() {
+            panic!("run exited before its first cycle: {status}");
+        }
+        if start.elapsed() >= Duration::from_secs(30) {
+            let _ = child.kill();
+            panic!("run never wrote {}", health.display());
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(lock.exists() && socket.exists(), "a running run holds both");
+
+    let sent = Command::new("kill")
+        .args([format!("-{signal}"), child.id().to_string()])
+        .status()
+        .unwrap();
+    assert!(sent.success(), "kill -{signal} failed");
+    let out = env.wait(child, &args);
+
+    assert!(
+        out.status.success(),
+        "SIG{signal} must stop the run gracefully, got {} (stderr: {})",
+        out.status,
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let doc: serde_json::Value = serde_json::from_str(&stdout(&out))
+        .unwrap_or_else(|e| panic!("stdout is not one JSON document ({e}): {}", stdout(&out)));
+    assert_eq!(doc["interrupted"], true, "document: {doc}");
+    assert!(!health.exists(), "health.json must be cleared");
+    assert!(!lock.exists(), "run.lock must be released");
+    assert!(!socket.exists(), "the hook socket must be unlinked");
+
+    let _ = std::fs::remove_dir_all(&env.base);
+}
+
+#[test]
+fn run_watch_stops_gracefully_on_sigterm() {
+    stops_gracefully_on("TERM");
+}
+
+#[test]
+fn run_watch_stops_gracefully_on_sighup() {
+    stops_gracefully_on("HUP");
+}
+
+#[test]
+fn run_watch_stops_gracefully_on_sigint() {
+    stops_gracefully_on("INT");
 }

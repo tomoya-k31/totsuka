@@ -3,7 +3,7 @@ type: Spec
 title: totsuka — Local AI-Agent Orchestrator Requirements (v1)
 description: Requirements specification for the totsuka orchestrator CLI — task-source/agent-IDE/notifier plugins, git-worktree lifecycle, workflows, parallel execution control, and v1 scope.
 tags: [orchestrator, requirements, plugin, worktree, cli, rust]
-generated: { by: claude-code/opus-5, at: 2026-09-23T12:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-23T03:45:00+09:00 }
 status: draft
 owner: tomoya-k31
 ---
@@ -207,7 +207,7 @@ request_timeout_secs = 30
 | F-71 | Implement state transitions as an explicit state machine. Common transitions: `queued → dispatched → running → publishing → done / failed / cancelled`. What `running` means (plan / implement) and what `publishing` means (PR creation / source write-back) is decided by the workflow definition (§4.9) | M |
 | F-72 | Record each transition as an event log (audit/debugging) | S |
 | F-73 | Intake idempotency: a unique constraint on `(source, source_task_id)` prevents double intake of the same task | M |
-| F-74 | Prevent concurrent `run` instances: a lock file + PID under `$XDG_STATE_HOME/totsuka/`. `status` checks process liveness and clearly reports "orchestrator not running" with stale state when run is stopped | M |
+| F-74 | Prevent concurrent `run` instances: a lock file + PID under `$XDG_STATE_HOME/totsuka/`. `status` checks process liveness and clearly reports "orchestrator not running" with stale state when run is stopped. SIGINT, SIGTERM and SIGHUP all stop `run` gracefully and release the lock (#753) | M |
 
 ### 4.9 Workflow definitions (trigger × mode × output policy)
 
