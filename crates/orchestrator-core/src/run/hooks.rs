@@ -543,33 +543,35 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         op: TaskOp,
         task_id: i64,
     ) -> Result<TaskControlOutcome, StateError> {
-        match op {
-            TaskOp::Cancel => {
-                let outcome = crate::task_control::cancel(
-                    &self.db,
-                    task_id,
-                    serde_json::json!({ "kind": "control", "command": "task cancel" }),
-                )?;
-                if outcome.ok {
-                    self.release_slot(task_id);
-                    self.drop_task_sessions(task_id);
-                    self.agent_output.remove(&task_id);
-                    // The "already told / already paused" memos belong to the
-                    // run that was cancelled. Left behind, a retry would start
-                    // with the silence sweep still paused for it and its next
-                    // tool / agent wait unannounced.
-                    self.awaiting_approval.remove(&task_id);
-                    self.blocked_on_tools.remove(&task_id);
-                    self.blocked_on_agent.remove(&task_id);
-                }
-                Ok(outcome)
-            }
+        let outcome = match op {
+            TaskOp::Cancel => crate::task_control::cancel(
+                &self.db,
+                task_id,
+                serde_json::json!({ "kind": "control", "command": "task cancel" }),
+            )?,
             TaskOp::Retry => crate::task_control::retry(
                 &self.db,
                 task_id,
                 serde_json::json!({ "kind": "control", "command": "task retry" }),
-            ),
+            )?,
+        };
+        if !outcome.ok {
+            return Ok(outcome);
         }
+        if op == TaskOp::Cancel {
+            self.release_slot(task_id);
+            self.drop_task_sessions(task_id);
+            self.agent_output.remove(&task_id);
+        }
+        // The "already told / already paused" memos belong to the run that
+        // just ended. Left behind, the next run would start with the silence
+        // sweep still paused for it and its next tool / agent wait
+        // unannounced. Cleared on retry too: a run that failed need not have
+        // cleared them on its way out.
+        self.awaiting_approval.remove(&task_id);
+        self.blocked_on_tools.remove(&task_id);
+        self.blocked_on_agent.remove(&task_id);
+        Ok(outcome)
     }
 
     /// Capture a pane snapshot for escalation diagnostics (R-10), if the task's
