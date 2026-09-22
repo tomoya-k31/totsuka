@@ -530,9 +530,9 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// The same rules as `totsuka task cancel` / `retry` writing the DB
     /// directly ([`task_control`](crate::task_control)), applied inside the
     /// loop so what this run holds for the task moves with its state: an
-    /// applied cancel frees the task's slot and its session routes now,
-    /// rather than whenever a cycle's `release_slots_of_settled_tasks` gets to
-    /// it. A retry needs nothing extra — the loop runs `dispatch_ready`
+    /// applied cancel frees the task's slot, its session routes and its
+    /// per-run memos now, rather than whenever a cycle's
+    /// `release_slots_of_settled_tasks` gets to it. A retry needs nothing extra — the loop runs `dispatch_ready`
     /// right after every event, and a previous dispatch's pane is released
     /// by the dispatcher itself (#481).
     ///
@@ -554,6 +554,13 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                     self.release_slot(task_id);
                     self.drop_task_sessions(task_id);
                     self.agent_output.remove(&task_id);
+                    // The "already told / already paused" memos belong to the
+                    // run that was cancelled. Left behind, a retry would start
+                    // with the silence sweep still paused for it and its next
+                    // tool / agent wait unannounced.
+                    self.awaiting_approval.remove(&task_id);
+                    self.blocked_on_tools.remove(&task_id);
+                    self.blocked_on_agent.remove(&task_id);
                 }
                 Ok(outcome)
             }
@@ -981,6 +988,8 @@ mod tests {
         engine
             .sessions
             .insert(("mock".to_string(), "s-1".to_string()), id);
+        engine.awaiting_approval.insert(id);
+        engine.blocked_on_tools.insert(id);
 
         let outcome = engine.control_task(TaskOp::Cancel, id).unwrap();
         assert_eq!(
@@ -993,6 +1002,10 @@ mod tests {
         );
         assert!(engine.slot_holders.is_empty());
         assert!(engine.sessions.is_empty());
+        assert!(
+            engine.awaiting_approval.is_empty() && engine.blocked_on_tools.is_empty(),
+            "a retry must not inherit the cancelled run's memos"
+        );
 
         // A refusal is an answer, not an error, and moves nothing.
         let again = engine.control_task(TaskOp::Cancel, id).unwrap();
