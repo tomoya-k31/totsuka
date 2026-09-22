@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](plugin-dev-guide.ja.md)
 
-<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:bf22ee02c15e2058664190b464b2a0c52b9a2571b452cd30bb82d915ccf08632 -->
+<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:9d4aeceb8473a8eb3731589da010cb4083ced8a6f20853b124757c6e70c50658 -->
 
 # Plugin development guide
 
@@ -112,7 +112,7 @@ Transport-level errors (`NOT_ACCEPTING`, `SUBMIT_OVERLOADED`, `INTERNAL_ERROR`) 
 
 **The worktree arrives on a detached HEAD.** Creating a branch, committing, pushing, and opening a pull request are all the agent's responsibility, not the orchestrator's.
 
-`state` is one of `idle`, `running`, `waiting_input`, `done`, `failed`. The orchestrator maps these onto its own state machine — `running` starts the clock, `waiting_input` releases the concurrency slot, `done` moves to publishing — so map your tool's real state onto these five honestly.
+`state` is one of `idle`, `running`, `waiting_input`, `done`, `failed`. The orchestrator maps these onto its own state machine — `running` starts the clock, `waiting_input` parks the task (it keeps its concurrency slot), `done` moves to publishing — so map your tool's real state onto these five honestly.
 
 ### notifier
 

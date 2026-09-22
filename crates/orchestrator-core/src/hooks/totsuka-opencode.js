@@ -145,7 +145,7 @@ export const TotsukaOpencode = async ({ client }) => {
   return {
     // The `question` tool blocks the turn on the human (#487): no idle — and
     // so no marker — can arrive while it waits. Post QuestionPending so the
-    // engine parks the task (waiting_input, slot released, operator notified),
+    // engine parks the task (waiting_input, slot kept, operator notified),
     // exactly like claude's AskUserQuestion PreToolUse relay. `callID` is the
     // per-question idempotency key: a second question must not be dropped as
     // a duplicate of the first.

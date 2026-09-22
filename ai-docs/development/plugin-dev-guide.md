@@ -4,7 +4,7 @@ title: プラグイン開発ガイド
 description: totsuka プラグインの作り方。plugin-protocol クレートの型、JSON-RPC(NDJSON/stdio) メソッド、plugin.toml マニフェスト、capability 宣言、開発ループ（plugin install --from-source）とビルド手順（bin 名 = plugin.toml の name という不変条件）、install/enable の流れ、参照実装。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/plugin-protocol
 tags: [plugin, protocol, json-rpc, manifest, guide]
-generated: { by: claude-code/opus-5, at: 2026-09-19T22:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-23T12:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -123,7 +123,7 @@ O→P 呼び出しは Orchestrator 側でメソッド別に会計されており
 
 # 状態の対応（F-32）
 
-エージェントの状態 `AgentState` は Orchestrator のステートマシンへ写像される（dispatched→running は `Start`、blocked は `waiting_input` でスロット解放、done は publishing へ）。プラグインは自分のツールの状態を 5 値へ正直に写像する。
+エージェントの状態 `AgentState` は Orchestrator のステートマシンへ写像される（dispatched→running は `Start`、blocked は `waiting_input`（スロットは保持したまま）、done は publishing へ）。プラグインは自分のツールの状態を 5 値へ正直に写像する。
 
 # ビルドと install（開発ループ）
 

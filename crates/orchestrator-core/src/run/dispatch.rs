@@ -1204,6 +1204,27 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         }
     }
 
+    /// Release the slots of tasks that stopped holding one without this run
+    /// being told — `totsuka task cancel` only writes the DB. A waiting task
+    /// holds its slot (F-45), and cancelling one is the operator's way to free
+    /// it, so without this the slot would stay taken until the next restart.
+    pub(super) fn release_slots_of_settled_tasks(&mut self) -> Result<(), EngineError> {
+        let mut stale = Vec::new();
+        for &task_id in self.slot_holders.keys() {
+            if self
+                .db
+                .get_task(task_id)?
+                .is_none_or(|t| !counts_toward_slot(t.state))
+            {
+                stale.push(task_id);
+            }
+        }
+        for task_id in stale {
+            self.release_slot(task_id);
+        }
+        Ok(())
+    }
+
     /// Drop a finished task's session routes so long-running `--watch` does
     /// not accumulate stale `(plugin, session_id)` entries.
     pub(super) fn drop_task_sessions(&mut self, task_id: i64) {

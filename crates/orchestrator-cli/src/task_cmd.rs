@@ -1,9 +1,10 @@
 //! `totsuka task ...` — per-task operations (§5.1): list / show / cancel /
 //! retry / export.
 //!
-//! `cancel` / `retry` are state-machine transitions on the DB (#48); the agent
-//! session and slots are reconciled by the next `totsuka run` (recovery/retry
-//! reuse, F-44).
+//! `cancel` / `retry` are state-machine transitions on the DB (#48). A running
+//! `totsuka run` frees a cancelled task's slot on its next cycle; the agent
+//! session is reconciled by the next `totsuka run` (recovery/retry reuse,
+//! F-44).
 
 use std::io::Write;
 

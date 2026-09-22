@@ -19,14 +19,14 @@ pub enum TaskState {
     Dispatched,
     /// Agent is working (plan or implement).
     Running,
-    /// Agent is blocked on a human question (F-35). Frees its slot (F-45).
+    /// Agent is blocked on a human question (F-35). Holds its slot (F-45).
     WaitingInput,
     /// Agent self-reported COMPLETED; waiting for human verification
     /// (`totsuka task verify`, #131 D-01). Holds its slot like `Publishing`.
     Verifying,
     /// Escalated to a human (UNKNOWN stops / timeout / correlation anomaly,
     /// #131 D-02/D-03). Non-terminal: resolving it in the pane resumes the
-    /// task on the next signal. Frees its slot like `WaitingInput`.
+    /// task on the next signal. Holds its slot like `WaitingInput`.
     Escalated,
     /// Producing output (PR creation or source write-back).
     Publishing,

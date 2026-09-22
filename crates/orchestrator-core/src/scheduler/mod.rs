@@ -2,9 +2,10 @@
 //! slot-counting rule (F-40–F-45).
 //!
 //! Three concurrency tiers gate a dispatch (all must have a free slot):
-//! global (F-40), per-repository (F-41), and per-agent-plugin (F-42). Only the
-//! `dispatched → running → publishing` states occupy a slot (F-45); entering
-//! `waiting_input`/`pending` releases it and resuming re-acquires it. The
+//! global (F-40), per-repository (F-41), and per-agent-plugin (F-42). Every
+//! state from `dispatched` until the task finishes occupies a slot (F-45) —
+//! including `waiting_input` and `escalated`, which are blocked on a human.
+//! The
 //! counters are plain state (not tokio semaphores) so they can be **rebuilt
 //! from the state DB** after a restart.
 
@@ -15,14 +16,24 @@ use crate::domain::state::TaskState;
 
 /// Whether a task in `state` occupies a concurrency slot (F-45).
 ///
-/// Only actively-executing states count; `waiting_input`/`pending` free the
-/// slot to prevent wait-induced deadlock. `verifying` still holds its slot
-/// (Publishing-equivalent: the agent finished but the output is not final),
-/// while `escalated` frees it (WaitingInput-equivalent: blocked on a human).
+/// Every dispatched, unfinished state counts — **including the ones blocked on
+/// a human** (`waiting_input`, `escalated`). Freeing the slot there let
+/// the scheduler keep starting new tasks while the old ones sat half-done,
+/// since most tasks stop for input sooner or later: the cap then bounded
+/// nothing, and the operator ended up answering every task at once. Holding
+/// the slot means a full set of waiting tasks stops new work until a human
+/// answers (or cancels) one. There is no deadlock in that: a waiting task
+/// needs a human, not a slot, and it resumes on the slot it already holds.
+/// `pending` (repository confirmation) is before dispatch and holds none.
 pub fn counts_toward_slot(state: TaskState) -> bool {
     matches!(
         state,
-        TaskState::Dispatched | TaskState::Running | TaskState::Verifying | TaskState::Publishing
+        TaskState::Dispatched
+            | TaskState::Running
+            | TaskState::WaitingInput
+            | TaskState::Escalated
+            | TaskState::Verifying
+            | TaskState::Publishing
     )
 }
 
@@ -283,11 +294,12 @@ mod tests {
 
     #[test]
     fn counts_only_active_states() {
-        // Verifying holds its slot (output not final yet); Escalated frees it
-        // (blocked on a human, like WaitingInput).
+        // Waiting on a human still holds the slot.
         for s in [
             TaskState::Dispatched,
             TaskState::Running,
+            TaskState::WaitingInput,
+            TaskState::Escalated,
             TaskState::Verifying,
             TaskState::Publishing,
         ] {
@@ -296,8 +308,6 @@ mod tests {
         for s in [
             TaskState::Queued,
             TaskState::Pending,
-            TaskState::WaitingInput,
-            TaskState::Escalated,
             TaskState::Done,
             TaskState::Failed,
             TaskState::Cancelled,

@@ -7,7 +7,7 @@
 # while the dialog waits, so no Stop — and therefore no NEEDS_INPUT — can reach
 # the orchestrator from that path (ADR-0038 D6). This hook is what parks the
 # task instead: it POSTs a QuestionPending event and the engine moves the task
-# to waiting_input (slot released, operator notified with the question text).
+# to waiting_input (operator notified with the question text; the slot is kept).
 #
 # stdout stays EMPTY on every path: a PreToolUse hook's stdout JSON is a
 # permission decision, and printing one would allow/deny the tool call instead

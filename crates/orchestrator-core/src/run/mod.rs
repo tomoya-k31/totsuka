@@ -800,7 +800,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     }
 
     /// Whether the one-shot loop can exit: no task **this run is monitoring**
-    /// is actively executing. `waiting_input`/`pending` tasks remain by design
+    /// is actively executing. `waiting_input`/`escalated`/`pending` tasks remain by design
     /// (§5.1); `queued` leftovers were warned about at dispatch time; a
     /// leftover active-state row with no live session (recovery left it for
     /// human confirmation, §5.3) can never progress, so it must not wedge the
@@ -808,8 +808,16 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     fn settled(&self) -> Result<bool, EngineError> {
         let monitored: HashSet<i64> = self.sessions.values().copied().collect();
         for task_id in monitored {
+            // Not `counts_toward_slot`: a task blocked on a human holds its
+            // slot (F-45) but has nothing left to do in this run.
             if let Some(record) = self.db.get_task(task_id)?
-                && counts_toward_slot(record.state)
+                && matches!(
+                    record.state,
+                    TaskState::Dispatched
+                        | TaskState::Running
+                        | TaskState::Verifying
+                        | TaskState::Publishing
+                )
             {
                 return Ok(false);
             }
@@ -834,6 +842,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         // same cycle rather than the next one (#242).
         self.requeue_conversations_with_unsent_messages().await?;
         self.select_repos().await?;
+        self.release_slots_of_settled_tasks()?;
         self.dispatch_ready().await?;
         // Escalate hook-dispatched tasks that have gone silent past their
         // workflow timeout (D-03).

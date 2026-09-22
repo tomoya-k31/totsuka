@@ -1,5 +1,12 @@
 # Bundle Update Log
 
+## 2026-09-23
+
+* **Creation**: [ADR-0093](/decisions/adr-0093-waiting-holds-slot.md) — 人間待ち（`waiting_input` / `escalated`）のタスクもスロットを保持するようにした。入力待ちで枠が空くため `max_concurrency` が上限として働かず、キューのタスクが次々に中途半端に進んでいた。設定での切り替えは設けず、既定の挙動を変えた
+* **Update**: [orchestrator-spec](/product/orchestrator-spec.md) / [ja](/product/orchestrator-spec.ja.md) — F-45 を書き換え、F-108 の「スロット解放」を「保持」にした
+* **Update**: [orchestrator-core](/components/orchestrator-core.md) / [設定リファレンス](/development/config-reference.md) / [プラグイン開発ガイド](/development/plugin-dev-guide.md) / [フック完了判定のトラブルシューティング](/operations/hook-troubleshooting.md) / [要対応（用語）](/glossary/attention.md) / [状態 DB](/data/state-db.md) — 「人間待ちでスロットを解放する」前提の記述を直した
+* **Update**: [エージェントイベント](/apis/agent-events.md) — QuestionPending の park を「スロットは保持する」に直した
+
 ## 2026-09-22
 
 * **Creation**: [ADR-0092](/decisions/adr-0092-git-timeout.md) — `SystemGitRunner` の全 git 呼び出しに上限（既定 300 秒、`[worktree].git_timeout_secs` で上書き、`0` で無効）を設け、超えたら git を kill して `TimedOut` で失敗させ、dispatch の自動再キューに乗せる（#764）。`spawn_blocking` での非同期化は不採用

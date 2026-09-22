@@ -304,7 +304,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         }
     }
 
-    /// Park a task in `WaitingInput`: slot released, operator notified. The
+    /// Park a task in `WaitingInput`: operator notified, slot kept. The
     /// shared tail of [`on_stop_needs_input`](Self::on_stop_needs_input) and
     /// [`on_question_pending`](Self::on_question_pending) — the two differ
     /// only in what an arrival while already parked means.
@@ -323,7 +323,6 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                     TaskEvent::WaitInput,
                     Some(serde_json::json!({ "kind": kind, "reason": reason })),
                 )?;
-                self.release_slot(record.id);
                 notify_all(
                     &self.plugins.notifiers,
                     NotifierEvent::WaitingInput,
@@ -450,7 +449,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
 
     /// Escalate a task to a human (D-02/D-03): capture a pane snapshot for the
     /// audit detail (R-10) if the plugin supports it, transition to `Escalated`
-    /// (freeing its slot), and notify. `Escalated` is non-terminal: the next
+    /// (keeping its slot), and notify. `Escalated` is non-terminal: the next
     /// signal resumes the task.
     async fn escalate(&mut self, record: &TaskRecord, reason: String) -> Result<(), EngineError> {
         if record.state.is_terminal() || record.state == TaskState::Escalated {
@@ -466,7 +465,6 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                 "diagnostics": snapshot,
             })),
         )?;
-        self.release_slot(record.id);
         notify_all(
             &self.plugins.notifiers,
             NotifierEvent::Escalated,

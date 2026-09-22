@@ -4,7 +4,7 @@ title: 状態DB（SQLite state.db）スキーマ
 description: タスク実行状態を永続化する SQLite DB（$XDG_STATE_HOME/totsuka/state.db）の tasks/sessions/events/hook_events/task_messages/schema_migrations スキーマと設計判断。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/adapters/state_db.rs
 tags: [sqlite, state, schema, statemachine, hooks]
-generated: { by: human:tomoya-k31, at: 2026-07-31T00:00:00Z }
+generated: { by: claude-code/opus-5, at: 2026-09-23T12:00:00+09:00 }
 verified:
   - { by: claude-code/opus-5, at: 2026-08-19T02:36:00Z }
 status: stable
@@ -246,7 +246,7 @@ Claude Code フック（Stop / Notification / SessionStart / SessionEnd / heartb
 - セッション消失 / attach エラー / セッション未記録 / エージェント failed: タスクを「継続確認待ち」として `RecoveryReport::needs_confirmation` に載せる。**自動では failed にしない**（§5.3）。次アクション（`task retry` / `task cancel`）を人間へ提示。
 - **human-gated 安全化（#133）**: `verifying`/`escalated` のタスクはエージェント状態に関わらず常に「継続確認待ち」（検収・エスカレーション解消を再起動で自動スキップしない）。また `waiting_input` 中にエージェントが Done を報告していたケースも自動 Publishing せず「継続確認待ち」とする（human 検収待ち相当のタスクが再起動を跨ぐと検収をスキップして自動 publish される穴の封鎖）。
 
-リトライ（F-44）は `recovery::retry_plan(task, latest_session)` が判定: worktree＋セッションが残れば既存を再利用して会話再開、無ければ新規 worktree＋dispatch（履歴にセッション追記）。スロット再取得は `recovery::active_slot_claims(db, report)` が **再開した**タスクのうち slot 計上状態（`waiting_input` を除く）の `(repo, plugin)` を集めて `SlotManager::rebuild`（#55）へ渡す（継続確認待ちのタスクはスロットを占有しない）。
+リトライ（F-44）は `recovery::retry_plan(task, latest_session)` が判定: worktree＋セッションが残れば既存を再利用して会話再開、無ければ新規 worktree＋dispatch（履歴にセッション追記）。スロット再取得は `recovery::active_slot_claims(db, report)` が **再開した**タスクのうち slot 計上状態（`waiting_input` / `escalated` を含む → ADR-0093）の `(repo, plugin)` を集めて `SlotManager::rebuild`（#55）へ渡す（継続確認待ちのタスクはスロットを占有しない）。
 
 # 多重起動防止（F-74）
 

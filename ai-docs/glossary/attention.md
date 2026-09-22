@@ -3,7 +3,7 @@ type: Term
 title: 要対応（Attention）
 description: 人間が動かさない限り永久に進まない非終端タスクの集合。pending / waiting_input / verifying / escalated / queued+wait_reason の 5 状態からなり、メニューバーのバッジ（F-109）が数える対象。終端状態を含めないのは、含めると数字が単調増加して 0 に戻らなくなるため。
 tags: [glossary, attention, menu, status, task-state]
-generated: { by: claude-code/opus-5, at: 2026-08-28T05:40:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-23T12:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -34,7 +34,7 @@ owner: tomoya-k31
 
 # なぜこの集合に意味があるのか
 
-`waiting_input` と `escalated` は**スロットを解放する**（F-45）。したがって同時実行数だけを見ていると「枠が空いている＝順調」に見えるが、実際には人間待ちで止まっている。要対応は、その見え方の穴をふさぐために数える集合である。
+`waiting_input` と `escalated` はスロットを保持する（F-45、[ADR-0093](/decisions/adr-0093-waiting-holds-slot.md)。以前は解放していた）。それでも同時実行数だけでは「枠が埋まっているのが作業中だからか、人間待ちだからか」は分からない。要対応は、人間の手が要るタスクを枠とは別に数える集合である。
 
 定義の実体は `crates/orchestrator-cli/src/menu_cmd.rs` の `classify` 一箇所にあり、[`TaskState`](/glossary/task.md) を網羅する `match` で書かれている —— 状態が増えたときに黙って「対象外」に倒れず、コンパイルが通らなくなるようにするため。
 

@@ -23,7 +23,7 @@ use orchestrator_core::adapters::git::SystemGitRunner;
 use orchestrator_core::adapters::llm::GatewayClassifier;
 use orchestrator_core::adapters::plugin_host::{Plugin, PluginSpec};
 use orchestrator_core::config::RootConfig;
-use orchestrator_core::domain::state::TaskState;
+use orchestrator_core::domain::state::{TaskEvent, TaskState};
 use orchestrator_core::domain::workflow::Workflow;
 use orchestrator_core::repo_select::SelectConfig;
 use orchestrator_core::run::{Engine, EngineSettings, PluginSet, RepoSettings};
@@ -1286,6 +1286,74 @@ output = "none"
     assert!(
         !std::path::Path::new(&sweep).exists(),
         "the sibling under the immediate default must be removed: {sweep}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// F-45: a task waiting for input keeps its slot. With room for one task, the
+/// first one parking in `waiting_input` must not let the second one start —
+/// freeing the slot there let every queued task get half-way and then wait on
+/// a human all at once.
+#[tokio::test]
+async fn a_task_waiting_for_input_keeps_its_slot() {
+    let base = scratch("waiting_slot");
+    let repo = setup_repo(&base);
+    let source_log = base.join("source.ndjson");
+    let notify_log = base.join("notify.ndjson");
+    let db_path = base.join("state.db");
+
+    let plugins = plugin_set(
+        json!([mock_task("w1"), mock_task("w2")]),
+        json!({ "stream_states": ["running", "waiting_input"] }),
+        &source_log,
+        &notify_log,
+    )
+    .await;
+    let mut settings = engine_settings(&repo);
+    settings.limits = Limits::global(1);
+    let mut engine = Engine::new(
+        StateDb::open(&db_path).unwrap(),
+        settings,
+        plugins,
+        SystemGitRunner::default(),
+        no_llm(),
+    )
+    .await;
+
+    let state_of =
+        |db: &StateDb, id: &str| db.find_by_source("mock_src", id).unwrap().map(|t| t.state);
+    let db_probe = db_path.clone();
+    run_watch_until(&mut engine, move || {
+        let db = StateDb::open(&db_probe).unwrap();
+        [state_of(&db, "w1"), state_of(&db, "w2")].contains(&Some(TaskState::WaitingInput))
+    })
+    .await;
+    // Cycles in which a freed slot would have been handed to the other task.
+    for _ in 0..3 {
+        engine.cycle().await.unwrap();
+    }
+    let db = StateDb::open(&db_path).unwrap();
+    let (waiting, queued) = if state_of(&db, "w1") == Some(TaskState::WaitingInput) {
+        ("w1", "w2")
+    } else {
+        ("w2", "w1")
+    };
+    assert_eq!(
+        state_of(&db, queued),
+        Some(TaskState::Queued),
+        "the waiting task must still hold the only slot"
+    );
+
+    // `totsuka task cancel` only writes the DB; the running engine must still
+    // notice and hand the slot on.
+    let id = db.find_by_source("mock_src", waiting).unwrap().unwrap().id;
+    db.apply_event(id, TaskEvent::Cancel, None).unwrap();
+    engine.cycle().await.unwrap();
+    engine.shutdown(Duration::from_secs(5)).await;
+    assert_ne!(
+        state_of(&db, queued),
+        Some(TaskState::Queued),
+        "cancelling the waiting task must free its slot"
     );
     let _ = std::fs::remove_dir_all(&base);
 }

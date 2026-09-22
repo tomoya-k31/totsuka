@@ -1,7 +1,7 @@
 > 🌐 [English](plugin-dev-guide.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:bf22ee02c15e2058664190b464b2a0c52b9a2571b452cd30bb82d915ccf08632 -->
+<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:9d4aeceb8473a8eb3731589da010cb4083ced8a6f20853b124757c6e70c50658 -->
 
 # プラグイン開発ガイド
 
@@ -115,7 +115,7 @@ Orchestrator は起動前に `protocol_version` の互換性を検査し、宣�
 
 **worktree は detached HEAD で渡される。** ブランチの作成、コミット、push、プルリクエストの作成はすべてエージェント側の責務であって、Orchestrator の仕事ではない。
 
-`state` は `idle` / `running` / `waiting_input` / `done` / `failed` の 5 値。Orchestrator はこれを自身のステートマシンへ写像する（`running` で計測が始まり、`waiting_input` で並列枠が解放され、`done` で書き戻しへ進む）ので、自分のツールの実際の状態をこの 5 値へ正直に写像すること。
+`state` は `idle` / `running` / `waiting_input` / `done` / `failed` の 5 値。Orchestrator はこれを自身のステートマシンへ写像する（`running` で計測が始まり、`waiting_input` で park され（並列枠は保持したまま）、`done` で書き戻しへ進む）ので、自分のツールの実際の状態をこの 5 値へ正直に写像すること。
 
 ### notifier
 
