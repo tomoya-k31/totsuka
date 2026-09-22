@@ -11,6 +11,13 @@ Note: the plugin protocol is versioned independently of the application (see
 `crates/plugin-protocol`); a totsuka release does not imply a protocol-version
 change.
 
+## [0.8.4](https://github.com/tomoya-k31/totsuka/compare/v0.8.3...v0.8.4) (2026-09-22)
+
+
+### Bug Fixes
+
+* **core:** git の呼び出しに上限時間を設け、固まった git で Engine が止まらないようにする ([#769](https://github.com/tomoya-k31/totsuka/issues/769)) ([e0136be](https://github.com/tomoya-k31/totsuka/commit/e0136beba14256033f097448262cb62b3eb50912))
+
 ## [0.8.3](https://github.com/tomoya-k31/totsuka/compare/v0.8.2...v0.8.3) (2026-09-21)
 
 
