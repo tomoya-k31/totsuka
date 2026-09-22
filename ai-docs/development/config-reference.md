@@ -4,7 +4,7 @@ title: 設定リファレンス（config.toml）
 description: "config.toml の全キー・デフォルト値・意味の一覧。設定ファイルは 1 本で、プラグイン個別設定もトップレベルの [<name>] テーブルに入る。シークレット参照、設定スキーマのバージョニング方針、[[projects]] の domain 宣言とワークフローからの参照、プラグインが定義する追加プロパティ、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-github の [github]、task-source-notion の [notion]、task-source-slack の [slack]、agent-ide-herdr の [herdr] を含む。"
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
 tags: [config, reference, toml, secrets, workflow, worktree, github, notion, slack, hooks, versioning]
-generated: { by: claude-code/opus-5, at: 2026-09-21T18:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-22T12:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -867,8 +867,9 @@ confidence_threshold = 0.7
 | `location` | string? | `<state dir>/worktrees/{repo_name}/{worktree_name}` | 配置テンプレート。`{repo}`/`{repo_name}`/`{worktree_name}`/`{task_id}`/`{source}`/`{task_number}`/`{hash}`/`{handle}`/`${ENV}`/`~` を展開。**`{worktree_name}` は `<task 番号>[-<handle>]-<hash8>`**（`{task_number}` / 任意の `{handle}` / `{hash}` を `-` で繋いだもの。0.7.3 までは `{source}-{task_id}` を git ref 規則で正規化したものだった → [ADR-0071](/decisions/adr-0071-task-identifier-naming.md)）。`{task_number}` は `totsuka status` / `totsuka task retry <n>` が使う番号、`{hash}` は `sha256(source ∥ ソース側 id)` の先頭 8 桁、`{handle}` はソースが付ける人間向けの短い名前（GitHub は `repo-番号`、Slack / Discord はチャンネル名、Notion は無し）で、別々に置いてあるのは区切りを変えたり一部を落としたりできるようにするため。**`{handle}` はソースが出さなければ空文字**になるので、それ単独でディレクトリ名にしない。なお `{handle}` だけは**正規化してから**埋められる（英数字と `-` `_` 以外は潰す）— プラグインが書く文字列なので、`../` のようなものがパスに入らないようにするためで、`{task_id}` / `{source}` を生のまま埋めているのと意図的に違う（あちらは既存の設定の出力を変えないため）。**`{task_id}` は従来どおりソース側の id**（Slack なら `{channel}:{ts}`）で意味は変わらない。**`{branch}` は廃止** — ブランチは worktree ができた後にエージェントが決めるので、作成時点のディレクトリ名には使えない。残っていると設定エラーで起動しない |
 | `cleanup` | policy? | `manual` | implement モードの掃除ポリシー（F-23） |
 | `plan_cleanup` | policy? | `immediate` | plan モードの掃除ポリシー（F-85） |
+| `git_timeout_secs` | int? | `300` | totsuka が実行する git のコマンド 1 回の上限秒数。超えたら git を止め、そのコマンドを失敗させる（dispatch 中なら自動で再キュー）。`0` で上限なし（#764 → [ADR-0092](/decisions/adr-0092-git-timeout.md)） |
 
-どちらも **`[[workflows]].cleanup` が書かれていればそちらが勝つ**（#548）。ここの 2 キーは mode で選ばれる既定であり、workflow 単位の例外は workflow 行に書く。
+`cleanup` / `plan_cleanup` はどちらも **`[[workflows]].cleanup` が書かれていればそちらが勝つ**（#548）。ここの 2 キーは mode で選ばれる既定であり、workflow 単位の例外は workflow 行に書く。
 
 **既定値の解決**: `location` を省略したときの `<state dir>` は `$XDG_STATE_HOME/totsuka`、`XDG_STATE_HOME` 未設定なら XDG 仕様どおり `$HOME/.local/state/totsuka` にフォールバックする（state DB・ログ・hook spool と同じ解決）。既定値はテンプレート文字列ではなく**解決済みのパス**として組み立てられるため、`${ENV}` 展開を経由しない。逆に `location` を**明示した場合の `${ENV}` は未設定だとエラー**（`expand_env` は空文字にフォールバックしない）で、worktree 作成はタスクのディスパッチ時なので run 起動時ではなく毎タスクの失敗として現れる。`totsuka doctor` の `worktree-location` チェックが事前に検出する。`[[repositories]].worktree_location` の上書きも同じ扱い。
 
@@ -880,6 +881,8 @@ cleanup      = "keep_7d"              # implement: 7日保持ののち削除
 plan_cleanup = "immediate"            # plan: 即削除（既定）
 # cleanup    = { retention_days = 3 } # 任意日数は明示形式
 ```
+
+**`git_timeout_secs` の決め方**: 固まった git（スリープ復帰後に ssh が死んだ接続を待ち続ける等）を止めるための上限であって、遅いが生きている fetch を取り締まるものではない。ssh の remote を使うなら `~/.ssh/config` の `ServerAliveInterval` × `ServerAliveCountMax` より長く保つ — 死んだ接続は先に ssh が分かりやすいエラーで落とす（→ [運用ガイド](/operations/operations-guide.md)）。上限が効くのは totsuka 自身が実行する git だけで、エージェントが pane の中で実行する git には届かない。
 
 **pane との連動（#210, [ADR-0010](/decisions/adr-0010-worktree-cleanup-pane-release.md)）**: worktree を「削除する」と判定したとき、その前にタスクの herdr pane が自動で閉じられる（`session/release`）。保持中（retention 未経過 / `manual`）や未コミット変更で削除を見送った worktree の pane は残る。**既定の `cleanup = "manual"` では worktree も pane も自動では消えず、タスクごとに pane が増えていく**点に注意 — コミット済み未 push の作業を pane で確認したい運用でなければ `keep_7d` を推奨する。
 

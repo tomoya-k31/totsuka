@@ -256,6 +256,8 @@
 #                                           #   "manual" / "keep_7d" / "keep_28d" (the last two are
 #                                           #   sugar for 7 and 28 days). **One `cleanup` line only.**
 # plan_cleanup = "immediate"                # plan mode, same vocabulary
+# git_timeout_secs = 300                    # kill a git command still running after this (default 300;
+#                                           #   0 = no limit). Keep it above ssh's ServerAlive cut-off
 
 # ============================================================================
 # [log]

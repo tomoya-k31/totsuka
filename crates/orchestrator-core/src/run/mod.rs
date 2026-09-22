@@ -1168,7 +1168,7 @@ pub(crate) async fn test_engine_with<L: RepoClassifier + 'static>(
         StateDb::open_in_memory().unwrap(),
         settings,
         PluginSet::default(),
-        crate::adapters::git::SystemGitRunner,
+        crate::adapters::git::SystemGitRunner::default(),
         llm,
         clock,
     )

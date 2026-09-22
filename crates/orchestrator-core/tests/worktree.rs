@@ -83,7 +83,7 @@ fn default_location_creates_a_worktree_without_xdg_state_home() {
     })
     .unwrap();
     let template = default_location_template(&paths);
-    let mgr = WorktreeManager::new(SystemGitRunner);
+    let mgr = WorktreeManager::new(SystemGitRunner::default());
 
     let wt = mgr
         .create(&CreateRequest {
@@ -132,7 +132,7 @@ fn create_cleanup_and_orphan_detection() {
     let clone = setup(&base);
     let state = base.join("state");
     let env = env(&state);
-    let mgr = WorktreeManager::new(SystemGitRunner);
+    let mgr = WorktreeManager::new(SystemGitRunner::default());
 
     // Create.
     let wt = mgr.create(&request(&clone, "123", &env)).unwrap();
@@ -200,7 +200,7 @@ fn recreates_a_cleaned_up_worktree_at_the_same_path() {
     let clone = setup(&base);
     let state = base.join("state");
     let env = env(&state);
-    let mgr = WorktreeManager::new(SystemGitRunner);
+    let mgr = WorktreeManager::new(SystemGitRunner::default());
 
     let first = mgr.create(&request(&clone, "42", &env)).unwrap();
     let branch = agent_branches(&first.path, "fix/flaky-test");
@@ -233,7 +233,7 @@ fn a_stray_directory_at_a_removed_worktree_path_is_gone_not_an_error() {
     let clone = setup(&base);
     let state = base.join("state");
     let env = env(&state);
-    let mgr = WorktreeManager::new(SystemGitRunner);
+    let mgr = WorktreeManager::new(SystemGitRunner::default());
 
     let wt = mgr.create(&request(&clone, "44", &env)).unwrap();
     let branch = agent_branches(&wt.path, "chore/tidy");
@@ -285,7 +285,7 @@ fn a_stray_directory_at_a_removed_worktree_path_is_gone_not_an_error() {
 fn a_stray_directory_inside_the_repo_is_gone_too() {
     let base = scratch("stray-dir-nested");
     let clone = setup(&base);
-    let mgr = WorktreeManager::new(SystemGitRunner);
+    let mgr = WorktreeManager::new(SystemGitRunner::default());
 
     let stray = clone.join(".worktrees/44-was-here");
     std::fs::create_dir_all(&stray).unwrap();
@@ -322,7 +322,7 @@ fn a_stray_repository_at_a_removed_worktree_path_is_gone_too() {
     let clone = setup(&base);
     let state = base.join("state");
     let env = env(&state);
-    let mgr = WorktreeManager::new(SystemGitRunner);
+    let mgr = WorktreeManager::new(SystemGitRunner::default());
 
     let wt = mgr.create(&request(&clone, "45", &env)).unwrap();
     mgr.remove(&clone, &wt.path, None, Some(&wt.base_commit))
@@ -358,7 +358,7 @@ fn recreates_over_a_surviving_branch_without_losing_its_commits() {
     let clone = setup(&base);
     let state = base.join("state");
     let env = env(&state);
-    let mgr = WorktreeManager::new(SystemGitRunner);
+    let mgr = WorktreeManager::new(SystemGitRunner::default());
 
     let first = mgr.create(&request(&clone, "43", &env)).unwrap();
     let branch = agent_branches(&first.path, "feat/keep-my-commits");
@@ -400,7 +400,7 @@ fn recreates_from_the_remote_branch_after_a_published_branch_was_cleaned_up() {
     let clone = setup(&base);
     let state = base.join("state");
     let env = env(&state);
-    let mgr = WorktreeManager::new(SystemGitRunner);
+    let mgr = WorktreeManager::new(SystemGitRunner::default());
 
     let first = mgr.create(&request(&clone, "45", &env)).unwrap();
     let branch = agent_branches(&first.path, "feat/published");
@@ -443,7 +443,7 @@ fn recreates_after_a_manual_directory_removal_leaves_a_stale_registration() {
     let clone = setup(&base);
     let state = base.join("state");
     let env = env(&state);
-    let mgr = WorktreeManager::new(SystemGitRunner);
+    let mgr = WorktreeManager::new(SystemGitRunner::default());
 
     let first = mgr.create(&request(&clone, "44", &env)).unwrap();
     std::fs::remove_dir_all(&first.path).unwrap();
@@ -465,7 +465,7 @@ fn branches_from_origin_even_with_stale_local_default() {
     let clone = setup(&base);
     let state = base.join("state");
     let env = env(&state);
-    let mgr = WorktreeManager::new(SystemGitRunner);
+    let mgr = WorktreeManager::new(SystemGitRunner::default());
 
     let origin_main = git(&clone, &["rev-parse", "origin/main"]);
     // Advance the *local* main so it diverges from origin/main.
@@ -490,7 +490,7 @@ fn dirty_worktree_is_not_removed() {
     let clone = setup(&base);
     let state = base.join("state");
     let env = env(&state);
-    let mgr = WorktreeManager::new(SystemGitRunner);
+    let mgr = WorktreeManager::new(SystemGitRunner::default());
 
     let wt = mgr.create(&request(&clone, "7", &env)).unwrap();
     let branch = agent_branches(&wt.path, "chore/dirty");
@@ -520,7 +520,7 @@ fn retain_policies_do_not_remove() {
     let clone = setup(&base);
     let state = base.join("state");
     let env = env(&state);
-    let mgr = WorktreeManager::new(SystemGitRunner);
+    let mgr = WorktreeManager::new(SystemGitRunner::default());
 
     // Manual: never auto-remove.
     let wt = mgr.create(&request(&clone, "m", &env)).unwrap();
@@ -567,7 +567,7 @@ fn parallel_creation_does_not_deadlock() {
     let base = scratch("parallel");
     let clone = setup(&base);
     let state = base.join("state");
-    let mgr = WorktreeManager::new(SystemGitRunner);
+    let mgr = WorktreeManager::new(SystemGitRunner::default());
 
     let handles: Vec<_> = (0..6)
         .map(|i| {
@@ -610,7 +610,7 @@ fn cleanup_deletes_the_branch_even_when_the_local_default_lags_origin() {
     let clone = setup(&base);
     let state = base.join("state");
     let env = env(&state);
-    let mgr = WorktreeManager::new(SystemGitRunner);
+    let mgr = WorktreeManager::new(SystemGitRunner::default());
 
     // Advance `origin/main` and leave the local `main` behind it — the
     // ordinary state of any clone that has not pulled lately.
@@ -660,7 +660,7 @@ fn cleanup_keeps_a_branch_whose_commits_are_not_on_origin() {
     let clone = setup(&base);
     let state = base.join("state");
     let env = env(&state);
-    let mgr = WorktreeManager::new(SystemGitRunner);
+    let mgr = WorktreeManager::new(SystemGitRunner::default());
 
     let wt = mgr.create(&request(&clone, "12", &env)).unwrap();
     let branch = agent_branches(&wt.path, "feat/unpushed");
@@ -700,7 +700,7 @@ fn cleanup_deletes_a_pushed_branch_that_is_not_merged_into_the_default() {
     let clone = setup(&base);
     let state = base.join("state");
     let env = env(&state);
-    let mgr = WorktreeManager::new(SystemGitRunner);
+    let mgr = WorktreeManager::new(SystemGitRunner::default());
 
     let wt = mgr.create(&request(&clone, "13", &env)).unwrap();
     let branch = agent_branches(&wt.path, "feat/pushed-open-pr");
@@ -743,7 +743,7 @@ fn cleanup_keeps_a_branch_that_does_not_descend_from_the_base_commit() {
     let clone = setup(&base);
     let state = base.join("state");
     let env = env(&state);
-    let mgr = WorktreeManager::new(SystemGitRunner);
+    let mgr = WorktreeManager::new(SystemGitRunner::default());
 
     // A human's branch, cut from the default branch as it was, and pushed.
     git(&clone, &["branch", "feat/human-work"]);
@@ -794,7 +794,7 @@ fn cleanup_keeps_a_branch_when_no_base_commit_was_recorded() {
     let clone = setup(&base);
     let state = base.join("state");
     let env = env(&state);
-    let mgr = WorktreeManager::new(SystemGitRunner);
+    let mgr = WorktreeManager::new(SystemGitRunner::default());
 
     let wt = mgr.create(&request(&clone, "15", &env)).unwrap();
     let branch = agent_branches(&wt.path, "feat/legacy-row");
@@ -832,7 +832,7 @@ fn a_detached_worktree_with_commits_is_kept() {
     let clone = setup(&base);
     let state = base.join("state");
     let env = env(&state);
-    let mgr = WorktreeManager::new(SystemGitRunner);
+    let mgr = WorktreeManager::new(SystemGitRunner::default());
 
     let wt = mgr.create(&request(&clone, "16", &env)).unwrap();
     // The agent ignored the instruction to branch and just committed.
@@ -886,7 +886,7 @@ fn a_detached_worktree_with_no_commits_is_removed() {
     let clone = setup(&base);
     let state = base.join("state");
     let env = env(&state);
-    let mgr = WorktreeManager::new(SystemGitRunner);
+    let mgr = WorktreeManager::new(SystemGitRunner::default());
 
     let wt = mgr.create(&request(&clone, "17", &env)).unwrap();
     assert_eq!(
@@ -954,7 +954,7 @@ fn a_hinted_branch_puts_a_writable_worktree_on_it() {
     let base = scratch("hint-on");
     let clone = setup(&base);
     let env = env(&base.join("state"));
-    let mgr = WorktreeManager::new(SystemGitRunner);
+    let mgr = WorktreeManager::new(SystemGitRunner::default());
     let theirs = someone_pushes(&base, "renovate/x", "v1", false);
 
     let wt = mgr
@@ -980,7 +980,7 @@ fn a_hinted_branch_leaves_a_read_only_worktree_detached_at_its_head() {
     let base = scratch("hint-detached");
     let clone = setup(&base);
     let env = env(&base.join("state"));
-    let mgr = WorktreeManager::new(SystemGitRunner);
+    let mgr = WorktreeManager::new(SystemGitRunner::default());
     let theirs = someone_pushes(&base, "renovate/x", "v1", false);
 
     let wt = mgr
@@ -1021,7 +1021,7 @@ fn a_hinted_branch_missing_from_origin_is_an_error_not_a_fallback() {
     let base = scratch("hint-missing");
     let clone = setup(&base);
     let env = env(&base.join("state"));
-    let mgr = WorktreeManager::new(SystemGitRunner);
+    let mgr = WorktreeManager::new(SystemGitRunner::default());
 
     for hint in [
         HintedStart::On("merged/and-deleted"),
@@ -1051,7 +1051,7 @@ fn a_local_copy_of_the_hinted_branch_is_reconciled_without_losing_anything() {
     let base = scratch("hint-local");
     let clone = setup(&base);
     let env = env(&base.join("state"));
-    let mgr = WorktreeManager::new(SystemGitRunner);
+    let mgr = WorktreeManager::new(SystemGitRunner::default());
 
     // Behind: they pushed again after the local copy was taken.
     someone_pushes(&base, "pr/behind", "v1", false);
@@ -1132,7 +1132,7 @@ fn a_hinted_branch_held_by_another_worktree_is_an_error_naming_it() {
     let base = scratch("hint-held");
     let clone = setup(&base);
     let env = env(&base.join("state"));
-    let mgr = WorktreeManager::new(SystemGitRunner);
+    let mgr = WorktreeManager::new(SystemGitRunner::default());
     someone_pushes(&base, "feat/x", "v1", false);
 
     let first = mgr
@@ -1189,7 +1189,7 @@ fn sync_moves_a_surviving_worktree_to_its_hinted_start() {
     let base = scratch("hint-sync");
     let clone = setup(&base);
     let env = env(&base.join("state"));
-    let mgr = WorktreeManager::new(SystemGitRunner);
+    let mgr = WorktreeManager::new(SystemGitRunner::default());
     let v1 = someone_pushes(&base, "renovate/x", "v1", false);
 
     // The design stage.
@@ -1244,7 +1244,7 @@ fn sync_refuses_to_overwrite_uncommitted_changes() {
     let base = scratch("hint-sync-dirty");
     let clone = setup(&base);
     let env = env(&base.join("state"));
-    let mgr = WorktreeManager::new(SystemGitRunner);
+    let mgr = WorktreeManager::new(SystemGitRunner::default());
     someone_pushes(&base, "renovate/x", "v1", false);
     let wt = mgr
         .create(&hinted(
@@ -1283,7 +1283,7 @@ fn a_hinted_branch_deleted_on_origin_after_being_fetched_is_missing() {
     let base = scratch("hint-deleted");
     let clone = setup(&base);
     let env = env(&base.join("state"));
-    let mgr = WorktreeManager::new(SystemGitRunner);
+    let mgr = WorktreeManager::new(SystemGitRunner::default());
     someone_pushes(&base, "renovate/x", "v1", false);
     git(&clone, &["fetch", "origin"]);
     git(
@@ -1319,7 +1319,7 @@ fn a_hinted_branch_deleted_on_origin_after_being_fetched_is_missing() {
 fn sync_refuses_a_path_that_is_not_this_repositorys_worktree() {
     let base = scratch("hint-sync-unregistered");
     let clone = setup(&base);
-    let mgr = WorktreeManager::new(SystemGitRunner);
+    let mgr = WorktreeManager::new(SystemGitRunner::default());
     someone_pushes(&base, "renovate/x", "v1", false);
     let stray = clone.join("leftovers");
     std::fs::create_dir_all(&stray).unwrap();
@@ -1349,7 +1349,7 @@ fn sync_refuses_to_leave_detached_commits_behind() {
     let base = scratch("hint-sync-detached-commits");
     let clone = setup(&base);
     let env = env(&base.join("state"));
-    let mgr = WorktreeManager::new(SystemGitRunner);
+    let mgr = WorktreeManager::new(SystemGitRunner::default());
     someone_pushes(&base, "renovate/x", "v1", false);
     let wt = mgr
         .create(&hinted(
@@ -1391,7 +1391,7 @@ fn sync_follows_a_force_push_away_from_a_stale_detached_base() {
     let base = scratch("hint-sync-force-push");
     let clone = setup(&base);
     let env = env(&base.join("state"));
-    let mgr = WorktreeManager::new(SystemGitRunner);
+    let mgr = WorktreeManager::new(SystemGitRunner::default());
     someone_pushes(&base, "renovate/x", "v1", false);
     let wt = mgr
         .create(&hinted(

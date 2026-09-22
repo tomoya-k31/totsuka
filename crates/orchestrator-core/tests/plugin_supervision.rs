@@ -332,7 +332,7 @@ async fn a_dead_task_source_is_noticed_and_comes_back() {
         db,
         settings(5),
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         None::<GatewayClassifier>,
     )
     .await;
@@ -387,7 +387,7 @@ async fn a_dead_notifier_is_noticed_and_comes_back() {
         db,
         settings(5),
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         None::<GatewayClassifier>,
     )
     .await;
@@ -431,7 +431,7 @@ async fn giving_up_escalates_instead_of_retrying_forever() {
         db,
         settings(2),
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         None::<GatewayClassifier>,
     )
     .await;
@@ -536,7 +536,7 @@ async fn restart_can_be_disabled_without_losing_detection() {
         db,
         settings,
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         None::<GatewayClassifier>,
     )
     .await;
@@ -669,7 +669,7 @@ output = "none"
         db,
         settings,
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         None::<GatewayClassifier>,
     )
     .await;
@@ -720,7 +720,7 @@ async fn a_duplicate_submit_for_a_task_in_flight_is_not_logged_at_info() {
         db,
         settings(1),
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         None::<GatewayClassifier>,
     )
     .await;
@@ -792,7 +792,7 @@ async fn a_task_queued_during_a_crash_window_is_not_failed() {
         db,
         settings_with_backoff(5, Duration::from_secs(30)),
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         None::<GatewayClassifier>,
     )
     .await;
@@ -847,7 +847,7 @@ async fn the_summary_accounts_for_rpcs_per_plugin() {
         db,
         settings(5),
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         None::<GatewayClassifier>,
     )
     .await;
@@ -894,7 +894,7 @@ async fn a_restart_does_not_reset_the_accounting() {
         db,
         settings(5),
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         None::<GatewayClassifier>,
     )
     .await;
@@ -947,7 +947,7 @@ async fn an_abandoned_plugin_is_published_as_a_degradation() {
         db,
         settings_publishing_health(2, &dir),
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         None::<GatewayClassifier>,
     )
     .await;

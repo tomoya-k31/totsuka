@@ -1642,8 +1642,8 @@ mod tests {
     fn detach_leaves_the_branch_and_the_commit_alone() {
         let base = test_support::scratch("wt_detach");
         let repo = test_support::bare_origin_and_clone(&base);
-        let git = crate::adapters::git::SystemGitRunner;
-        let mgr = WorktreeManager::new(crate::adapters::git::SystemGitRunner);
+        let git = crate::adapters::git::SystemGitRunner::default();
+        let mgr = WorktreeManager::new(crate::adapters::git::SystemGitRunner::default());
 
         // Put the clone on a branch, as an implement stage would leave it.
         for args in [

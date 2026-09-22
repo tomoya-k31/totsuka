@@ -828,6 +828,10 @@ pub struct WorktreeConfig {
     /// (design-only worktrees carry no unique work).
     #[serde(default)]
     pub plan_cleanup: Option<CleanupPolicyConfig>,
+    /// Seconds a single git command may run before it is killed (#764).
+    /// Omitted: `DEFAULT_GIT_TIMEOUT` (300). `0`: no limit.
+    #[serde(default)]
+    pub git_timeout_secs: Option<u64>,
 }
 
 /// A worktree cleanup policy as written in config (F-23):

@@ -790,8 +790,9 @@ mod tests {
     async fn a_read_only_stage_inherits_a_detached_worktree() {
         let base = test_support::scratch("handoff_detach");
         let repo = test_support::bare_origin_and_clone(&base);
-        let git = crate::adapters::git::SystemGitRunner;
-        let wt = crate::worktree::WorktreeManager::new(crate::adapters::git::SystemGitRunner);
+        let git = crate::adapters::git::SystemGitRunner::default();
+        let wt =
+            crate::worktree::WorktreeManager::new(crate::adapters::git::SystemGitRunner::default());
         for args in [
             &["switch", "-c", "feat/prev"][..],
             &["commit", "--allow-empty", "-m", "implement stage"][..],
@@ -873,13 +874,14 @@ mod tests {
         let base = test_support::scratch("handoff_unreadable");
         let repo = base.join("empty");
         std::fs::create_dir_all(&repo).unwrap();
-        let git = crate::adapters::git::SystemGitRunner;
+        let git = crate::adapters::git::SystemGitRunner::default();
         assert!(
             crate::ports::git::GitRunner::run(&git, &repo, &["init", "-q"])
                 .unwrap()
                 .success()
         );
-        let wt = crate::worktree::WorktreeManager::new(crate::adapters::git::SystemGitRunner);
+        let wt =
+            crate::worktree::WorktreeManager::new(crate::adapters::git::SystemGitRunner::default());
         // No commits: `rev-parse --abbrev-ref HEAD` fails, so this is the
         // "cannot read" flavour of `None`, not the detached one.
         assert!(wt.head_branch(&repo).is_none());
@@ -991,8 +993,9 @@ mod tests {
     async fn a_writing_stage_keeps_the_inherited_branch() {
         let base = test_support::scratch("handoff_keep");
         let repo = test_support::bare_origin_and_clone(&base);
-        let git = crate::adapters::git::SystemGitRunner;
-        let wt = crate::worktree::WorktreeManager::new(crate::adapters::git::SystemGitRunner);
+        let git = crate::adapters::git::SystemGitRunner::default();
+        let wt =
+            crate::worktree::WorktreeManager::new(crate::adapters::git::SystemGitRunner::default());
         for args in [
             &["switch", "-c", "feat/prev"][..],
             &["commit", "--allow-empty", "-m", "stage one"][..],

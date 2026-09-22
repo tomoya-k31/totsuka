@@ -243,7 +243,7 @@ async fn full_path_fetch_worktree_dispatch_done_cleanup() {
         StateDb::open(&db_path).unwrap(),
         engine_settings(&repo),
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -365,7 +365,7 @@ on_success = { status = "レビュー待ち" }
         StateDb::open(&db_path).unwrap(),
         settings,
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -424,7 +424,7 @@ async fn absent_on_start_writes_nothing_at_dispatch() {
         StateDb::open(&db_path).unwrap(),
         engine_settings(&repo),
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -504,7 +504,7 @@ on_success = { status = "レビュー待ち" }
         StateDb::open(&db_path).unwrap(),
         settings,
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -561,7 +561,7 @@ async fn claim_lost_skips_without_touching_the_source() {
         StateDb::open(&db_path).unwrap(),
         engine_settings(&repo),
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -640,7 +640,7 @@ on_failure = { status = "失敗" }
         StateDb::open(&db_path).unwrap(),
         settings,
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -703,7 +703,7 @@ async fn claim_error_leaves_the_task_queued_and_retries() {
         StateDb::open(&db_path).unwrap(),
         engine_settings(&repo),
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -755,7 +755,7 @@ async fn run_settles_with_waiting_task_left_in_place() {
         StateDb::open(&db_path).unwrap(),
         engine_settings(&repo),
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -816,7 +816,7 @@ async fn restart_recovers_in_flight_task() {
             StateDb::open(&db_path).unwrap(),
             engine_settings(&repo),
             plugins,
-            SystemGitRunner,
+            SystemGitRunner::default(),
             no_llm(),
         )
         .await;
@@ -850,7 +850,7 @@ async fn restart_recovers_in_flight_task() {
         StateDb::open(&db_path).unwrap(),
         engine_settings(&repo),
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -893,7 +893,7 @@ async fn dry_run_has_no_preview_and_zero_side_effects() {
         StateDb::open(&db_path).unwrap(),
         engine_settings(&repo),
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -934,7 +934,7 @@ async fn unrecoverable_task_does_not_wedge_one_shot_exit() {
             StateDb::open(&db_path).unwrap(),
             engine_settings(&repo),
             plugins,
-            SystemGitRunner,
+            SystemGitRunner::default(),
             no_llm(),
         )
         .await;
@@ -959,7 +959,7 @@ async fn unrecoverable_task_does_not_wedge_one_shot_exit() {
         StateDb::open(&db_path).unwrap(),
         engine_settings(&repo),
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -1009,7 +1009,7 @@ async fn task_finished_while_down_is_finalized_on_recovery() {
             StateDb::open(&db_path).unwrap(),
             engine_settings(&repo),
             plugins,
-            SystemGitRunner,
+            SystemGitRunner::default(),
             no_llm(),
         )
         .await;
@@ -1034,7 +1034,7 @@ async fn task_finished_while_down_is_finalized_on_recovery() {
         StateDb::open(&db_path).unwrap(),
         engine_settings(&repo),
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -1095,7 +1095,7 @@ async fn agent_without_state_stream_fails_dispatch_instead_of_hanging() {
         StateDb::open(&db_path).unwrap(),
         engine_settings(&repo),
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -1154,7 +1154,7 @@ async fn output_source_publishes_result_artifact() {
         StateDb::open(&db_path).unwrap(),
         settings,
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -1252,7 +1252,7 @@ output = "none"
         StateDb::open(&db_path).unwrap(),
         settings,
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -1331,7 +1331,7 @@ async fn a_retry_releases_the_stale_pane_before_dispatching_again() {
         StateDb::open(&db_path).unwrap(),
         settings,
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -1385,7 +1385,7 @@ async fn a_retry_releases_the_stale_pane_before_dispatching_again() {
         StateDb::open(&db_path).unwrap(),
         settings,
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -1464,7 +1464,7 @@ async fn retry_after_a_publish_failure_can_publish_again() {
         StateDb::open(&db_path).unwrap(),
         settings,
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -1532,7 +1532,7 @@ async fn retry_after_a_publish_failure_can_publish_again() {
         StateDb::open(&db_path).unwrap(),
         settings,
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -1589,7 +1589,7 @@ async fn missing_workflow_at_finalize_keeps_worktree_not_deletes() {
         StateDb::open(&db_path).unwrap(),
         settings,
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -1634,7 +1634,7 @@ async fn missing_workflow_at_finalize_keeps_worktree_not_deletes() {
         StateDb::open(&db_path).unwrap(),
         settings,
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -1746,7 +1746,7 @@ async fn submitted_task_is_persisted_acked_and_dispatched_without_polling() {
         StateDb::open(&db_path).unwrap(),
         engine_settings(&repo),
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -1810,7 +1810,7 @@ async fn duplicate_submit_is_acked_duplicate_and_ingested_once() {
         StateDb::open(&db_path).unwrap(),
         engine_settings(&repo),
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -1857,7 +1857,7 @@ async fn submit_without_matching_workflow_is_rejected() {
         StateDb::open(&db_path).unwrap(),
         engine_settings(&repo),
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -1915,7 +1915,7 @@ async fn restart_dispatches_persisted_but_undispatched_submission() {
             StateDb::open(&db_path).unwrap(),
             settings,
             plugins,
-            SystemGitRunner,
+            SystemGitRunner::default(),
             no_llm(),
         )
         .await;
@@ -1959,7 +1959,7 @@ async fn restart_dispatches_persisted_but_undispatched_submission() {
             StateDb::open(&db_path).unwrap(),
             engine_settings(&repo),
             plugins,
-            SystemGitRunner,
+            SystemGitRunner::default(),
             no_llm(),
         )
         .await;
@@ -2038,7 +2038,7 @@ async fn a_stray_directory_does_not_get_its_branch_recorded_on_the_task() {
         StateDb::open(&db_path).unwrap(),
         settings,
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -2079,7 +2079,7 @@ async fn a_stray_directory_does_not_get_its_branch_recorded_on_the_task() {
         StateDb::open(&db_path).unwrap(),
         settings,
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -2126,7 +2126,7 @@ async fn done_task_releases_its_pane_before_immediate_worktree_removal() {
         StateDb::open(&db_path).unwrap(),
         engine_settings(&repo),
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -2192,7 +2192,7 @@ async fn elapsed_retention_sweep_releases_pane_and_removes_worktree() {
         StateDb::open_with_clock(&db_path, clock.clone()).unwrap(),
         settings,
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
         clock.clone(),
     )
@@ -2235,7 +2235,7 @@ async fn elapsed_retention_sweep_releases_pane_and_removes_worktree() {
         StateDb::open_with_clock(&db_path, clock.clone()).unwrap(),
         settings,
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
         clock.clone(),
     )
@@ -2281,7 +2281,7 @@ async fn dirty_worktree_keeps_both_worktree_and_pane() {
         StateDb::open(&db_path).unwrap(),
         engine_settings(&repo),
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -2336,7 +2336,7 @@ async fn manual_policy_never_releases_the_pane() {
         StateDb::open(&db_path).unwrap(),
         settings,
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -2396,7 +2396,7 @@ async fn release_is_sent_once_even_when_removal_keeps_failing() {
         StateDb::open_with_clock(&db_path, clock.clone()).unwrap(),
         settings,
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
         clock.clone(),
     )
@@ -2433,7 +2433,7 @@ async fn release_is_sent_once_even_when_removal_keeps_failing() {
         StateDb::open_with_clock(&db_path, clock.clone()).unwrap(),
         settings,
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
         clock.clone(),
     )
@@ -2505,7 +2505,7 @@ async fn a_re_dispatch_makes_the_task_releasable_again() {
         StateDb::open_with_clock(&db_path, clock.clone()).unwrap(),
         settings,
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
         clock.clone(),
     )
@@ -2548,7 +2548,7 @@ async fn a_re_dispatch_makes_the_task_releasable_again() {
         StateDb::open_with_clock(&db_path, clock.clone()).unwrap(),
         settings,
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
         clock.clone(),
     )
@@ -2647,7 +2647,7 @@ async fn redispatch_after_release(
         StateDb::open(&db_path).unwrap(),
         settings,
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -2790,7 +2790,7 @@ async fn a_transient_dispatch_failure_recovers_without_a_human() {
         StateDb::open(&db_path).unwrap(),
         engine_settings(&repo),
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -2865,7 +2865,7 @@ async fn a_permanent_dispatch_failure_stops_after_three_and_notifies_once() {
         StateDb::open(&db_path).unwrap(),
         engine_settings(&repo),
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -2972,7 +2972,7 @@ async fn a_read_only_task_that_branches_mid_run_is_failed_and_its_pane_closed() 
         StateDb::open(&db_path).unwrap(),
         settings,
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -3098,7 +3098,7 @@ async fn run_hinted(
         StateDb::open(&db_path).unwrap(),
         settings,
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;

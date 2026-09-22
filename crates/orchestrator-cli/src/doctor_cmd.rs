@@ -2401,7 +2401,7 @@ fn check_orphans(
         .into_iter()
         .filter_map(|t| t.worktree_path.map(PathBuf::from))
         .collect();
-    let manager = WorktreeManager::new(SystemGitRunner);
+    let manager = WorktreeManager::new(SystemGitRunner::default());
 
     let mut orphans: Vec<(String, PathBuf, PathBuf)> = Vec::new();
     for repo in &cfg.repositories {
@@ -2444,7 +2444,7 @@ fn check_orphans(
             if matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
                 // Go through the GitRunner seam like the rest of the codebase
                 // (testable, single place git is invoked).
-                let out = SystemGitRunner.run(
+                let out = SystemGitRunner::default().run(
                     repo_path,
                     &["worktree", "remove", &orphan.display().to_string()],
                 )?;

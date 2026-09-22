@@ -8,7 +8,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::time::Duration;
 
-use orchestrator_core::adapters::git::SystemGitRunner;
+use orchestrator_core::adapters::git::{DEFAULT_GIT_TIMEOUT, SystemGitRunner};
 use orchestrator_core::adapters::llm::gateway_classifier;
 use orchestrator_core::adapters::plugin_host::Plugin;
 use orchestrator_core::adapters::{RunLock, StateDb};
@@ -209,7 +209,12 @@ async fn run_async(cx: &Cx, args: RunArgs) -> Result<(), CliError> {
         ));
     }
 
-    let mut engine = Engine::new(db, settings, plugins, SystemGitRunner, llm).await;
+    let git = SystemGitRunner::with_timeout(
+        cfg.worktree
+            .git_timeout_secs
+            .map_or(DEFAULT_GIT_TIMEOUT, Duration::from_secs),
+    );
+    let mut engine = Engine::new(db, settings, plugins, git, llm).await;
 
     if dry_run {
         // Every task_source is push-only since protocol 0.2.0, so there is

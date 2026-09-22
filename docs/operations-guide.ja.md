@@ -1,7 +1,7 @@
 > 🌐 [English](operations-guide.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/operations-guide.md sha256:9269ae35253e1a69746206a7713dab84792bca9ba086b9902060b28842c26cd9 -->
+<!-- generated-from: ai-docs/operations/operations-guide.md sha256:6d9c91377facb42c756b6169c4b2a9245259688647b6bf73648a10a487423771 -->
 
 # 運用ガイド
 
@@ -150,6 +150,21 @@ worktree と pane の連動が破れると、pane だけが残る（手動での
 - 異常終了した後の再起動では、状態 DB からセッションを復元して再接続を試みる。再接続できなかったタスクは**自動で失敗にはせず**「継続確認待ち」として残るので、`totsuka task retry <id>` か `totsuka task cancel <id>` を選ぶ
 - `run` の多重起動はロックファイルと PID で防いでいる。`totsuka status` は `run` が止まっている間、情報が古いことを明示する
 
+### SSH の keepalive（推奨設定）
+
+remote が ssh（`git@github.com:…`）のリポジトリを扱うなら、`~/.ssh/config` に次を入れておく。totsuka はこのファイルを書き換えないので手作業になる。
+
+```text
+Host *
+  ServerAliveInterval 30
+  ServerAliveCountMax 4
+```
+
+- **何を防ぐか**: スリープ復帰の後などに、ssh が死んだ接続を待ち続けて `git fetch` / `git push` が返らなくなること。既定では `ServerAliveInterval` が `0`（無効）なので、ssh はいつまでも待つ
+- **意味**: サーバーから 30 秒何も届かなければ ssh が暗号化された通信路の中で生存確認を送り、4 回続けて応答が無ければ（約 120 秒）接続を切って失敗する。応答が 1 回でも返ればカウンタは戻るので、遅いだけの転送は切らない。GitHub 側が重い処理をしていても、生存確認には sshd がすぐ応答する
+- **totsuka 側の上限との関係**: totsuka は自分が実行する git のコマンド 1 回ごとに上限（`[worktree].git_timeout_secs`、既定 300 秒）を持ち、超えたら git を止めて dispatch を失敗させ、自動で再キューする。それが効くのは totsuka 自身が実行する git だけで、**エージェントが pane の中で実行する `git push` には届かない**。こちらを守るのは ssh の設定だけになる。ssh の見切り（`ServerAliveInterval × ServerAliveCountMax`）はこの上限より短く保つ。そうすれば、死んだ接続は先に ssh が分かりやすいエラーで落とす
+- `Host github.com` に絞って書いてもよい。`Host *` なら github.com 以外の ssh にも同じ見切りが効く
+
 ## タスク操作
 
 | コマンド | 何をするか |
@@ -244,6 +259,7 @@ EOF
 | タスクが取り込まれない | `totsuka run --dry-run` でトリガーの一致・リポジトリ選択・エージェント割当を副作用ゼロで確認する。ワークフローの `projects` は `[[projects]].name` と、その `source` はプラグインのインスタンス名と一致させる |
 | リポジトリ選択が `pending` のまま | `[llm]` が未設定か、判定の確信度が低い。リポジトリが 1 つなら自動選択される。複数なら `[llm]` を設定するか、依頼に `repo_hint` を付ける |
 | `task show` にブランチが出ない | エージェントがブランチを切っていない（worktree は detached HEAD で渡される）。コミットがあれば worktree は残るので、そこから作業を拾える。plan モードでは常にこの状態が正常 |
+| ``git … did not finish within <N>s and was killed`` | git のコマンドが totsuka の上限時間（`[worktree].git_timeout_secs`）内に終わらず、止められた。dispatch 中なら自動で再キューされる。多くは ssh の死んだ接続なので、[SSH の keepalive](#ssh-の-keepalive推奨設定) を設定する。続けて出るなら `git fetch origin` を手で実行して、ネットワークと remote への接続を確かめる |
 | 通知が来ない | 通知プラグインが有効かと疎通を `doctor` で確認する。配送に失敗してもタスクの実行は止まらない |
 
 ---

@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](operations-guide.ja.md)
 
-<!-- generated-from: ai-docs/operations/operations-guide.md sha256:9269ae35253e1a69746206a7713dab84792bca9ba086b9902060b28842c26cd9 -->
+<!-- generated-from: ai-docs/operations/operations-guide.md sha256:6d9c91377facb42c756b6169c4b2a9245259688647b6bf73648a10a487423771 -->
 
 # Operations guide
 
@@ -149,6 +149,21 @@ When the link between a worktree and its pane breaks — you removed a worktree 
 - After an abnormal exit, restarting restores sessions from the state database and tries to reattach. Tasks that cannot be reattached are **not failed automatically** — they wait for you to choose `totsuka task retry <id>` or `totsuka task cancel <id>`
 - A lock file plus a PID check prevents running `run` twice. While `run` is stopped, `totsuka status` says explicitly that its information is stale
 
+### SSH keepalive (recommended)
+
+If any repository uses an SSH remote (`git@github.com:…`), add this to `~/.ssh/config`. totsuka does not edit this file, so it is a manual step.
+
+```text
+Host *
+  ServerAliveInterval 30
+  ServerAliveCountMax 4
+```
+
+- **What it prevents**: `git fetch` / `git push` never returning because ssh keeps waiting on a dead connection — typically after the machine wakes from sleep. By default `ServerAliveInterval` is `0` (off), so ssh waits forever
+- **What it means**: when nothing has arrived from the server for 30 seconds, ssh sends a liveness check inside the encrypted channel; after 4 unanswered checks in a row (about 120 seconds) it drops the connection and fails. A single answer resets the count, so a slow but live transfer is never cut. GitHub's sshd answers the check promptly even while the server is busy preparing data
+- **How it relates to totsuka's own limit**: totsuka gives every git command it runs a time limit (`[worktree].git_timeout_secs`, 300 seconds by default); past that it stops git and the dispatch fails and is requeued automatically. That limit only covers the git totsuka runs itself — **it does not reach a `git push` an agent runs inside its pane**, which only the SSH setting protects. Keep ssh's cut-off (`ServerAliveInterval × ServerAliveCountMax`) below that limit, so a dead connection is dropped by ssh first, with a clearer error
+- You may scope it to `Host github.com` instead. `Host *` applies the same cut-off to every SSH host
+
 ## Working with tasks
 
 | Command | What it does |
@@ -245,6 +260,7 @@ EOF
 | Tasks are not picked up | Use `totsuka run --dry-run` to check trigger matching, repository selection, and agent assignment with no side effects. A workflow's `projects` must match `[[projects]].name` entries, and their `source` must match the plugin instance name |
 | Repository selection stays `pending` | `[llm]` is unset, or the decision was low-confidence. With a single repository it is chosen automatically; with several, configure `[llm]` or add a `repo_hint` to the request |
 | `task show` shows no branch | The agent did not create one — worktrees are handed over on a detached HEAD. If there are commits, the worktree is kept, so you can pick the work up there. In plan mode this is always the normal state |
+| ``git … did not finish within <N>s and was killed`` | A git command did not finish within totsuka's limit (`[worktree].git_timeout_secs`) and was stopped. During a dispatch the task is requeued automatically. The usual cause is a dead SSH connection — set up the [SSH keepalive](#ssh-keepalive-recommended). If it keeps happening, run `git fetch origin` by hand to check the network and your access to the remote |
 | No notifications arrive | Check that the notifier plugin is enabled and reachable with `doctor`. A failed delivery does not stop the task |
 
 ---

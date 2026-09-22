@@ -1,10 +1,10 @@
 ---
 type: Runbook
 title: 運用ガイド（doctor / worktree 掃除 / FAQ）
-description: totsuka 日常運用の手引き。doctor の読み方、ランタイム health（縮退）の読み方と doctor との守備範囲の違い、worktree 掃除ポリシーと孤児掃除、run 停止・回復、メニューバー表示（SwiftBar）の導入と読み方、よくある問題の切り分け。
+description: totsuka 日常運用の手引き。doctor の読み方、ランタイム health（縮退）の読み方と doctor との守備範囲の違い、worktree 掃除ポリシーと孤児掃除、run 停止・回復と SSH keepalive の推奨設定、メニューバー表示（SwiftBar）の導入と読み方、よくある問題の切り分け。
 resource: https://github.com/tomoya-k31/totsuka
 tags: [operations, doctor, health, worktree, menu, swiftbar, faq, troubleshooting]
-generated: { by: claude-code/opus-5, at: 2026-09-17T12:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-22T12:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -177,6 +177,21 @@ worktree↔pane の連動（[ADR-0010](/decisions/adr-0010-worktree-cleanup-pane
 - 異常終了（SIGKILL 含む）後の再起動は、状態 DB からセッション ID を復元し `session/attach` で再接続を試みる（§5.3）。再接続不能なタスクは **自動 failed にせず**「継続確認待ち」として残り、`totsuka task retry <id>` / `task cancel <id>` を人間が選ぶ
 - `run` の多重起動は `$XDG_STATE_HOME/totsuka/run.lock` + PID で防止。`totsuka status` は run 停止中に stale を明示する
 
+## SSH の keepalive（推奨設定、#764）
+
+remote が ssh（`git@github.com:…`）のリポジトリを扱うなら、`~/.ssh/config` に次を入れておく。totsuka はこのファイルを書き換えないので手作業になる。
+
+```text
+Host *
+  ServerAliveInterval 30
+  ServerAliveCountMax 4
+```
+
+- **何を防ぐか**: スリープ復帰の後などに、ssh が死んだ接続を待ち続けて `git fetch` / `git push` が返らなくなること。既定では `ServerAliveInterval` が `0`（無効）なので、ssh はいつまでも待つ
+- **意味**: サーバーから 30 秒何も届かなければ ssh が暗号化された通信路の中で生存確認を送り、4 回続けて応答が無ければ（約 120 秒）接続を切って失敗する。応答が 1 回でも返ればカウンタは戻るので、遅いだけの転送は切らない。GitHub 側が重い処理をしていても、生存確認には sshd がすぐ応答する
+- **totsuka 側の上限との関係**: totsuka は git の呼び出し 1 回ごとに上限（`[worktree].git_timeout_secs`、既定 300 秒）を持ち、超えたら git を止めて dispatch 失敗 → 自動再キューにする（[ADR-0092](/decisions/adr-0092-git-timeout.md)）。ただしそれが効くのは totsuka 自身が呼ぶ git だけで、**エージェントが pane の中で実行する `git push` には届かない**。こちらを守るのは ssh の設定だけになる。ssh の見切り（`ServerAliveInterval × ServerAliveCountMax`）はこの上限より短く保つ。そうすれば、死んだ接続は先に ssh が分かりやすいエラーで落とす
+- `Host github.com` に絞って書いてもよい。`Host *` なら github.com 以外の ssh にも同じ見切りが効く
+
 # タスク操作
 
 - `totsuka status [--json]`: 実行中 / 待機（waiting_input・pending）タスクと worktree 一覧。**`Queued` のまま動かないタスクに理由が付いていればそれも出す**（`not starting yet:` ブロック / `--json` の `wait_reason`）。現状の唯一の理由は `blocked_agent_tools`（#399 の外部ツール未整備）で、対処は [config.toml リファレンス](/development/config-reference.md) 参照
@@ -265,6 +280,7 @@ EOF
 - **タスクが取り込まれない**: `totsuka run --dry-run` でトリガーマッチ・リポジトリ選択・エージェント割当を副作用ゼロで確認。ワークフローの `projects` は `[[projects]].name` と、その `source` は `[plugins.{name}]` のインスタンス名と一致させる（#626）
 - **リポジトリ選択が `pending`**: `[llm]` 未設定 or 確信度が低い。単一リポジトリなら自動選択、複数なら `[llm]` を設定するか `repo_hint` を付与
 - **`totsuka task show` にブランチが出ない**: エージェントがブランチを切っていない（worktree は detached HEAD で渡る）。コミットがあれば掃除は worktree を残すので、そこで作業を拾える。plan モードは常にこの状態が正常
+- **``git … did not finish within <N>s and was killed``**: git が上限時間（`[worktree].git_timeout_secs`）内に終わらず、totsuka が止めた（[ADR-0092](/decisions/adr-0092-git-timeout.md)）。dispatch 中なら自動で再キューされる。多くは ssh の死んだ接続なので、[SSH の keepalive](#ssh-の-keepalive推奨設定764) を設定する。続けて出るなら `git fetch origin` を手で実行して、ネットワークと remote への接続を確かめる
 - **通知が来ない**: `[plugins.{notifier}] enabled` と `notifier` プラグイン疎通を `doctor` で確認。配送失敗はタスク実行を止めない（F-93）
 
 リリース前の実機確認は [リリース前手動チェックリスト](/quality/release-checklist.md) を参照。
