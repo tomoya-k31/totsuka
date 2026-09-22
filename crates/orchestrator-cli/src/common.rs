@@ -33,6 +33,13 @@ pub const EXIT_USAGE: u8 = 2;
 /// Distinct from [`EXIT_ERROR`] so scripts can tell "doctor itself failed"
 /// from "doctor worked and the environment has issues".
 pub const EXIT_PROBLEMS_FOUND: u8 = 3;
+/// `run` stopped at startup on something only a person can fix — config,
+/// a secret reference, a plugin's install (#755). A supervisor must not
+/// restart on this: the next start fails the same way.
+pub const EXIT_CONFIG: u8 = 4;
+/// `run` found another live orchestrator holding the run lock (#755).
+/// Also not worth a restart, but not a config error either.
+pub const EXIT_ALREADY_RUNNING: u8 = 5;
 
 /// A failure that maps to a specific process exit code. `main` downcasts the
 /// returned [`CliError`] to this; any other error exits [`EXIT_ERROR`]. The

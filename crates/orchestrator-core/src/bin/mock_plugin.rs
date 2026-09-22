@@ -8,6 +8,7 @@
 //!   (`"no_state_stream": true` drops the `state_stream` capability). The full
 //!   params are recorded to the config's `"init_log"` file, if set — separate
 //!   from `notify_log`, which tests read as "observable side effects".
+//!   `"reject_config": true` answers `CONFIG_INVALID` instead.
 //! - `config/validate` → valid unless the config contains `"invalid": true`.
 //! - `task/claim` → answers the config's `"claim_result"` verbatim (or a
 //!   JSON-RPC error when it has an `"error"` key); absent means
@@ -112,6 +113,23 @@ fn main() {
         let id = request.get("id").cloned().unwrap_or(Value::Null);
 
         let response = match method {
+            // `reject_config: true` (#755): refuse `initialize` the way a real
+            // plugin rejects its own `[<name>]` table (F-59).
+            "initialize"
+                if params
+                    .pointer("/config/reject_config")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false) =>
+            {
+                Response::error(
+                    request_id(&id),
+                    Error {
+                        code: error_code::CONFIG_INVALID,
+                        message: "mock rejected its config → fix [mock]".to_string(),
+                        data: None,
+                    },
+                )
+            }
             "initialize" => {
                 config = params.get("config").cloned().unwrap_or(Value::Null);
                 // Recorded to its own file (`init_log`), NOT `notify_log`:

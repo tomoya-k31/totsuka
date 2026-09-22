@@ -44,3 +44,4 @@ exit code は `main.rs` に 0/1/2 の 3 値がハードコードされ、名前�
 - clap 自身のパース失敗（不正フラグ等）は clap 内部で exit 2 するため、メッセージ形式はプロジェクトの管理外のまま（既知の制約）。
 - エラーの `message` / `action` 分割は文字列規約（` → `）依存であり、型レベルでは強制されない。文言に ` → ` を含めるかどうかが機械可読性に直結するため、エラー文言規約の重要性が上がる。
 - exit code 一覧は [orchestrator-cli](/components/orchestrator-cli.md) の UX 規約節に明文化した。
+- **後継による拡張**: [ADR-0095](/decisions/adr-0095-run-startup-exit-codes.md)（#755）が `run` の起動時エラー用に 4（`EXIT_CONFIG`）と 5（`EXIT_ALREADY_RUNNING`）を足した。1 の「より特定の code を持たない全エラー」という定義は変わらない。

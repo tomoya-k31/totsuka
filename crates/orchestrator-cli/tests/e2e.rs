@@ -477,7 +477,8 @@ fn an_unclaimed_workflow_key_refuses_to_run() {
     .unwrap();
 
     let out = env.run(&[&["run"], GRACE].concat());
-    assert!(!out.status.success(), "{}", stdout(&out));
+    // A config error: exit 4, so a supervisor does not restart into it (#755).
+    assert_eq!(out.status.code(), Some(4), "{}", stdout(&out));
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("profil"), "{err}");
     assert!(
@@ -805,4 +806,104 @@ fn run_watch_stops_gracefully_on_sighup() {
 #[test]
 fn run_watch_stops_gracefully_on_sigint() {
     stops_gracefully_on("INT");
+}
+
+// ---------------------------------------------------------------------------
+// `run`'s startup exit codes (#755): 4 = only a person can fix it, 5 = another
+// orchestrator holds the lock, 1 = everything else. A supervisor restarts on 1
+// and stops on 4 / 5, so a misclassification either loops forever or gives up
+// on something a restart would have fixed.
+// ---------------------------------------------------------------------------
+
+/// Run `run` and require exit `code`; returns stderr for further checks.
+fn run_expecting(env: &Env, code: i32) -> String {
+    let out = env.run(&[&["run"], GRACE].concat());
+    let err = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert_eq!(out.status.code(), Some(code), "stderr: {err}");
+    err
+}
+
+#[test]
+fn run_exits_4_on_a_config_that_does_not_parse() {
+    let env = setup("exit4-parse", "", "none", "plan");
+    std::fs::write(env.cfg_dir().join("config.toml"), "[plugins.mock_src\n").unwrap();
+
+    // `--json` keeps the existing envelope; the code is the only new signal.
+    let out = env.run(&[&["run", "--json"], GRACE].concat());
+    assert_eq!(out.status.code(), Some(4));
+    let envelope: serde_json::Value =
+        serde_json::from_str(String::from_utf8_lossy(&out.stderr).trim())
+            .expect("stderr is the JSON error envelope");
+    assert!(envelope["error"]["message"].is_string(), "{envelope}");
+    assert!(stdout(&out).is_empty(), "stdout: {}", stdout(&out));
+}
+
+#[test]
+fn run_exits_4_when_an_env_file_is_missing() {
+    let env = setup("exit4-env-file", "", "none", "plan");
+    let config = env.cfg_dir().join("config.toml");
+    let text = std::fs::read_to_string(&config).unwrap();
+    let tools = "[tools.claude]\nkind = \"claude\"\nenv_file = \"/nonexistent/totsuka-755.env\"\n";
+    std::fs::write(&config, format!("{text}\n{tools}")).unwrap();
+    let err = run_expecting(&env, 4);
+    assert!(err.contains("env_file"), "{err}");
+}
+
+#[test]
+fn run_exits_4_when_a_plugin_secret_does_not_resolve() {
+    let env = setup(
+        "exit4-secret",
+        "stream_states = [\"running\", \"done\"]\n",
+        "none",
+        "plan",
+    );
+    let config = env.cfg_dir().join("config.toml");
+    let text = std::fs::read_to_string(&config).unwrap();
+    // `cmd:false` always exits non-zero — a `SecretError::Backend`, the kind
+    // a locked vault produces, without depending on a real Keychain or `op`.
+    std::fs::write(
+        &config,
+        text.replace("[mock_src]\n", "[mock_src]\ntoken = \"cmd:false\"\n"),
+    )
+    .unwrap();
+    let err = run_expecting(&env, 4);
+    assert!(err.contains("mock_src"), "{err}");
+}
+
+#[test]
+fn run_exits_4_when_a_plugin_rejects_its_config() {
+    let env = setup("exit4-reject", "reject_config = true\n", "none", "plan");
+    let err = run_expecting(&env, 4);
+    assert!(err.contains("mock rejected its config"), "{err}");
+}
+
+#[test]
+fn run_exits_4_when_a_plugin_binary_is_missing() {
+    let env = setup("exit4-no-binary", "", "none", "plan");
+    std::fs::remove_file(env.plugins_store().join("mock_agent/mock_agent")).unwrap();
+    let err = run_expecting(&env, 4);
+    assert!(err.contains("mock_agent"), "{err}");
+}
+
+#[test]
+fn run_exits_5_while_another_orchestrator_holds_the_lock() {
+    let env = setup("exit5-lock", "", "none", "plan");
+    // This test process is alive, so its pid is a live holder.
+    std::fs::write(
+        env.state_dir().join("run.lock"),
+        std::process::id().to_string(),
+    )
+    .unwrap();
+    let err = run_expecting(&env, 5);
+    assert!(err.contains("already running"), "{err}");
+}
+
+/// The control: a failure a restart may fix stays the generic 1. Without this,
+/// mapping every startup error to 4 would pass the tests above.
+#[test]
+fn run_still_exits_1_when_the_state_db_cannot_open() {
+    let env = setup("exit1-db", "", "none", "plan");
+    // A directory where the DB file should be: an IO failure, not config.
+    std::fs::create_dir_all(env.state_dir().join("state.db")).unwrap();
+    run_expecting(&env, 1);
 }
