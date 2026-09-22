@@ -939,7 +939,7 @@ impl<C: OrcaCli> OrcaAgent<C> {
                     Err(e) => {
                         tracing::warn!(error = %e, "terminal wait failed; asking `terminal show`");
                         format!(
-                            "`terminal wait` failed ({e}) and `terminal show` has the terminal ended"
+                            "`terminal wait` failed ({e}), and `terminal show` confirms the terminal has ended"
                         )
                     }
                 };
