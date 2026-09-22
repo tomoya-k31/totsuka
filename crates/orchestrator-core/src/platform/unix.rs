@@ -1,4 +1,5 @@
-//! POSIX process liveness via `kill(pid, 0)`.
+//! POSIX process liveness via `kill(pid, 0)`, and process-group kill for the
+//! git runner's deadline (#764).
 //!
 //! `kill` with signal `0` performs error checking without sending a signal:
 //! it returns `0` when the process exists, and fails with `EPERM` when the
@@ -28,6 +29,30 @@ impl ProcessProbe for UnixProcessProbe {
         // EPERM means the process exists but is owned by another user.
         std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
     }
+}
+
+/// Start `cmd` as the leader of a new process group, so that
+/// [`kill_process_group`] reaches everything it spawns too (#764).
+pub fn own_process_group(cmd: &mut std::process::Command) {
+    use std::os::unix::process::CommandExt;
+    cmd.process_group(0);
+}
+
+/// `SIGKILL` the process group led by `pid` — a child started with
+/// [`own_process_group`]. Best-effort: a group that has already exited is not
+/// an error.
+pub fn kill_process_group(pid: u32) {
+    // Same guard as `is_alive`: an out-of-range pid must never become `-0`
+    // or a wrapped value, both of which `kill()` reads as a broader target.
+    let Ok(pid) = libc::pid_t::try_from(pid) else {
+        return;
+    };
+    if pid <= 0 {
+        return;
+    }
+    // SAFETY: a negative pid addresses exactly the group `pid` leads, which
+    // `own_process_group` created for our own child.
+    unsafe { libc::kill(-pid, libc::SIGKILL) };
 }
 
 #[cfg(test)]

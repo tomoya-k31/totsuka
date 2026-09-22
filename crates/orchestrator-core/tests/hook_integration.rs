@@ -329,7 +329,7 @@ async fn the_doctor_liveness_probe_is_not_logged_as_an_anomaly() {
         db,
         engine_settings(workflows("llm", "none"), None),
         plugin_set(json!({}), &notify_log).await,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -398,7 +398,7 @@ async fn completed_llm_publishes_to_done() {
         db,
         engine_settings(workflows("llm", "none"), None),
         plugin_set(json!({}), &notify_log).await,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -456,7 +456,7 @@ async fn completed_llm_on_tool_without_prompt_hooks_parks_in_verifying() {
             db,
             settings,
             plugin_set(json!({}), &notify_log).await,
-            SystemGitRunner,
+            SystemGitRunner::default(),
             no_llm(),
         )
         .await;
@@ -536,7 +536,7 @@ on_failure = { status = "failed" }
         db,
         settings,
         plugin_set(json!({}), &notify_log).await,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -581,7 +581,7 @@ async fn completed_human_waits_for_verify_then_pass_reaches_done() {
         db,
         engine_settings(workflows("human", "none"), None),
         plugin_set(json!({}), &notify_log).await,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -642,7 +642,7 @@ async fn verify_fail_returns_to_running() {
         db,
         engine_settings(workflows("human", "none"), None),
         plugin_set(json!({}), &notify_log).await,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -687,7 +687,7 @@ async fn three_unknown_stops_escalate_with_snapshot() {
             &notify_log,
         )
         .await,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -746,7 +746,7 @@ async fn focus_task_delegates_to_a_pane_control_agent() {
             &notify_log,
         )
         .await,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -780,7 +780,7 @@ async fn focus_task_degrades_without_pane_control_or_task() {
         engine_settings(workflows("llm", "none"), None),
         // pane_control defaults to false in the mock.
         plugin_set(json!({}), &notify_log).await,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -824,7 +824,7 @@ async fn focus_task_reports_a_closed_pane_as_not_focused() {
         db,
         engine_settings(workflows("llm", "none"), None),
         plugin_set(json!({ "pane_control": true }), &notify_log).await,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -851,7 +851,7 @@ async fn needs_input_parks_in_waiting_input() {
         db,
         engine_settings(workflows("llm", "none"), None),
         plugin_set(json!({}), &notify_log).await,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -892,7 +892,7 @@ async fn question_pending_parks_and_a_later_completed_still_publishes() {
         db,
         engine_settings(workflows("llm", "none"), None),
         plugin_set(json!({}), &notify_log).await,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -953,7 +953,7 @@ async fn a_second_question_renotifies_and_a_redelivery_does_not() {
         db,
         engine_settings(workflows("llm", "none"), None),
         plugin_set(json!({}), &notify_log).await,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -1002,7 +1002,7 @@ async fn duplicate_signal_transitions_once() {
         db,
         engine_settings(workflows("human", "none"), None),
         plugin_set(json!({}), &notify_log).await,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -1047,7 +1047,7 @@ async fn timeout_sweep_escalates_silent_task() {
         db,
         engine_settings(workflows_with_timeout(1800), None),
         plugin_set(json!({}), &notify_log).await,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
         clock.clone(),
     )
@@ -1107,7 +1107,7 @@ async fn a_redispatched_task_is_not_escalated_for_the_previous_attempts_silence(
         db,
         engine_settings(workflows_with_timeout(1800), None),
         plugin_set(json!({}), &notify_log).await,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
         clock.clone(),
     )
@@ -1189,7 +1189,7 @@ async fn a_zero_timeout_disables_the_silence_sweep() {
             db,
             engine_settings(workflows, None),
             plugin_set(json!({}), &notify_log).await,
-            SystemGitRunner,
+            SystemGitRunner::default(),
             no_llm(),
             clock.clone(),
         )
@@ -1245,7 +1245,7 @@ async fn a_pending_permission_prompt_pauses_the_silence_sweep() {
         db,
         engine_settings(workflows_with_timeout(1800), None),
         plugin_set(json!({}), &notify_log).await,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
         clock.clone(),
     )
@@ -1290,7 +1290,7 @@ async fn a_duplicate_permission_prompt_does_not_re_arm_the_pause() {
         db,
         engine_settings(workflows_with_timeout(1800), None),
         plugin_set(json!({}), &notify_log).await,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
         clock.clone(),
     )
@@ -1340,7 +1340,7 @@ async fn watch_mode_periodic_tick_escalates_silent_task_without_events() {
         StateDb::open(&db_path).unwrap(),
         engine_settings(workflows_with_timeout(1), None),
         plugin_set(json!({}), &notify_log).await,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -1375,7 +1375,7 @@ async fn spool_replay_applies_signal_and_deletes_file() {
         db,
         engine_settings(workflows("llm", "none"), Some(hook)),
         plugin_set(json!({}), &notify_log).await,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -1424,7 +1424,7 @@ async fn unknown_task_signal_does_not_corrupt_state() {
         db,
         engine_settings(workflows("llm", "none"), None),
         plugin_set(json!({}), &notify_log).await,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -1527,7 +1527,7 @@ async fn dispatch_wires_job_id_and_hook_launch_spec() {
         StateDb::open(&db_path).unwrap(),
         settings,
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -1700,7 +1700,7 @@ async fn dispatch_with_codex_tool_builds_codex_argv() {
         StateDb::open(&db_path).unwrap(),
         settings,
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -1808,7 +1808,7 @@ async fn dispatch_with_opencode_tool_routes_context_visibly() {
         StateDb::open(&db_path).unwrap(),
         settings,
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -1932,7 +1932,7 @@ on_failure = { status = "failed" }
             StateDb::open(&db_path).unwrap(),
             settings,
             plugins,
-            SystemGitRunner,
+            SystemGitRunner::default(),
             no_llm(),
         )
         .await;
@@ -2060,7 +2060,7 @@ async fn a_triage_dispatch_is_told_where_to_file() {
         StateDb::open(&base.join("state.db")).unwrap(),
         settings,
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -2115,7 +2115,7 @@ async fn a_triage_dispatch_for_an_unclaimed_repository_says_nothing_extra() {
         StateDb::open(&base.join("state.db")).unwrap(),
         settings,
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -2177,7 +2177,7 @@ async fn a_non_triage_dispatch_is_not_told_about_the_board() {
         StateDb::open(&base.join("state.db")).unwrap(),
         settings,
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -2230,7 +2230,7 @@ async fn an_initial_prompt_leads_a_new_conversation() {
         StateDb::open(&base.join("state.db")).unwrap(),
         settings,
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -2270,8 +2270,15 @@ async fn an_initial_prompt_is_not_repeated_on_a_resume() {
     for wf in &mut settings.workflows {
         wf.initial_prompt = Some(INITIAL_PROMPT.to_string());
     }
-    let mut engine =
-        Engine::with_clock(db, settings, plugins, SystemGitRunner, no_llm(), clock).await;
+    let mut engine = Engine::with_clock(
+        db,
+        settings,
+        plugins,
+        SystemGitRunner::default(),
+        no_llm(),
+        clock,
+    )
+    .await;
 
     let dispatch_probe = dispatch_log.clone();
     run_until(&mut engine, move || !read_log(&dispatch_probe).is_empty()).await;
@@ -2319,8 +2326,15 @@ async fn an_initial_prompt_returns_when_a_resume_turns_out_to_be_impossible() {
     for wf in &mut settings.workflows {
         wf.initial_prompt = Some(INITIAL_PROMPT.to_string());
     }
-    let mut engine =
-        Engine::with_clock(db, settings, plugins, SystemGitRunner, no_llm(), clock).await;
+    let mut engine = Engine::with_clock(
+        db,
+        settings,
+        plugins,
+        SystemGitRunner::default(),
+        no_llm(),
+        clock,
+    )
+    .await;
 
     let dispatch_probe = dispatch_log.clone();
     run_until(&mut engine, move || dispatches(&dispatch_probe).len() >= 2).await;
@@ -2396,7 +2410,7 @@ async fn an_initial_prompt_precedes_the_visible_marker_convention() {
         StateDb::open(&base.join("state.db")).unwrap(),
         settings,
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -2481,7 +2495,7 @@ async fn dispatch_without_hook_falls_back_to_visible_extra_context() {
         StateDb::open(&base.join("state.db")).unwrap(),
         settings,
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -2532,7 +2546,7 @@ async fn duplicate_heartbeat_refreshes_liveness_and_prevents_false_escalation() 
         db,
         engine_settings(workflows_with_timeout(1800), None),
         plugin_set(json!({}), &notify_log).await,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
         clock.clone(),
     )
@@ -2633,7 +2647,7 @@ async fn failed_hook_dispatch_rolls_back_reserved_session() {
         StateDb::open(&db_path).unwrap(),
         settings,
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -2690,7 +2704,7 @@ async fn spool_replay_quarantines_file_with_corrupt_line() {
         db,
         engine_settings(workflows("llm", "none"), Some(hook)),
         plugin_set(json!({}), &notify_log).await,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -2893,7 +2907,7 @@ async fn a_follow_up_message_reopens_the_conversation_and_resumes_its_session() 
         db,
         resume_settings(&repo, &base),
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
         clock,
     )
@@ -2945,7 +2959,7 @@ async fn unestablished_prior_session_falls_back_to_fresh_dispatch() {
         db,
         resume_settings(&repo, &base),
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
         clock,
     )
@@ -2986,7 +3000,7 @@ async fn a_reopened_conversation_resumes_its_latest_session() {
         db,
         resume_settings(&repo, &base),
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
         clock,
     )
@@ -3025,7 +3039,7 @@ async fn distinct_conversations_do_not_cross_resume() {
         db,
         resume_settings(&repo, &base),
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
         clock,
     )
@@ -3071,7 +3085,7 @@ async fn reply_destination_is_task_id_origin_never_the_shared_session_id() {
         db,
         engine_settings(workflows("llm", "none"), None),
         plugin_set(json!({}), &notify_log).await,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -3148,7 +3162,7 @@ async fn an_unresumable_session_is_dispatched_once_more_without_it() {
         db,
         resume_settings(&repo, &base),
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
         clock,
     )
@@ -3269,7 +3283,7 @@ async fn dispatched_env_with_tool_env(
         StateDb::open(&db_path).unwrap(),
         settings,
         plugins,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;

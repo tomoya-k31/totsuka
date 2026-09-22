@@ -277,7 +277,7 @@ async fn e2e_socket_completion_dispatches_to_done() {
             &notify_log,
         )
         .await,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -333,7 +333,7 @@ async fn e2e_socket_duplicate_delivery_transitions_once() {
             &notify_log,
         )
         .await,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -390,7 +390,7 @@ async fn e2e_socket_needs_input_parks_in_waiting() {
             &notify_log,
         )
         .await,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -529,7 +529,7 @@ async fn e2e_a_follow_up_reopens_the_conversation_and_re_creates_its_worktree() 
             &notify_log,
         )
         .await,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -590,7 +590,7 @@ async fn e2e_a_follow_up_reopens_the_conversation_and_re_creates_its_worktree() 
             &notify_log,
         )
         .await,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;
@@ -662,7 +662,7 @@ async fn e2e_a_follow_up_reopens_the_conversation_and_re_creates_its_worktree() 
             &notify_log,
         )
         .await,
-        SystemGitRunner,
+        SystemGitRunner::default(),
         no_llm(),
     )
     .await;

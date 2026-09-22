@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:3a0b44b69c35babeb08c15d1f59da78faa2f9752aebc670c14d539a0375875f1 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:e2232faf7ede270e449781f5101a0c71c4d82d9339956c4de9e79ed95e083b82 -->
 
 # 設定リファレンス
 
@@ -762,8 +762,9 @@ confidence_threshold = 0.7
 | `location` | string? | `<state dir>/worktrees/{repo_name}/{worktree_name}` | 配置テンプレート。`{repo}` `{repo_name}` `{worktree_name}` `{task_id}` `{source}` `{task_number}` `{hash}` `{handle}` `${ENV}` `~` を展開する。`{worktree_name}` は `<task 番号>[-<handle>]-<8 桁 hex>` — `totsuka status` や `totsuka task retry <n>` が使う番号、ソースが付ける短い名前（GitHub は `repo-番号`、Slack と Discord はチャンネル名、Notion は無し）、ソース名とソース側 id から取ったダイジェストの先頭 8 桁である。各部分は個別にも使えるので、区切りを変えたり一部だけ使ったりできる。`{handle}` はソースが出さなければ**空文字**になるので、単独でディレクトリ名にしない。また `{handle}` だけは埋める前に**正規化**される（英数字と `-` `_` 以外は潰す）— プラグインが書く文字列なので `../` のようなものが worktree の外へ出ないようにするためで、`{task_id}` と `{source}` は既存のテンプレートの出力を変えないよう生のままである。`{task_id}` は**ソース側の** id（Slack なら `{channel}:{ts}`）。**`{branch}` は廃止された** — ブランチは worktree ができた後にエージェントが決めるので、ディレクトリ名には使えない。残っていると起動しない |
 | `cleanup` | policy? | `manual` | implement モードの掃除ポリシー |
 | `plan_cleanup` | policy? | `immediate` | plan モードの掃除ポリシー |
+| `git_timeout_secs` | int? | `300` | totsuka が実行する git のコマンド 1 回の上限秒数。超えたら git を、それが起動したものごと止め、そのコマンドを失敗させる。dispatch 中なら自動で再キューされる。`0` で上限なし |
 
-どちらも **mode で選ばれる既定**であり、workflow 自身の `cleanup` が書かれていればそちらが勝つ。
+`cleanup` / `plan_cleanup` はどちらも **mode で選ばれる既定**であり、workflow 自身の `cleanup` が書かれていればそちらが勝つ。
 
 **既定値の解決。** `location` を省略したときの `<state dir>` は `$XDG_STATE_HOME/totsuka` で、未設定なら `$HOME/.local/state/totsuka` にフォールバックする。既定値は解決済みのパスとして組み立てられるので `${ENV}` 展開を経由しない。逆に `location` を**明示した場合、未設定の `${ENV}` は空文字ではなくエラー**になり、worktree の作成はディスパッチ時なので、起動時ではなく毎タスクの失敗として現れる。`doctor` の `worktree-location` チェックが事前に検出する。
 
@@ -775,6 +776,8 @@ cleanup      = "keep_7d"              # implement: 7 日保持してから削除
 plan_cleanup = "immediate"            # plan: 即削除（既定）
 # cleanup    = { retention_days = 3 } # 任意の日数は明示形式で
 ```
+
+**`git_timeout_secs` の決め方。** 固まった git（スリープ復帰の後に ssh が死んだ接続を待ち続ける、など）を止めるための上限であって、遅いが生きている fetch を取り締まるものではない。ssh の remote を使うなら、`~/.ssh/config` の `ServerAliveInterval` × `ServerAliveCountMax` より長く保つ。そうすれば、死んだ接続は先に ssh が分かりやすいエラーで落とす（[運用ガイド](operations-guide.ja.md#ssh-の-keepalive推奨設定)を参照）。上限が効くのは totsuka 自身が実行する git だけで、エージェントが pane の中で実行する git には届かない。
 
 **pane は worktree に連動する。** worktree を削除すると判定したとき、先にそのタスクの pane が閉じられる。保持された worktree（retention 未経過・`manual`・未コミット変更あり）の pane は残る。**既定の `cleanup = "manual"` では worktree も pane も自動では消えず、タスクごとに pane が増えていく。** コミット済み未 push の作業を pane で確認したい運用でなければ、`keep_7d` を勧める。
 

@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:3a0b44b69c35babeb08c15d1f59da78faa2f9752aebc670c14d539a0375875f1 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:e2232faf7ede270e449781f5101a0c71c4d82d9339956c4de9e79ed95e083b82 -->
 
 # Configuration reference
 
@@ -761,8 +761,9 @@ confidence_threshold = 0.7
 | `location` | string? | `<state dir>/worktrees/{repo_name}/{worktree_name}` | Placement template. Expands `{repo}`, `{repo_name}`, `{worktree_name}`, `{task_id}`, `{source}`, `{task_number}`, `{hash}`, `{handle}`, `${ENV}`, and `~`. `{worktree_name}` is `<task number>[-<handle>]-<8 hex>` — the number `totsuka status` and `totsuka task retry <n>` use, an optional short name from the source (GitHub `repo-number`, Slack and Discord the channel name, Notion none), and the first 8 hex characters of a digest over the source and its task id. The parts are also available separately, so you can join them differently or drop some. `{handle}` is **empty** when the source offers none, so do not use it alone as a directory name. It is also the one placeholder that is **normalized** before substitution (anything outside letters, digits, `-` and `_` is folded), because a plugin writes it and a `../` in a path would escape the worktree root; `{task_id}` and `{source}` stay raw so that existing custom templates keep rendering what they always did. `{task_id}` is the **source's own** id (for Slack, `{channel}:{ts}`). **`{branch}` was removed** — the agent chooses the branch after the worktree exists, so it cannot appear in the directory name. Leaving it in stops startup |
 | `cleanup` | policy? | `manual` | Cleanup policy for implement mode |
 | `plan_cleanup` | policy? | `immediate` | Cleanup policy for plan mode |
+| `git_timeout_secs` | int? | `300` | How many seconds a single git command totsuka runs may take. Past it, git is stopped together with everything it started and the command fails; during a dispatch the task is requeued automatically. `0` means no limit |
 
-Both are **defaults selected by mode**; a workflow that sets its own `cleanup` wins over them.
+`cleanup` and `plan_cleanup` are both **defaults selected by mode**; a workflow that sets its own `cleanup` wins over them.
 
 **Resolving the default.** With `location` omitted, `<state dir>` is `$XDG_STATE_HOME/totsuka`, falling back to `$HOME/.local/state/totsuka`. The default is built as an already-resolved path, so it never goes through `${ENV}` expansion. If you **do** set `location`, an unset `${ENV}` is an error rather than an empty string — and since worktrees are created at dispatch, it shows up as every task failing rather than as a startup failure. `doctor`'s `worktree-location` check finds it first.
 
@@ -774,6 +775,8 @@ cleanup      = "keep_7d"              # implement: delete after 7 days
 plan_cleanup = "immediate"            # plan: delete right away (the default)
 # cleanup    = { retention_days = 3 } # any other number of days
 ```
+
+**Choosing `git_timeout_secs`.** It is there to stop a git that is stuck — ssh waiting on a dead connection after the machine woke from sleep, for example — not to police a fetch that is slow but alive. If you use SSH remotes, keep it longer than `ServerAliveInterval` × `ServerAliveCountMax` in `~/.ssh/config`, so ssh drops a dead connection first with a clearer error (see the [operations guide](operations-guide.md#ssh-keepalive-recommended)). The limit only covers the git totsuka runs itself, not git that an agent runs inside its pane.
 
 **Panes follow worktrees.** When a worktree is judged deletable, the task's pane is closed first. Panes of worktrees kept back — still within retention, set to `manual`, or holding uncommitted changes — stay open. **With the default `cleanup = "manual"`, neither the worktree nor the pane goes away, so panes accumulate one per task.** Unless you specifically want to inspect committed-but-unpushed work in the pane, `keep_7d` is the better choice.
 
