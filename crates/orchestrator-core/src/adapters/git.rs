@@ -66,7 +66,10 @@ fn run_with_timeout(cwd: &Path, args: &[&str], timeout: Duration) -> std::io::Re
         .stderr(Stdio::piped());
     let mut child = cmd.spawn()?;
 
-    let deadline = (!timeout.is_zero()).then(|| Instant::now() + timeout);
+    // Past what `Instant` can hold is as good as no limit.
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .filter(|_| !timeout.is_zero());
     let (done, finished) = mpsc::channel();
     let stdout = drain(child.stdout.take(), done.clone());
     let stderr = drain(child.stderr.take(), done);
@@ -153,5 +156,13 @@ mod tests {
             "returned only after {:?}",
             started.elapsed()
         );
+    }
+
+    #[test]
+    fn a_timeout_past_what_instant_can_hold_means_no_limit() {
+        // `git_timeout_secs` takes any u64; `Instant + Duration` panics on
+        // overflow, so the deadline must be built with `checked_add`.
+        let out = run_with_timeout(&std::env::temp_dir(), &["--version"], Duration::MAX).unwrap();
+        assert!(out.success());
     }
 }
