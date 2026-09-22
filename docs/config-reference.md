@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:0cce1e8ac9efd0aecbdc7a25cf384d84ba48a286ad3e41a919a8d6b425b6ea12 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:d3f88264598b2f0cc2808f64b1c2fa3ed6676e0e89adf350bcc77904e5a85e64 -->
 
 # Configuration reference
 
@@ -67,7 +67,7 @@ cmd:bw get item totsuka-slack | jq -r '.fields[]|select(.name=="api_token").valu
 
 The current schema is **v1**, and it has never been bumped.
 
-A `config.toml` whose `version` does not match is rejected at startup validation, and **totsuka never rewrites your configuration**. `config validate`, `run`, and `doctor` share the same validation, so all three notice the same mismatch, but they treat it differently: `config validate` and `run` stop with an error, while `doctor` reports it as a failing `config` check and carries on with the other checks.
+A `config.toml` whose `version` does not match is rejected at startup validation, and **totsuka never rewrites your configuration**. `config validate`, `run`, and `doctor` share the same validation, so all three notice the same mismatch, but they treat it differently: `config validate` and `run` stop with an error (`config validate` exits 1; `run` exits 4, its code for a startup failure only you can fix), while `doctor` reports it as a failing `config` check and carries on with the other checks.
 
 The guidance depends on which side is behind:
 

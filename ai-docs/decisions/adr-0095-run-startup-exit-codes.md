@@ -55,7 +55,7 @@ config を 1 箇所間違えただけで再起動が無限ループする。別�
 
 8. **`--json` のエラーエンベロープは変えない。** 分類は exit code が、理由は既存の `message` / `action` が表す。
 
-9. **対象は `run`（`--dry-run` を含む）だけ。** 監視下で走るのは `run` だけで、`config validate` / `status` / `doctor` などは従来どおり 1 を返す。`--dry-run` は同じ呼び出し元を通るので 4 を返しうるが、lock を取らないので 5 は返さない。
+9. **対象は `run`（`--dry-run` を含む）だけ。** 監視下で走るのは `run` だけで、`config validate` / `status` / `doctor` などは従来どおり 1 を返す。`--dry-run` も同じ呼び出し元を通るので、そこで起きる失敗（config の検証、プラグインの `[<name>]` 表の機密参照と起動、`[llm].api_key_ref`、エンジン設定）は 4 になる。ただし dry run はもともと `env_file` と `[hooks]`（`auth_token_ref` を含む）を解決しないので、それらの誤りは検出しない。lock も取らないので 5 は返さない。
 
 # 代替案と不採用理由
 
@@ -70,6 +70,7 @@ config を 1 箇所間違えただけで再起動が無限ループする。別�
 - 監視する側は exit code だけで「再起動するか」を決められる。理由は `run --json` の stderr エンベロープから取り出せる
 - config の誤りで exit 1 を前提にしていたスクリプトは 4 を受け取る。ADR-0012 は 1 を「より特定の code を持たない全エラー」と定義しており、一部を特定の code に切り出すのはその契約の範囲内なので、破壊的変更として扱わない
 - launchd の `KeepAlive` は成功終了かどうかしか見ないので、この区別を活かせるのはアプリが自分で子プロセスを監視する構成（#754）に限られる
+- **既知の制約**: config の検証エラーでは、エンベロープの前に `config error: …` の平文の行が検証結果の数だけ stderr に出る（この ADR 以前からの挙動）。`--json` の呼び出し側は stderr の**最後の行**をエンベロープとして読む必要があり、個々の検証結果はエンベロープに載らない（`message` は「configuration is invalid」）
 - #754 の `secret:` スキームの解決失敗も、Decision 2 の「機密参照の解決失敗 = 4」にそのまま乗る
 - 起動工程に新しい呼び出しを足すときは、その失敗が「人が直すまで直らない」かを判断して `needs_fix` で包むかを決める必要がある。包み忘れると 1 になる（安全側: 監視は再起動を試みる）
-- 回帰テストは `crates/orchestrator-cli/tests/e2e.rs` の `run_exits_*` 群（壊れた config、無い `env_file`、解決できない機密参照、`CONFIG_INVALID`、無いプラグインバイナリ、lock の競合、対照として state DB が開けないときの 1）
+- 回帰テストは `crates/orchestrator-cli/tests/e2e.rs` の `run_exits_*` 群（壊れた config、無い `env_file`、解決できない機密参照、`CONFIG_INVALID`、無いプラグインバイナリ、プロトコル版の合わないプラグイン、lock の競合、対照として state DB が開けないときの 1）

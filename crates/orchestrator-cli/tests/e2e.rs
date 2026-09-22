@@ -907,3 +907,13 @@ fn run_still_exits_1_when_the_state_db_cannot_open() {
     std::fs::create_dir_all(env.state_dir().join("state.db")).unwrap();
     run_expecting(&env, 1);
 }
+
+#[test]
+fn run_exits_4_when_a_plugin_speaks_an_incompatible_protocol() {
+    let env = setup("exit4-protocol", "", "none", "plan");
+    let manifest = env.plugins_store().join("mock_notify/plugin.toml");
+    let text = std::fs::read_to_string(&manifest).unwrap();
+    std::fs::write(&manifest, text.replace(">=0.6.0, <0.8", ">=99.0.0")).unwrap();
+    let err = run_expecting(&env, 4);
+    assert!(err.contains("protocol-incompatible"), "{err}");
+}

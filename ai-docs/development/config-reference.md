@@ -70,7 +70,7 @@ owner: tomoya-k31
 `version` が `CURRENT_SCHEMA_VERSION` と一致しない config.toml は起動時検証でエラーになり、
 **totsuka が設定を書き換えることはない**。`config validate` / `run` / `doctor` は同じ検証
 （`Cx::validate_config`）を共有するため 3 つとも同じ不一致を検出するが、扱いは異なる:
-`config validate` と `run` は**エラーで停止**（exit 1）、`doctor` は `config` チェックの
+`config validate` と `run` は**エラーで停止**（`config validate` は exit 1、`run` は exit 4 — 起動時の設定エラー。[ADR-0095](/decisions/adr-0095-run-startup-exit-codes.md)）、`doctor` は `config` チェックの
 **失敗として報告**する（exit 3。診断コマンドなので他のチェックは続行する）。
 
 エラーは向きによって案内が逆になる（#276）:
