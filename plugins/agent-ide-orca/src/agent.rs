@@ -38,7 +38,7 @@
 //!   rewrites that through OSC within seconds, `terminal rename` included.
 
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime};
 
 use plugin_protocol::methods::{
     AgentState, DiagnosticsSnapshotResult, NotReleased, SessionAttachResult, SessionFocusResult,
@@ -103,6 +103,45 @@ const MAX_CONSECUTIVE_ERRORS: u32 = 5;
 
 /// The pause between two such failed waits.
 const ERROR_BACKOFF: Duration = Duration::from_secs(2);
+
+/// How far the wall clock may run ahead of the process clock between two
+/// failed waits before the gap counts as the host having slept.
+const SLEEP_SLACK: Duration = Duration::from_secs(30);
+
+/// A run of consecutive failed waits — **consecutive while awake**.
+///
+/// A host that sleeps with dark wakes (Power Nap: a few seconds awake every
+/// ~16 minutes) gives every wait one `runtime_timeout` per wake — the Orca app
+/// is not answering yet — and sleeps again before a wait can succeed and reset
+/// the count. Counted plainly, five wakes (~80 minutes asleep) reported every
+/// live agent `failed` at once: observed 2026-09-22, seven tasks in one
+/// second. A sleep between two failures therefore starts the run over. It is
+/// detected the way the engine's resume detection is: the process clock
+/// (`Instant`) stands still while the host sleeps, the wall clock does not.
+#[derive(Debug, Default)]
+struct ErrorRun {
+    count: u32,
+    last: Option<(SystemTime, Instant)>,
+}
+
+impl ErrorRun {
+    fn reset(&mut self) {
+        *self = Self::default();
+    }
+
+    /// Count one failed wait seen at `now`; returns the run's length.
+    fn record(&mut self, now: (SystemTime, Instant)) -> u32 {
+        if let Some((wall, mono)) = self.last {
+            let wall_gap = now.0.duration_since(wall).unwrap_or_default();
+            if wall_gap.saturating_sub(now.1 - mono) >= SLEEP_SLACK {
+                self.count = 0;
+            }
+        }
+        self.count += 1;
+        self.last = Some(now);
+        self.count
+    }
+}
 
 /// How many lines the stream-read fallback of a snapshot asks for.
 const SNAPSHOT_LINES: u32 = 200;
@@ -892,7 +931,7 @@ impl<C: OrcaCli> OrcaAgent<C> {
         let (tx, rx) = mpsc::unbounded_channel();
 
         tokio::spawn(async move {
-            let mut consecutive_errors = 0u32;
+            let mut errors = ErrorRun::default();
             let reason = loop {
                 if tx.is_closed() {
                     return; // the consumer is gone
@@ -919,18 +958,18 @@ impl<C: OrcaCli> OrcaAgent<C> {
                 let claim = match waited {
                     Ok(wait) if wait_satisfied(&wait) => Some(exit_description(&wait)),
                     Ok(_) => {
-                        consecutive_errors = 0;
+                        errors.reset();
                         None
                     }
                     Err(e) if e.is_wait_timeout() => {
-                        consecutive_errors = 0;
+                        errors.reset();
                         None
                     }
                     Err(e) if e.is_gone() => Some(format!(
                         "the agent's terminal is gone (closed, or its process exited): {e}"
                     )),
                     Err(e) => {
-                        consecutive_errors += 1;
+                        let consecutive_errors = errors.record((SystemTime::now(), Instant::now()));
                         tracing::warn!(error = %e, consecutive_errors, "terminal wait failed");
                         if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
                             break format!(
@@ -957,7 +996,7 @@ impl<C: OrcaCli> OrcaAgent<C> {
                         tokio::time::sleep(ERROR_BACKOFF).await;
                     }
                     Ended::Unknown(e) => {
-                        consecutive_errors += 1;
+                        let consecutive_errors = errors.record((SystemTime::now(), Instant::now()));
                         tracing::warn!(error = %e, consecutive_errors, "could not confirm the end");
                         if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
                             break format!("{claim} (unconfirmed: {e})");
@@ -1180,6 +1219,33 @@ fn args<const N: usize>(parts: [&str; N]) -> Vec<String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_sleep_between_failed_waits_starts_the_run_over() {
+        let (wall, mono) = (SystemTime::now(), Instant::now());
+        let mut run = ErrorRun::default();
+        // Awake: failures 2 s apart on both clocks keep counting.
+        for i in 0..4u32 {
+            let t = Duration::from_secs(2 * u64::from(i));
+            assert_eq!(run.record((wall + t, mono + t)), i + 1);
+        }
+        // A dark wake 16 minutes later: the process clock moved 2 s.
+        let later = (
+            wall + Duration::from_secs(8 + 16 * 60),
+            mono + Duration::from_secs(8),
+        );
+        assert_eq!(
+            run.record(later),
+            1,
+            "a sleep in between is not \"consecutive\""
+        );
+
+        // Exactly at the threshold is a sleep, like the engine's own resume
+        // detection (`>=`, not `>`).
+        let mut run = ErrorRun::default();
+        run.record((wall, mono));
+        assert_eq!(run.record((wall + SLEEP_SLACK, mono)), 1);
+    }
 
     fn params(body: Option<&str>, extra: Option<Value>) -> TaskDispatchParams {
         TaskDispatchParams {
