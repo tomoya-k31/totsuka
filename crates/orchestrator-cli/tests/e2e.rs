@@ -756,17 +756,24 @@ fn stops_gracefully_on(signal: &str) {
         }
         if start.elapsed() >= Duration::from_secs(30) {
             let _ = child.kill();
+            let _ = child.wait();
             panic!("run never wrote {}", health.display());
         }
         std::thread::sleep(Duration::from_millis(50));
     }
-    assert!(lock.exists() && socket.exists(), "a running run holds both");
-
-    let sent = Command::new("kill")
-        .args([format!("-{signal}"), child.id().to_string()])
-        .status()
-        .unwrap();
-    assert!(sent.success(), "kill -{signal} failed");
+    // Every failure before `env.wait` kills the child first: a `--watch` run
+    // never exits on its own, and a leaked one keeps holding its lock.
+    let sent = lock.exists()
+        && socket.exists()
+        && Command::new("kill")
+            .args([format!("-{signal}"), child.id().to_string()])
+            .status()
+            .is_ok_and(|s| s.success());
+    if !sent {
+        let _ = child.kill();
+        let _ = child.wait();
+        panic!("run was not holding its lock and socket, or kill -{signal} failed");
+    }
     let out = env.wait(child, &args);
 
     assert!(

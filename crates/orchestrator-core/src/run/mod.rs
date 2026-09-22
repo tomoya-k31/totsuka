@@ -721,7 +721,12 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             {
                 break;
             }
+            // `biased`, shutdown first (#753 review): a signal sent to the
+            // whole process group (Ctrl-C, a closed terminal) kills the
+            // plugins at the same moment, and a randomly picked `Closed` event
+            // would fail in-flight tasks the graceful stop promises to keep.
             tokio::select! {
+                biased;
                 _ = &mut shutdown => {
                     interrupted = true;
                     break;
