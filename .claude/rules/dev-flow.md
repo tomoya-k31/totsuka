@@ -296,6 +296,67 @@ opening the PR, when the diff contains code):
   pre-PR review must not be the only thing blocking an otherwise-finished
   change.
 
+## Splitting one design into several PRs — stacked PRs with `gh stack`
+
+When a detailed design is to be implemented as **several PRs** — because the
+user asks for a split, or because one PR would exceed the ~400-line guideline
+of [pr-conventions](pr-conventions.md) — build them as a **stacked pull
+request** with the `gh stack` extension (`github/gh-stack`), not as
+independent branches off `main`. Each layer is one branch and one PR whose base
+is the layer below, so a reviewer sees only that layer's diff, and the layers
+merge bottom-up in order. Operate it per the **`gh-stack` skill**
+(`.claude/skills/gh-stack/SKILL.md`); what follows is what this repository adds
+on top.
+
+- **Plan the layers by dependency before writing code.** Foundations go low
+  (protocol / schema / core types), consumers go high (plugins, CLI, docs that
+  describe the finished behaviour). A layer may only depend on layers below it.
+- **Every layer must stand on its own**: it builds, passes the checks its diff
+  triggers (the table in "Before opening a PR", run per layer), and carries
+  its own docs obligation — the `ai-docs/` concept, a `log.d/` fragment with a
+  slug unique to that layer, and regenerated ledgers in that layer. CI runs on
+  each PR separately, so a layer that only compiles once the next one lands is
+  red.
+- **Branch names follow [git-conventions](git-conventions.md)**
+  (`<type>/<slug>`, one per layer). `gh stack` uses names verbatim, so pass them
+  explicitly: `gh stack init feat/foo-protocol`, then `gh stack add feat/foo-core`.
+  Confirm the names with the user as for any branch.
+- **Never run `gh stack` interactively** — it hangs an agent: always
+  `submit --auto`, `view --json`, and a positional argument for
+  `init` / `add` / `checkout`.
+- **Opening the PRs**: `gh stack submit --auto --open`. The titles and bodies it
+  generates come from commit messages, so rewrite each PR with `gh pr edit <n>`
+  to the Conventional Commits title and `.github/PULL_REQUEST_TEMPLATE.md` body
+  of [pr-conventions](pr-conventions.md). In each body, state the stack order
+  (e.g. "2/3 — base: #101") and what the layer leaves to the next one.
+- **Fixing a lower layer** (a finding, or a need discovered higher up): go to
+  that branch (`gh stack checkout <branch>` / `gh stack down`), add a **new**
+  commit there (never amend), then `gh stack rebase --upstack` and
+  `gh stack push`. Do not patch it in the layer where you noticed it — the
+  change would land in the wrong PR. `push` force-pushes with a per-branch
+  lease; on your own stack's branches that is the allowed `--force-with-lease`
+  of git-conventions.
+- **Unattended runs and signing**: `gh stack rebase` / `sync` run `git rebase`
+  internally, where `git -c commit.gpgsign=false` cannot be passed. Disable
+  signing for that one invocation through the environment instead — still no
+  config change (→ [unattended-commit-signing](unattended-commit-signing.md)):
+
+  ```bash
+  GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=commit.gpgsign GIT_CONFIG_VALUE_0=false \
+    gh stack rebase --upstack
+  ```
+
+- **After opening**: the steps under "After opening a PR" apply **to every PR in
+  the stack** — CI and Copilot per PR, `/code-review --comment` once per PR.
+- **Merging** (only when instructed, like any merge): `gh pr merge` does not
+  work on a stacked PR. Use `gh stack merge <n> --yes --squash`, which merges
+  bottom-up everything up to and including PR `<n>`, all or nothing. Check CI
+  per PR first — the command checks only that the PRs are open and not drafts.
+  Afterwards run `gh stack sync --prune` to rebase what remains onto `main` and
+  drop the merged local branches.
+- **If `submit` exits with code 9**, stacked PRs are not enabled on the
+  repository. Tell the user; do not silently fall back to unstacked PRs.
+
 ## After opening a PR — monitor, assess, iterate
 
 **Do not merge until BOTH the CI run and the Copilot review have been fetched
