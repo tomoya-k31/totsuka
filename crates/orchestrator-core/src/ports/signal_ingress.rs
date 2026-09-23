@@ -12,6 +12,7 @@
 use std::future::Future;
 
 use crate::domain::signal::AgentSignal;
+use crate::domain::state::TaskState;
 
 /// Acknowledgement that a signal was accepted for processing.
 ///
@@ -76,11 +77,82 @@ impl FocusOutcome {
     }
 }
 
-/// Accepts `POST /focus` control requests from a driving adapter (F-94):
-/// bring the pane of `task_id`'s session to the foreground via the task's
-/// agent plugin (`session/focus`, gated on `pane_control`).
-pub trait FocusPort: Send + Sync {
-    /// Ask the engine to focus the task's pane and wait for the outcome.
+/// Which task operation a `POST /task/<op>` control request asks for (#760).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskOp {
+    /// `POST /task/cancel` — the same transition `totsuka task cancel` makes.
+    Cancel,
+    /// `POST /task/retry` — the same requeue `totsuka task retry` makes.
+    Retry,
+}
+
+/// The engine's answer to a `POST /task/cancel` / `POST /task/retry` control
+/// request (#760).
+///
+/// Same convention as [`FocusOutcome`]: a refusal the operator can act on
+/// (the task is already finished, unknown, not retryable) is a normal answer
+/// with `ok: false` and a `reason`, never an error status. HTTP statuses are
+/// left to auth, framing, and an engine that is no longer answering.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct TaskControlOutcome {
+    /// Whether the transition was applied.
+    pub ok: bool,
+    /// The state the task was in before — what callers phrase their notes
+    /// from (a pane that stays open, a skipped claim being re-entered).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from: Option<TaskState>,
+    /// The state the task is in now.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<TaskState>,
+    /// Retry only: how many messages of the last dispatch were queued again
+    /// (#242).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requeued: Option<usize>,
+    /// Why nothing was applied, and what to do instead. `None` when `ok`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+impl TaskControlOutcome {
+    /// An applied transition.
+    pub fn applied(from: TaskState, state: TaskState, requeued: Option<usize>) -> Self {
+        Self {
+            ok: true,
+            from: Some(from),
+            state: Some(state),
+            requeued,
+            reason: None,
+        }
+    }
+
+    /// A refusal: nothing changed.
+    pub fn refused(reason: impl Into<String>) -> Self {
+        Self {
+            ok: false,
+            from: None,
+            state: None,
+            requeued: None,
+            reason: Some(reason.into()),
+        }
+    }
+}
+
+/// Accepts control requests from a driving adapter: `POST /focus` (F-94)
+/// and `POST /task/cancel` / `POST /task/retry` (#760).
+///
+/// One port for all of them because they share everything but the verb: the
+/// same socket, the same auth, and the same request-response trip through the
+/// engine's event channel.
+pub trait ControlPort: Send + Sync {
+    /// Ask the engine to focus the task's pane (via the task's agent plugin,
+    /// `session/focus`, gated on `pane_control`) and wait for the outcome.
     fn focus(&self, task_id: i64)
     -> impl Future<Output = Result<FocusOutcome, SignalError>> + Send;
+
+    /// Ask the engine to cancel or retry the task and wait for the outcome.
+    fn task(
+        &self,
+        op: TaskOp,
+        task_id: i64,
+    ) -> impl Future<Output = Result<TaskControlOutcome, SignalError>> + Send;
 }

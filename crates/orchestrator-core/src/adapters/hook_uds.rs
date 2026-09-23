@@ -2,7 +2,8 @@
 //! `POST /agent-events` from agent-CLI hooks (Claude Code today) and
 //! normalizes each request into an [`AgentSignal`] submitted through a
 //! [`SignalPort`]. The pre-rename `/claude-events` path (≤0.2.2, #196) is
-//! still accepted: every non-`/focus` path is signal ingestion (E-08).
+//! still accepted: every path but the three control endpoints is signal
+//! ingestion (E-08).
 //!
 //! # Why a hand-rolled server
 //!
@@ -17,9 +18,10 @@
 //!   bytes. Chunked transfer-encoding is rejected by design (the hook scripts
 //!   send fixed-length `curl --data` POSTs). The method is **not** inspected
 //!   (deliberately — same-user 0600 + Bearer make method routing pure surface),
-//!   and the path only minimally: the exact path `/focus` — whatever the
-//!   method — is the control endpoint (F-94, below); **every other path** is
-//!   signal ingestion (E-08 forward-compat for the hook scripts is unchanged).
+//!   and the path only minimally: the exact paths `/focus`, `/task/cancel` and
+//!   `/task/retry` — whatever the method — are the control endpoints (F-94,
+//!   #760, below); **every other path** is signal ingestion (E-08
+//!   forward-compat for the hook scripts is unchanged).
 //! - **Auth** (E-03): `Authorization: Bearer <token>`, constant-time compared
 //!   to the resolved `[hooks].auth_token_ref`. A mismatch is `401` + a warning;
 //!   the listener stays up.
@@ -61,6 +63,16 @@
 //! error status. Only an engine that is no longer answering (run loop shut
 //! down) is `503`, same as signal ingestion. Auth and body caps are identical
 //! to signal ingestion.
+//!
+//! ## Control endpoints (`POST /task/cancel`, `POST /task/retry`, #760)
+//!
+//! The same `{"task_id": 42}` body asks the engine to cancel or retry the
+//! task — the transitions `totsuka task cancel` / `retry` make, applied inside
+//! the run loop so the engine's own bookkeeping (the task's slot, its session
+//! routes) moves with the state. The reply is `200` with
+//! `{"ok": bool, "from"?, "state"?, "requeued"?, "reason"?}`: a refusal (task
+//! unknown, already finished, not retryable) is `ok: false` with the advice in
+//! `reason`, never an error status. Everything else is as for `/focus`.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -72,7 +84,7 @@ use tokio::sync::watch;
 
 use crate::domain::signal::{AgentSignal, JobId, SignalEvent, SignalSource, StopStatus};
 use crate::ports::secret::SecretString;
-use crate::ports::signal_ingress::{FocusPort, SignalPort};
+use crate::ports::signal_ingress::{ControlPort, SignalPort, TaskOp};
 
 /// Maximum request-body size (1 MiB). Larger bodies are refused with `413`.
 pub const MAX_BODY_BYTES: usize = 1024 * 1024;
@@ -132,31 +144,32 @@ fn set_socket_perms_0600(socket_path: &Path) -> io::Result<()> {
 /// Serve hook POSTs until `shutdown` flips to `true` (or its sender drops),
 /// then unlink the socket. Each accepted connection is handled on its own task.
 ///
-/// `sink` receives every valid, authenticated signal; `focus` answers
-/// `POST /focus` control requests (F-94). `auth_token` is the expected Bearer
-/// token; `None` disables the check (0600 socket only).
-pub async fn serve<P, F>(
+/// `sink` receives every valid, authenticated signal; `control` answers the
+/// control requests (`/focus`, F-94; `/task/cancel` and `/task/retry`, #760).
+/// `auth_token` is the expected Bearer token; `None` disables the check (0600
+/// socket only).
+pub async fn serve<P, C>(
     listener: UnixListener,
     socket_path: PathBuf,
     sink: P,
-    focus: F,
+    control: C,
     auth_token: Option<SecretString>,
     mut shutdown: watch::Receiver<bool>,
 ) where
     P: SignalPort + Clone + Send + 'static,
-    F: FocusPort + Clone + Send + 'static,
+    C: ControlPort + Clone + Send + 'static,
 {
     loop {
         tokio::select! {
             accepted = listener.accept() => match accepted {
                 Ok((stream, _addr)) => {
                     let sink = sink.clone();
-                    let focus = focus.clone();
+                    let control = control.clone();
                     let auth_token = auth_token.clone();
                     tokio::spawn(async move {
                         let handled = tokio::time::timeout(
                             REQUEST_TIMEOUT,
-                            handle_connection(stream, &sink, &focus, auth_token.as_ref()),
+                            handle_connection(stream, &sink, &control, auth_token.as_ref()),
                         )
                         .await;
                         match handled {
@@ -194,10 +207,10 @@ pub async fn serve<P, F>(
 /// Read one request, authenticate, route, and reply. Any protocol problem is
 /// answered with the appropriate 4xx and returns `Ok` (the connection is
 /// spent, not an I/O failure).
-async fn handle_connection<P: SignalPort, F: FocusPort>(
+async fn handle_connection<P: SignalPort, C: ControlPort>(
     mut stream: UnixStream,
     sink: &P,
-    focus: &F,
+    control: &C,
     auth_token: Option<&SecretString>,
 ) -> io::Result<()> {
     let request = match read_request(&mut stream).await {
@@ -220,9 +233,17 @@ async fn handle_connection<P: SignalPort, F: FocusPort>(
         return write_response(&mut stream, 401, "Unauthorized").await;
     }
 
-    // The control endpoint (F-94); every other path is signal ingestion (E-08).
-    if request.path == "/focus" {
-        return handle_focus(&mut stream, focus, &request.body).await;
+    // The control endpoints (F-94, #760); every other path is signal
+    // ingestion (E-08).
+    match request.path.as_str() {
+        "/focus" => return handle_focus(&mut stream, control, &request.body).await,
+        "/task/cancel" => {
+            return handle_task(&mut stream, control, TaskOp::Cancel, &request.body).await;
+        }
+        "/task/retry" => {
+            return handle_task(&mut stream, control, TaskOp::Retry, &request.body).await;
+        }
+        _ => {}
     }
 
     // Normalize the JSON body → AgentSignal.
@@ -245,22 +266,22 @@ async fn handle_connection<P: SignalPort, F: FocusPort>(
 }
 
 /// Answer a `POST /focus` control request (F-94): parse `{"task_id": …}`, ask
-/// the engine through the [`FocusPort`], and reply the outcome as JSON. Waits
+/// the engine through the [`ControlPort`], and reply the outcome as JSON. Waits
 /// for the engine (request-response, unlike signal ingestion) — the
 /// connection-level [`REQUEST_TIMEOUT`] bounds the wait.
-async fn handle_focus<F: FocusPort>(
+async fn handle_focus<C: ControlPort>(
     stream: &mut UnixStream,
-    focus: &F,
+    control: &C,
     body: &[u8],
 ) -> io::Result<()> {
-    let task_id = match parse_focus_task_id(body) {
+    let task_id = match parse_task_id(body) {
         Ok(id) => id,
         Err(reason) => {
             tracing::warn!("focus request rejected: {reason}");
             return write_response(stream, 400, "Bad Request").await;
         }
     };
-    match focus.focus(task_id).await {
+    match control.focus(task_id).await {
         Ok(outcome) => {
             let body = serde_json::to_string(&outcome)
                 .unwrap_or_else(|_| r#"{"focused":false}"#.to_string());
@@ -273,10 +294,40 @@ async fn handle_focus<F: FocusPort>(
     }
 }
 
-/// Extract `task_id` from a focus request body. Accepts a JSON number or a
+/// Answer a `POST /task/cancel` / `POST /task/retry` control request (#760):
+/// same body and same request-response trip as [`handle_focus`], with the
+/// engine's [`TaskControlOutcome`](crate::ports::TaskControlOutcome) as the
+/// JSON reply.
+async fn handle_task<C: ControlPort>(
+    stream: &mut UnixStream,
+    control: &C,
+    op: TaskOp,
+    body: &[u8],
+) -> io::Result<()> {
+    let task_id = match parse_task_id(body) {
+        Ok(id) => id,
+        Err(reason) => {
+            tracing::warn!(?op, "task control request rejected: {reason}");
+            return write_response(stream, 400, "Bad Request").await;
+        }
+    };
+    match control.task(op, task_id).await {
+        Ok(outcome) => {
+            let body =
+                serde_json::to_string(&outcome).unwrap_or_else(|_| r#"{"ok":false}"#.to_string());
+            write_json_response(stream, &body).await
+        }
+        Err(e) => {
+            tracing::error!(?op, "task control request failed: {e}");
+            write_response(stream, 503, "Service Unavailable").await
+        }
+    }
+}
+
+/// Extract `task_id` from a control request body. Accepts a JSON number or a
 /// numeric string (`{"task_id": 42}` / `{"task_id": "42"}` — the notifier's
 /// `click_command` template renders it as text).
-fn parse_focus_task_id(body: &[u8]) -> Result<i64, String> {
+fn parse_task_id(body: &[u8]) -> Result<i64, String> {
     let value: serde_json::Value =
         serde_json::from_slice(body).map_err(|e| format!("invalid JSON body: {e}"))?;
     let field = value
@@ -295,8 +346,9 @@ fn parse_focus_task_id(body: &[u8]) -> Result<i64, String> {
 
 /// A parsed request: the request path, lower-cased header names, and the raw
 /// body bytes. Of the request line only the path is kept, and it is inspected
-/// only for the exact control endpoint `/focus` (F-94) — the method and any
-/// other path stay uninterpreted (E-08).
+/// only for the exact control endpoints (`/focus`, F-94; `/task/cancel` and
+/// `/task/retry`, #760) — the method and any other path stay uninterpreted
+/// (E-08).
 struct Request {
     path: String,
     headers: Vec<(String, String)>,
@@ -544,7 +596,7 @@ fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
         .position(|window| window == needle)
 }
 
-/// Write a `200` response with a JSON body (the `/focus` outcome) and close
+/// Write a `200` response with a JSON body (a control outcome) and close
 /// the write half.
 async fn write_json_response(stream: &mut UnixStream, body: &str) -> io::Result<()> {
     let response = format!(
@@ -585,6 +637,7 @@ async fn write_response(stream: &mut UnixStream, status: u16, reason: &str) -> i
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ports::signal_ingress::TaskControlOutcome;
     use std::sync::{Arc, Mutex};
 
     /// The wire contract must stay identical on both sides: a payload shaped
@@ -742,14 +795,16 @@ mod tests {
         }
     }
 
-    /// A [`FocusPort`] fake: records the asked task ids and answers a canned
-    /// outcome (`focused: id > 0`, so tests can drive both answers).
+    /// A [`ControlPort`] fake: records every request and answers a canned
+    /// outcome (`focused` / `ok` iff `id > 0`, so tests can drive both
+    /// answers).
     #[derive(Clone, Default)]
-    struct RecordingFocus {
+    struct RecordingControl {
         asked: Arc<Mutex<Vec<i64>>>,
+        tasks: Arc<Mutex<Vec<(TaskOp, i64)>>>,
     }
 
-    impl FocusPort for RecordingFocus {
+    impl ControlPort for RecordingControl {
         fn focus(
             &self,
             task_id: i64,
@@ -764,6 +819,27 @@ mod tests {
                 crate::ports::signal_ingress::FocusOutcome::focused()
             } else {
                 crate::ports::signal_ingress::FocusOutcome::not("pane is gone")
+            };
+            async move { Ok(outcome) }
+        }
+
+        fn task(
+            &self,
+            op: TaskOp,
+            task_id: i64,
+        ) -> impl std::future::Future<
+            Output = Result<TaskControlOutcome, crate::ports::signal_ingress::SignalError>,
+        > + Send {
+            use crate::domain::state::TaskState;
+            self.tasks.lock().unwrap().push((op, task_id));
+            let outcome = match (op, task_id > 0) {
+                (TaskOp::Cancel, true) => {
+                    TaskControlOutcome::applied(TaskState::Running, TaskState::Cancelled, None)
+                }
+                (TaskOp::Retry, true) => {
+                    TaskControlOutcome::applied(TaskState::Skipped, TaskState::Queued, Some(2))
+                }
+                (_, false) => TaskControlOutcome::refused("task is already done"),
             };
             async move { Ok(outcome) }
         }
@@ -785,14 +861,14 @@ mod tests {
     ) -> (
         PathBuf,
         RecordingSink,
-        RecordingFocus,
+        RecordingControl,
         watch::Sender<bool>,
         tokio::task::JoinHandle<()>,
     ) {
         let socket_path = temp_socket();
         let listener = bind(&socket_path).expect("bind");
         let sink = RecordingSink::default();
-        let focus = RecordingFocus::default();
+        let focus = RecordingControl::default();
         let (stop_tx, stop_rx) = watch::channel(false);
         let handle = tokio::spawn(serve(
             listener,
@@ -999,11 +1075,16 @@ mod tests {
 
     /// Build a `POST /focus` control request.
     fn focus_post(bearer: Option<&str>, body: &str) -> Vec<u8> {
+        control_post("/focus", bearer, body)
+    }
+
+    /// Build a `POST <path>` request with an optional Bearer header.
+    fn control_post(path: &str, bearer: Option<&str>, body: &str) -> Vec<u8> {
         let auth = bearer
             .map(|t| format!("Authorization: Bearer {t}\r\n"))
             .unwrap_or_default();
         format!(
-            "POST /focus HTTP/1.1\r\n\
+            "POST {path} HTTP/1.1\r\n\
              Host: localhost\r\n\
              {auth}\
              Content-Type: application/json\r\n\
@@ -1013,6 +1094,80 @@ mod tests {
             len = body.len(),
         )
         .into_bytes()
+    }
+
+    #[tokio::test]
+    async fn task_routes_answer_the_outcome_as_json() {
+        let (socket, sink, control, stop_tx, handle) = spawn_server(None);
+        let cancel = send_raw_full(
+            &socket,
+            &control_post("/task/cancel", None, r#"{"task_id":42}"#),
+        )
+        .await;
+        assert!(
+            cancel.starts_with("HTTP/1.1 200"),
+            "response was {cancel:?}"
+        );
+        assert!(
+            cancel.ends_with(r#"{"ok":true,"from":"running","state":"cancelled"}"#),
+            "response was {cancel:?}"
+        );
+        let retry = send_raw_full(
+            &socket,
+            &control_post("/task/retry", None, r#"{"task_id":"7"}"#),
+        )
+        .await;
+        assert!(
+            retry.ends_with(r#"{"ok":true,"from":"skipped","state":"queued","requeued":2}"#),
+            "response was {retry:?}"
+        );
+        assert_eq!(
+            control.tasks.lock().unwrap().as_slice(),
+            &[(TaskOp::Cancel, 42), (TaskOp::Retry, 7)]
+        );
+        // A control request is never a signal, nor a focus.
+        assert!(sink.signals().is_empty());
+        assert!(control.asked.lock().unwrap().is_empty());
+        stop(stop_tx, handle).await;
+    }
+
+    #[tokio::test]
+    async fn a_refused_task_request_is_still_200_with_its_reason() {
+        let (socket, _sink, _control, stop_tx, handle) = spawn_server(None);
+        let response = send_raw_full(
+            &socket,
+            &control_post("/task/cancel", None, r#"{"task_id":0}"#),
+        )
+        .await;
+        assert!(
+            response.starts_with("HTTP/1.1 200"),
+            "response was {response:?}"
+        );
+        assert!(
+            response.ends_with(r#"{"ok":false,"reason":"task is already done"}"#),
+            "response was {response:?}"
+        );
+        stop(stop_tx, handle).await;
+    }
+
+    #[tokio::test]
+    async fn task_routes_require_the_bearer_token_and_a_task_id() {
+        let (socket, _sink, control, stop_tx, handle) =
+            spawn_server(Some(SecretString::new("right")));
+        let status = send_raw(
+            &socket,
+            &control_post("/task/cancel", None, r#"{"task_id":1}"#),
+        )
+        .await;
+        assert!(status.contains("401"), "status was {status:?}");
+        let status = send_raw(
+            &socket,
+            &control_post("/task/retry", Some("right"), r#"{"id":1}"#),
+        )
+        .await;
+        assert!(status.contains("400"), "status was {status:?}");
+        assert!(control.tasks.lock().unwrap().is_empty());
+        stop(stop_tx, handle).await;
     }
 
     #[tokio::test]
@@ -1076,19 +1231,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn non_focus_paths_stay_signal_ingestion() {
-        // E-08: the path is inspected only for the exact `/focus`; any other
-        // path (today's `/agent-events`, a future one) is signal ingestion.
+    async fn non_control_paths_stay_signal_ingestion() {
+        // E-08: the path is inspected only for the exact control paths; any
+        // other path (today's `/agent-events`, a future one, or a near miss of
+        // a control path) is signal ingestion.
         let (socket, sink, focus, stop_tx, handle) = spawn_server(None);
         let body = r#"{"job_id":"job-5-6","hook_event_name":"Stop","status":"completed"}"#;
-        let request = format!(
-            "POST /some/future/path HTTP/1.1\r\nContent-Length: {len}\r\n\r\n{body}",
-            len = body.len(),
-        );
-        let status = send_raw(&socket, request.as_bytes()).await;
-        assert!(status.contains("200"), "status was {status:?}");
-        assert_eq!(sink.signals().len(), 1);
+        for path in ["/some/future/path", "/task/cancel/"] {
+            let request = format!(
+                "POST {path} HTTP/1.1\r\nContent-Length: {len}\r\n\r\n{body}",
+                len = body.len(),
+            );
+            let status = send_raw(&socket, request.as_bytes()).await;
+            assert!(status.contains("200"), "{path}: status was {status:?}");
+        }
+        assert_eq!(sink.signals().len(), 2);
         assert!(focus.asked.lock().unwrap().is_empty());
+        assert!(focus.tasks.lock().unwrap().is_empty());
         stop(stop_tx, handle).await;
     }
 

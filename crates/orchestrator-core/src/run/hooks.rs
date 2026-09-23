@@ -32,7 +32,7 @@ use crate::domain::signal::{AgentSignal, SignalEvent, StopStatus};
 use crate::domain::state::{TaskEvent, TaskState};
 use crate::ports::git::GitRunner;
 use crate::ports::llm::RepoClassifier;
-use crate::ports::signal_ingress::FocusOutcome;
+use crate::ports::signal_ingress::{FocusOutcome, TaskControlOutcome, TaskOp};
 
 impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// Interpret one normalized hook signal (#138): resolve its task, record it
@@ -487,11 +487,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     pub async fn focus_task(&self, task_id: i64) -> FocusOutcome {
         let record = match self.db.get_task(task_id) {
             Ok(Some(record)) => record,
-            Ok(None) => {
-                return FocusOutcome::not(format!(
-                    "task {task_id} not found → `totsuka task list` shows known ids"
-                ));
-            }
+            Ok(None) => return FocusOutcome::not(crate::task_control::not_found(task_id)),
             Err(e) => return FocusOutcome::not(format!("state DB error: {e}")),
         };
         let session = match self.db.latest_session(record.id) {
@@ -526,6 +522,57 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             Ok(_) => FocusOutcome::not("the pane is already closed"),
             Err(e) => FocusOutcome::not(format!("session/focus failed: {e}")),
         }
+    }
+
+    /// Cancel or retry a task on request (#760, `POST /task/cancel` /
+    /// `POST /task/retry` → here).
+    ///
+    /// The same rules as `totsuka task cancel` / `retry` writing the DB
+    /// directly ([`task_control`](crate::task_control)), applied inside the
+    /// loop so what this run holds for the task moves with its state: an
+    /// applied cancel frees the task's slot and its session routes now,
+    /// rather than whenever a cycle's `release_slots_of_settled_tasks` gets to
+    /// it, and either operation clears the ended run's per-run memos. Nothing
+    /// else is owed to a retry: the loop runs `dispatch_ready` right after
+    /// every event, and a previous dispatch's pane is released by the
+    /// dispatcher itself (#481).
+    ///
+    /// The pane is **not** closed on cancel: its lifetime follows the
+    /// worktree's cleanup policy, not the task's state (F-107, ADR-0010).
+    pub(super) fn control_task(
+        &mut self,
+        op: TaskOp,
+        task_id: i64,
+    ) -> Result<TaskControlOutcome, StateError> {
+        let outcome = match op {
+            TaskOp::Cancel => crate::task_control::cancel(
+                &self.db,
+                task_id,
+                serde_json::json!({ "kind": "control", "command": "task cancel" }),
+            )?,
+            TaskOp::Retry => crate::task_control::retry(
+                &self.db,
+                task_id,
+                serde_json::json!({ "kind": "control", "command": "task retry" }),
+            )?,
+        };
+        if !outcome.ok {
+            return Ok(outcome);
+        }
+        if op == TaskOp::Cancel {
+            self.release_slot(task_id);
+            self.drop_task_sessions(task_id);
+            self.agent_output.remove(&task_id);
+        }
+        // The "already told / already paused" memos belong to the run that
+        // just ended. Left behind, the next run would start with the silence
+        // sweep still paused for it and its next tool / agent wait
+        // unannounced. Cleared on retry too: a run that failed need not have
+        // cleared them on its way out.
+        self.awaiting_approval.remove(&task_id);
+        self.blocked_on_tools.remove(&task_id);
+        self.blocked_on_agent.remove(&task_id);
+        Ok(outcome)
     }
 
     /// Capture a pane snapshot for escalation diagnostics (R-10), if the task's
@@ -910,5 +957,63 @@ mod tests {
             event_and_status_strings(&SignalEvent::QuestionPending { message: None }),
             ("question_pending", None)
         );
+    }
+
+    /// #760: a cancel that arrives through the control socket frees what the
+    /// run holds for the task in the same event, not a cycle later — the slot
+    /// is what lets the next queued task start.
+    #[tokio::test]
+    async fn a_control_cancel_frees_the_slot_and_session_routes_at_once() {
+        let mut engine = crate::run::test_engine(std::time::Duration::from_secs(3600)).await;
+        let id = engine
+            .db
+            .upsert_task(&crate::adapters::state_db::NewTask {
+                source: "github".to_string(),
+                source_task_id: "42".to_string(),
+                workflow: "implement".to_string(),
+                mode: "implement".to_string(),
+                repo: Some("web".to_string()),
+                priority: 0,
+                title: "Fix the bug".to_string(),
+                url: None,
+                source_payload: None,
+                last_signal_at: None,
+            })
+            .unwrap();
+        engine
+            .db
+            .apply_event(id, TaskEvent::Dispatch, None)
+            .unwrap();
+        assert!(engine.slots.acquire("web", "mock"));
+        engine
+            .slot_holders
+            .insert(id, ("web".to_string(), "mock".to_string()));
+        engine
+            .sessions
+            .insert(("mock".to_string(), "s-1".to_string()), id);
+        engine.awaiting_approval.insert(id);
+        engine.blocked_on_tools.insert(id);
+
+        let outcome = engine.control_task(TaskOp::Cancel, id).unwrap();
+        assert_eq!(
+            outcome,
+            TaskControlOutcome::applied(TaskState::Dispatched, TaskState::Cancelled, None)
+        );
+        assert!(
+            engine.slots.can_dispatch("web", "mock"),
+            "the only slot must be free again"
+        );
+        assert!(engine.slot_holders.is_empty());
+        assert!(engine.sessions.is_empty());
+        assert!(
+            engine.awaiting_approval.is_empty() && engine.blocked_on_tools.is_empty(),
+            "a retry must not inherit the cancelled run's memos"
+        );
+
+        // A refusal is an answer, not an error, and moves nothing.
+        let again = engine.control_task(TaskOp::Cancel, id).unwrap();
+        assert!(!again.ok, "{again:?}");
+        let retried = engine.control_task(TaskOp::Retry, id).unwrap();
+        assert_eq!(retried.state, Some(TaskState::Queued));
     }
 }

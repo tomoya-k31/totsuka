@@ -51,6 +51,18 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                 let _ = respond.send(outcome);
                 Ok(())
             }
+            // A control-UDS cancel/retry (#760). A DB failure propagates
+            // (run-fatal, as everywhere else) and drops `respond`, which the
+            // adapter answers with 503.
+            PluginEvent::TaskControl {
+                op,
+                task_id,
+                respond,
+            } => {
+                let outcome = self.control_task(op, task_id)?;
+                let _ = respond.send(outcome);
+                Ok(())
+            }
             // A pushed task (`task/submit`, 0.1.6): persist, ack only after
             // the commit, then run repo selection so the loop's dispatch pass
             // can pick the task up. A persistence error answers the plugin

@@ -67,7 +67,7 @@ use crate::ports::llm::{
     Candidate, Classification, ClassifyError, ClassifyRequest, RepoClassifier,
 };
 use crate::ports::secret::SecretString;
-use crate::ports::signal_ingress::FocusOutcome;
+use crate::ports::signal_ingress::{FocusOutcome, TaskControlOutcome, TaskOp};
 use crate::recovery::{self, RecoveryReport, RetryPlan};
 use crate::repo_select::{ReadmeCache, RepoDecision, SelectConfig, select_repo};
 use crate::scheduler::{Limits, ReadyTask, SlotManager, counts_toward_slot, plan_dispatch};
@@ -192,6 +192,17 @@ pub(crate) enum PluginEvent {
         task_id: i64,
         /// Where the adapter awaits the outcome.
         respond: tokio::sync::oneshot::Sender<FocusOutcome>,
+    },
+    /// A `POST /task/cancel` / `POST /task/retry` control request (#760):
+    /// apply it inside the loop, so the transition and the in-memory cleanup
+    /// that goes with it happen in one place, and answer over `respond`.
+    TaskControl {
+        /// Cancel or retry.
+        op: TaskOp,
+        /// The task to act on.
+        task_id: i64,
+        /// Where the adapter awaits the outcome.
+        respond: tokio::sync::oneshot::Sender<TaskControlOutcome>,
     },
     /// A `task/submit` from a task source (P→O, 0.1.6): persist the task and
     /// answer the ack over `respond` **after** the durable write committed
@@ -659,8 +670,9 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                     self.hook_receiver = HookReceiver::Listening;
                     let sink = EngineSignalSink::new(self.events_tx.clone());
                     let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
-                    // The sink doubles as the focus port (F-94): both feed the
-                    // same event channel, focus with a response oneshot.
+                    // The sink doubles as the control port (F-94, #760): both
+                    // feed the same event channel, control requests with a
+                    // response oneshot.
                     let handle = tokio::spawn(hook_uds::serve(
                         listener,
                         socket_path,
