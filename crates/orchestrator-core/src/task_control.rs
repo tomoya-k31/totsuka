@@ -39,7 +39,7 @@ pub fn cancel(
     }
     let to = match db.apply_event(task.task_ref(), TaskEvent::Cancel, Some(detail)) {
         Ok((to, _)) => to,
-        Err(e @ (StateError::Conflict { .. } | StateError::Transition(_))) => {
+        Err(e @ (StateError::Conflict(_) | StateError::Transition(_))) => {
             return Ok(lost_race(id, &e));
         }
         Err(e) => return Err(e),
@@ -78,7 +78,7 @@ pub fn retry(
     // messages its failed run was given would dispatch an empty prompt (#242).
     let (to, requeued) = match db.retry_task(task.task_ref(), Some(detail)) {
         Ok((to, _, requeued)) => (to, requeued),
-        Err(e @ (StateError::Conflict { .. } | StateError::Transition(_))) => {
+        Err(e @ (StateError::Conflict(_) | StateError::Transition(_))) => {
             return Ok(lost_race(id, &e));
         }
         Err(e) => return Err(e),

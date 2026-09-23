@@ -37,7 +37,7 @@ stable（[#763](https://github.com/tomoya-k31/totsuka/issues/763)）。2 段で�
 
 # Decision
 
-1. **楽観的並行制御にする。** `tasks.state_version`（v9、`NOT NULL DEFAULT 0`）を足し、状態を書く唯一の関数（`apply_event_tx`）の中で遷移のたびに 1 増やす。ノートのように遷移でない書き込みでは増やさない。版数の比較は遷移の判定より**前**に行い、違えば `StateError::Conflict { id, expected, actual, actual_state, event }` を返して何も書かない
+1. **楽観的並行制御にする。** `tasks.state_version`（v9、`NOT NULL DEFAULT 0`）を足し、状態を書く唯一の関数（`apply_event_tx`）の中で遷移のたびに 1 増やす。ノートのように遷移でない書き込みでは増やさない。版数の比較は遷移の判定より**前**に行い、違えば `StateError::Conflict(TransitionConflict { id, expected, actual, actual_state, event })` を返して何も書かない
    - 遷移のトランザクションは `BEGIN IMMEDIATE` で書き込みロックを先に取る。deferred のままだと、版数を古いスナップショットで読み、別の接続が間にコミットしたときの書き込みへの昇格が `SQLITE_BUSY_SNAPSHOT` で拒否される（busy handler は再試行しない）。競合が Conflict ではなく致命的な DB エラーとして表に出てしまうため
 2. **API は「読んだ参照」でしか呼べない。** `apply_event` / `retry_task` は id ではなく `TaskRef` を取る。`TaskRef` は id と版数の組で、`TaskRecord::task_ref()`、`StateDb::task_ref(id)`、または前の遷移の戻り値から得る
    - 成功すると更新済みの `TaskRef` を返す。同じタスクに続けて書くときはそれを使う
@@ -45,7 +45,7 @@ stable（[#763](https://github.com/tomoya-k31/totsuka/issues/763)）。2 段で�
    - id と版数を取り違える、あるいは別のタスクの版数を渡す誤りも型で防ぐ
 3. **条件なしの入口は残さない。** 呼び出し元はすべて版数を渡す: Engine、`task_control`（Engine 経由と CLI の直接書き込みの両方）、`task verify`、起動時の recovery、テスト。同じトランザクション内で読んで書く内部経路（取り込み時の reopen）だけは版数を持たない
 4. **CLI 側の競合は、案内つきの拒否にする。** cancel / retry は既存の `lost_race`（`200 + ok:false` 相当の拒否）で、`task verify` は `→ totsuka task show <id>` を添えたエラーで返す
-5. **Engine は Conflict をタスク単位の境界で受け止める**（PR 2）。`EngineError` に DB 障害とは別のバリアントとして Conflict を足し、`?` で境界まで運ぶ。境界はタスクを 1 件ずつ処理する箇所である
+5. **Engine は Conflict をタスク単位の境界で受け止める**（PR 2）。`EngineError` に DB 障害とは別のバリアントとして `Conflict(TransitionConflict)` を足し（`From<StateError>` が振り分ける）、`?` で境界まで運ぶ。境界はタスクを 1 件ずつ処理する箇所で、隔壁は `Engine::isolate_task` 1 つである。当てているのは次の箇所: `dispatch_ready`（dispatch 1 件ごと）、`select_repos`、`requeue_conversations_with_unsent_messages`、`on_signal`（hook シグナルと spool の再生の両方が通る）、`sweep_signal_timeouts`、エージェント状態の通知（`on_event` の `State`）、読み取り専用違反の掃除、プラグインのクラッシュでのフェイル
    - 受け止めたら warn を 1 行出し、そのタスクのメモリ上の状態（スロット、セッションの経路、出力バッファ）を捨てて処理を続ける。以降は DB を正として扱う
    - 通知・ソースへの書き戻し・pane を閉じる処理はしない
    - DB 障害は今までどおり致命的
@@ -69,4 +69,7 @@ stable（[#763](https://github.com/tomoya-k31/totsuka/issues/763)）。2 段で�
 - `TaskRecord` に `state_version` が増えた。v9 のマイグレーションは `totsuka run` が適用する（`open_no_migrate` を使う CLI は、それまでは古いスキーマとして拒否する。従来どおりの挙動）
 - `apply_event` の戻り値は `(TaskState, TaskRef)`、`retry_task` の戻り値は `(TaskState, TaskRef, usize)` になった
 - 遷移を書く関数（`fail_dispatch` / `finalize_success` / `fail_publish`）は、記録を書き込む参照を `record` とは別に受け取る。途中で遷移を適用した呼び出し元が、古い `record` の版数で書かないようにするため
-- PR 1 の時点では Engine の中で Conflict はまだ致命的である。以前なら黙って通っていた「古い判断の合法な遷移」も Conflict で止まる。PR 2 と続けてマージする
+- PR 1 の時点では Engine の中で Conflict はまだ致命的だった（以前なら黙って通っていた「古い判断の合法な遷移」も止まる）。PR 2 の隔壁で、run を止めるのは DB 障害と debug ビルドでの Engine のバグだけになった
+- dispatch 失敗後の自動 retry（#492）の「requeue できなければ普通の失敗として扱う」逃げ道は、Conflict だけは握りつぶさず隔壁へ渡す。外部で状態が動いたタスクを失敗として通知しないため
+- 起動時の recovery の中での Conflict は隔壁を通さない（常駐中の競合の窓ではないため）
+- 回帰テストはモックプラグインの `gates`（指定メソッドの応答を、指定ファイルが現れるまで止める）で、sleep に頼らず競合を再現する

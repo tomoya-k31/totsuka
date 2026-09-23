@@ -49,7 +49,7 @@ use crate::adapters::plugin_host::{HostError, IncomingRequest, Plugin};
 use crate::adapters::run_health::{self, Degradation, RunHealth};
 use crate::adapters::state_db::{
     HandoffOutcome, NewTask, StateDb, StateError, TaskMessage, TaskMessageInsert,
-    TaskMessageOutcome, TaskRecord, TaskRef,
+    TaskMessageOutcome, TaskRecord, TaskRef, TransitionConflict,
 };
 use crate::adapters::{EngineSignalSink, hook_uds};
 use crate::config::{

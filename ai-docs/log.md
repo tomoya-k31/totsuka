@@ -9,6 +9,8 @@
 * **Update**: [プラグイン開発ガイド](/development/plugin-dev-guide.md) / [ログ規約](/development/logging-conventions.md) — プラグインのログの書き方と中継のされ方を書き直した
 * **Update**: [設定リファレンス](/development/config-reference.md) / [設定例](/development/config-examples.md) / [orchestrator-spec](/product/orchestrator-spec.md) / [ja](/product/orchestrator-spec.ja.md) / [ADR-0058](/decisions/adr-0058-config-ownership-boundary.md) — `log_level` を取り除いた
 * **Update**: [plugin-sdk](/components/plugin-sdk.md) / [orchestrator-core](/components/orchestrator-core.md) — `init_tracing` の出力形式、`logging` の予約フィールドを反映した
+* **Update**: [ADR-0098](/decisions/adr-0098-task-state-optimistic-concurrency.md) — Engine の隔壁（`isolate_task`）を入れた（#763）。外部で状態が動いたタスクへの書き込みは warn を残してそのタスクだけを諦め、run は止まらない。版数一致の不正遷移は debug では止め、release では隔離する
+* **Update**: [orchestrator-core](/components/orchestrator-core.md) — `run` の隔壁と、それを当てている境界を追記
 * **Creation**: [ADR-0098](/decisions/adr-0098-task-state-optimistic-concurrency.md) — タスクの状態遷移を行バージョンによる楽観的並行制御にした（#763）。`apply_event` / `retry_task` は読んだ参照（`TaskRef`）でしか呼べず、外部で動いたタスクへの書き込みは `StateError::Conflict` で拒否される。Engine の隔壁は後続の PR
 * **Update**: [状態DB スキーマ](/data/state-db.md) — v9 で `tasks.state_version` を追加。遷移の書き方（`TaskRef`・Conflict）を追記
 * **Update**: [orchestrator-core](/components/orchestrator-core.md) — `state_db` の遷移 API が `TaskRef` を取るようになったことを反映

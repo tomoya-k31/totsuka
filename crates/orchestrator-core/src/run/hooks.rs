@@ -43,6 +43,15 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// [`replay_spool`](Self::replay_spool). Public so integration tests can
     /// feed signals directly.
     pub async fn on_signal(&mut self, sig: AgentSignal) -> Result<(), EngineError> {
+        // Every signal names one task, so this is that task's bulkhead (#763)
+        // for both of its callers.
+        let task_id = sig.job_id.task_id;
+        let handled = self.handle_signal(sig).await;
+        self.isolate_task(task_id, handled)
+    }
+
+    /// [`on_signal`](Self::on_signal) without the bulkhead.
+    async fn handle_signal(&mut self, sig: AgentSignal) -> Result<(), EngineError> {
         // Resolve job_id → task (E-09: never guessed from a session id). An
         // unknown task is accepted at the socket but parked here: no state
         // change, and the `hook_events` FK forbids logging against a task that
@@ -560,19 +569,18 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         if !outcome.ok {
             return Ok(outcome);
         }
-        if op == TaskOp::Cancel {
-            self.release_slot(task_id);
-            self.drop_task_sessions(task_id);
-            self.agent_output.remove(&task_id);
-        }
         // The "already told / already paused" memos belong to the run that
         // just ended. Left behind, the next run would start with the silence
         // sweep still paused for it and its next tool / agent wait
         // unannounced. Cleared on retry too: a run that failed need not have
         // cleared them on its way out.
-        self.awaiting_approval.remove(&task_id);
-        self.blocked_on_tools.remove(&task_id);
-        self.blocked_on_agent.remove(&task_id);
+        if op == TaskOp::Cancel {
+            self.forget_task(task_id);
+        } else {
+            self.awaiting_approval.remove(&task_id);
+            self.blocked_on_tools.remove(&task_id);
+            self.blocked_on_agent.remove(&task_id);
+        }
         Ok(outcome)
     }
 
@@ -642,11 +650,13 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         }
         for record in timed_out {
             let secs = self.workflow_timeout_secs(&record.workflow);
-            self.escalate(
-                &record,
-                format!("no hook signal for over {secs}s (timeout)"),
-            )
-            .await?;
+            let escalated = self
+                .escalate(
+                    &record,
+                    format!("no hook signal for over {secs}s (timeout)"),
+                )
+                .await;
+            self.isolate_task(record.id, escalated)?;
         }
         Ok(())
     }
