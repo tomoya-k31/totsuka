@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](plugin-dev-guide.ja.md)
 
-<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:02a4f19107c00542e98b708deb9e0213b5cc43bf8af097890794391139f104ec -->
+<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:606f1569b20fa112340bf0089a9a4d4ca3d8e6256da1ad7a77f6b553e9cbc19f -->
 
 # Plugin development guide
 
@@ -138,7 +138,8 @@ fields intact**, tagged with your plugin name.
 - **Without the SDK**, write one JSON object per line with `level` (`ERROR` to
   `TRACE`), `target`, `message` and any fields, and it is handled the same way. Any
   other line is forwarded verbatim as `INFO`; a `thread '…' panicked at` line and
-  everything after it becomes `ERROR`.
+  the non-JSON lines following it become `ERROR` (SDK lines keep their own level
+  even after a panic).
 
 Each field passes through the orchestrator's redaction on its own, so a field named
 like `api_token` is masked as `***`. **A secret embedded in the message is only masked

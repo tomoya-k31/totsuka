@@ -961,7 +961,8 @@ const STDERR_WINDOW: Duration = Duration::from_secs(10);
 /// so the host's `[log] level` is the one filter a plugin's log passes
 /// through. A line that is not SDK JSON — a plugin without the SDK, or a
 /// panic from the runtime — is logged as `INFO`, and everything from a
-/// `panicked at` line on as `ERROR`.
+/// `panicked at` line on as `ERROR` — the untagged lines after it, that is;
+/// an SDK line still carries its own level.
 ///
 /// A plugin in a tight failure loop can emit stderr faster than anything reads
 /// it. The cap keeps a noisy plugin from burying everything else; the

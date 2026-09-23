@@ -53,7 +53,7 @@ stable。[プラグイン開発ガイド](/development/plugin-dev-guide.md)の�
 
 3. **本体（`spawn_stderr_logger`）は各行を分解し、元のレベルで出し直す。**
    - JSON で `level` を持つ行: `level` / `target` / `message` を取り出し、残りをフィールドにする。`timestamp` は捨て、本体の時刻を使う（差はパイプの遅延だけ）。
-   - それ以外の行（SDK を使わないプラグイン、runtime の出力）: `INFO` で、行をそのまま message にする。`thread '…' panicked at` の行とそれ以降は `ERROR`。go-plugin の既定は DEBUG だが、本体の既定が INFO なのでそれでは見えなくなる。
+   - それ以外の行（SDK を使わないプラグイン、runtime の出力）: `INFO` で、行をそのまま message にする。`thread '…' panicked at` の行とそれに続く JSON でない行は `ERROR`。panic の後に SDK の行が来たら、プロセスは生きている（ワーカースレッドの panic）ので panic 扱いを解く。JSON の行は panic の後でも自分のレベルのまま。go-plugin の既定は DEBUG だが、本体の既定が INFO なのでそれでは見えなくなる。
    - 空行は捨てる。
 
 4. **フィルタは本体の `[log] level` の 1 か所だけにする。** プラグインは全レベルを出し、本体が判定する。本体に集約すれば、SDK を使わないプラグインにも同じ判定がかかり、設定も 1 か所で済む。代わりに依存ライブラリの TRACE もパイプを流れ、本体はそれを読んで捨てる。この負荷は受け入れる。

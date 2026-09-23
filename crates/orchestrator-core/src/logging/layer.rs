@@ -303,7 +303,9 @@ where
                 }
                 for (k, v) in &collector.fields {
                     if let Value::String(s) = v {
-                        line.push_str(&format!(" {k}={}", safe(s)));
+                        // The name too: a relayed plugin field's name is
+                        // plugin-authored (ADR-0096), not one of ours.
+                        line.push_str(&format!(" {}={}", safe(k), safe(s)));
                     }
                 }
                 line
@@ -697,5 +699,20 @@ mod tests {
             "{human}"
         );
         assert!(!human.contains("hunter2"), "{human}");
+    }
+
+    /// A relayed field *name* is plugin-authored too, so it cannot carry a
+    /// live escape sequence to the terminal any more than a value can.
+    #[test]
+    fn a_relayed_field_name_is_escaped_on_the_terminal() {
+        let human = capture_as(LogFormat::Human, false, || {
+            tracing::info!(
+                { PLUGIN_FIELDS_FIELD } = "{\"evil\\u001b[2Jname\":\"v\"}",
+                plugin = "p",
+                "m"
+            );
+        });
+        assert!(!human.contains('\u{1b}'), "{human:?}");
+        assert!(human.contains("name=v"), "{human:?}");
     }
 }

@@ -1,7 +1,7 @@
 > 🌐 [English](plugin-dev-guide.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:02a4f19107c00542e98b708deb9e0213b5cc43bf8af097890794391139f104ec -->
+<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:606f1569b20fa112340bf0089a9a4d4ca3d8e6256da1ad7a77f6b553e9cbc19f -->
 
 # プラグイン開発ガイド
 
@@ -137,7 +137,7 @@ Orchestrator は起動前に `protocol_version` の互換性を検査し、宣�
   プラグインの debug を見たいときは `[log] level = "debug"`（または `--debug`）にする。
 - **SDK を使わない場合**は、1 行 1 オブジェクトで `level`（`ERROR`〜`TRACE`）/ `target` /
   `message` と任意のフィールドを書けば同じように扱われる。それ以外の行は `INFO` として
-  そのまま中継され、`thread '…' panicked at` の行とそれ以降は `ERROR` になる。
+  そのまま中継され、`thread '…' panicked at` の行と、それに続く JSON でない行は `ERROR` になる（SDK の行は panic の後でも自分のレベルのまま）。
 
 フィールドは 1 つずつ Orchestrator の伏字処理を通るので、`api_token` のような名前の
 フィールドは `***` に伏せられる。ただし **message に埋め込んだ秘密は、既知のトークンの形

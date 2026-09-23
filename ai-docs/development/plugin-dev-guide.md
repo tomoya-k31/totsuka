@@ -4,7 +4,7 @@ title: プラグイン開発ガイド
 description: totsuka プラグインの作り方。plugin-protocol クレートの型、JSON-RPC(NDJSON/stdio) メソッド、plugin.toml マニフェスト、capability 宣言、開発ループ（plugin install --from-source）とビルド手順（bin 名 = plugin.toml の name という不変条件）、install/enable の流れ、参照実装。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/plugin-protocol
 tags: [plugin, protocol, json-rpc, manifest, guide]
-generated: { by: claude-code/opus-5, at: 2026-09-24T10:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-24T12:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -119,7 +119,7 @@ Orchestrator は起動前に `protocol_version` の互換性を検査し（F-54�
   プラグインの debug を見たいときは `[log] level = "debug"`（または `--debug`）にする。
 - **SDK を使わない場合**は、1 行 1 オブジェクトで `level`（`ERROR`〜`TRACE`）/ `target` /
   `message` と任意のフィールドを書けば同じように扱われる。それ以外の行は `INFO` として
-  そのまま中継され、`thread '…' panicked at` の行とそれ以降は `ERROR` になる。
+  そのまま中継され、`thread '…' panicked at` の行と、それに続く JSON でない行は `ERROR` になる（SDK の行は panic の後でも自分のレベルのまま）。
 
 フィールドは 1 つずつ Orchestrator の redaction 層を通るので、`api_token` のような名前の
 フィールドは `***` に伏せられる。ただし **message に埋め込んだ秘密は値のパターン
