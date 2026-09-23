@@ -38,6 +38,7 @@ stable（[#763](https://github.com/tomoya-k31/totsuka/issues/763)）。2 段で�
 # Decision
 
 1. **楽観的並行制御にする。** `tasks.state_version`（v9、`NOT NULL DEFAULT 0`）を足し、状態を書く唯一の関数（`apply_event_tx`）の中で遷移のたびに 1 増やす。ノートのように遷移でない書き込みでは増やさない。版数の比較は遷移の判定より**前**に行い、違えば `StateError::Conflict { id, expected, actual, actual_state, event }` を返して何も書かない
+   - 遷移のトランザクションは `BEGIN IMMEDIATE` で書き込みロックを先に取る。deferred のままだと、版数を古いスナップショットで読み、別の接続が間にコミットしたときの書き込みへの昇格が `SQLITE_BUSY_SNAPSHOT` で拒否される（busy handler は再試行しない）。競合が Conflict ではなく致命的な DB エラーとして表に出てしまうため
 2. **API は「読んだ参照」でしか呼べない。** `apply_event` / `retry_task` は id ではなく `TaskRef` を取る。`TaskRef` は id と版数の組で、`TaskRecord::task_ref()`、`StateDb::task_ref(id)`、または前の遷移の戻り値から得る
    - 成功すると更新済みの `TaskRef` を返す。同じタスクに続けて書くときはそれを使う
    - `TaskRef` は `Clone` / `Copy` でない。遷移が参照を消費するので、古い参照の使い回しはコンパイルが通らない

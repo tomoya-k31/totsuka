@@ -1133,7 +1133,7 @@ impl StateDb {
         let detail = detail.as_ref().map(serde_json::to_string).transpose()?;
         // Update + audit event in one transaction: state never advances
         // without its recorded event (F-72).
-        let tx = self.conn.unchecked_transaction()?;
+        let tx = self.write_transaction()?;
         let (to, version) = apply_event_tx(
             &tx,
             &now,
@@ -1150,6 +1150,23 @@ impl StateDb {
                 version,
             },
         ))
+    }
+
+    /// A transaction that holds the write lock from its first statement
+    /// (`BEGIN IMMEDIATE`), for a version check followed by a write (#763).
+    ///
+    /// A deferred transaction reads the version on a snapshot and only asks
+    /// for the write lock at the `UPDATE`. If another connection committed in
+    /// between, WAL refuses the upgrade with `SQLITE_BUSY_SNAPSHOT`, which the
+    /// busy handler does not retry — the race would surface as a fatal
+    /// [`StateError::Db`] instead of the [`StateError::Conflict`] it is.
+    /// Taking the lock first makes the other writer wait (busy timeout) and
+    /// this read see what it committed.
+    fn write_transaction(&self) -> Result<rusqlite::Transaction<'_>, StateError> {
+        Ok(rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        )?)
     }
 
     /// The current reference to task `id`, for a caller that decides on
@@ -1807,7 +1824,7 @@ impl StateDb {
     ) -> Result<(TaskState, TaskRef, usize), StateError> {
         let now = self.clock.now_rfc3339();
         let detail = detail.as_ref().map(serde_json::to_string).transpose()?;
-        let tx = self.conn.unchecked_transaction()?;
+        let tx = self.write_transaction()?;
         let id = task.id;
         let (to, version) = apply_event_tx(
             &tx,
@@ -2784,6 +2801,50 @@ mod tests {
         assert_eq!(rec.state, TaskState::Cancelled);
         assert_eq!(rec.state_version, 2);
         assert_eq!(db.event_count(id).unwrap(), events);
+    }
+
+    /// Two connections, as in production (the engine and `task cancel`): the
+    /// other writer commits while this transition is waiting to start. With a
+    /// deferred transaction the version is read on a stale snapshot and the
+    /// write fails as `SQLITE_BUSY_SNAPSHOT` — a DB error, fatal to the
+    /// engine. Holding the write lock from the start turns it into the
+    /// conflict it is.
+    #[test]
+    fn a_transition_racing_another_connection_reports_a_conflict() {
+        let dir = std::env::temp_dir().join(format!("totsuka-{}-two_writers", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("state.db");
+        let db = StateDb::open(&path).unwrap();
+        let id = db.upsert_task(&sample_task()).unwrap();
+        let (_, engine_ref) = db
+            .apply_event(db.task_ref(id).unwrap(), TaskEvent::Dispatch, None)
+            .unwrap();
+
+        let other = Connection::open(&path).unwrap();
+        other.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let writer = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            other
+                .execute(
+                    "UPDATE tasks SET state = 'cancelled', state_version = state_version + 1 \
+                     WHERE id = ?1",
+                    params![id],
+                )
+                .unwrap();
+            other.execute_batch("COMMIT").unwrap();
+        });
+        let err = db
+            .apply_event(engine_ref, TaskEvent::Fail, None)
+            .unwrap_err();
+        writer.join().unwrap();
+        assert!(matches!(err, StateError::Conflict { .. }), "{err:?}");
+        assert_eq!(
+            db.get_task(id).unwrap().unwrap().state,
+            TaskState::Cancelled
+        );
+        drop(db);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     /// Comparing states would not catch this: cancel → retry → re-dispatch
