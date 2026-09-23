@@ -317,25 +317,9 @@ pub enum StateError {
     /// An illegal state transition was requested.
     #[error(transparent)]
     Transition(#[from] InvalidTransition),
-    /// The task changed after the caller read it (#763): another writer
-    /// applied a transition in between, so the caller's decision was made
-    /// against a state that no longer exists. Nothing was written.
-    #[error(
-        "task {id} changed state while {event:?} was being applied \
-         (read at version {expected}, now {actual_state} at version {actual})"
-    )]
-    Conflict {
-        /// The task.
-        id: i64,
-        /// The version the caller read.
-        expected: i64,
-        /// The version found at write time.
-        actual: i64,
-        /// The state found at write time.
-        actual_state: TaskState,
-        /// The event that was not applied.
-        event: TaskEvent,
-    },
+    /// The task changed after the caller read it (#763). Nothing was written.
+    #[error(transparent)]
+    Conflict(#[from] TransitionConflict),
     /// JSON (de)serialization of `source_payload`/`detail` failed.
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
@@ -385,6 +369,27 @@ pub enum StateError {
         /// Version this binary needs.
         expected: i64,
     },
+}
+
+/// A transition refused because the task moved after the caller read it
+/// (#763): another writer applied a transition in between, so the caller's
+/// decision was made against a state that no longer exists.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "task {id} changed state while {event:?} was being applied \
+     (read at version {expected}, now {actual_state} at version {actual})"
+)]
+pub struct TransitionConflict {
+    /// The task.
+    pub id: i64,
+    /// The version the caller read.
+    pub expected: i64,
+    /// The version found at write time.
+    pub actual: i64,
+    /// The state found at write time.
+    pub actual_state: TaskState,
+    /// The event that was not applied.
+    pub event: TaskEvent,
 }
 
 /// A task to ingest (F-01). Starts life in [`TaskState::Queued`].
@@ -2220,13 +2225,14 @@ fn apply_event_tx(
     let (from, version) = row.ok_or(StateError::NotFound(id))?;
     let from: TaskState = from.parse()?;
     if let Some(expected) = expected.filter(|&v| v != version) {
-        return Err(StateError::Conflict {
+        return Err(TransitionConflict {
             id,
             expected,
             actual: version,
             actual_state: from,
             event,
-        });
+        }
+        .into());
     }
     let to = transition(from, event)?;
     let finished_at = to.is_terminal().then(|| now.to_string());
@@ -2786,14 +2792,14 @@ mod tests {
             .unwrap_err();
         assert!(
             matches!(
-                err,
-                StateError::Conflict {
-                    id: i,
+                &err,
+                StateError::Conflict(c) if *c == TransitionConflict {
+                    id,
                     expected: 1,
                     actual: 2,
                     actual_state: TaskState::Cancelled,
                     event: TaskEvent::Fail,
-                } if i == id
+                }
             ),
             "{err:?}"
         );
@@ -2869,7 +2875,7 @@ mod tests {
         let err = db
             .apply_event(first_attempt, TaskEvent::Fail, None)
             .unwrap_err();
-        assert!(matches!(err, StateError::Conflict { .. }), "{err:?}");
+        assert!(matches!(err, StateError::Conflict(_)), "{err:?}");
         assert_eq!(
             db.get_task(id).unwrap().unwrap().state,
             TaskState::Dispatched
@@ -2907,7 +2913,7 @@ mod tests {
         assert_eq!(state, TaskState::Queued);
 
         let err = db.retry_task(stale, None).unwrap_err();
-        assert!(matches!(err, StateError::Conflict { .. }), "{err:?}");
+        assert!(matches!(err, StateError::Conflict(_)), "{err:?}");
         assert_eq!(db.get_task(id).unwrap().unwrap().state, TaskState::Queued);
     }
 

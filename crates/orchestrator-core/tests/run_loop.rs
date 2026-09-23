@@ -3289,3 +3289,114 @@ async fn a_branch_hint_that_cannot_be_honoured_fails_the_dispatch() {
     );
     assert_eq!(task.worktree_path, None, "no worktree was made at all");
 }
+
+/// Run the engine over tasks `1` and `2` with one slot, holding the first
+/// call to `gated` at a mock-plugin gate; while it is held, cancel task `1`
+/// from a second DB connection — `totsuka task cancel` writing the DB
+/// directly — then open the gate. Returns once task `2` is done, with task
+/// `1`'s final state (#763).
+///
+/// `run_watch_until` unwraps the run's result, so a run that ended with an
+/// error fails the test right there: that is the regression this guards.
+async fn cancel_task_1_while_the_engine_awaits(
+    tag: &str,
+    gate_on_agent: bool,
+    agent_extra: serde_json::Value,
+) -> TaskState {
+    let base = scratch(tag);
+    let repo = setup_repo(&base);
+    let source_log = base.join("source.ndjson");
+    let notify_log = base.join("notify.ndjson");
+    let db_path = base.join("state.db");
+    let gate = base.join("gate");
+    let gated = if gate_on_agent {
+        "task/dispatch"
+    } else {
+        "task/update_status"
+    };
+    let gates = json!({ "gates": { gated: gate } });
+
+    let mut agent = json!({ "stream_states": ["running", "done"] });
+    for (k, v) in agent_extra.as_object().unwrap() {
+        agent[k] = v.clone();
+    }
+    let (agent, source_extra) = if gate_on_agent {
+        agent["gates"] = gates["gates"].clone();
+        (agent, json!({}))
+    } else {
+        (agent, gates)
+    };
+    let plugins = plugin_set_with_source(
+        json!([mock_task("1"), mock_task("2")]),
+        agent,
+        source_extra,
+        &source_log,
+        &notify_log,
+    )
+    .await;
+    let mut settings = engine_settings(&repo);
+    // One slot: task `2` can only start once task `1` gave its slot back.
+    settings.limits = Limits::global(1);
+    let mut engine = Engine::new(
+        StateDb::open(&db_path).unwrap(),
+        settings,
+        plugins,
+        SystemGitRunner::default(),
+        no_llm(),
+    )
+    .await;
+
+    let waiting = PathBuf::from(format!("{}.waiting", gate.display()));
+    let db_probe = db_path.clone();
+    run_watch_until(&mut engine, move || {
+        let db = StateDb::open(&db_probe).unwrap();
+        if !gate.exists() {
+            if waiting.exists() {
+                // FIFO among equal priorities: the first call is task `1`'s.
+                let task = db.find_by_source("mock_src", "1").unwrap().unwrap();
+                db.apply_event(task.task_ref(), TaskEvent::Cancel, None)
+                    .unwrap();
+                std::fs::write(&gate, "").unwrap();
+            }
+            return false;
+        }
+        db.find_by_source("mock_src", "2")
+            .unwrap()
+            .is_some_and(|t| t.state == TaskState::Done)
+    })
+    .await;
+    engine.shutdown(Duration::from_secs(5)).await;
+
+    let state = StateDb::open(&db_path)
+        .unwrap()
+        .find_by_source("mock_src", "1")
+        .unwrap()
+        .unwrap()
+        .state;
+    let _ = std::fs::remove_dir_all(&base);
+    state
+}
+
+/// #763: the dispatch fails after the task was cancelled from outside. The
+/// failure's `Fail` lands on a task that is no longer the one the engine read,
+/// and must cost that task only — not the run, not the slot.
+#[tokio::test]
+async fn a_task_cancelled_during_a_failing_dispatch_does_not_stop_the_run() {
+    let state = cancel_task_1_while_the_engine_awaits(
+        "cancel_mid_dispatch",
+        true,
+        json!({ "dispatch_error": { "fail_first": 1 } }),
+    )
+    .await;
+    assert_eq!(state, TaskState::Cancelled, "the operator's cancel stands");
+}
+
+/// #763: the same race on the event path. The agent reported done, the task
+/// is `publishing`, and the engine is waiting on the source's status
+/// write-back when the task is cancelled; the `Complete` that follows must
+/// not stop the run.
+#[tokio::test]
+async fn a_task_cancelled_while_it_publishes_does_not_stop_the_run() {
+    let state = cancel_task_1_while_the_engine_awaits("cancel_mid_publish", false, json!({})).await;
+    assert_eq!(state, TaskState::Cancelled, "the operator's cancel stands");
+}

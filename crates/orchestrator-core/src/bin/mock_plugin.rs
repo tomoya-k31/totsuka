@@ -46,6 +46,15 @@
 //! - `shutdown` → replies, then exits 0.
 //! - anything else → method-not-found error.
 //!
+//! `"gates": { "<method>": <path> }` holds every request for that method until
+//! the file at `<path>` exists, touching `<path>.waiting` first (#763). A test
+//! waits for the `.waiting` file — the orchestrator is then inside that call,
+//! with whatever it read before it — changes the state DB from outside, and
+//! creates `<path>` to let the call finish. A rendezvous rather than a delay,
+//! so nothing depends on timing. Bounded at 30s so a test that never opens the
+//! gate fails instead of hanging. Like `submit_delay_ms` below it blocks the
+//! whole plugin.
+//!
 //! `"submit_delay_ms": N` holds the `submit_tasks` pushes back by N ms, so a
 //! test can sequence a task's arrival after another event (#499).
 //!
@@ -111,6 +120,13 @@ fn main() {
             continue;
         }
         let id = request.get("id").cloned().unwrap_or(Value::Null);
+        if let Some(gate) = config
+            .get("gates")
+            .and_then(|g| g.get(method))
+            .and_then(Value::as_str)
+        {
+            wait_at_gate(std::path::Path::new(gate));
+        }
 
         let response = match method {
             // `reject_config: true` (#755): refuse `initialize` the way a real
@@ -727,6 +743,16 @@ fn forces_dispatch_error(config: &Value, params: &Value) -> bool {
     match spec.get("fail_first").and_then(Value::as_u64) {
         Some(n) => (DISPATCH_ATTEMPTS.fetch_add(1, Ordering::Relaxed) as u64) < n,
         None => true,
+    }
+}
+
+/// Block until `gate` exists, announcing the wait with `<gate>.waiting` (the
+/// `gates` config, #763).
+fn wait_at_gate(gate: &std::path::Path) {
+    let _ = std::fs::write(format!("{}.waiting", gate.display()), "");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !gate.exists() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(10));
     }
 }
 

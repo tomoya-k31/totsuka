@@ -204,11 +204,14 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             if record.state.is_terminal() {
                 continue;
             }
-            self.db.apply_event(
+            if let Err(e) = self.db.apply_event(
                 record.task_ref(),
                 crate::domain::state::TaskEvent::Fail,
                 Some(serde_json::json!({ "kind": "plugin_crash", "plugin": plugin })),
-            )?;
+            ) {
+                self.isolate_task(task_id, Err(e.into()))?;
+                continue;
+            }
             self.release_slot(task_id);
             self.agent_output.remove(&task_id);
             self.stats.failed += 1;

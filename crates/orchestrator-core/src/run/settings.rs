@@ -12,7 +12,21 @@ use super::*;
 pub enum EngineError {
     /// State DB failure — the loop cannot proceed without persistence.
     #[error(transparent)]
-    Db(#[from] StateError),
+    Db(StateError),
+    /// The task moved while the engine was working on it (#763). Never leaves
+    /// the run: the per-task boundary (`Engine::isolate_task`) takes it, so
+    /// only [`Db`](Self::Db) is fatal.
+    #[error(transparent)]
+    Conflict(TransitionConflict),
+}
+
+impl From<StateError> for EngineError {
+    fn from(e: StateError) -> Self {
+        match e {
+            StateError::Conflict(c) => Self::Conflict(c),
+            e => Self::Db(e),
+        }
+    }
 }
 
 /// A repository the engine can target (paths already expanded).

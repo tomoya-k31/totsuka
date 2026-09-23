@@ -515,7 +515,7 @@ fn verify(
     // (#763): the version check refuses, and the operator re-reads.
     let lost_race = |e: StateError| -> CliError {
         match e {
-            StateError::Conflict { .. } => {
+            StateError::Conflict(_) => {
                 format!("{e} → `totsuka task show {id}` and try again").into()
             }
             e => e.into(),

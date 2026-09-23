@@ -45,7 +45,8 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         }
         for task_id in candidates {
             self.sync_branch(task_id)?;
-            self.enforce_read_only(task_id).await?;
+            let enforced = self.enforce_read_only(task_id).await;
+            self.isolate_task(task_id, enforced)?;
         }
         Ok(())
     }

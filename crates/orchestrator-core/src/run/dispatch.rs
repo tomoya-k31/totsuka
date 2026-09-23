@@ -12,46 +12,53 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     pub(super) async fn select_repos(&mut self) -> Result<(), EngineError> {
         let queued = self.db.tasks_in_state(TaskState::Queued)?;
         for record in queued.iter().filter(|t| t.repo.is_none()) {
-            let task = task_from_record(record);
-            let decision = self.decide_repo(&task).await;
-            match decision {
-                RepoDecision::Selected { repo, reason } => {
-                    tracing::info!(task_id = record.id, repo = %repo, "repository selected: {reason}");
-                    self.db.set_repo(record.id, &repo)?;
-                }
-                RepoDecision::Pending { reason } => {
-                    tracing::warn!(
-                        task_id = record.id,
-                        "repository pending confirmation: {reason}"
-                    );
-                    self.db.apply_event(
-                        record.task_ref(),
-                        TaskEvent::NeedRepoConfirmation,
-                        Some(serde_json::json!({ "kind": "repo_select", "reason": reason })),
-                    )?;
-                    notify_all(
-                        &self.plugins.notifiers,
-                        NotifierEvent::Pending,
-                        record,
-                        Some(reason),
-                    );
-                }
-                RepoDecision::Failed { reason } => {
-                    tracing::error!(task_id = record.id, "repository selection failed: {reason}");
-                    self.db.apply_event(
-                        record.task_ref(),
-                        TaskEvent::Fail,
-                        Some(serde_json::json!({ "kind": "repo_select", "reason": reason })),
-                    )?;
-                    self.stats.failed += 1;
-                    self.write_back_status(record, StatusMoment::Failure).await;
-                    notify_all(
-                        &self.plugins.notifiers,
-                        NotifierEvent::Failed,
-                        record,
-                        Some(reason),
-                    );
-                }
+            let selected = self.select_repo(record).await;
+            self.isolate_task(record.id, selected)?;
+        }
+        Ok(())
+    }
+
+    /// Select the repository of one queued task, or park / fail it.
+    async fn select_repo(&mut self, record: &TaskRecord) -> Result<(), EngineError> {
+        let task = task_from_record(record);
+        let decision = self.decide_repo(&task).await;
+        match decision {
+            RepoDecision::Selected { repo, reason } => {
+                tracing::info!(task_id = record.id, repo = %repo, "repository selected: {reason}");
+                self.db.set_repo(record.id, &repo)?;
+            }
+            RepoDecision::Pending { reason } => {
+                tracing::warn!(
+                    task_id = record.id,
+                    "repository pending confirmation: {reason}"
+                );
+                self.db.apply_event(
+                    record.task_ref(),
+                    TaskEvent::NeedRepoConfirmation,
+                    Some(serde_json::json!({ "kind": "repo_select", "reason": reason })),
+                )?;
+                notify_all(
+                    &self.plugins.notifiers,
+                    NotifierEvent::Pending,
+                    record,
+                    Some(reason),
+                );
+            }
+            RepoDecision::Failed { reason } => {
+                tracing::error!(task_id = record.id, "repository selection failed: {reason}");
+                self.db.apply_event(
+                    record.task_ref(),
+                    TaskEvent::Fail,
+                    Some(serde_json::json!({ "kind": "repo_select", "reason": reason })),
+                )?;
+                self.stats.failed += 1;
+                self.write_back_status(record, StatusMoment::Failure).await;
+                notify_all(
+                    &self.plugins.notifiers,
+                    NotifierEvent::Failed,
+                    record,
+                    Some(reason),
+                );
             }
         }
         Ok(())
@@ -239,7 +246,8 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             if let Some(pair) = pair_by_id.get(&task_id) {
                 self.slot_holders.insert(task_id, pair.clone());
             }
-            self.dispatch_one(task_id).await?;
+            let dispatched = self.dispatch_one(task_id).await;
+            self.isolate_task(task_id, dispatched)?;
         }
         Ok(())
     }
@@ -1077,13 +1085,16 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             .conversations_with_unsent_messages(TaskState::Done)?
         {
             let task_id = task.id();
-            self.db.apply_event(
+            if let Err(e) = self.db.apply_event(
                 task,
                 TaskEvent::Reopen,
                 Some(serde_json::json!({
                     "kind": "reopen", "cause": "messages_arrived_while_working",
                 })),
-            )?;
+            ) {
+                self.isolate_task(task_id, Err(e.into()))?;
+                continue;
+            }
             tracing::info!(
                 task_id,
                 "conversation requeued: messages arrived while it was working"
@@ -1237,6 +1248,71 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         self.sessions.retain(|_, &mut id| id != task_id);
     }
 
+    /// Forget everything this run holds in memory for a task: its slot,
+    /// session routes, output buffer and the "already told" memos. What the
+    /// DB says about the task is left as it is.
+    pub(super) fn forget_task(&mut self, task_id: i64) {
+        self.release_slot(task_id);
+        self.drop_task_sessions(task_id);
+        self.agent_output.remove(&task_id);
+        self.awaiting_approval.remove(&task_id);
+        self.blocked_on_tools.remove(&task_id);
+        self.blocked_on_agent.remove(&task_id);
+    }
+
+    /// The per-task bulkhead (#763): what one task's work returned, with the
+    /// failures that belong to that task alone taken out of it.
+    ///
+    /// Applied wherever the loop works through tasks one at a time, so every
+    /// state write inside is covered without being handled where it is
+    /// written — there are twenty-odd of those, and handling each one is how
+    /// one gets missed. Not at the top of `run`: `plan_dispatch` has already
+    /// taken the slots of the whole plan, so unwinding a dispatch pass half-way
+    /// would leak the slots of the tasks it never reached.
+    ///
+    /// - [`EngineError::Conflict`]: the task moved while this run was working
+    ///   on it — `totsuka task cancel` / `retry` writing the DB directly
+    ///   (ADR-0094's fallback). What this run decided was about a task that no
+    ///   longer exists, so it drops its memory of the task and lets the next
+    ///   cycle read the DB afresh. No notification and no status write-back:
+    ///   whoever moved the task knows.
+    /// - An illegal transition at the version this run read is a bug in the
+    ///   engine, not a race — a debug build still stops on it, so tests catch
+    ///   it; a release build contains it to the task instead of stopping every
+    ///   other one.
+    /// - Anything else is a state DB failure and stays fatal.
+    pub(super) fn isolate_task(
+        &mut self,
+        task_id: i64,
+        result: Result<(), EngineError>,
+    ) -> Result<(), EngineError> {
+        match result {
+            Err(EngineError::Conflict(c)) => {
+                tracing::warn!(
+                    task_id,
+                    expected = c.expected,
+                    actual = c.actual,
+                    state = %c.actual_state,
+                    event = ?c.event,
+                    "the task changed state outside this run while it was being worked on → dropped this run's view of it; the next cycle follows the state DB"
+                );
+                self.forget_task(task_id);
+                Ok(())
+            }
+            Err(EngineError::Db(StateError::Transition(e))) if !cfg!(debug_assertions) => {
+                tracing::error!(
+                    task_id,
+                    from = %e.from,
+                    event = ?e.event,
+                    "illegal state transition in the engine (a bug) → isolated to this task; please report it"
+                );
+                self.forget_task(task_id);
+                Ok(())
+            }
+            other => other,
+        }
+    }
+
     /// Fail a task during dispatch: release its slot, record the reason,
     /// notify (F-90).
     ///
@@ -1297,6 +1373,9 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                         );
                         return Ok(());
                     }
+                    // The task moved after the `Fail` above (#763): it is not
+                    // ours to report as failed any more — the bulkhead's.
+                    Err(StateError::Conflict(c)) => return Err(EngineError::Conflict(c)),
                     // Requeueing is the optimisation, not the contract. If the
                     // DB refuses, fall through and fail the task as before
                     // rather than leaving it in `Failed` with nobody told.
@@ -1923,5 +2002,39 @@ mod tests {
             resolve_dispatch_target(&r, &s, streaming, 0),
             resolve_dispatch_target(&r, &s, streaming, 0)
         );
+    }
+
+    /// #763: the bulkhead takes what belongs to one task and nothing else. A
+    /// conflict frees the task's slot and is not an error; a DB failure still
+    /// is; an illegal transition stops a debug build (so tests catch the bug)
+    /// and is contained in a release build.
+    #[tokio::test]
+    async fn the_bulkhead_contains_only_what_belongs_to_one_task() {
+        let mut engine = crate::run::test_engine(std::time::Duration::from_secs(3600)).await;
+        assert!(engine.slots.acquire("web", "mock"));
+        engine
+            .slot_holders
+            .insert(7, ("web".to_string(), "mock".to_string()));
+        let conflict = TransitionConflict {
+            id: 7,
+            expected: 1,
+            actual: 2,
+            actual_state: TaskState::Cancelled,
+            event: TaskEvent::Fail,
+        };
+
+        engine
+            .isolate_task(7, Err(EngineError::Conflict(conflict)))
+            .expect("a conflict is the task's, not the run's");
+        assert!(engine.slot_holders.is_empty(), "the slot came back");
+        assert!(engine.slots.acquire("web", "mock"));
+
+        let db_failure = engine.isolate_task(7, Err(StateError::NotFound(7).into()));
+        assert!(matches!(db_failure, Err(EngineError::Db(_))));
+
+        let bug =
+            crate::domain::state::transition(TaskState::Cancelled, TaskEvent::Fail).unwrap_err();
+        let isolated = engine.isolate_task(7, Err(StateError::Transition(bug).into()));
+        assert_eq!(isolated.is_err(), cfg!(debug_assertions), "{isolated:?}");
     }
 }

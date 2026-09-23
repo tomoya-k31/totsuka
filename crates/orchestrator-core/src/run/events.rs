@@ -29,8 +29,10 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                         buf.push('\n');
                     }
                 }
-                self.apply_agent_state(task_id, &plugin, note.state, note.log_chunk)
-                    .await
+                let applied = self
+                    .apply_agent_state(task_id, &plugin, note.state, note.log_chunk)
+                    .await;
+                self.isolate_task(task_id, applied)
             }
             PluginEvent::Closed(plugin) => self.on_plugin_closed(&plugin).await,
             // A booked relaunch came due (#495, `run::supervise`).
