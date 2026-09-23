@@ -14,8 +14,11 @@ pub enum EngineError {
     #[error(transparent)]
     Db(StateError),
     /// The task moved while the engine was working on it (#763). Never leaves
-    /// the run: the per-task boundary (`Engine::isolate_task`) takes it, so
-    /// only [`Db`](Self::Db) is fatal.
+    /// the run loop: the per-task boundary (`Engine::isolate_task`) takes it,
+    /// so there only [`Db`](Self::Db) is fatal. Startup recovery
+    /// ([`Engine::recover`]) runs before that loop and outside the boundary,
+    /// so it can still return one — as it returned the illegal transition the
+    /// same race produced before #763.
     #[error(transparent)]
     Conflict(TransitionConflict),
 }
