@@ -11,6 +11,17 @@ Note: the plugin protocol is versioned independently of the application (see
 `crates/plugin-protocol`); a totsuka release does not imply a protocol-version
 change.
 
+## [0.9.0](https://github.com/tomoya-k31/totsuka/compare/v0.8.5...v0.9.0) (2026-09-23)
+
+
+### ⚠ BREAKING CHANGES
+
+* **logging:** [plugins.<name>] log_level を削除した。書いてある設定は起動時にエラーになる。
+
+### Refactors
+
+* **logging:** プラグインのログを元のレベルのまま中継し、表示時刻をローカルにする ([#778](https://github.com/tomoya-k31/totsuka/issues/778)) ([86e4be7](https://github.com/tomoya-k31/totsuka/commit/86e4be7ccb4ac7ea61dcf9c82a629b15d858bc4a))
+
 ## [0.8.5](https://github.com/tomoya-k31/totsuka/compare/v0.8.4...v0.8.5) (2026-09-23)
 
 
