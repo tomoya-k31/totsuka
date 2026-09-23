@@ -530,11 +530,12 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// The same rules as `totsuka task cancel` / `retry` writing the DB
     /// directly ([`task_control`](crate::task_control)), applied inside the
     /// loop so what this run holds for the task moves with its state: an
-    /// applied cancel frees the task's slot, its session routes and its
-    /// per-run memos now, rather than whenever a cycle's
-    /// `release_slots_of_settled_tasks` gets to it. A retry needs nothing extra — the loop runs `dispatch_ready`
-    /// right after every event, and a previous dispatch's pane is released
-    /// by the dispatcher itself (#481).
+    /// applied cancel frees the task's slot and its session routes now,
+    /// rather than whenever a cycle's `release_slots_of_settled_tasks` gets to
+    /// it, and either operation clears the ended run's per-run memos. Nothing
+    /// else is owed to a retry: the loop runs `dispatch_ready` right after
+    /// every event, and a previous dispatch's pane is released by the
+    /// dispatcher itself (#481).
     ///
     /// The pane is **not** closed on cancel: its lifetime follows the
     /// worktree's cleanup policy, not the task's state (F-107, ADR-0010).
