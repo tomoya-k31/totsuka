@@ -1,7 +1,7 @@
 > 🌐 [English](orchestrator-spec.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/product/orchestrator-spec.ja.md sha256:d92e0427e577bf71b55f842c689398306cf2d1152d7641b3f14926647086b994 -->
+<!-- generated-from: ai-docs/product/orchestrator-spec.ja.md sha256:29391adfec4278db67986680b46e92f0ed343a770769a165e81a9b6c97d16b35 -->
 
 # totsuka とは
 
@@ -113,6 +113,16 @@ totsuka run --json | jq -e '.stats.failed == 0'
 ```
 
 ドキュメントの内容は `stats`（`submitted` / `dispatched` / `done` / `failed` / `skipped`）、残ったタスク id の `waiting` / `pending` / `queued`、そして `interrupted`。**終了コードはこれに追随しない** — 失敗したタスクを正しく記録した実行も 0 で終わるので、判定はドキュメントから行うこと。`--json` は `--dry-run` とは併用できない（プレビューする対象が無いため）。
+
+終了コードが教えてくれるのは、`run` が起動できなかった理由のほうである。`run` を監視して再起動する仕組みを組むときに使う:
+
+| 終了コード | 意味 | 再起動するか |
+|---|---|---|
+| 1 | それ以外の失敗 | する |
+| 4 | 人が直すまで直らない起動時の失敗: config、機密参照、`env_file`、プラグインが入っていない・版が合わない、プラグインが config を拒否した | しない（直すまで同じところで落ちる） |
+| 5 | 別の `totsuka run` が既に動いている | しない |
+
+理由は stderr に出る。`--json` を付けたときは、いつもの `{"error":{"message","action"}}` の 1 行になる。
 
 `task export` は監査ログ — 各タスクがたどった全状態遷移 — を NDJSON で標準出力へ流す。1 行 1 イベント、古い順:
 

@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:0cce1e8ac9efd0aecbdc7a25cf384d84ba48a286ad3e41a919a8d6b425b6ea12 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:d3f88264598b2f0cc2808f64b1c2fa3ed6676e0e89adf350bcc77904e5a85e64 -->
 
 # 設定リファレンス
 
@@ -68,7 +68,7 @@ cmd:bw get item totsuka-slack | jq -r '.fields[]|select(.name=="api_token").valu
 
 現行のスキーマは **v1** で、一度も上がっていない。
 
-`version` が一致しない `config.toml` は起動時の検証で拒否され、**totsuka が設定を書き換えることはない**。`config validate` / `run` / `doctor` は同じ検証を共有するので 3 つとも同じ不一致に気づくが、扱いは異なる。`config validate` と `run` はエラーで停止し、`doctor` は `config` チェックの失敗として報告したうえで他のチェックを続行する。
+`version` が一致しない `config.toml` は起動時の検証で拒否され、**totsuka が設定を書き換えることはない**。`config validate` / `run` / `doctor` は同じ検証を共有するので 3 つとも同じ不一致に気づくが、扱いは異なる。`config validate` と `run` はエラーで停止し（`config validate` は exit 1、`run` は人が直すまで直らない起動時の失敗を表す exit 4）、`doctor` は `config` チェックの失敗として報告したうえで他のチェックを続行する。
 
 案内は、どちらが遅れているかで逆になる。
 

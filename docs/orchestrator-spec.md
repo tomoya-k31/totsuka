@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](orchestrator-spec.ja.md)
 
-<!-- generated-from: ai-docs/product/orchestrator-spec.md sha256:8029d74a3277e4d2055cdaa5b4b6a7fedd0d54338d8418f61892870a1c416486 -->
+<!-- generated-from: ai-docs/product/orchestrator-spec.md sha256:c7f949cf69c3f63b5b54c13f6c9ebd473aecf59efa89a303a3cb09862c3d76ae -->
 
 # What totsuka is
 
@@ -112,6 +112,16 @@ totsuka run --json | jq -e '.stats.failed == 0'
 ```
 
 The document has `stats` (`submitted` / `dispatched` / `done` / `failed` / `skipped`), the task ids left in `waiting`, `pending`, and `queued`, and `interrupted`. **The exit code does not follow it** — a run that correctly recorded a failing task still exits 0, so decide from the document. `--json` cannot be combined with `--dry-run`, which has nothing to preview.
+
+What the exit code does tell you is why `run` could not start. That matters when something supervises `run` and restarts it:
+
+| Exit code | Meaning | Restart? |
+|---|---|---|
+| 1 | Any other failure | Yes |
+| 4 | A startup failure only a person can fix: the config, a secret reference, an `env_file`, a plugin that is not installed or is incompatible, or a plugin that rejects its config | No — it fails the same way until fixed |
+| 5 | Another `totsuka run` is already running | No |
+
+The reason is on stderr, as the usual `{"error":{"message","action"}}` line when `--json` is given.
 
 `task export` writes the audit log — every state change every task has been through — to stdout as NDJSON, one event per line, oldest first:
 

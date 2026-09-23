@@ -11,7 +11,7 @@ use std::time::Duration;
 use orchestrator_core::adapters::git::{DEFAULT_GIT_TIMEOUT, SystemGitRunner};
 use orchestrator_core::adapters::llm::gateway_classifier;
 use orchestrator_core::adapters::plugin_host::Plugin;
-use orchestrator_core::adapters::{RunLock, StateDb};
+use orchestrator_core::adapters::{HostError, LockError, RunLock, StateDb};
 use orchestrator_core::config::{self, PluginKind, RootConfig, secret_resolver};
 use orchestrator_core::logging::{self, LogConfig};
 use orchestrator_core::platform::PlatformProcessProbe;
@@ -19,7 +19,7 @@ use orchestrator_core::plugins::{check_workflow_options, plugin_spec};
 use orchestrator_core::ports::SecretString;
 use orchestrator_core::run::{Engine, HookRuntime, PluginSet, RunSummary, settings_from_config};
 
-use crate::common::{CliError, Cx, print_json};
+use crate::common::{CliError, Cx, EXIT_ALREADY_RUNNING, EXIT_CONFIG, ExitWith, print_json};
 
 /// Grace period for plugin shutdown at the end of a run.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
@@ -60,13 +60,13 @@ async fn run_async(cx: &Cx, args: RunArgs) -> Result<(), CliError> {
 
     // Config load (incl. `TOTSUKA_*` overrides, F-66 layer 2) + full
     // validation (static + workflow semantics).
-    let cfg = cx.load_config(&env)?;
+    let cfg = cx.load_config(&env).map_err(needs_fix)?;
     let findings = cx.validate_config(&cfg, &env);
     if config::has_errors(&findings) {
         for finding in &findings {
             eprintln!("config error: {}", finding.message);
         }
-        return Err("configuration is invalid → fix the errors above".into());
+        return Err(needs_fix("configuration is invalid → fix the errors above"));
     }
     for finding in &findings {
         eprintln!("config warning: {}", finding.message);
@@ -93,10 +93,18 @@ async fn run_async(cx: &Cx, args: RunArgs) -> Result<(), CliError> {
     let _lock = if dry_run {
         None
     } else {
-        Some(RunLock::acquire(
-            &paths.state_dir().join("run.lock"),
-            &PlatformProcessProbe::default(),
-        )?)
+        Some(
+            RunLock::acquire(
+                &paths.state_dir().join("run.lock"),
+                &PlatformProcessProbe::default(),
+            )
+            .map_err(|e| match e {
+                LockError::AlreadyRunning { .. } => {
+                    ExitWith::new(EXIT_ALREADY_RUNNING, e.to_string()).into()
+                }
+                LockError::Io(_) => CliError::from(e),
+            })?,
+        )
     };
 
     // Stop requests (#753), installed right after the lock rather than where
@@ -132,7 +140,8 @@ async fn run_async(cx: &Cx, args: RunArgs) -> Result<(), CliError> {
     let tool_env = if dry_run {
         Default::default()
     } else {
-        config::env_file::resolve_tool_env(&cfg.tools, &env_fn, &secret_resolver(&env))?
+        config::env_file::resolve_tool_env(&cfg.tools, &env_fn, &secret_resolver(&env))
+            .map_err(needs_fix)?
     };
 
     let db = StateDb::open(&paths.state_dir().join("state.db"))?;
@@ -142,7 +151,9 @@ async fn run_async(cx: &Cx, args: RunArgs) -> Result<(), CliError> {
     let llm = match &cfg.llm {
         Some(llm_cfg) => {
             let api_key = match &llm_cfg.api_key_ref {
-                Some(reference) => secret_resolver(&env).resolve(reference)?,
+                Some(reference) => secret_resolver(&env)
+                    .resolve(reference)
+                    .map_err(needs_fix)?,
                 None => SecretString::new(""),
             };
             Some(gateway_classifier(llm_cfg, api_key))
@@ -150,7 +161,7 @@ async fn run_async(cx: &Cx, args: RunArgs) -> Result<(), CliError> {
         None => None,
     };
 
-    let mut settings = settings_from_config(&cfg, &env, paths)?;
+    let mut settings = settings_from_config(&cfg, &env, paths).map_err(needs_fix)?;
     settings.readme_cache_dir = Some(paths.cache_dir().to_path_buf());
     settings.tool_env = tool_env;
     // CLI flags are layer 1 of the precedence stack (see config/env_overrides),
@@ -166,7 +177,7 @@ async fn run_async(cx: &Cx, args: RunArgs) -> Result<(), CliError> {
     // config with no hook-capable agent simply never receives a POST.
     if !dry_run {
         let socket_path = match &cfg.hooks.socket_path {
-            Some(p) => config::expand_path(p, &env_fn)?,
+            Some(p) => config::expand_path(p, &env_fn).map_err(needs_fix)?,
             None => paths.runtime_dir().join("agent-events.sock"),
         };
         // The default socket was `claude-events.sock` before the #196 rename;
@@ -176,7 +187,11 @@ async fn run_async(cx: &Cx, args: RunArgs) -> Result<(), CliError> {
             let _ = std::fs::remove_file(&legacy_socket);
         }
         let auth_token = match &cfg.hooks.auth_token_ref {
-            Some(reference) => Some(secret_resolver(&env).resolve(reference)?),
+            Some(reference) => Some(
+                secret_resolver(&env)
+                    .resolve(reference)
+                    .map_err(needs_fix)?,
+            ),
             None => {
                 eprintln!(
                     "hook auth token not configured ([hooks].auth_token_ref) → hook POSTs are accepted without a Bearer token (0600 socket only)"
@@ -185,7 +200,7 @@ async fn run_async(cx: &Cx, args: RunArgs) -> Result<(), CliError> {
             }
         };
         let spool_dir = Some(match &cfg.hooks.spool_dir {
-            Some(p) => config::expand_path(p, &env_fn)?,
+            Some(p) => config::expand_path(p, &env_fn).map_err(needs_fix)?,
             None => paths.state_dir().join("hooks").join("spool"),
         });
         let settings_paths = cfg
@@ -298,12 +313,12 @@ async fn launch_plugins(
     let mut claims: BTreeMap<String, Vec<plugin_protocol::methods::WorkflowOption>> =
         BTreeMap::new();
     for (name, plugin_cfg) in cfg.plugins.iter().filter(|(_, p)| p.enabled) {
-        let spec = plugin_spec(&cx.store(), cfg, name, env)?;
+        let spec = plugin_spec(&cx.store(), cfg, name, env).map_err(needs_fix)?;
         // Keep the spec: it is everything a relaunch needs (#495), and
         // re-deriving it later would re-resolve the plugin's secrets — a
         // Keychain/1Password round trip per crash, on the engine loop.
         set.specs.insert(name.clone(), spec.clone());
-        let plugin = Plugin::launch(spec).await?;
+        let plugin = Plugin::launch(spec).await.map_err(launch_error)?;
         claims.insert(name.clone(), plugin.claimed_options().to_vec());
         match plugin_cfg.kind {
             PluginKind::TaskSource => set.sources.insert(name.clone(), plugin),
@@ -324,11 +339,37 @@ async fn launch_plugins(
             .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join("\n  ");
-        return Err(CliError::from(format!(
+        return Err(needs_fix(format!(
             "config.toml has workflow keys no plugin owns:\n  {listed}"
         )));
     }
     Ok(set)
+}
+
+/// A startup failure a restart cannot fix: config, a secret reference, a
+/// plugin's install (#755). Exits [`EXIT_CONFIG`] so a supervisor stops
+/// instead of looping. Applied per call site, not by error type in `main`:
+/// the same types (`SecretError`, …) also occur after startup, where a
+/// restart may well help.
+fn needs_fix(err: impl std::fmt::Display) -> CliError {
+    ExitWith::new(EXIT_CONFIG, err.to_string()).into()
+}
+
+/// Classify a failed plugin launch (#755). An incompatible protocol, a binary
+/// that is missing or not executable, and a plugin rejecting its own config
+/// (`CONFIG_INVALID`) all need a person; anything else (a crash or timeout
+/// during `initialize`, other spawn IO) stays the generic exit 1.
+fn launch_error(err: HostError) -> CliError {
+    let fixable = match &err {
+        HostError::ProtocolMismatch { .. } => true,
+        HostError::Spawn { source, .. } => matches!(
+            source.kind(),
+            std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied
+        ),
+        HostError::Rpc { code, .. } => *code == plugin_protocol::error_code::CONFIG_INVALID,
+        _ => false,
+    };
+    if fixable { needs_fix(err) } else { err.into() }
 }
 
 /// Print the one-shot / watch exit summary (§5.1).

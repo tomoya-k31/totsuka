@@ -2,6 +2,10 @@
 
 ## 2026-09-23
 
+* **Creation**: [ADR-0095](/decisions/adr-0095-run-startup-exit-codes.md) — `run` の起動時エラーに専用の exit code を割り当てた。人が直すまで再起動しても直らない失敗（config・機密参照・`env_file`・プラグインの導入不備と `CONFIG_INVALID`）は 4、lock の競合は 5、それ以外は従来どおり 1。ネイティブアプリの監視が設定ミスで再起動ループしないようにするため
+* **Update**: [ADR-0012](/decisions/adr-0012-cli-exit-codes-json-errors.md) / [orchestrator-cli](/components/orchestrator-cli.md) — exit code の表に 4 / 5 を足した
+* **Update**: [orchestrator-spec](/product/orchestrator-spec.md) / [ja](/product/orchestrator-spec.ja.md) — `run` の終了コードの記述に 4 / 5 を足した
+* **Update**: [設定リファレンス](/development/config-reference.md) — スキーマ版の不一致で `run` が止まるときの終了コードを 1 から 4 に直した
 * **Creation**: [ADR-0094](/decisions/adr-0094-task-control-endpoints.md) — `task cancel` / `retry` を実行中の Engine へ届ける制御ルート（`POST /task/cancel`・`/task/retry`）を hook UDS に足した（#760）。Engine が run ループの中で遷移とスロット等の解放を行う。cancel で pane は閉じない。DB 直接書き込みはフォールバックとして残す
 * **Update**: [エージェントイベント](/apis/agent-events.md) / [claude-events（旧名）](/apis/claude-events.md) — 制御パスが 3 本になった。新ルートの契約を追記した
 * **Update**: [orchestrator-core](/components/orchestrator-core.md) — `task_control` モジュールを追加し、`FocusPort` を `ControlPort` に改名・拡張した
