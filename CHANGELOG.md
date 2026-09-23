@@ -11,6 +11,22 @@ Note: the plugin protocol is versioned independently of the application (see
 `crates/plugin-protocol`); a totsuka release does not imply a protocol-version
 change.
 
+## [0.8.5](https://github.com/tomoya-k31/totsuka/compare/v0.8.4...v0.8.5) (2026-09-23)
+
+
+### Features
+
+* **cli:** run の起動時の設定・機密情報エラーを exit 4、lock 競合を exit 5 にする ([#775](https://github.com/tomoya-k31/totsuka/issues/775)) ([570fdd8](https://github.com/tomoya-k31/totsuka/commit/570fdd8d836b2d98cc2b99f42d740103ce3c8f00))
+* **core:** task cancel / retry を実行中の Engine へ届ける制御ルートを hook UDS に足す ([#776](https://github.com/tomoya-k31/totsuka/issues/776)) ([0298681](https://github.com/tomoya-k31/totsuka/commit/0298681aa004f5a105092145f9c7a31aa2840e3e)), closes [#760](https://github.com/tomoya-k31/totsuka/issues/760)
+* **core:** 人間待ちのタスクもスロットを保持し、max_concurrency が同時に開くタスク数を縛るようにする ([#771](https://github.com/tomoya-k31/totsuka/issues/771)) ([9ea3a3c](https://github.com/tomoya-k31/totsuka/commit/9ea3a3c4c5ee5570d1407289d00bfd3dce2b99b9))
+
+
+### Bug Fixes
+
+* **cli:** totsuka run を SIGTERM / SIGHUP でも graceful shutdown させる ([#777](https://github.com/tomoya-k31/totsuka/issues/777)) ([af75b54](https://github.com/tomoya-k31/totsuka/commit/af75b5464ccf5f05a7407b2b3f509c4897fad4c9))
+* **orca:** deadman は terminal show で終了を確かめたときだけ failed にする ([#774](https://github.com/tomoya-k31/totsuka/issues/774)) ([8fde2eb](https://github.com/tomoya-k31/totsuka/commit/8fde2eb77e120ec4b4f69c10c6eff0210430bb76))
+* **orca:** スリープをまたいだ Orca の応答失敗で、生きているエージェントを failed にしない ([#773](https://github.com/tomoya-k31/totsuka/issues/773)) ([23c345b](https://github.com/tomoya-k31/totsuka/commit/23c345b78bc22b2203eb60a0432cd909fdbed9e4))
+
 ## [0.8.4](https://github.com/tomoya-k31/totsuka/compare/v0.8.3...v0.8.4) (2026-09-22)
 
 
