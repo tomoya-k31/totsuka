@@ -4,7 +4,7 @@ title: プラグイン開発ガイド
 description: totsuka プラグインの作り方。plugin-protocol クレートの型、JSON-RPC(NDJSON/stdio) メソッド、plugin.toml マニフェスト、capability 宣言、開発ループ（plugin install --from-source）とビルド手順（bin 名 = plugin.toml の name という不変条件）、install/enable の流れ、参照実装。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/plugin-protocol
 tags: [plugin, protocol, json-rpc, manifest, guide]
-generated: { by: claude-code/opus-5, at: 2026-09-23T12:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-24T12:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -108,14 +108,28 @@ Orchestrator は起動前に `protocol_version` の互換性を検査し（F-54�
 
 # ログと stderr（#497）
 
-プラグインの **stderr は Orchestrator のログへ素通しで入る**（`plugin=<name>` 付きの `info`）。
-デバッグには便利だが、**秘密を書かないのはプラグイン作者の責務である** — Orchestrator は
-プラグインが何を秘密と考えているか知らないので正しく伏せられず、プラグイン側からは
-Orchestrator の redaction 層に手が届かない。
+プラグインのログは **stderr に書く**（stdout は JSON-RPC 専用）。Orchestrator はそれを 1 行ずつ
+読み、**プラグインのレベル・target・フィールドのまま**自分のログに出し直す（`plugin=<name>` 付き、
+[ADR-0096](/decisions/adr-0096-plugin-log-relay.md)）。
+
+- **SDK を使うなら何もしなくてよい。** `main` の最初で `plugin_sdk::runtime::init_tracing()` を
+  呼べば、stderr がパイプのとき（Orchestrator の下）は全レベルの JSON Lines を書く。
+  端末のとき（手で動かしたとき）は人間向けの表示で、`RUST_LOG`（既定 `info`）に従う。
+- **レベルの判定は Orchestrator の `[log] level` だけで行う。** プラグイン側で絞らない。
+  プラグインの debug を見たいときは `[log] level = "debug"`（または `--debug`）にする。
+- **SDK を使わない場合**は、1 行 1 オブジェクトで `level`（`ERROR`〜`TRACE`）/ `target` /
+  `message` と任意のフィールドを書けば同じように扱われる。それ以外の行は `INFO` として
+  そのまま中継され、`thread '…' panicked at` の行と、それに続く JSON でない行は `ERROR` になる（SDK の行は panic の後でも自分のレベルのまま）。
+
+フィールドは 1 つずつ Orchestrator の redaction 層を通るので、`api_token` のような名前の
+フィールドは `***` に伏せられる。ただし **message に埋め込んだ秘密は値のパターン
+（`Bearer …` / `ghp_…` など）に当たるものしか伏せられない** — Orchestrator はプラグインが何を
+秘密と考えているか知らないので、秘密を書かないのはプラグイン作者の責務である。
 
 転送は **10 秒あたり 100 行**にレート制限され、超過分は「N 行抑制」の 1 行に畳まれる。
 失敗ループに入ったプラグインが読む側より速く stderr を吐き、運用者のログを埋めるのを
-防ぐためで、抑制した行数自体は報告されるので**うるささが数字として残る**。
+防ぐためで、抑制した行数自体は報告されるので**うるささが数字として残る**。数えるのは
+`[log] level` を通った行だけで、捨てられる debug が枠を食うことはない。
 
 O→P 呼び出しは Orchestrator 側でメソッド別に会計されており、`totsuka run --json` の
 `plugins` に呼び出し数・outcome 別の内訳・直近サンプルの p50/p95 が出る。プラグインが

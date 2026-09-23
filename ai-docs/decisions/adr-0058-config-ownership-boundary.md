@@ -4,7 +4,7 @@ title: ADR-0058 設定の所有はファイル位置ではなく宣言で切り�
 description: "プラグイン固有の設定項目の定義と検証をプラグインへ委譲するための設計。plugins/{name}.toml を廃止して config.toml のトップレベル [<name>] へ移し、[[workflows]] の追加キーはフラットに書いて source と agent の両方へ送り「ちょうど 1 つが引き取る」を規則にする。ワークフロー選択はプラグインが task/submit で名指しし、core の予約 trigger 語彙（reaction / project_status / label）を撤廃する（このうち status は ADR-0062 で core 所有へ戻した）。repo→トラッカーの紐付けは [[projects]] と [[repositories]].project へ移し ADR-0056 を置き換える。manifest への静的スキーマ宣言・名前空間つきの記法・互換のための二重読みは不採用。"
 resource: https://github.com/tomoya-k31/totsuka/issues/554
 tags: [decision, config, protocol, plugin, workflow, projects, adr]
-generated: { by: claude-code/opus-5, at: 2026-08-27T04:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-24T10:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -110,6 +110,8 @@ error: unknown top-level table `worktre` → …
 ### `poll_interval_secs` も `[<name>]` へ
 
 `[plugins.{name}].poll_interval_secs` は背景の表のとおり core が使わず転送するだけだったので、各ソースの `[<name>]` のキーにし、`InitializeParams.poll_interval_secs` を削除した。値は `initialize.config` の中で届き、`0` を busy-spin に倒さないガードは元からプラグイン側にあってそのまま残る。ロスターの `[plugins.{name}]` に残るのは core がその値で何かを決めるキーだけ（`enabled` / `kind` / `max_concurrency` / `timeout_secs` / `log_level` / `restart`）である。
+
+> 追記（[ADR-0096](/decisions/adr-0096-plugin-log-relay.md)）: `log_level` は実際にはどこからも読まれておらず、この一覧に入れたのは誤りだった。ADR-0096 で削除した。
 
 ## 2. core 構造体の中のプラグイン固有キーは「フラット + 引き取り規則」
 

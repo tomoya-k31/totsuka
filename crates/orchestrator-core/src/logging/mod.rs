@@ -28,7 +28,10 @@ use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::layer::{Layer, SubscriberExt};
 use tracing_subscriber::util::SubscriberInitExt;
 
-pub use layer::{LogFormat, RedactingLayer};
+/// Re-exported so callers of [`local_offset`] / [`rfc3339_at`] need no `time` dependency.
+pub use time::UtcOffset;
+
+pub use layer::{LogFormat, PLUGIN_FIELDS_FIELD, PLUGIN_TARGET_FIELD, RedactingLayer};
 
 /// Default number of daily log files to keep.
 pub const DEFAULT_MAX_FILES: usize = 7;
@@ -148,6 +151,29 @@ pub fn parse_level(name: &str) -> Option<Level> {
     }
 }
 
+/// The machine's UTC offset (honours `TZ`), for human-facing timestamps only
+/// — the log file stays UTC (ADR-0097). Falls back to UTC when unknown.
+///
+/// Read **once**: `time` refuses to read it on Unix once the process has more
+/// than one thread (`localtime_r` races `setenv`), so the CLI calls this first
+/// thing in `main`, before the runtime starts, and every later call returns
+/// the cached value. The ceiling: a long `run` keeps the offset it started
+/// with across a daylight-saving switch, until it is restarted.
+pub fn local_offset() -> time::UtcOffset {
+    static OFFSET: std::sync::OnceLock<time::UtcOffset> = std::sync::OnceLock::new();
+    *OFFSET.get_or_init(|| time::UtcOffset::current_local_offset().unwrap_or(time::UtcOffset::UTC))
+}
+
+/// Re-render an RFC 3339 timestamp at `offset`; `None` if it does not parse.
+pub fn rfc3339_at(timestamp: &str, offset: time::UtcOffset) -> Option<String> {
+    use time::format_description::well_known::Rfc3339;
+    time::OffsetDateTime::parse(timestamp, &Rfc3339)
+        .ok()?
+        .to_offset(offset)
+        .format(&Rfc3339)
+        .ok()
+}
+
 /// Convenience: the default log directory under a state directory.
 pub fn default_log_dir(state_dir: &Path) -> PathBuf {
     state_dir.join("logs")
@@ -156,6 +182,16 @@ pub fn default_log_dir(state_dir: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rfc3339_at_shifts_the_offset_not_the_instant() {
+        let jst = time::UtcOffset::from_hms(9, 0, 0).unwrap();
+        assert_eq!(
+            rfc3339_at("2026-09-23T14:36:24.355929Z", jst).as_deref(),
+            Some("2026-09-23T23:36:24.355929+09:00")
+        );
+        assert_eq!(rfc3339_at("-", jst), None);
+    }
 
     #[test]
     fn parses_levels_case_insensitively() {

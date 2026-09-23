@@ -108,7 +108,6 @@
 # kind = "task_source"                      # "task_source" / "agent_ide" / "notifier"
 # max_concurrency = 3                       # per-plugin cap (agent plugins)
 # timeout_secs = 120                        # RPC timeout
-# log_level = "info"                        # this plugin's log level
 # restart = true                            # restart on crash: 5 tries / 5 min sliding window,
 #                                           #   exponential backoff. `false` still detects and
 #                                           #   escalates; only the restart stops

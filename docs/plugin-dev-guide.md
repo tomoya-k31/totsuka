@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](plugin-dev-guide.ja.md)
 
-<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:9d4aeceb8473a8eb3731589da010cb4083ced8a6f20853b124757c6e70c50658 -->
+<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:606f1569b20fa112340bf0089a9a4d4ca3d8e6256da1ad7a77f6b553e9cbc19f -->
 
 # Plugin development guide
 
@@ -124,16 +124,34 @@ Transport-level errors (`NOT_ACCEPTING`, `SUBMIT_OVERLOADED`, `INTERNAL_ERROR`) 
 
 ## Logging and stderr
 
-**Your plugin's stderr goes straight into the orchestrator's log**, tagged with your
-plugin name. That is handy while debugging, but **keeping secrets out of it is your
-job** — the orchestrator does not know what your plugin considers secret, so it
-cannot redact it for you, and your plugin has no access to its redaction layer.
+Write your logs to **stderr** — stdout is reserved for JSON-RPC. The orchestrator reads
+them line by line and re-emits each one in its own log **with your level, target and
+fields intact**, tagged with your plugin name.
+
+- **With the SDK there is nothing to do.** Call `plugin_sdk::runtime::init_tracing()`
+  first thing in `main`. When stderr is a pipe (running under the orchestrator) it
+  writes JSON Lines at every level; when stderr is a terminal (running it by hand) it
+  prints human-readable lines and honours `RUST_LOG` (default `info`).
+- **Levels are filtered only by the orchestrator's `[log] level`.** Do not filter in
+  the plugin. To see your plugin's debug output, set `[log] level = "debug"` (or pass
+  `--debug`).
+- **Without the SDK**, write one JSON object per line with `level` (`ERROR` to
+  `TRACE`), `target`, `message` and any fields, and it is handled the same way. Any
+  other line is forwarded verbatim as `INFO`; a `thread '…' panicked at` line and
+  the non-JSON lines following it become `ERROR` (SDK lines keep their own level
+  even after a panic).
+
+Each field passes through the orchestrator's redaction on its own, so a field named
+like `api_token` is masked as `***`. **A secret embedded in the message is only masked
+if it matches a known token shape** (`Bearer …`, `ghp_…`, and so on) — the orchestrator
+does not know what your plugin considers secret, so keeping secrets out is your job.
 
 Forwarding is rate-limited to **100 lines per 10 seconds**; anything beyond that is
 collapsed into a single "suppressed N lines" warning. A plugin stuck in a failure
 loop can emit stderr faster than anything reads it, and the cap keeps it from burying
 everything else. The suppressed count is still reported, so the noise stays visible
-as a number.
+as a number. Only lines that pass `[log] level` count, so debug output that is
+discarded anyway never uses up the budget.
 
 Calls the orchestrator makes to your plugin are timed and counted per method on its
 side. `totsuka run --json` reports them under `plugins`, with call counts, a

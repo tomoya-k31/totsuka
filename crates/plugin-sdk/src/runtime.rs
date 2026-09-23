@@ -18,24 +18,20 @@ use crate::dispatch::Reply;
 use crate::lookup::LookupClient;
 use crate::submit::SubmitClient;
 
-/// Install the plugin's tracing subscriber on **stderr**, honouring
-/// `RUST_LOG` and colouring only for a human.
+/// Install the plugin's tracing subscriber on **stderr** (stdout is the
+/// JSON-RPC channel).
 ///
-/// Every plugin used to write this by hand as
-/// `tracing_subscriber::fmt().with_writer(stderr).init()`, and that spelling
-/// is wrong in two ways that are silent:
+/// Two shapes, chosen by who is reading (ADR-0096):
 ///
-/// - **`RUST_LOG` was ignored.** The *free function* `fmt::init()` installs an
-///   `EnvFilter` for you; the **builder** does not — its `.init()` uses the
-///   builder's default filter, which is INFO, unless you hand it one (which
-///   is what this function now does). So `RUST_LOG=my_plugin=debug` produced
-///   no error, no warning, and no debug output — the flag looked accepted and
-///   did nothing. Every `debug!` in every plugin was unreachable.
-/// - **ANSI was always on.** The host captures this stderr through a pipe and
-///   re-emits each line as a JSON log record, so the escape sequences were
-///   embedded verbatim and reached the log file as `\u001b[2m…`, which is
-///   unreadable at exactly the moment someone is reading logs to debug
-///   something. `fmt` does no terminal detection of its own.
+/// - **Under the host (stderr is a pipe): JSON Lines at every level.** The
+///   host parses each line back into a record and re-emits it at the
+///   plugin's own level and target, with its fields intact, then filters it
+///   against `[log] level`. The host is the **only** filter: a threshold
+///   here would be a second, independently configured one, and that is how
+///   a plugin's `WARN` used to vanish under a host at `warn` — it arrived
+///   relabelled `INFO`. So `RUST_LOG` is deliberately not read here.
+/// - **By hand (stderr is a terminal): human-readable, `RUST_LOG` honoured**
+///   (default `info`), coloured.
 ///
 /// Call this once, first thing in `main`. A second call is a no-op rather
 /// than a panic: `init()` aborts the process when a global subscriber already
@@ -45,16 +41,30 @@ use crate::submit::SubmitClient;
 /// reach this arm is that a subscriber is already installed and doing the job.
 pub fn init_tracing() {
     use std::io::IsTerminal;
+    use tracing_subscriber::EnvFilter;
+    use tracing_subscriber::filter::LevelFilter;
 
-    let _ = tracing_subscriber::fmt()
-        // stderr so logs never corrupt the stdout JSON-RPC channel.
-        .with_writer(std::io::stderr)
-        .with_ansi(std::io::stderr().is_terminal())
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .try_init();
+    if std::io::stderr().is_terminal() {
+        let _ = tracing_subscriber::fmt()
+            .with_writer(std::io::stderr)
+            // The builder installs no `EnvFilter` of its own — without this
+            // `RUST_LOG` is silently ignored and every `debug!` unreachable.
+            .with_env_filter(
+                EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+            )
+            .try_init();
+    } else {
+        let _ = tracing_subscriber::fmt()
+            .with_writer(std::io::stderr)
+            .json()
+            // Fields at the top level next to `message`, which is the shape
+            // the host reads; no span keys, since no plugin opens spans.
+            .flatten_event(true)
+            .with_current_span(false)
+            .with_span_list(false)
+            .with_max_level(LevelFilter::TRACE)
+            .try_init();
+    }
 }
 
 /// A clonable handle onto the shared writer task; each `send` is one NDJSON

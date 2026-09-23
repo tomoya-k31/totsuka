@@ -145,6 +145,9 @@ enum Command {
         /// Only show lines for one task id.
         #[arg(long, value_name = "ID")]
         task: Option<i64>,
+        /// Show timestamps in UTC, as stored, instead of local time.
+        #[arg(long)]
+        utc: bool,
     },
     /// Diagnose the environment (git, config, plugins, orphan worktrees).
     Doctor {
@@ -171,6 +174,8 @@ enum Command {
 }
 
 fn main() -> std::process::ExitCode {
+    // Before any thread exists: the offset cannot be read after (ADR-0097).
+    orchestrator_core::logging::local_offset();
     let cli = Cli::parse();
     // No subcommand is a usage error: exit code 2 (clap's convention, which the
     // rest of the CLI shares) so scripts can tell it apart from a runtime
@@ -305,7 +310,7 @@ fn execute(
         Command::Focus { id } => focus_cmd::run(&cx, id),
         Command::Plugin { cmd } => plugin_cmd::run(&cx, cmd),
         Command::Config { cmd } => config_cmd::run(&cx, cmd),
-        Command::Logs { follow, task } => logs_cmd::run(&cx, follow, task),
+        Command::Logs { follow, task, utc } => logs_cmd::run(&cx, follow, task, utc),
         Command::Doctor {
             json,
             online,

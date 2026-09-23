@@ -953,23 +953,35 @@ const STDERR_LINES_PER_WINDOW: usize = 100;
 /// The window [`STDERR_LINES_PER_WINDOW`] is measured over.
 const STDERR_WINDOW: Duration = Duration::from_secs(10);
 
-/// Forward plugin stderr lines into the Orchestrator log (F-38 adjacent),
-/// rate-limited (#497).
+/// Forward plugin stderr into the Orchestrator log (F-38 adjacent) as
+/// records at the plugin's **own** level (ADR-0096), rate-limited (#497).
+///
+/// The SDK writes JSON Lines at every level (`plugin_sdk::runtime::init_tracing`);
+/// each line is read back and re-emitted with its level, target and fields,
+/// so the host's `[log] level` is the one filter a plugin's log passes
+/// through. A line that is not SDK JSON — a plugin without the SDK, or a
+/// panic from the runtime — is logged as `INFO`, and everything from a
+/// `panicked at` line on as `ERROR` — the untagged lines after it, that is;
+/// an SDK line still carries its own level.
 ///
 /// A plugin in a tight failure loop can emit stderr faster than anything reads
-/// it, and every line lands in the operator's log verbatim. The cap keeps a
-/// noisy plugin from burying everything else; the suppressed count is still
-/// reported, so the noise itself stays visible as a number.
+/// it. The cap keeps a noisy plugin from burying everything else; the
+/// suppressed count is still reported, so the noise itself stays visible as a
+/// number. It counts only lines that **pass** the level filter: counting the
+/// `DEBUG` flood a host at `info` throws away anyway would let it push the
+/// `WARN` next to it out of the window.
 ///
-/// **The content is not redacted, and cannot be.** The host does not know what
-/// a plugin considers secret, and plugins cannot reach the redaction layer.
-/// That is documented in the plugin guide as the author's responsibility.
+/// The plugin's fields go through the redaction layer one by one, so the
+/// field-name denylist applies to them. What the plugin wrote into the
+/// *message* only gets the value patterns — the host cannot know what a
+/// plugin considers secret, which the plugin guide leaves to the author.
 fn spawn_stderr_logger(name: String, stderr: tokio::process::ChildStderr) {
     tokio::spawn(async move {
         let mut lines = BufReader::new(stderr).lines();
         let mut window_started = tokio::time::Instant::now();
         let mut in_window = 0usize;
         let mut suppressed = 0usize;
+        let mut in_panic = false;
         while let Ok(Some(line)) = lines.next_line().await {
             if window_started.elapsed() >= STDERR_WINDOW {
                 if suppressed > 0 {
@@ -983,9 +995,16 @@ fn spawn_stderr_logger(name: String, stderr: tokio::process::ChildStderr) {
                 in_window = 0;
                 suppressed = 0;
             }
+            if line.trim().is_empty() {
+                continue;
+            }
+            let record = parse_stderr_line(&line, &mut in_panic);
+            if !level_enabled(record.level) {
+                continue;
+            }
             if in_window < STDERR_LINES_PER_WINDOW {
                 in_window += 1;
-                tracing::info!(plugin = %name, "{line}");
+                emit_stderr_record(&name, &record);
             } else {
                 suppressed += 1;
             }
@@ -994,4 +1013,192 @@ fn spawn_stderr_logger(name: String, stderr: tokio::process::ChildStderr) {
             tracing::warn!(plugin = %name, "suppressed {suppressed} further stderr line(s)");
         }
     });
+}
+
+/// One plugin stderr line, read back into a record (ADR-0096).
+#[derive(Debug, PartialEq)]
+struct StderrRecord {
+    level: tracing::Level,
+    /// The plugin's own `target`; `None` for a line that was not SDK JSON.
+    target: Option<String>,
+    message: String,
+    /// The plugin's remaining fields as one JSON object, which the logging
+    /// layer unpacks — `tracing` cannot take field names chosen at runtime.
+    fields: Option<String>,
+}
+
+/// Parse one stderr line. `in_panic` carries across lines: once a panic
+/// header is seen, the untagged lines after it (the message, the backtrace)
+/// are part of the panic too — until the next SDK line, which means the
+/// process survived it (a panicked worker thread) and is logging normally.
+fn parse_stderr_line(line: &str, in_panic: &mut bool) -> StderrRecord {
+    if let Ok(Value::Object(mut obj)) = serde_json::from_str::<Value>(line)
+        && let Some(level) = obj
+            .get("level")
+            .and_then(Value::as_str)
+            .and_then(|l| l.parse().ok())
+    {
+        *in_panic = false;
+        obj.remove("level");
+        // Dropped: the host stamps its own time on the re-emitted record, and
+        // the two differ only by the pipe's latency.
+        obj.remove("timestamp");
+        let target = match obj.remove("target") {
+            Some(Value::String(t)) => Some(t),
+            _ => None,
+        };
+        let message = match obj.remove("message") {
+            Some(Value::String(m)) => m,
+            Some(other) => other.to_string(),
+            None => String::new(),
+        };
+        let fields = (!obj.is_empty()).then(|| Value::Object(obj).to_string());
+        return StderrRecord {
+            level,
+            target,
+            message,
+            fields,
+        };
+    }
+    // `thread 'main' panicked at …`, and since the thread id was added
+    // `thread 'main' (50976717) panicked at …` — match both.
+    if line.starts_with("thread '") && line.contains(" panicked at ") {
+        *in_panic = true;
+    }
+    StderrRecord {
+        level: if *in_panic {
+            tracing::Level::ERROR
+        } else {
+            tracing::Level::INFO
+        },
+        target: None,
+        message: line.to_string(),
+        fields: None,
+    }
+}
+
+/// Whether the host would record an event at `level` from this module.
+///
+/// `tracing` fixes an event's level at compile time (tokio-rs/tracing#2730),
+/// so a level known only at runtime is dispatched through one call site per
+/// level — here and in [`emit_stderr_record`].
+fn level_enabled(level: tracing::Level) -> bool {
+    use tracing::Level;
+    match level {
+        Level::ERROR => tracing::enabled!(Level::ERROR),
+        Level::WARN => tracing::enabled!(Level::WARN),
+        Level::INFO => tracing::enabled!(Level::INFO),
+        Level::DEBUG => tracing::enabled!(Level::DEBUG),
+        Level::TRACE => tracing::enabled!(Level::TRACE),
+    }
+}
+
+/// Re-emit `record` at its own level. `plugin` is recorded **last** so a
+/// plugin field of the same name cannot overwrite which plugin this was.
+fn emit_stderr_record(plugin: &str, record: &StderrRecord) {
+    use crate::logging::{PLUGIN_FIELDS_FIELD, PLUGIN_TARGET_FIELD};
+    use tracing::Level;
+    macro_rules! emit {
+        ($lvl:expr) => {
+            tracing::event!(
+                $lvl,
+                { PLUGIN_TARGET_FIELD } = record.target.as_deref(),
+                { PLUGIN_FIELDS_FIELD } = record.fields.as_deref(),
+                plugin = %plugin,
+                "{}",
+                record.message
+            )
+        };
+    }
+    match record.level {
+        Level::ERROR => emit!(Level::ERROR),
+        Level::WARN => emit!(Level::WARN),
+        Level::INFO => emit!(Level::INFO),
+        Level::DEBUG => emit!(Level::DEBUG),
+        Level::TRACE => emit!(Level::TRACE),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tracing::Level;
+
+    /// ADR-0096: an SDK line keeps the plugin's level, target and fields. The
+    /// line is the shape `init_tracing` writes (`tracing-subscriber` JSON,
+    /// flattened) — before this, it arrived as `INFO` whatever it said.
+    #[test]
+    fn an_sdk_json_line_keeps_its_level_target_and_fields() {
+        let line = r#"{"timestamp":"2026-09-23T14:36:24.355840Z","level":"WARN","message":"could not confirm the end; waiting again","retry_in":"2s","attempt":3,"target":"agent_ide_orca::agent"}"#;
+        let record = parse_stderr_line(line, &mut false);
+        assert_eq!(record.level, Level::WARN);
+        assert_eq!(record.target.as_deref(), Some("agent_ide_orca::agent"));
+        assert_eq!(record.message, "could not confirm the end; waiting again");
+        let fields: Value = serde_json::from_str(record.fields.as_deref().unwrap()).unwrap();
+        assert_eq!(fields, serde_json::json!({"retry_in": "2s", "attempt": 3}));
+    }
+
+    #[test]
+    fn a_line_that_is_not_sdk_json_is_info_verbatim() {
+        for line in [
+            "plain text from a plugin without the SDK",
+            r#"{"no":"level"}"#,
+        ] {
+            let record = parse_stderr_line(line, &mut false);
+            assert_eq!(record.level, Level::INFO, "{line}");
+            assert_eq!(record.target, None);
+            assert_eq!(record.message, line);
+            assert_eq!(record.fields, None);
+        }
+    }
+
+    /// A panic is not SDK JSON, but it is the one untagged output that must
+    /// not read as `INFO` — nor must the lines under its header.
+    #[test]
+    fn a_panic_and_the_lines_after_it_are_error() {
+        for header in [
+            "thread 'main' panicked at src/main.rs:3:5:",
+            // What the current toolchain prints: the thread id comes first.
+            "thread '<unnamed>' (50984134) panicked at p.rs:1:33:",
+        ] {
+            let mut in_panic = false;
+            let before = parse_stderr_line("starting", &mut in_panic);
+            let head = parse_stderr_line(header, &mut in_panic);
+            let body = parse_stderr_line("boom", &mut in_panic);
+            assert_eq!(before.level, Level::INFO);
+            assert_eq!(head.level, Level::ERROR, "{header}");
+            assert_eq!(body.level, Level::ERROR, "{header}");
+        }
+    }
+
+    /// A panicked worker thread does not end the process; once the SDK logs
+    /// again, untagged lines are no longer part of that panic.
+    #[test]
+    fn an_sdk_line_ends_the_panic() {
+        let mut in_panic = false;
+        parse_stderr_line(
+            "thread 'tokio-runtime-worker' (7) panicked at a.rs:1:1:",
+            &mut in_panic,
+        );
+        parse_stderr_line(
+            r#"{"level":"INFO","message":"still here","target":"p"}"#,
+            &mut in_panic,
+        );
+        assert_eq!(parse_stderr_line("plain", &mut in_panic).level, Level::INFO);
+    }
+
+    /// The relay filters on the host's level **before** the rate limit counts
+    /// a line, so this has to answer per level at runtime.
+    #[test]
+    fn level_enabled_follows_the_host_filter() {
+        use tracing_subscriber::filter::LevelFilter;
+        use tracing_subscriber::layer::SubscriberExt;
+        let subscriber = tracing_subscriber::registry().with(LevelFilter::WARN);
+        tracing::subscriber::with_default(subscriber, || {
+            assert!(level_enabled(Level::ERROR));
+            assert!(level_enabled(Level::WARN));
+            assert!(!level_enabled(Level::INFO));
+            assert!(!level_enabled(Level::DEBUG));
+        });
+    }
 }

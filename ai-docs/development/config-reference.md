@@ -4,7 +4,7 @@ title: 設定リファレンス（config.toml）
 description: "config.toml の全キー・デフォルト値・意味の一覧。設定ファイルは 1 本で、プラグイン個別設定もトップレベルの [<name>] テーブルに入る。シークレット参照、設定スキーマのバージョニング方針、[[projects]] の domain 宣言とワークフローからの参照、プラグインが定義する追加プロパティ、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-github の [github]、task-source-notion の [notion]、task-source-slack の [slack]、agent-ide-herdr の [herdr] を含む。"
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
 tags: [config, reference, toml, secrets, workflow, worktree, github, notion, slack, hooks, versioning]
-generated: { by: claude-code/opus-5, at: 2026-09-23T12:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-24T10:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -176,8 +176,9 @@ project = "tomo-prj"
 | `kind` | enum | 必須 | `task_source` / `agent_ide` / `notifier` |
 | `max_concurrency` | int? | 無制限 | agent プラグイン単位の同時実行上限（F-42） |
 | `timeout_secs` | int? | 120 | RPC タイムアウト秒 |
-| `log_level` | string? | なし | プラグインのログレベル |
 | `restart` | bool | true | クラッシュしたら再起動するか（#495 / [ADR-0051](/decisions/adr-0051-plugin-supervision.md)）。指数バックオフ（1s / 2s / 4s …）で**最大 5 回・5 分のスライディング窓**、尽きたら `escalated` を通知する。**`false` にしても検知は残る** — ログに出て `RunSummary.plugin_crashes` に計上され、`escalated` も飛ぶ（`plugin_restarts` のほうは 0 のまま。だから死亡を数える counter が別に要る）。agent なら在席タスクも畳まれる。止まるのは再起動だけで、プラグインを手で調べたいときの形。バックオフの形は設定に出していない（運用者が調整する材料を持たないため） |
+
+`log_level` も**無い**（[ADR-0096](/decisions/adr-0096-plugin-log-relay.md) で削除 — どこからも読まれていなかった。プラグインのログも `[log] level` で判定する。書いてあると起動時にエラーになる）。
 
 `poll_interval_secs` はここには**無い**（0.6.0 / #554 で各ソースの `[<name>]` へ移動 — core は使わず転送するだけだった）。下の `[github]` の節を参照。
 
