@@ -205,7 +205,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                 continue;
             }
             self.db.apply_event(
-                task_id,
+                record.task_ref(),
                 crate::domain::state::TaskEvent::Fail,
                 Some(serde_json::json!({ "kind": "plugin_crash", "plugin": plugin })),
             )?;

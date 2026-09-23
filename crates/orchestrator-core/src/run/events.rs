@@ -213,8 +213,9 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                     _ => &[],
                 };
                 let resuming = record.state == TaskState::WaitingInput;
+                let mut task = record.task_ref();
                 for &event in events {
-                    self.db.apply_event(task_id, event, Some(detail.clone()))?;
+                    (_, task) = self.db.apply_event(task, event, Some(detail.clone()))?;
                 }
                 if resuming && !self.slot_holders.contains_key(&task_id) {
                     // A waiting task keeps its slot (F-45), so this is
@@ -241,8 +242,9 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                     _ => &[],
                 };
                 if !events.is_empty() {
+                    let mut task = record.task_ref();
                     for &event in events {
-                        self.db.apply_event(task_id, event, Some(detail.clone()))?;
+                        (_, task) = self.db.apply_event(task, event, Some(detail.clone()))?;
                     }
                     // A waiting task keeps its slot (F-45).
                     tracing::info!(task_id, "agent is waiting for input (F-35)");
@@ -261,6 +263,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                     TaskState::WaitingInput => &[TaskEvent::ResumeInput, TaskEvent::BeginPublish],
                     _ => &[],
                 };
+                let mut task = record.task_ref();
                 for &event in events {
                     // Persist the accumulated agent output on the BeginPublish
                     // transition, so a crash before finalize can recover the
@@ -273,13 +276,13 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                     } else {
                         detail.clone()
                     };
-                    self.db.apply_event(task_id, event, Some(event_detail))?;
+                    (_, task) = self.db.apply_event(task, event, Some(event_detail))?;
                 }
-                self.finalize_success(&record).await?;
+                self.finalize_success(&record, task).await?;
             }
             AgentState::Failed => {
                 self.db.apply_event(
-                    task_id,
+                    record.task_ref(),
                     TaskEvent::Fail,
                     Some(serde_json::json!({ "kind": "agent_state", "state": "failed" })),
                 )?;

@@ -210,8 +210,10 @@ fn new_task(source_task_id: &str, last_signal_at: Option<&str>) -> NewTask {
 /// `(task_id, session_row)`.
 fn seed_running(db: &StateDb, sid: &str) -> (i64, i64) {
     let id = db.upsert_task(&new_task("1", None)).unwrap();
-    db.apply_event(id, TaskEvent::Dispatch, None).unwrap();
-    db.apply_event(id, TaskEvent::Start, None).unwrap();
+    db.apply_event(db.task_ref(id).unwrap(), TaskEvent::Dispatch, None)
+        .unwrap();
+    db.apply_event(db.task_ref(id).unwrap(), TaskEvent::Start, None)
+        .unwrap();
     let row = db.record_session(id, "mock_agent", sid).unwrap();
     (id, row)
 }
@@ -605,7 +607,11 @@ async fn completed_human_waits_for_verify_then_pass_reaches_done() {
     // Simulate `totsuka task verify --pass`.
     engine
         .db()
-        .apply_event(id, TaskEvent::ApproveVerification, None)
+        .apply_event(
+            engine.db().task_ref(id).unwrap(),
+            TaskEvent::ApproveVerification,
+            None,
+        )
         .unwrap();
     assert_eq!(
         engine.db().get_task(id).unwrap().unwrap().state,
@@ -660,7 +666,11 @@ async fn verify_fail_returns_to_running() {
     // `totsuka task verify --fail`.
     engine
         .db()
-        .apply_event(id, TaskEvent::VerificationFailed, None)
+        .apply_event(
+            engine.db().task_ref(id).unwrap(),
+            TaskEvent::VerificationFailed,
+            None,
+        )
         .unwrap();
     assert_eq!(
         engine.db().get_task(id).unwrap().unwrap().state,
@@ -1038,8 +1048,10 @@ async fn timeout_sweep_escalates_silent_task() {
     // execution and clears the anchor (#382), and seeding one beforehand would
     // build a state that never occurs.
     let id = db.upsert_task(&new_task("1", None)).unwrap();
-    db.apply_event(id, TaskEvent::Dispatch, None).unwrap();
-    db.apply_event(id, TaskEvent::Start, None).unwrap();
+    db.apply_event(db.task_ref(id).unwrap(), TaskEvent::Dispatch, None)
+        .unwrap();
+    db.apply_event(db.task_ref(id).unwrap(), TaskEvent::Start, None)
+        .unwrap();
     db.touch_last_signal(id).unwrap();
     db.record_session(id, "mock_agent", "sess-1").unwrap();
 
@@ -1093,15 +1105,19 @@ async fn a_redispatched_task_is_not_escalated_for_the_previous_attempts_silence(
     // anchor is stamped AFTER the dispatch — seeding it beforehand would let
     // the first dispatch clear it, leaving nothing for the second one to clear
     // and turning this into a test that passes without the fix.
-    db.apply_event(id, TaskEvent::Dispatch, None).unwrap();
-    db.apply_event(id, TaskEvent::Start, None).unwrap();
+    db.apply_event(db.task_ref(id).unwrap(), TaskEvent::Dispatch, None)
+        .unwrap();
+    db.apply_event(db.task_ref(id).unwrap(), TaskEvent::Start, None)
+        .unwrap();
     db.touch_last_signal(id).unwrap();
-    db.apply_event(id, TaskEvent::Fail, None).unwrap();
+    db.apply_event(db.task_ref(id).unwrap(), TaskEvent::Fail, None)
+        .unwrap();
 
     // A human retries it well past the workflow timeout.
     clock.advance(time::Duration::seconds(1801));
-    db.retry_task(id, None).unwrap();
-    db.apply_event(id, TaskEvent::Dispatch, None).unwrap();
+    db.retry_task(db.task_ref(id).unwrap(), None).unwrap();
+    db.apply_event(db.task_ref(id).unwrap(), TaskEvent::Dispatch, None)
+        .unwrap();
 
     let mut engine = Engine::with_clock(
         db,
@@ -1180,8 +1196,10 @@ async fn a_zero_timeout_disables_the_silence_sweep() {
         // Same shape as `timeout_sweep_escalates_silent_task`: alive after the
         // dispatch, then silent for far longer than any plausible timeout.
         let id = db.upsert_task(&new_task("1", None)).unwrap();
-        db.apply_event(id, TaskEvent::Dispatch, None).unwrap();
-        db.apply_event(id, TaskEvent::Start, None).unwrap();
+        db.apply_event(db.task_ref(id).unwrap(), TaskEvent::Dispatch, None)
+            .unwrap();
+        db.apply_event(db.task_ref(id).unwrap(), TaskEvent::Start, None)
+            .unwrap();
         db.touch_last_signal(id).unwrap();
         db.record_session(id, "mock_agent", "sess-1").unwrap();
 
@@ -1237,8 +1255,10 @@ async fn a_pending_permission_prompt_pauses_the_silence_sweep() {
     let clock = manual_clock();
     let db = StateDb::open_with_clock(&base.join("state.db"), clock.clone()).unwrap();
     let id = db.upsert_task(&new_task("1", None)).unwrap();
-    db.apply_event(id, TaskEvent::Dispatch, None).unwrap();
-    db.apply_event(id, TaskEvent::Start, None).unwrap();
+    db.apply_event(db.task_ref(id).unwrap(), TaskEvent::Dispatch, None)
+        .unwrap();
+    db.apply_event(db.task_ref(id).unwrap(), TaskEvent::Start, None)
+        .unwrap();
     let row = db.record_session(id, "mock_agent", "sess-1").unwrap();
 
     let mut engine = Engine::with_clock(
@@ -1282,8 +1302,10 @@ async fn a_duplicate_permission_prompt_does_not_re_arm_the_pause() {
     let clock = manual_clock();
     let db = StateDb::open_with_clock(&base.join("state.db"), clock.clone()).unwrap();
     let id = db.upsert_task(&new_task("1", None)).unwrap();
-    db.apply_event(id, TaskEvent::Dispatch, None).unwrap();
-    db.apply_event(id, TaskEvent::Start, None).unwrap();
+    db.apply_event(db.task_ref(id).unwrap(), TaskEvent::Dispatch, None)
+        .unwrap();
+    db.apply_event(db.task_ref(id).unwrap(), TaskEvent::Start, None)
+        .unwrap();
     let row = db.record_session(id, "mock_agent", "sess-1").unwrap();
 
     let mut engine = Engine::with_clock(
@@ -1329,8 +1351,10 @@ async fn watch_mode_periodic_tick_escalates_silent_task_without_events() {
     let id = {
         let db = StateDb::open(&db_path).unwrap();
         let id = db.upsert_task(&new_task("1", None)).unwrap();
-        db.apply_event(id, TaskEvent::Dispatch, None).unwrap();
-        db.apply_event(id, TaskEvent::Start, None).unwrap();
+        db.apply_event(db.task_ref(id).unwrap(), TaskEvent::Dispatch, None)
+            .unwrap();
+        db.apply_event(db.task_ref(id).unwrap(), TaskEvent::Start, None)
+            .unwrap();
         db.touch_last_signal(id).unwrap();
         db.record_session(id, "mock_agent", "sess-1").unwrap();
         id
@@ -2538,8 +2562,10 @@ async fn duplicate_heartbeat_refreshes_liveness_and_prevents_false_escalation() 
     // Seed the anchor at T0, then move past a 30-minute timeout: without the
     // refresh below, the sweep WOULD escalate (#174).
     let id = db.upsert_task(&new_task("1", Some(T0))).unwrap();
-    db.apply_event(id, TaskEvent::Dispatch, None).unwrap();
-    db.apply_event(id, TaskEvent::Start, None).unwrap();
+    db.apply_event(db.task_ref(id).unwrap(), TaskEvent::Dispatch, None)
+        .unwrap();
+    db.apply_event(db.task_ref(id).unwrap(), TaskEvent::Start, None)
+        .unwrap();
     let row = db.record_session(id, "mock_agent", "sess-1").unwrap();
 
     let mut engine = Engine::with_clock(
@@ -2862,7 +2888,8 @@ fn seed_finished_conversation(db: &StateDb, source_task_id: &str, tool_sid: Opti
         TaskEvent::BeginPublish,
         TaskEvent::Complete,
     ] {
-        db.apply_event(id, event, None).unwrap();
+        db.apply_event(db.task_ref(id).unwrap(), event, None)
+            .unwrap();
     }
     id
 }
@@ -3070,14 +3097,18 @@ async fn reply_destination_is_task_id_origin_never_the_shared_session_id() {
 
     // Two tasks sharing tool_session_id "cc-shared".
     let prior = db.upsert_task(&new_task("1", None)).unwrap();
-    db.apply_event(prior, TaskEvent::Dispatch, None).unwrap();
-    db.apply_event(prior, TaskEvent::Start, None).unwrap();
+    db.apply_event(db.task_ref(prior).unwrap(), TaskEvent::Dispatch, None)
+        .unwrap();
+    db.apply_event(db.task_ref(prior).unwrap(), TaskEvent::Start, None)
+        .unwrap();
     let prior_row = db.record_session(prior, "mock_agent", "sess-1").unwrap();
     db.set_tool_session_id(prior_row, "cc-shared").unwrap();
 
     let follow = db.upsert_task(&new_task("2", None)).unwrap();
-    db.apply_event(follow, TaskEvent::Dispatch, None).unwrap();
-    db.apply_event(follow, TaskEvent::Start, None).unwrap();
+    db.apply_event(db.task_ref(follow).unwrap(), TaskEvent::Dispatch, None)
+        .unwrap();
+    db.apply_event(db.task_ref(follow).unwrap(), TaskEvent::Start, None)
+        .unwrap();
     let follow_row = db.record_session(follow, "mock_agent", "sess-2").unwrap();
     db.set_tool_session_id(follow_row, "cc-shared").unwrap();
 

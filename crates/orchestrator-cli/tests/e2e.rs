@@ -585,10 +585,13 @@ fn doctor_detects_orphan_panes_via_session_list() {
         last_signal_at: None,
     };
     let cancelled = db.upsert_task(&new("C9:9.9")).unwrap();
-    db.apply_event(cancelled, TaskEvent::Cancel, None).unwrap();
+    db.apply_event(db.task_ref(cancelled).unwrap(), TaskEvent::Cancel, None)
+        .unwrap();
     let running = db.upsert_task(&new("C1:1.0")).unwrap();
-    db.apply_event(running, TaskEvent::Dispatch, None).unwrap();
-    db.apply_event(running, TaskEvent::Start, None).unwrap();
+    db.apply_event(db.task_ref(running).unwrap(), TaskEvent::Dispatch, None)
+        .unwrap();
+    db.apply_event(db.task_ref(running).unwrap(), TaskEvent::Start, None)
+        .unwrap();
     drop(db);
 
     let out = env.run(&["doctor", "--json"]);

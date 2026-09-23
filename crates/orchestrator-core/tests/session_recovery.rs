@@ -102,9 +102,11 @@ async fn kill9_restart_attach_resumes_running() {
         )
         .await
         .expect("dispatch");
-    db.apply_event(id, TaskEvent::Dispatch, None).unwrap();
+    db.apply_event(db.task_ref(id).unwrap(), TaskEvent::Dispatch, None)
+        .unwrap();
     db.record_session(id, "mock", &disp.session_id).unwrap();
-    db.apply_event(id, TaskEvent::Start, None).unwrap();
+    db.apply_event(db.task_ref(id).unwrap(), TaskEvent::Start, None)
+        .unwrap();
     assert_eq!(db.get_task(id).unwrap().unwrap().state, TaskState::Running);
 
     // Simulate SIGKILL: drop the plugin process. The state DB survives.
@@ -134,10 +136,12 @@ async fn kill9_restart_attach_resumes_running() {
 async fn lost_session_defers_to_human_not_failed() {
     let db = StateDb::open_in_memory().unwrap();
     let id = db.upsert_task(&new_task("2")).unwrap();
-    db.apply_event(id, TaskEvent::Dispatch, None).unwrap();
+    db.apply_event(db.task_ref(id).unwrap(), TaskEvent::Dispatch, None)
+        .unwrap();
     // `sess-gone` makes the mock report `attached: false` (session lost).
     db.record_session(id, "mock", "sess-gone").unwrap();
-    db.apply_event(id, TaskEvent::Start, None).unwrap();
+    db.apply_event(db.task_ref(id).unwrap(), TaskEvent::Start, None)
+        .unwrap();
 
     let plugins = one_plugin(Plugin::launch(spec()).await.expect("launch"));
     let attacher = PluginAgentSession::new(&plugins);

@@ -9,7 +9,7 @@
 use std::io::Write;
 
 use clap::Subcommand;
-use orchestrator_core::adapters::state_db::EventExportFilter;
+use orchestrator_core::adapters::state_db::{EventExportFilter, StateError};
 use orchestrator_core::domain::state::{TaskEvent, TaskState};
 use orchestrator_core::task_control;
 use serde::Serialize;
@@ -511,26 +511,38 @@ fn verify(
         )
         .into());
     }
+    // The engine may move the task between the read above and the write
+    // (#763): the version check refuses, and the operator re-reads.
+    let lost_race = |e: StateError| -> CliError {
+        match e {
+            StateError::Conflict { .. } => {
+                format!("{e} → `totsuka task show {id}` and try again").into()
+            }
+            e => e.into(),
+        }
+    };
     if pass {
         // ApproveVerification → Publishing; the next `totsuka run` recover cycle
         // finalizes it via the existing Publishing-restore path (#131 D-01).
         db.apply_event(
-            id,
+            task.task_ref(),
             TaskEvent::ApproveVerification,
             Some(serde_json::json!({ "kind": "cli", "command": "task verify --pass" })),
-        )?;
+        )
+        .map_err(lost_race)?;
         println!("task {id} verification passed → `totsuka run` publishes it on the next cycle");
     } else if fail {
         // VerificationFailed → Running; the human gives corrective instructions
         // directly in the agent pane (D-07).
         let reason = reason.unwrap_or_default();
         db.apply_event(
-            id,
+            task.task_ref(),
             TaskEvent::VerificationFailed,
             Some(serde_json::json!({
                 "kind": "cli", "command": "task verify --fail", "reason": reason,
             })),
-        )?;
+        )
+        .map_err(lost_race)?;
         println!(
             "task {id} verification failed → back to running; give corrective instructions in the agent pane"
         );

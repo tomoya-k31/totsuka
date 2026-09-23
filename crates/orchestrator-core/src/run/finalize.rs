@@ -13,9 +13,13 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// `record` is in a pre-`Complete` pipeline state (usually `Publishing`).
     /// On a **publishing failure** the task is failed but its worktree and
     /// commits are kept, so `task retry` can resume from here (issue #65).
+    ///
+    /// `task` is the reference the outcome is recorded through: `record` was
+    /// read before the transitions that brought the task here (#763).
     pub(super) async fn finalize_success(
         &mut self,
         record: &TaskRecord,
+        task: TaskRef,
     ) -> Result<(), EngineError> {
         // Last chance to learn the branch before anything consumes it. The
         // Stop handler already syncs, but only hook-capable agents send a
@@ -66,7 +70,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             record.worktree_path.as_deref().unwrap_or("<worktree>"),
         ) {
             return self
-                .fail_publish(record, "read_only_violation", reason)
+                .fail_publish(record, task, "read_only_violation", reason)
                 .await;
         }
         // A finished task whose workflow vanished from config still holds the
@@ -77,6 +81,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             return self
                 .fail_publish(
                     record,
+                    task,
                     "publish",
                     format!(
                         "workflow `{}` is no longer configured → restore it (worktree and commits are kept) or `totsuka task cancel {}`",
@@ -91,7 +96,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                 // Success: on_success write-back (F-84) → Complete → cleanup.
                 self.write_back_status(record, StatusMoment::Success).await;
                 self.db.apply_event(
-                    record.id,
+                    task,
                     TaskEvent::Complete,
                     Some(serde_json::json!({
                         "kind": "publish",
@@ -108,7 +113,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                 tracing::info!(task_id = record.id, "task done");
                 Ok(())
             }
-            Err(reason) => self.fail_publish(record, "publish", reason).await,
+            Err(reason) => self.fail_publish(record, task, "publish", reason).await,
         }
     }
 
@@ -128,12 +133,13 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     pub(super) async fn fail_publish(
         &mut self,
         record: &TaskRecord,
+        task: TaskRef,
         kind: &str,
         reason: String,
     ) -> Result<(), EngineError> {
         tracing::error!(task_id = record.id, kind, "task failed: {reason}");
         self.db.apply_event(
-            record.id,
+            task,
             TaskEvent::Fail,
             Some(serde_json::json!({ "kind": kind, "reason": reason.clone() })),
         )?;

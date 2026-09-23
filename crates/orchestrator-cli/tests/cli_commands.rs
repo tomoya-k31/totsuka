@@ -86,8 +86,10 @@ fn seed_db(base: &Path) -> (i64, i64, i64) {
         last_signal_at: None,
     };
     let running = db.upsert_task(&new("1")).unwrap();
-    db.apply_event(running, TaskEvent::Dispatch, None).unwrap();
-    db.apply_event(running, TaskEvent::Start, None).unwrap();
+    db.apply_event(db.task_ref(running).unwrap(), TaskEvent::Dispatch, None)
+        .unwrap();
+    db.apply_event(db.task_ref(running).unwrap(), TaskEvent::Start, None)
+        .unwrap();
     db.record_session(running, "herdr", "sess-1").unwrap();
     // A conversation on the running task (#242): one message already handed
     // to the agent, one that arrived while it was working and is still queued.
@@ -113,7 +115,8 @@ fn seed_db(base: &Path) -> (i64, i64, i64) {
         }
     }
     let failed = db.upsert_task(&new("2")).unwrap();
-    db.apply_event(failed, TaskEvent::Fail, None).unwrap();
+    db.apply_event(db.task_ref(failed).unwrap(), TaskEvent::Fail, None)
+        .unwrap();
     let done = db.upsert_task(&new("3")).unwrap();
     for event in [
         TaskEvent::Dispatch,
@@ -121,7 +124,8 @@ fn seed_db(base: &Path) -> (i64, i64, i64) {
         TaskEvent::BeginPublish,
         TaskEvent::Complete,
     ] {
-        db.apply_event(done, event, None).unwrap();
+        db.apply_event(db.task_ref(done).unwrap(), event, None)
+            .unwrap();
     }
     (running, failed, done)
 }
@@ -337,7 +341,8 @@ fn menu_exits_quietly_when_the_reader_goes_away() {
                 })
                 .unwrap();
             for event in [TaskEvent::Dispatch, TaskEvent::Start, TaskEvent::WaitInput] {
-                db.apply_event(id, event, None).unwrap();
+                db.apply_event(db.task_ref(id).unwrap(), event, None)
+                    .unwrap();
             }
         }
     }
@@ -434,7 +439,7 @@ fn task_export_exits_quietly_when_the_reader_goes_away() {
                 })
                 .unwrap();
             db.apply_event(
-                id,
+                db.task_ref(id).unwrap(),
                 TaskEvent::Dispatch,
                 Some(serde_json::json!({"publish_artifact": bulky})),
             )
@@ -550,7 +555,8 @@ fn status_explains_why_a_queued_task_is_not_starting() {
 
     // Dispatching resolves it — nothing has to remember to clear it.
     let db = StateDb::open(&state_dir.join("state.db")).unwrap();
-    db.apply_event(id, TaskEvent::Dispatch, None).unwrap();
+    db.apply_event(db.task_ref(id).unwrap(), TaskEvent::Dispatch, None)
+        .unwrap();
     drop(db);
     let text = stdout(&run(&base, &["status"]));
     assert!(!text.contains("not starting yet"), "resolved: {text}");
@@ -2084,7 +2090,8 @@ fn menu_renders_the_glyph_the_count_and_a_focus_action() {
             })
             .unwrap();
         for event in [TaskEvent::Dispatch, TaskEvent::Start, TaskEvent::WaitInput] {
-            db.apply_event(id, event, None).unwrap();
+            db.apply_event(db.task_ref(id).unwrap(), event, None)
+                .unwrap();
         }
         id
     };

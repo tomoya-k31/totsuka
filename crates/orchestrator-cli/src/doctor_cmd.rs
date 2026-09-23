@@ -3112,6 +3112,7 @@ location = "${MY_ROOT}/wt/{worktree_name}"
             created_at: "2026-07-23T00:00:00Z".into(),
             updated_at: "2026-07-23T00:00:00Z".into(),
             last_signal_at: None,
+            state_version: 0,
         }
     }
 

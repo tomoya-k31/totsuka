@@ -49,7 +49,7 @@ use crate::adapters::plugin_host::{HostError, IncomingRequest, Plugin};
 use crate::adapters::run_health::{self, Degradation, RunHealth};
 use crate::adapters::state_db::{
     HandoffOutcome, NewTask, StateDb, StateError, TaskMessage, TaskMessageInsert,
-    TaskMessageOutcome, TaskRecord,
+    TaskMessageOutcome, TaskRecord, TaskRef,
 };
 use crate::adapters::{EngineSignalSink, hook_uds};
 use crate::config::{
@@ -578,7 +578,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                     if let Some(artifact) = self.persisted_artifact(outcome.task_id)? {
                         self.agent_output.insert(outcome.task_id, artifact);
                     }
-                    self.finalize_success(&record).await?;
+                    self.finalize_success(&record, record.task_ref()).await?;
                 }
                 // Surface the open question again (F-35); the agent will not
                 // re-announce it.

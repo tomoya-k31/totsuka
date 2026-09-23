@@ -131,7 +131,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             );
         }
         self.drop_task_sessions(record.id);
-        self.fail_publish(&record, "read_only_violation", reason)
+        self.fail_publish(&record, record.task_ref(), "read_only_violation", reason)
             .await
     }
 

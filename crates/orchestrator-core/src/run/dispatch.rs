@@ -25,7 +25,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                         "repository pending confirmation: {reason}"
                     );
                     self.db.apply_event(
-                        record.id,
+                        record.task_ref(),
                         TaskEvent::NeedRepoConfirmation,
                         Some(serde_json::json!({ "kind": "repo_select", "reason": reason })),
                     )?;
@@ -39,7 +39,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                 RepoDecision::Failed { reason } => {
                     tracing::error!(task_id = record.id, "repository selection failed: {reason}");
                     self.db.apply_event(
-                        record.id,
+                        record.task_ref(),
                         TaskEvent::Fail,
                         Some(serde_json::json!({ "kind": "repo_select", "reason": reason })),
                     )?;
@@ -307,7 +307,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                     && let Err(e) = self.worktrees.sync_to_hint(&repo.path, &path, hint)
                 {
                     return self
-                        .fail_dispatch(record, e.to_string())
+                        .fail_dispatch(record, record.task_ref(), e.to_string())
                         .await
                         .map(|()| None);
                 }
@@ -357,6 +357,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                         return self
                             .fail_dispatch(
                                 record,
+                                record.task_ref(),
                                 format!(
                                     "`{}` is already occupied but is not recorded for this task; \
                                      remove it — `git worktree remove {}`, or the cleanup \
@@ -371,7 +372,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                     }
                     Err(e) => {
                         return self
-                            .fail_dispatch(record, e.to_string())
+                            .fail_dispatch(record, record.task_ref(), e.to_string())
                             .await
                             .map(|()| None);
                     }
@@ -546,8 +547,8 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                     .record_session(record.id, agent_name, &dispatched.session_id)?;
             }
         }
-        self.db.apply_event(
-            record.id,
+        let (_, task) = self.db.apply_event(
+            record.task_ref(),
             TaskEvent::Dispatch,
             Some(serde_json::json!({
                 "kind": "dispatch", "plugin": agent_name, "session_id": dispatched.session_id,
@@ -596,6 +597,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             return self
                 .fail_dispatch(
                     record,
+                    task,
                     format!("state/subscribe failed: {e} → dispatch cancelled; fix the agent plugin and `task retry`"),
                 )
                 .await;
@@ -705,7 +707,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                 return Ok(()); // warned in dispatch_ready
             }
             Err(DispatchRefusal::Failed(reason)) => {
-                return self.fail_dispatch(&record, reason).await;
+                return self.fail_dispatch(&record, record.task_ref(), reason).await;
             }
             // Consumed by the park arm above; unreachable here.
             Err(DispatchRefusal::AgentDown) => unreachable!("parked above"),
@@ -790,7 +792,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             && let Some(state) = self.try_reattach(&plugin, &session_id).await
         {
             self.db.apply_event(
-                record.id,
+                record.task_ref(),
                 TaskEvent::Dispatch,
                 Some(serde_json::json!({
                     "kind": "dispatch", "reused_session": session_id, "plugin": plugin,
@@ -853,6 +855,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                     return self
                         .fail_dispatch(
                             &record,
+                            record.task_ref(),
                             concat!(
                                 "a pane is still open on this task's worktree — the ",
                                 "agent plugin found one of its own there, at a ",
@@ -1025,7 +1028,9 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                         "failed to roll back reserved session row: {err}"
                     );
                 }
-                return self.fail_dispatch(&record, e.to_string()).await;
+                return self
+                    .fail_dispatch(&record, record.task_ref(), e.to_string())
+                    .await;
             }
         };
         self.record_dispatch_and_subscribe(
@@ -1067,12 +1072,13 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     pub(super) async fn requeue_conversations_with_unsent_messages(
         &mut self,
     ) -> Result<(), EngineError> {
-        for task_id in self
+        for task in self
             .db
             .conversations_with_unsent_messages(TaskState::Done)?
         {
+            let task_id = task.id();
             self.db.apply_event(
-                task_id,
+                task,
                 TaskEvent::Reopen,
                 Some(serde_json::json!({
                     "kind": "reopen", "cause": "messages_arrived_while_working",
@@ -1152,7 +1158,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             }) => {
                 self.release_slot(record.id);
                 self.db.apply_event(
-                    record.id,
+                    record.task_ref(),
                     TaskEvent::Skip,
                     Some(serde_json::json!({ "kind": "claim_lost", "holder": holder })),
                 )?;
@@ -1170,7 +1176,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             }) => {
                 self.release_slot(record.id);
                 self.db.apply_event(
-                    record.id,
+                    record.task_ref(),
                     TaskEvent::Fail,
                     Some(serde_json::json!({ "kind": "claim_forbidden" })),
                 )?;
@@ -1233,9 +1239,13 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
 
     /// Fail a task during dispatch: release its slot, record the reason,
     /// notify (F-90).
+    ///
+    /// `task` is the reference the failure is recorded through — `record`'s
+    /// own unless a transition was already applied on the way here (#763).
     async fn fail_dispatch(
         &mut self,
         record: &TaskRecord,
+        task: TaskRef,
         reason: String,
     ) -> Result<(), EngineError> {
         tracing::error!(task_id = record.id, "dispatch failed: {reason}");
@@ -1245,8 +1255,8 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         // attempt is in the log even when the task recovers and nobody ever
         // looks. It is also what makes the requeue below legal: `Retry` is a
         // transition out of `Failed`.
-        self.db.apply_event(
-            record.id,
+        let (_, task) = self.db.apply_event(
+            task,
             TaskEvent::Fail,
             Some(serde_json::json!({ "kind": "dispatch", "reason": reason })),
         )?;
@@ -1273,7 +1283,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                     "attempt": attempt,
                     "limit": DISPATCH_RETRY_LIMIT,
                 });
-                match self.db.retry_task(record.id, Some(detail)) {
+                match self.db.retry_task(task, Some(detail)) {
                     Ok(_) => {
                         // No notification, no status write-back: the task is
                         // not finished, and telling the operator about a
@@ -1632,6 +1642,7 @@ mod tests {
             created_at: String::new(),
             updated_at: String::new(),
             last_signal_at: None,
+            state_version: 0,
         }
     }
 
