@@ -1,3 +1,4 @@
 * **Creation**: [ADR-0096](/decisions/adr-0096-plugin-log-relay.md) — プラグインのログを一律 INFO で中継するのをやめた。SDK が stderr に全レベルの JSON Lines を書き、本体が元のレベル・target・フィールドで出し直す。判定は `[log] level` の 1 か所だけにした。使われていなかった `[plugins.<name>] log_level` は削除した（書いてあると起動時にエラーになる）
 * **Update**: [プラグイン開発ガイド](/development/plugin-dev-guide.md) / [ログ規約](/development/logging-conventions.md) — プラグインのログの書き方と中継のされ方を書き直した
 * **Update**: [設定リファレンス](/development/config-reference.md) / [設定例](/development/config-examples.md) / [orchestrator-spec](/product/orchestrator-spec.md) / [ja](/product/orchestrator-spec.ja.md) / [ADR-0058](/decisions/adr-0058-config-ownership-boundary.md) — `log_level` を取り除いた
+* **Update**: [plugin-sdk](/components/plugin-sdk.md) / [orchestrator-core](/components/orchestrator-core.md) — `init_tracing` の出力形式、`logging` の予約フィールドを反映した

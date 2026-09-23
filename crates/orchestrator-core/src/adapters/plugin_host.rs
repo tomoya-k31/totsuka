@@ -1027,8 +1027,9 @@ struct StderrRecord {
 }
 
 /// Parse one stderr line. `in_panic` carries across lines: once a panic
-/// header is seen, the untagged lines after it (the message, the backtrace
-/// note) are part of the panic too.
+/// header is seen, the untagged lines after it (the message, the backtrace)
+/// are part of the panic too — until the next SDK line, which means the
+/// process survived it (a panicked worker thread) and is logging normally.
 fn parse_stderr_line(line: &str, in_panic: &mut bool) -> StderrRecord {
     if let Ok(Value::Object(mut obj)) = serde_json::from_str::<Value>(line)
         && let Some(level) = obj
@@ -1036,6 +1037,7 @@ fn parse_stderr_line(line: &str, in_panic: &mut bool) -> StderrRecord {
             .and_then(Value::as_str)
             .and_then(|l| l.parse().ok())
     {
+        *in_panic = false;
         obj.remove("level");
         // Dropped: the host stamps its own time on the re-emitted record, and
         // the two differ only by the pipe's latency.
@@ -1057,7 +1059,9 @@ fn parse_stderr_line(line: &str, in_panic: &mut bool) -> StderrRecord {
             fields,
         };
     }
-    if line.starts_with("thread '") && line.contains("' panicked at") {
+    // `thread 'main' panicked at …`, and since the thread id was added
+    // `thread 'main' (50976717) panicked at …` — match both.
+    if line.starts_with("thread '") && line.contains(" panicked at ") {
         *in_panic = true;
     }
     StderrRecord {
@@ -1151,13 +1155,35 @@ mod tests {
     /// not read as `INFO` — nor must the lines under its header.
     #[test]
     fn a_panic_and_the_lines_after_it_are_error() {
+        for header in [
+            "thread 'main' panicked at src/main.rs:3:5:",
+            // What the current toolchain prints: the thread id comes first.
+            "thread '<unnamed>' (50984134) panicked at p.rs:1:33:",
+        ] {
+            let mut in_panic = false;
+            let before = parse_stderr_line("starting", &mut in_panic);
+            let head = parse_stderr_line(header, &mut in_panic);
+            let body = parse_stderr_line("boom", &mut in_panic);
+            assert_eq!(before.level, Level::INFO);
+            assert_eq!(head.level, Level::ERROR, "{header}");
+            assert_eq!(body.level, Level::ERROR, "{header}");
+        }
+    }
+
+    /// A panicked worker thread does not end the process; once the SDK logs
+    /// again, untagged lines are no longer part of that panic.
+    #[test]
+    fn an_sdk_line_ends_the_panic() {
         let mut in_panic = false;
-        let before = parse_stderr_line("starting", &mut in_panic);
-        let header = parse_stderr_line("thread 'main' panicked at src/main.rs:3:5:", &mut in_panic);
-        let body = parse_stderr_line("boom", &mut in_panic);
-        assert_eq!(before.level, Level::INFO);
-        assert_eq!(header.level, Level::ERROR);
-        assert_eq!(body.level, Level::ERROR);
+        parse_stderr_line(
+            "thread 'tokio-runtime-worker' (7) panicked at a.rs:1:1:",
+            &mut in_panic,
+        );
+        parse_stderr_line(
+            r#"{"level":"INFO","message":"still here","target":"p"}"#,
+            &mut in_panic,
+        );
+        assert_eq!(parse_stderr_line("plain", &mut in_panic).level, Level::INFO);
     }
 
     /// The relay filters on the host's level **before** the rate limit counts
