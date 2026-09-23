@@ -4,7 +4,7 @@ title: 運用ガイド（doctor / worktree 掃除 / FAQ）
 description: totsuka 日常運用の手引き。doctor の読み方、ランタイム health（縮退）の読み方と doctor との守備範囲の違い、worktree 掃除ポリシーと孤児掃除、run 停止・回復と SSH keepalive の推奨設定、メニューバー表示（SwiftBar）の導入と読み方、よくある問題の切り分け。
 resource: https://github.com/tomoya-k31/totsuka
 tags: [operations, doctor, health, worktree, menu, swiftbar, faq, troubleshooting]
-generated: { by: claude-code/opus-5-5, at: 2026-09-23T15:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-24T10:30:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -201,7 +201,7 @@ Host *
 - `totsuka status [--json]`: 実行中 / 待機（waiting_input・pending）タスクと worktree 一覧。**`Queued` のまま動かないタスクに理由が付いていればそれも出す**（`not starting yet:` ブロック / `--json` の `wait_reason`）。現状の唯一の理由は `blocked_agent_tools`（#399 の外部ツール未整備）で、対処は [config.toml リファレンス](/development/config-reference.md) 参照
 - `totsuka task show <id>`: 状態・セッション履歴・worktree・イベント全履歴
 - `totsuka task cancel <id>` / `retry <id>`: retry は failed/cancelled のみ。worktree/セッションを再利用して再開（F-44）
-- `totsuka logs [-f] [--task <id>]`: JSON Lines ログの整形表示。機密は logging layer で無条件マスク（§5.2）
+- `totsuka logs [-f] [--task <id>] [--utc]`: JSON Lines ログの整形表示。時刻はローカル時刻で出す（`--utc` で UTC。ファイルは UTC）。機密は logging layer で無条件マスク（§5.2）
 
 # メニューバー表示（SwiftBar）
 

@@ -14,7 +14,15 @@ use crate::common::{CliError, Cx, safe};
 const FOLLOW_TICK: Duration = Duration::from_millis(500);
 
 /// Execute `totsuka logs`.
-pub fn run(cx: &Cx, follow: bool, task: Option<i64>) -> Result<(), CliError> {
+///
+/// Timestamps are shown in local time unless `utc` (ADR-0097); the file
+/// itself is UTC.
+pub fn run(cx: &Cx, follow: bool, task: Option<i64>, utc: bool) -> Result<(), CliError> {
+    let offset = if utc {
+        logging::UtcOffset::UTC
+    } else {
+        logging::local_offset()
+    };
     let dir = logging::default_log_dir(cx.paths.state_dir());
     let Some(path) = latest_log_file(&dir)? else {
         return Err(format!(
@@ -26,7 +34,7 @@ pub fn run(cx: &Cx, follow: bool, task: Option<i64>) -> Result<(), CliError> {
 
     // Print the whole current file, then follow from its end.
     let mut reader = BufReader::new(std::fs::File::open(&path)?);
-    drain(&mut reader, task)?;
+    drain(&mut reader, task, offset)?;
 
     if !follow {
         return Ok(());
@@ -40,7 +48,7 @@ pub fn run(cx: &Cx, follow: bool, task: Option<i64>) -> Result<(), CliError> {
     let mut current = path;
     loop {
         std::thread::sleep(FOLLOW_TICK);
-        let advanced = drain(&mut reader, task)?;
+        let advanced = drain(&mut reader, task, offset)?;
         if !advanced
             && let Some(newest) = latest_log_file(&dir)?
             && newest != current
@@ -54,7 +62,11 @@ pub fn run(cx: &Cx, follow: bool, task: Option<i64>) -> Result<(), CliError> {
 /// Read and print every complete line available from `reader` up to its current
 /// EOF, leaving the reader positioned exactly at the bytes consumed. Returns
 /// whether any line was printed.
-fn drain<R: BufRead>(reader: &mut R, task: Option<i64>) -> Result<bool, CliError> {
+fn drain<R: BufRead>(
+    reader: &mut R,
+    task: Option<i64>,
+    offset: logging::UtcOffset,
+) -> Result<bool, CliError> {
     let mut line = String::new();
     let mut advanced = false;
     loop {
@@ -62,7 +74,7 @@ fn drain<R: BufRead>(reader: &mut R, task: Option<i64>) -> Result<bool, CliError
         if reader.read_line(&mut line)? == 0 {
             break; // EOF for now; a growing file yields more on the next drain.
         }
-        print_line(&line, task);
+        print_line(&line, task, offset);
         advanced = true;
     }
     Ok(advanced)
@@ -88,7 +100,7 @@ fn latest_log_file(dir: &Path) -> Result<Option<PathBuf>, CliError> {
 }
 
 /// Format one JSON log line for humans; pass through unparseable lines.
-fn print_line(line: &str, task: Option<i64>) {
+fn print_line(line: &str, task: Option<i64>, offset: logging::UtcOffset) {
     let trimmed = line.trim_end();
     if trimmed.is_empty() {
         return;
@@ -108,7 +120,9 @@ fn print_line(line: &str, task: Option<i64>) {
             return;
         }
     }
-    let timestamp = value["timestamp"].as_str().unwrap_or("-");
+    let raw_timestamp = value["timestamp"].as_str().unwrap_or("-");
+    let timestamp = logging::rfc3339_at(raw_timestamp, offset);
+    let timestamp = timestamp.as_deref().unwrap_or(raw_timestamp);
     let level = value["level"].as_str().unwrap_or("-");
     let message = value["message"].as_str().unwrap_or("");
     let mut extras = String::new();

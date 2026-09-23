@@ -19,7 +19,8 @@ serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true
 rusqlite.workspace = true
-time.workspace = true
+# `local-offset`: human-facing timestamps in the machine's time zone (ADR-0097).
+time = { workspace = true, features = ["local-offset"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 tracing-appender.workspace = true

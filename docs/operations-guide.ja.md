@@ -1,7 +1,7 @@
 > 🌐 [English](operations-guide.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/operations-guide.md sha256:f423d5e20ca37c67c98805539f25ee992b097aff687d3fa60887aa41610f2831 -->
+<!-- generated-from: ai-docs/operations/operations-guide.md sha256:56b4324c25a1ffb07342dc66a9452dd697526df0e98b69b00dcf37c18fdc99ec -->
 
 # 運用ガイド
 
@@ -177,7 +177,7 @@ Host *
 | `totsuka task show <id>` | 状態、セッション履歴、worktree、イベントの全履歴 |
 | `totsuka task cancel <id>` | タスクを中止する |
 | `totsuka task retry <id>` | 失敗・中止したタスクを、worktree とセッションを再利用して再開する |
-| `totsuka logs [-f] [--task <id>]` | ログの整形表示。機密は無条件にマスクされる |
+| `totsuka logs [-f] [--task <id>] [--utc]` | ログの整形表示。時刻はローカル時刻で出る（`--utc` で保存どおり UTC）。機密は無条件にマスクされる |
 
 `retry` が受け付けるのは失敗・中止したタスクだけで、完了したタスクは再実行できない。
 

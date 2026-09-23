@@ -264,7 +264,11 @@ where
         }
         fields.extend(collector.fields);
         collector.fields = fields;
-        let ts = now_rfc3339();
+        // The file is UTC, the terminal local time (ADR-0097).
+        let ts = now_rfc3339(match self.format {
+            LogFormat::Json => time::UtcOffset::UTC,
+            LogFormat::Human => super::local_offset(),
+        });
         let target = collector.target.as_deref().unwrap_or(meta.target());
 
         let line = match self.format {
@@ -327,11 +331,13 @@ fn level_label(level: &tracing::Level, ansi: bool) -> String {
     format!("\x1b[{color}m{name}\x1b[0m")
 }
 
-/// Current time as an RFC 3339 UTC string (matches the state DB convention).
-fn now_rfc3339() -> String {
+/// Current time as an RFC 3339 string at `offset` (UTC for the file, which
+/// matches the state DB convention).
+fn now_rfc3339(offset: time::UtcOffset) -> String {
     time::OffsetDateTime::now_utc()
+        .to_offset(offset)
         .format(&time::format_description::well_known::Rfc3339)
-        .expect("RFC3339 formatting of current UTC time is infallible")
+        .expect("RFC3339 formatting of the current time is infallible")
 }
 
 #[cfg(test)]

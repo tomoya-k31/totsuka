@@ -4,7 +4,7 @@ title: ログ規約（JSON Lines・機密マスキング）
 description: totsuka の構造化ログ規約。JSON Lines 1行1イベント、task_id 相関、機密マスキング（フィールド denylist＋値パターン）、log_prompts、日次ローテーションと世代保持。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/orchestrator-core/src/logging
 tags: [logging, tracing, security, convention]
-generated: { by: claude-code/opus-5, at: 2026-09-24T10:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-24T10:30:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -12,8 +12,9 @@ owner: tomoya-k31
 # 出力形式
 
 - ファイル: `$XDG_STATE_HOME/totsuka/logs/totsuka.log.YYYY-MM-DD`（`tracing-appender` 日次ローテーション）。**JSON Lines**（1 行 = 1 イベント = 1 JSON オブジェクト、`jq` でパース可能）。
-- ターミナル: 人間可読の 1 行形式。`NO_COLOR` と 非 TTY を尊重（§7）。
-- 各行のキー: `timestamp`（ISO 8601 UTC）/ `level`（ERROR..TRACE）/ `target` / 任意 `message` / イベントフィールド。
+- ターミナル: 人間可読の 1 行形式。`NO_COLOR` と 非 TTY を尊重（§7）。時刻は OS のタイムゾーン（`TZ` を尊重）の時差付き。
+- 時刻は**保存が UTC、表示がローカル**（[ADR-0097](/decisions/adr-0097-log-timestamps-local-display.md)）。`totsuka logs` もローカル時刻で表示し、`--utc` で保存どおり UTC にする。
+- 各行のキー: `timestamp`（RFC 3339、UTC）/ `level`（ERROR..TRACE）/ `target` / 任意 `message` / イベントフィールド。
 
 # プラグインのログ
 

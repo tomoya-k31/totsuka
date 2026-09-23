@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](operations-guide.ja.md)
 
-<!-- generated-from: ai-docs/operations/operations-guide.md sha256:f423d5e20ca37c67c98805539f25ee992b097aff687d3fa60887aa41610f2831 -->
+<!-- generated-from: ai-docs/operations/operations-guide.md sha256:56b4324c25a1ffb07342dc66a9452dd697526df0e98b69b00dcf37c18fdc99ec -->
 
 # Operations guide
 
@@ -176,7 +176,7 @@ Host *
 | `totsuka task show <id>` | State, session history, worktree, and the full event history |
 | `totsuka task cancel <id>` | Cancel a task |
 | `totsuka task retry <id>` | Restart a failed or cancelled task, reusing its worktree and session |
-| `totsuka logs [-f] [--task <id>]` | Formatted logs. Secrets are masked unconditionally |
+| `totsuka logs [-f] [--task <id>] [--utc]` | Formatted logs, with timestamps in local time (`--utc` shows them in UTC, as stored). Secrets are masked unconditionally |
 
 `retry` only accepts failed or cancelled tasks — a completed task cannot be re-run.
 
