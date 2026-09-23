@@ -1944,6 +1944,56 @@ async fn submit_without_matching_workflow_is_rejected() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// Engine 1 of a restart scenario: zero slots, so task `s9` is persisted (and
+/// acked) but can never dispatch — a crash between persist and dispatch.
+async fn persist_undispatched_submission(repo: &Path, source_log: &Path, db_path: &Path) {
+    let mut plugins = PluginSet::default();
+    plugins.sources.insert(
+        "mock_src".to_string(),
+        launch(
+            "task_source",
+            "mock_src",
+            json!({
+                "task_submit": true,
+                "submit_workflow": "wf", "submit_tasks": [mock_task("s9")],
+                "notify_log": source_log,
+            }),
+        )
+        .await,
+    );
+    plugins.agents.insert(
+        "mock_agent".to_string(),
+        launch(
+            "agent_ide",
+            "mock_agent",
+            json!({ "stream_states": ["running", "done"] }),
+        )
+        .await,
+    );
+    let mut settings = engine_settings(repo);
+    settings.limits = Limits::global(0);
+    let mut engine = Engine::new(
+        StateDb::open(db_path).unwrap(),
+        settings,
+        plugins,
+        SystemGitRunner::default(),
+        no_llm(),
+    )
+    .await;
+    let db_probe = db_path.to_path_buf();
+    let summary = run_watch_until(&mut engine, move || {
+        StateDb::open(&db_probe)
+            .unwrap()
+            .find_by_source("mock_src", "s9")
+            .unwrap()
+            .is_some()
+    })
+    .await;
+    assert_eq!(summary.stats.submitted, 1);
+    assert_eq!(summary.stats.dispatched, 0);
+    engine.shutdown(Duration::from_secs(5)).await;
+}
+
 #[tokio::test]
 async fn restart_dispatches_persisted_but_undispatched_submission() {
     let base = scratch("submit_replay");
@@ -1951,55 +2001,7 @@ async fn restart_dispatches_persisted_but_undispatched_submission() {
     let source_log = base.join("source.ndjson");
     let db_path = base.join("state.db");
 
-    // Engine 1: zero slots — the submission is persisted (and acked) but can
-    // never dispatch, simulating a crash between persist and dispatch.
-    {
-        let mut plugins = PluginSet::default();
-        plugins.sources.insert(
-            "mock_src".to_string(),
-            launch(
-                "task_source",
-                "mock_src",
-                json!({
-                    "task_submit": true,
-                    "submit_workflow": "wf", "submit_tasks": [mock_task("s9")],
-                    "notify_log": source_log,
-                }),
-            )
-            .await,
-        );
-        plugins.agents.insert(
-            "mock_agent".to_string(),
-            launch(
-                "agent_ide",
-                "mock_agent",
-                json!({ "stream_states": ["running", "done"] }),
-            )
-            .await,
-        );
-        let mut settings = engine_settings(&repo);
-        settings.limits = Limits::global(0);
-        let mut engine = Engine::new(
-            StateDb::open(&db_path).unwrap(),
-            settings,
-            plugins,
-            SystemGitRunner::default(),
-            no_llm(),
-        )
-        .await;
-        let db_probe = db_path.clone();
-        let summary = run_watch_until(&mut engine, move || {
-            StateDb::open(&db_probe)
-                .unwrap()
-                .find_by_source("mock_src", "s9")
-                .unwrap()
-                .is_some()
-        })
-        .await;
-        assert_eq!(summary.stats.submitted, 1);
-        assert_eq!(summary.stats.dispatched, 0);
-        engine.shutdown(Duration::from_secs(5)).await;
-    }
+    persist_undispatched_submission(&repo, &source_log, &db_path).await;
 
     // Engine 2 over the same DB: the startup cycle picks the queued row up
     // with no re-submission — persist-before-ack means nothing was lost.
@@ -2047,6 +2049,62 @@ async fn restart_dispatches_persisted_but_undispatched_submission() {
         engine.shutdown(Duration::from_secs(5)).await;
     }
 
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// A stop that arrived while the CLI was still starting up (#753) is already
+/// resolved when `run` begins. The startup cycle would dispatch the queued
+/// row — exactly what `restart_dispatches_persisted_but_undispatched_submission`
+/// proves — so the run must stop before it instead.
+#[tokio::test]
+async fn a_stop_requested_before_run_dispatches_nothing() {
+    let base = scratch("stop_before_run");
+    let repo = setup_repo(&base);
+    let source_log = base.join("source.ndjson");
+    let db_path = base.join("state.db");
+    persist_undispatched_submission(&repo, &source_log, &db_path).await;
+
+    let mut plugins = PluginSet::default();
+    plugins.sources.insert(
+        "mock_src".to_string(),
+        launch(
+            "task_source",
+            "mock_src",
+            json!({ "task_submit": true, "notify_log": source_log }),
+        )
+        .await,
+    );
+    plugins.agents.insert(
+        "mock_agent".to_string(),
+        launch(
+            "agent_ide",
+            "mock_agent",
+            json!({ "stream_states": ["running", "done"] }),
+        )
+        .await,
+    );
+    let mut engine = Engine::new(
+        StateDb::open(&db_path).unwrap(),
+        engine_settings(&repo),
+        plugins,
+        SystemGitRunner::default(),
+        no_llm(),
+    )
+    .await;
+    let summary = tokio::time::timeout(
+        Duration::from_secs(60),
+        engine.run(true, std::future::ready(())),
+    )
+    .await
+    .expect("an already-requested stop must end even a --watch run")
+    .unwrap();
+
+    assert!(summary.interrupted);
+    assert_eq!(summary.stats.dispatched, 0);
+    let db = StateDb::open(&db_path).unwrap();
+    let task = db.find_by_source("mock_src", "s9").unwrap().unwrap();
+    assert_eq!(task.state, TaskState::Queued);
+    engine.shutdown(Duration::from_secs(5)).await;
     let _ = std::fs::remove_dir_all(&base);
 }
 

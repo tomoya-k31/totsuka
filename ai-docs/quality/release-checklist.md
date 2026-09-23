@@ -4,7 +4,7 @@ title: リリース前手動チェックリスト（実機結合）
 description: CI で自動化できない実機（herdr / orca）・設計プレビュー・通知・waiting_input 応答の目視確認手順。リリース前に実施する。
 resource: https://github.com/tomoya-k31/totsuka
 tags: [release, manual-test, checklist, herdr, orca, e2e]
-generated: { by: claude-code/opus-5, at: 2026-09-17T12:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-23T03:45:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -51,7 +51,7 @@ CI（[テスト戦略](/quality/test-strategy.md)）は実 mock プラグイン�
 
 # 信頼性・回復
 
-- [ ] `run --watch` 中に SIGINT で graceful 停止し、ロックが解放される（F-74）
+- [ ] `run --watch` 中に SIGINT / SIGTERM / SIGHUP のそれぞれで graceful 停止し、ロック・`health.json`・フックソケットが片付く（F-74、#753）
 - [ ] 実行中に強制終了（SIGKILL）→ 再起動で `session/attach` により再接続、再接続不能なら継続確認待ち（§5.3）
 - [ ] `task retry` が worktree / セッションを再利用して再開する（F-44）
 

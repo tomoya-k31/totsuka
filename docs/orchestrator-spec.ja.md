@@ -1,7 +1,7 @@
 > 🌐 [English](orchestrator-spec.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/product/orchestrator-spec.ja.md sha256:fff420c64c9694f0a3195a0536166aab556b69002cc53cc100eb942f6563fb10 -->
+<!-- generated-from: ai-docs/product/orchestrator-spec.ja.md sha256:d92e0427e577bf71b55f842c689398306cf2d1152d7641b3f14926647086b994 -->
 
 # totsuka とは
 
@@ -134,6 +134,8 @@ totsuka task export --since 4213 > today.ndjson   # 前回の続きだけ
 **設定・状態・ログの置き場所は XDG Base Directory 仕様に従う**ので、環境変数で移せる。
 
 **出力は `NO_COLOR` と非対話端末を尊重する。**
+
+**停止はどのシグナルでも穏やかに行う。** `run` は SIGINT（Ctrl-C）、SIGTERM（launchd・`brew services`・`kill`）、SIGHUP（端末を閉じる）のどれでも同じように止まる。実行中のタスクは状態 DB に残り、ロックは解放される。
 
 **回復は明示的である。** 異常終了の後、totsuka は状態 DB からセッションを復元して再接続を試みる。再接続できなかったタスクは自動で失敗にはせず、あなたが retry か cancel を選ぶまで待つ。
 

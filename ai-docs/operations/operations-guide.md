@@ -173,7 +173,11 @@ worktree↔pane の連動（[ADR-0010](/decisions/adr-0010-worktree-cleanup-pane
 
 # 停止・回復
 
-- `run --watch` は SIGINT で graceful 停止。実行中タスクは状態 DB に残し、ロックを解放する（F-74）
+- `run --watch` は **SIGINT / SIGTERM / SIGHUP** のどれでも graceful 停止する（#753）。実行中タスクは状態 DB に残し、ロック・`health.json`・フックソケットを片付ける（F-74 / F-110）。launchd・`brew services`・`kill <pid>` は SIGTERM、端末ウィンドウを閉じると SIGHUP が届く。SIGHUP は設定の再読込ではない。終了コードはどれも 0（`--json` の `interrupted` は `true`）で、どのシグナルで止まったかはログの `stop requested` 行の `signal` に出る
+  - ハンドラは `run.lock` を取った直後に入る。起動中（プラグイン起動・回復）に届いた停止は保持され、ループ開始時に **dispatch を 1 件もせずに** 止まる
+  - 停止処理中の 2 回目のシグナルは無視される。すぐに止めたいときは SIGKILL
+  - git が固まっている間は Engine がシグナルを見に行けない。端末の Ctrl-C は前面グループの git にも届くのですぐ戻るが、`kill -TERM <pid>` は totsuka にしか届かないので、git の上限（既定 300 秒、[ADR-0092](/decisions/adr-0092-git-timeout.md)）まで停止が遅れうる。launchd は `ExitTimeOut`（既定 20 秒）を過ぎると SIGKILL を送る
+  - 実測（#753、mock プラグイン、端末ジョブと同じく独立したプロセスグループで起動）: 修正前は SIGTERM / SIGHUP で即死し、`run.lock`・`health.json`・フックソケットが残った。**プラグインのプロセスはどの場合も残らなかった** — 親が死ぬと stdin が EOF になり、SDK の読み取りループが抜けるため。修正後は pid 宛ての SIGTERM / SIGHUP、グループ宛ての SIGHUP / SIGINT（端末を閉じる・Ctrl-C 相当）のいずれでも 3 ファイルとも消え、exit 0。herdr ペインで動くエージェントは herdr の子プロセスで totsuka の子ではないので、run を止めても残るのが仕様（次回起動時に `session/attach` で再接続する）
 - 異常終了（SIGKILL 含む）後の再起動は、状態 DB からセッション ID を復元し `session/attach` で再接続を試みる（§5.3）。再接続不能なタスクは **自動 failed にせず**「継続確認待ち」として残り、`totsuka task retry <id>` / `task cancel <id>` を人間が選ぶ
 - `run` の多重起動は `$XDG_STATE_HOME/totsuka/run.lock` + PID で防止。`totsuka status` は run 停止中に stale を明示する
 

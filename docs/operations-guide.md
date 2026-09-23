@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](operations-guide.ja.md)
 
-<!-- generated-from: ai-docs/operations/operations-guide.md sha256:5c6979d15ed8e176a1ea2ffdd2d40647984791bef24b13f22991ee05f3f9bfa5 -->
+<!-- generated-from: ai-docs/operations/operations-guide.md sha256:f423d5e20ca37c67c98805539f25ee992b097aff687d3fa60887aa41610f2831 -->
 
 # Operations guide
 
@@ -145,7 +145,11 @@ When the link between a worktree and its pane breaks — you removed a worktree 
 
 ## Stopping and recovering
 
-- `run --watch` stops gracefully on Ctrl-C. Running tasks stay in the state database and the lock is released
+- `run --watch` stops gracefully on SIGINT (Ctrl-C), SIGTERM and SIGHUP alike. launchd, `brew services` and `kill <pid>` send SIGTERM; closing the terminal window sends SIGHUP (it does not reload the configuration). Running tasks stay in the state database, and the lock, `health.json` and the hook socket are cleaned up. The exit code is 0 in every case (`interrupted` is `true` with `--json`), and the `stop requested` log line records which signal it was
+  - A stop that arrives while `run` is still starting up is kept, and `run` stops as soon as its loop begins, without dispatching anything
+  - A second signal during shutdown is ignored. Use SIGKILL to stop immediately
+  - While a git command is stuck, `run` cannot act on the signal. Ctrl-C also reaches the git process, so it returns at once, but `kill -TERM <pid>` reaches only totsuka, so the stop can be delayed until the git time limit (300 seconds by default). launchd sends SIGKILL once its `ExitTimeOut` (20 seconds by default) has passed
+  - Plugin processes do not outlive `run`, even when it is killed: they exit when `run`'s end of their input closes. Agents running in herdr panes belong to herdr, not to totsuka, so they keep running and are reattached on the next start
 - After an abnormal exit, restarting restores sessions from the state database and tries to reattach. Tasks that cannot be reattached are **not failed automatically** — they wait for you to choose `totsuka task retry <id>` or `totsuka task cancel <id>`
 - A lock file plus a PID check prevents running `run` twice. While `run` is stopped, `totsuka status` says explicitly that its information is stale
 

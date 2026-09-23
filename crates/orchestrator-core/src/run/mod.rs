@@ -644,8 +644,10 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// not have landed on the loop's first iteration — the grace period gives
     /// it a real chance instead of exiting on an empty snapshot); `--watch`
     /// keeps the loop alive, receiving `task/submit` pushes as they arrive,
-    /// until `shutdown` resolves (SIGINT → graceful: in-flight tasks stay in
-    /// the state DB for next-start recovery). There is no Orchestrator-side
+    /// until `shutdown` resolves (a stop request — SIGINT / SIGTERM / SIGHUP
+    /// in the CLI, #753 → graceful: in-flight tasks stay in the state DB for
+    /// next-start recovery; one that has already resolved skips the first
+    /// cycle, so nothing is dispatched after it). There is no Orchestrator-side
     /// polling to schedule tasks with, but a short heartbeat tick still
     /// re-runs [`cycle`](Self::cycle) periodically in both modes so signal
     /// timeouts (D-03) and worktree retention (F-23) are re-checked even when
@@ -655,7 +657,6 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         F: std::future::Future<Output = ()>,
     {
         tokio::pin!(shutdown);
-        let mut interrupted = false;
 
         // Start the UDS hook receiver (#136), if a hook runtime is configured.
         // It runs as a detached task; a `watch` channel signals graceful
@@ -695,7 +696,18 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             None => None,
         };
 
-        self.cycle().await?;
+        // A stop requested while the CLI was still starting up (#753 — the
+        // signal handlers are installed right after `run.lock`, so it is
+        // buffered, not lost) must not be answered with a dispatch: the first
+        // cycle can launch an agent. Checked once, without waiting.
+        let mut interrupted = tokio::select! {
+            biased;
+            () = &mut shutdown => true,
+            () = std::future::ready(()) => false,
+        };
+        if !interrupted {
+            self.cycle().await?;
+        }
 
         // One-shot's quiet-period floor: every source is push-only, so a
         // task submitted right after launch may not have arrived by the
@@ -704,12 +716,17 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         // exiting the instant nothing happens to be monitored yet.
         let mut last_activity = tokio::time::Instant::now();
 
-        loop {
+        while !interrupted {
             if !watch && self.settled()? && last_activity.elapsed() >= self.settings.one_shot_grace
             {
                 break;
             }
+            // `biased`, shutdown first (#753 review): a signal sent to the
+            // whole process group (Ctrl-C, a closed terminal) kills the
+            // plugins at the same moment, and a randomly picked `Closed` event
+            // would fail in-flight tasks the graceful stop promises to keep.
             tokio::select! {
+                biased;
                 _ = &mut shutdown => {
                     interrupted = true;
                     break;
