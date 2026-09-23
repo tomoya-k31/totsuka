@@ -4,7 +4,7 @@ title: 運用ガイド（doctor / worktree 掃除 / FAQ）
 description: totsuka 日常運用の手引き。doctor の読み方、ランタイム health（縮退）の読み方と doctor との守備範囲の違い、worktree 掃除ポリシーと孤児掃除、run 停止・回復と SSH keepalive の推奨設定、メニューバー表示（SwiftBar）の導入と読み方、よくある問題の切り分け。
 resource: https://github.com/tomoya-k31/totsuka
 tags: [operations, doctor, health, worktree, menu, swiftbar, faq, troubleshooting]
-generated: { by: claude-code/opus-5, at: 2026-09-23T13:00:00+09:00 }
+generated: { by: claude-code/opus-5-5, at: 2026-09-23T15:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -281,7 +281,7 @@ EOF
 - **リポジトリ選択が `pending`**: `[llm]` 未設定 or 確信度が低い。単一リポジトリなら自動選択、複数なら `[llm]` を設定するか `repo_hint` を付与
 - **`totsuka task show` にブランチが出ない**: エージェントがブランチを切っていない（worktree は detached HEAD で渡る）。コミットがあれば掃除は worktree を残すので、そこで作業を拾える。plan モードは常にこの状態が正常
 - **``git … did not finish within <N>s and was killed``**: git が上限時間（`[worktree].git_timeout_secs`）内に終わらず、totsuka が止めた（[ADR-0092](/decisions/adr-0092-git-timeout.md)）。dispatch 中なら自動で再キューされる。多くは ssh の死んだ接続なので、[SSH の keepalive](#ssh-の-keepalive推奨設定764) を設定する。続けて出るなら `git fetch origin` を手で実行して、ネットワークと remote への接続を確かめる
-- **スリープ明けに複数タスクがまとめて `failed` になっている**: orca の deadman が、スリープ中の dark wake（約 16 分ごとに数秒起きる）のたびに `runtime_timeout` を 1 回数え、5 回でエージェントが死んだと判断していた（2026-09-22 に実測、生きている 7 タスクが同じ 1 秒で失敗）。0.8.5 以降は、失敗の間にスリープが挟まれば数え直す。`totsuka logs` に `terminal wait failed … runtime_timeout` が起床ごとに 1 行ずつ並んでいたらこれ。失敗したタスクは、カードを trigger の列へ戻せば同じ会話から再開する
+- **スリープ明けに複数タスクがまとめて `failed` になっている**: orca の deadman が、スリープ中の dark wake（約 16 分ごとに数秒起きる）のたびに `runtime_timeout` を 1 回数え、5 回でエージェントが死んだと判断していた（2026-09-22 に実測、生きている 7 タスクが同じ 1 秒で失敗）。0.8.5 以降は、Orca に問い合わせられないだけではタスクを `failed` にしない（`terminal show` でエージェントの端末が終わったと確かめられたときだけ）。`totsuka logs` に `terminal wait failed … runtime_timeout` が起床ごとに 1 行ずつ並んでいたらこれ。失敗したタスクは、カードを trigger の列へ戻せば同じ会話から再開する
 - **通知が来ない**: `[plugins.{notifier}] enabled` と `notifier` プラグイン疎通を `doctor` で確認。配送失敗はタスク実行を止めない（F-93）
 
 リリース前の実機確認は [リリース前手動チェックリスト](/quality/release-checklist.md) を参照。

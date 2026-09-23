@@ -2,6 +2,8 @@
 
 ## 2026-09-23
 
+* **Update**: [agent-ide-orca](/components/agent-ide-orca.md) — deadman が `failed` を送るのは `terminal show` で端末の終了を確かめたときだけにした（#768）。`terminal wait` の失敗が 5 回続いたら確かめずに `failed` にする打ち切りと、スリープをまたいだら数え直す `ErrorRun` を削除した。待ち直しの間隔は 2 秒から倍々で最長 60 秒
+* **Update**: [運用ガイド](/operations/operations-guide.md) — 「スリープ明けに複数タスクがまとめて failed」の FAQ を、0.8.5 の直し方に合わせて書き直した
 * **Update**: [agent-ide-orca](/components/agent-ide-orca.md) — deadman の連続エラーを「起きている間に連続した」ものだけ数えるようにした。スリープ中の dark wake ごとに Orca が `runtime_timeout` を返し、それが積み上がって生きているエージェントが `failed` にされていた
 * **Update**: [運用ガイド](/operations/operations-guide.md) — 「スリープ明けに複数タスクがまとめて failed」の切り分けを FAQ に足した
 * **Creation**: [ADR-0093](/decisions/adr-0093-waiting-holds-slot.md) — 人間待ち（`waiting_input` / `escalated`）のタスクもスロットを保持するようにした。入力待ちで枠が空くため `max_concurrency` が上限として働かず、キューのタスクが次々に中途半端に進んでいた。設定での切り替えは設けず、既定の挙動を変えた

@@ -38,7 +38,7 @@
 //!   rewrites that through OSC within seconds, `terminal rename` included.
 
 use std::path::Path;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::Duration;
 
 use plugin_protocol::methods::{
     AgentState, DiagnosticsSnapshotResult, NotReleased, SessionAttachResult, SessionFocusResult,
@@ -97,51 +97,14 @@ const SUBMIT_WAIT_SECS: u64 = 60;
 /// process lives.
 const EXIT_WAIT_MS: u64 = 600_000;
 
-/// The deadman gives up — reporting `failed` — after this many consecutive
-/// waits that failed for a reason other than orca's own `timeout`.
-const MAX_CONSECUTIVE_ERRORS: u32 = 5;
-
-/// The pause between two such failed waits.
+/// The first pause after a wait that settled nothing — a failed `wait`, or a
+/// claim of the end that `terminal show` did not bear out. Each such pause
+/// doubles, up to [`MAX_ERROR_BACKOFF`], until a wait returns normally.
 const ERROR_BACKOFF: Duration = Duration::from_secs(2);
 
-/// How far the wall clock may run ahead of the process clock between two
-/// failed waits before the gap counts as the host having slept.
-const SLEEP_SLACK: Duration = Duration::from_secs(30);
-
-/// A run of consecutive failed waits — **consecutive while awake**.
-///
-/// A host that sleeps with dark wakes (Power Nap: a few seconds awake every
-/// ~16 minutes) gives every wait one `runtime_timeout` per wake — the Orca app
-/// is not answering yet — and sleeps again before a wait can succeed and reset
-/// the count. Counted plainly, five wakes (~80 minutes asleep) reported every
-/// live agent `failed` at once: observed 2026-09-22, seven tasks in one
-/// second. A sleep between two failures therefore starts the run over. It is
-/// detected the way the engine's resume detection is: the process clock
-/// (`Instant`) stands still while the host sleeps, the wall clock does not.
-#[derive(Debug, Default)]
-struct ErrorRun {
-    count: u32,
-    last: Option<(SystemTime, Instant)>,
-}
-
-impl ErrorRun {
-    fn reset(&mut self) {
-        *self = Self::default();
-    }
-
-    /// Count one failed wait seen at `now`; returns the run's length.
-    fn record(&mut self, now: (SystemTime, Instant)) -> u32 {
-        if let Some((wall, mono)) = self.last {
-            let wall_gap = now.0.duration_since(wall).unwrap_or_default();
-            if wall_gap.saturating_sub(now.1 - mono) >= SLEEP_SLACK {
-                self.count = 0;
-            }
-        }
-        self.count += 1;
-        self.last = Some(now);
-        self.count
-    }
-}
+/// The longest of those pauses: an Orca that stays down is asked once a
+/// minute, and noticed within a minute once it is back.
+const MAX_ERROR_BACKOFF: Duration = Duration::from_secs(60);
 
 /// How many lines the stream-read fallback of a snapshot asks for.
 const SNAPSHOT_LINES: u32 = 200;
@@ -931,7 +894,7 @@ impl<C: OrcaCli> OrcaAgent<C> {
         let (tx, rx) = mpsc::unbounded_channel();
 
         tokio::spawn(async move {
-            let mut errors = ErrorRun::default();
+            let mut pause = ERROR_BACKOFF;
             let reason = loop {
                 if tx.is_closed() {
                     return; // the consumer is gone
@@ -953,57 +916,52 @@ impl<C: OrcaCli> OrcaAgent<C> {
                 // measured live, it answered "gone" for a terminal whose
                 // agent was still working (task 9 of the first orca e2e,
                 // 2026-09-19 — failed 5s into a run that went on to finish).
-                // So every "it ended" is checked against `terminal show`
-                // before it becomes `failed`.
+                // A failed `wait` says even less — only that orca could not be
+                // asked. Every one of them is checked against `terminal show`,
+                // and only a confirmed end becomes `failed` (#768).
                 let claim = match waited {
-                    Ok(wait) if wait_satisfied(&wait) => Some(exit_description(&wait)),
+                    Ok(wait) if wait_satisfied(&wait) => exit_description(&wait),
                     Ok(_) => {
-                        errors.reset();
-                        None
+                        pause = ERROR_BACKOFF;
+                        continue;
                     }
                     Err(e) if e.is_wait_timeout() => {
-                        errors.reset();
-                        None
+                        pause = ERROR_BACKOFF;
+                        continue;
                     }
-                    Err(e) if e.is_gone() => Some(format!(
-                        "the agent's terminal is gone (closed, or its process exited): {e}"
-                    )),
+                    Err(e) if e.is_gone() => {
+                        format!("the agent's terminal is gone (closed, or its process exited): {e}")
+                    }
+                    // A host that sleeps and wakes every ~16 minutes gets one
+                    // `runtime_timeout` per wake and no successful wait in
+                    // between; counted as "consecutive", five of them once
+                    // failed every live agent (#768, task 12).
                     Err(e) => {
-                        let consecutive_errors = errors.record((SystemTime::now(), Instant::now()));
-                        tracing::warn!(error = %e, consecutive_errors, "terminal wait failed");
-                        if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
-                            break format!(
-                                "orca could not be asked about the agent's terminal after \
-                                 {consecutive_errors} attempts: {e}"
-                            );
-                        }
-                        tokio::time::sleep(ERROR_BACKOFF).await;
-                        None
+                        tracing::warn!(error = %e, "terminal wait failed; asking `terminal show`");
+                        format!(
+                            "`terminal wait` failed ({e}), and `terminal show` confirms the terminal has ended"
+                        )
                     }
                 };
-                let Some(claim) = claim else { continue };
                 match confirm_ended(&cli, &session_id).await {
                     Ended::Yes => break claim,
-                    Ended::No => {
-                        tracing::warn!(
-                            handle = %session_id,
-                            claim = %claim,
-                            "orca said the agent's terminal ended, but `terminal show` has it \
-                             connected; waiting again"
-                        );
-                        // Paced: a `wait` that keeps answering this at once
-                        // must not spin the CLI.
-                        tokio::time::sleep(ERROR_BACKOFF).await;
-                    }
-                    Ended::Unknown(e) => {
-                        let consecutive_errors = errors.record((SystemTime::now(), Instant::now()));
-                        tracing::warn!(error = %e, consecutive_errors, "could not confirm the end");
-                        if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
-                            break format!("{claim} (unconfirmed: {e})");
-                        }
-                        tokio::time::sleep(ERROR_BACKOFF).await;
-                    }
+                    Ended::No => tracing::warn!(
+                        handle = %session_id,
+                        claim = %claim,
+                        retry_in = ?pause,
+                        "`terminal show` has the agent's terminal connected; waiting again"
+                    ),
+                    Ended::Unknown(e) => tracing::warn!(
+                        error = %e,
+                        claim = %claim,
+                        retry_in = ?pause,
+                        "could not confirm the end; waiting again"
+                    ),
                 }
+                // Paced, and paced harder the longer nothing settles: a `wait`
+                // that keeps failing or claiming at once must not spin the CLI.
+                tokio::time::sleep(pause).await;
+                pause = (pause * 2).min(MAX_ERROR_BACKOFF);
             };
             let _ = tx.send(StateNotification {
                 session_id,
@@ -1219,33 +1177,6 @@ fn args<const N: usize>(parts: [&str; N]) -> Vec<String> {
 mod tests {
     use super::*;
     use serde_json::json;
-
-    #[test]
-    fn a_sleep_between_failed_waits_starts_the_run_over() {
-        let (wall, mono) = (SystemTime::now(), Instant::now());
-        let mut run = ErrorRun::default();
-        // Awake: failures 2 s apart on both clocks keep counting.
-        for i in 0..4u32 {
-            let t = Duration::from_secs(2 * u64::from(i));
-            assert_eq!(run.record((wall + t, mono + t)), i + 1);
-        }
-        // A dark wake 16 minutes later: the process clock moved 2 s.
-        let later = (
-            wall + Duration::from_secs(8 + 16 * 60),
-            mono + Duration::from_secs(8),
-        );
-        assert_eq!(
-            run.record(later),
-            1,
-            "a sleep in between is not \"consecutive\""
-        );
-
-        // Exactly at the threshold is a sleep, like the engine's own resume
-        // detection (`>=`, not `>`).
-        let mut run = ErrorRun::default();
-        run.record((wall, mono));
-        assert_eq!(run.record((wall + SLEEP_SLACK, mono)), 1);
-    }
 
     fn params(body: Option<&str>, extra: Option<Value>) -> TaskDispatchParams {
         TaskDispatchParams {
