@@ -1347,7 +1347,8 @@ async fn a_task_waiting_for_input_keeps_its_slot() {
     // `totsuka task cancel` only writes the DB; the running engine must still
     // notice and hand the slot on.
     let id = db.find_by_source("mock_src", waiting).unwrap().unwrap().id;
-    db.apply_event(id, TaskEvent::Cancel, None).unwrap();
+    db.apply_event(db.task_ref(id).unwrap(), TaskEvent::Cancel, None)
+        .unwrap();
     engine.cycle().await.unwrap();
     engine.shutdown(Duration::from_secs(5)).await;
     assert_ne!(
@@ -1431,7 +1432,7 @@ async fn a_retry_releases_the_stale_pane_before_dispatching_again() {
     // session it already has (the path the bug was reachable through).
     StateDb::open(&db_path)
         .unwrap()
-        .retry_task(task.id, None)
+        .retry_task(task.task_ref(), None)
         .unwrap();
 
     let plugins = plugin_set_with_source(
@@ -1580,7 +1581,7 @@ async fn retry_after_a_publish_failure_can_publish_again() {
     StateDb::open(&db_path)
         .unwrap()
         .apply_event(
-            task.id,
+            task.task_ref(),
             orchestrator_core::domain::state::TaskEvent::Retry,
             None,
         )
@@ -1682,13 +1683,13 @@ async fn missing_workflow_at_finalize_keeps_worktree_not_deletes() {
     // Force the task into Publishing (agent done) directly, then finalize with a
     // config that no longer has the workflow.
     db.apply_event(
-        task.id,
+        db.task_ref(task.id).unwrap(),
         orchestrator_core::domain::state::TaskEvent::Start,
         None,
     )
     .ok();
     db.apply_event(
-        task.id,
+        db.task_ref(task.id).unwrap(),
         orchestrator_core::domain::state::TaskEvent::BeginPublish,
         None,
     )

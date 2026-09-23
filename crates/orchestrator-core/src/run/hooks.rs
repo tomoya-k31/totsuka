@@ -207,15 +207,15 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                 // drive that one transition explicitly; every other
                 // pre-completion state reuses the Done path unchanged.
                 if record.state == TaskState::Escalated {
-                    self.db.apply_event(
-                        record.id,
+                    let (_, task) = self.db.apply_event(
+                        record.task_ref(),
                         TaskEvent::BeginPublish,
                         Some(serde_json::json!({
                             "kind": "hook_complete",
                             "publish_artifact": self.agent_output.get(&record.id),
                         })),
                     )?;
-                    self.finalize_success(record).await?;
+                    self.finalize_success(record, task).await?;
                 } else {
                     self.apply_agent_state(record.id, agent_plugin, AgentState::Done, None)
                         .await?;
@@ -224,9 +224,10 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             VerificationMode::Human => {
                 // Move from Dispatched into the pipeline first if the completion
                 // is the very first signal, then self-report → Verifying.
+                let mut task = record.task_ref();
                 if record.state == TaskState::Dispatched {
-                    self.db.apply_event(
-                        record.id,
+                    (_, task) = self.db.apply_event(
+                        task,
                         TaskEvent::Start,
                         Some(serde_json::json!({ "kind": "hook_start" })),
                     )?;
@@ -234,7 +235,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                 // Persist the artifact on the transition so a restart can verify
                 // and publish without re-deriving it (#133 recovery safety).
                 self.db.apply_event(
-                    record.id,
+                    task,
                     TaskEvent::SelfReportComplete,
                     Some(serde_json::json!({
                         "kind": "self_report",
@@ -319,7 +320,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             // Resume from an escalation straight into WaitingInput.
             TaskState::Escalated => {
                 self.db.apply_event(
-                    record.id,
+                    record.task_ref(),
                     TaskEvent::WaitInput,
                     Some(serde_json::json!({ "kind": kind, "reason": reason })),
                 )?;
@@ -352,7 +353,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             return Ok(());
         }
         self.db.apply_event(
-            record.id,
+            record.task_ref(),
             TaskEvent::Fail,
             Some(serde_json::json!({ "kind": "hook", "reason": reason })),
         )?;
@@ -457,7 +458,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         }
         let snapshot = self.diagnostics_snapshot(record).await;
         self.db.apply_event(
-            record.id,
+            record.task_ref(),
             TaskEvent::Escalate,
             Some(serde_json::json!({
                 "kind": "escalate",
@@ -982,7 +983,7 @@ mod tests {
             .unwrap();
         engine
             .db
-            .apply_event(id, TaskEvent::Dispatch, None)
+            .apply_event(engine.db.task_ref(id).unwrap(), TaskEvent::Dispatch, None)
             .unwrap();
         assert!(engine.slots.acquire("web", "mock"));
         engine

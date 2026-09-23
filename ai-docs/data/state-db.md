@@ -4,7 +4,7 @@ title: 状態DB（SQLite state.db）スキーマ
 description: タスク実行状態を永続化する SQLite DB（$XDG_STATE_HOME/totsuka/state.db）の tasks/sessions/events/hook_events/task_messages/schema_migrations スキーマと設計判断。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/adapters/state_db.rs
 tags: [sqlite, state, schema, statemachine, hooks]
-generated: { by: claude-code/opus-5, at: 2026-09-23T12:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-09-24T12:00:00+09:00 }
 verified:
   - { by: claude-code/opus-5, at: 2026-08-19T02:36:00Z }
 status: stable
@@ -17,7 +17,7 @@ owner: tomoya-k31
 
 # Schema
 
-## ER 図（v8 時点）
+## ER 図（v9 時点）
 
 `tasks` を中心に `sessions` / `events` / `hook_events` / `task_messages` が `task_id` で 1:N にぶら下がる。**worktree に専用テーブルはなく**、タスクと 1:1 のため `tasks.repo` / `worktree_path` / `branch` / `base_commit` の 4 列で表現する（実体の状態は git を直接参照）。tmux の pane も永続化せず、`session list` / `doctor` は tmux を実走査して DB と突き合わせる。`schema_migrations` は FK を持たない独立テーブル。
 
@@ -47,6 +47,7 @@ erDiagram
         TEXT created_at "NN — ISO 8601 UTC"
         TEXT updated_at "NN — ISO 8601 UTC"
         TEXT last_signal_at "v2 — R-10 タイムアウト起点"
+        INTEGER state_version "NN default 0 — v9、遷移ごとに +1（楽観的並行制御）"
     }
 
     sessions {
@@ -92,7 +93,7 @@ erDiagram
     }
 
     schema_migrations {
-        INTEGER version PK "index+1 = version（現行 v8）"
+        INTEGER version PK "index+1 = version（現行 v9）"
         TEXT applied_at "NN"
         TEXT applied_by "導入したアプリ版数（旧 DB は NULL = 不明）"
     }
@@ -120,6 +121,7 @@ erDiagram
 | finished_at | TEXT NULL | 終端到達時刻（retention 起点） |
 | created_at / updated_at | TEXT | ISO 8601 (UTC) |
 | last_signal_at | TEXT NULL | 最終フックシグナル時刻（v2/#134、R-10 タイムアウト起点）。`touch_last_signal` が更新 |
+| state_version | INTEGER | 状態遷移ごとに 1 増える版数（v9/#763、[ADR-0098](/decisions/adr-0098-task-state-optimistic-concurrency.md)）。ノート行など遷移でない書き込みでは増えない。v9 以前の行は 0 から始まる |
 
 ## sessions（F-37、#57）
 
@@ -218,7 +220,7 @@ Claude Code フック（Stop / Notification / SessionStart / SessionEnd / heartb
 
 ## schema_migrations（§10.3）
 
-`version` / `applied_at` / `applied_by`。`MIGRATIONS` 配列（index+1 = version）を順に適用。追記のみ（既存バージョンは不変）で、未適用があれば適用前に DB ファイルを **`{path}.v{適用前バージョン}.bak`** へバックアップし、適用時のみ INFO ログ（`from` / `to` / `backup`）を残す。現行 v8（v1 = 初期スキーマ、v2 = #134 の `hook_events` テーブル・`tasks.thread_key`/`last_signal_at`・`sessions.claude_session_id`、v3 = #131 実機検収フォローアップで `hook_events` の `UNIQUE` キーに `status` を追加・`status` を `NOT NULL DEFAULT ''` 化。SQLite は制約を in-place 変更できないためテーブルを再構築（`RENAME`→新規 `CREATE`→`INSERT ... SELECT COALESCE(status,'')`→旧 `DROP`）。既存行は保全。v4 = #196 ツール抽象化の rename で `sessions.claude_session_id` / `hook_events.claude_session_id` を `tool_session_id` へ `RENAME COLUMN`。SQLite ≥3.25 の RENAME COLUMN はテーブル制約・インデックス内の列参照も書き換えるため `hook_events` の UNIQUE 冪等キーは再構築不要。`idx_sessions_claude_session` のみ名前のため `idx_sessions_tool_session` へ作り直し。v5 = #257（[ADR-0015](/decisions/adr-0015-conversation-task-identity.md)）で `task_messages` を新設（**純追加**。既存の読み書きを一切変えないため、エピック #242 の途中でアップグレードが止まっても壊れた状態にならない。`tasks.thread_key` の DROP は後続バージョンに分離してある）。v6 = #258 で v5 以前の全タスクに台帳 1 行をバックフィル。**v5 が純追加だったことの裏返しで既存タスクの台帳が空のままになり**、ingest が「新着メッセージか」を台帳から判定するようになると**既存の終端タスクが最初の再配送で reopen され再実行される**（返信ソースなら二重返信）。再配送は例外ではなく定常で、`plugin_sdk::poll_loop` は自前 dedup を持たず毎 tick 全件を再 submit し orchestrator の `duplicate` ack だけに依存している。`message_key = source_task_id` は `message_key` 未設定ソースの ingest 側フォールバックと一致するため、それらの再配送は v5 以前と同じく dedup される。バックフィル行はタスクの状態によらず処理済みとして入れる — 指示内容は既に `tasks.source_payload` にあり（現行 dispatch が読む経路）、**未処理のプロンプト素材として提示してはならない**ため。`body` を空にしているのも同じ理由で、復元するには SQL で `source_payload` を JSON 走査する必要がありこのスキーマは意図的に JSON 走査を持たない）。v7 = #264 で `tasks.thread_key` と `idx_tasks_thread_key` を DROP（#242 で `Task.id` 自体が会話を指すようになり、相関すべき「先行タスク」が存在しなくなったため役目を終えた列。ingest / dispatch の作業が入り切ってから独立したバージョンとして落とすことで、v5〜v6 の途中で resume を壊さない。死んだ列は「設定しても何も起きない」罠として残るため放置しない。`DROP COLUMN` は SQLite ≥3.35 が必要だが `rusqlite` の bundled ビルドは十分に新しく、本プロジェクトは常に同梱の SQLite としか話さない）。v8 = worktree の分岐元コミットを `tasks.base_commit` に記録（純追加）。掃除は「origin のどこにも無いコミットが無ければ `-D`」だけを 見てブランチを削除するが、この判定は**そのブランチが誰のものか**を何も言っていない。ブランチ名を orchestrator が生成していた間は他人の名前と衝突しようがなかったので成立していただけで、エージェントがリポジトリの規約から名前を選ぶようになると、名前は運用者が使うのと同じ名前空間に入り、「全部 push 済み」は掃除が触ってよい理由にならなくなる。分岐元コミットがその区別を付ける — 古い既定ブランチから切られた人間のブランチは、このタスクの起点を含まない。v8 以前の行は NULL のままで、掃除は**所有を証明できない = ブランチを残す**と扱う（コミット数が数えられない場合と同じ倒し方）。
+`version` / `applied_at` / `applied_by`。`MIGRATIONS` 配列（index+1 = version）を順に適用。追記のみ（既存バージョンは不変）で、未適用があれば適用前に DB ファイルを **`{path}.v{適用前バージョン}.bak`** へバックアップし、適用時のみ INFO ログ（`from` / `to` / `backup`）を残す。現行 v9（v1 = 初期スキーマ、v2 = #134 の `hook_events` テーブル・`tasks.thread_key`/`last_signal_at`・`sessions.claude_session_id`、v3 = #131 実機検収フォローアップで `hook_events` の `UNIQUE` キーに `status` を追加・`status` を `NOT NULL DEFAULT ''` 化。SQLite は制約を in-place 変更できないためテーブルを再構築（`RENAME`→新規 `CREATE`→`INSERT ... SELECT COALESCE(status,'')`→旧 `DROP`）。既存行は保全。v4 = #196 ツール抽象化の rename で `sessions.claude_session_id` / `hook_events.claude_session_id` を `tool_session_id` へ `RENAME COLUMN`。SQLite ≥3.25 の RENAME COLUMN はテーブル制約・インデックス内の列参照も書き換えるため `hook_events` の UNIQUE 冪等キーは再構築不要。`idx_sessions_claude_session` のみ名前のため `idx_sessions_tool_session` へ作り直し。v5 = #257（[ADR-0015](/decisions/adr-0015-conversation-task-identity.md)）で `task_messages` を新設（**純追加**。既存の読み書きを一切変えないため、エピック #242 の途中でアップグレードが止まっても壊れた状態にならない。`tasks.thread_key` の DROP は後続バージョンに分離してある）。v6 = #258 で v5 以前の全タスクに台帳 1 行をバックフィル。**v5 が純追加だったことの裏返しで既存タスクの台帳が空のままになり**、ingest が「新着メッセージか」を台帳から判定するようになると**既存の終端タスクが最初の再配送で reopen され再実行される**（返信ソースなら二重返信）。再配送は例外ではなく定常で、`plugin_sdk::poll_loop` は自前 dedup を持たず毎 tick 全件を再 submit し orchestrator の `duplicate` ack だけに依存している。`message_key = source_task_id` は `message_key` 未設定ソースの ingest 側フォールバックと一致するため、それらの再配送は v5 以前と同じく dedup される。バックフィル行はタスクの状態によらず処理済みとして入れる — 指示内容は既に `tasks.source_payload` にあり（現行 dispatch が読む経路）、**未処理のプロンプト素材として提示してはならない**ため。`body` を空にしているのも同じ理由で、復元するには SQL で `source_payload` を JSON 走査する必要がありこのスキーマは意図的に JSON 走査を持たない）。v7 = #264 で `tasks.thread_key` と `idx_tasks_thread_key` を DROP（#242 で `Task.id` 自体が会話を指すようになり、相関すべき「先行タスク」が存在しなくなったため役目を終えた列。ingest / dispatch の作業が入り切ってから独立したバージョンとして落とすことで、v5〜v6 の途中で resume を壊さない。死んだ列は「設定しても何も起きない」罠として残るため放置しない。`DROP COLUMN` は SQLite ≥3.35 が必要だが `rusqlite` の bundled ビルドは十分に新しく、本プロジェクトは常に同梱の SQLite としか話さない）。v8 = worktree の分岐元コミットを `tasks.base_commit` に記録（純追加）。掃除は「origin のどこにも無いコミットが無ければ `-D`」だけを 見てブランチを削除するが、この判定は**そのブランチが誰のものか**を何も言っていない。ブランチ名を orchestrator が生成していた間は他人の名前と衝突しようがなかったので成立していただけで、エージェントがリポジトリの規約から名前を選ぶようになると、名前は運用者が使うのと同じ名前空間に入り、「全部 push 済み」は掃除が触ってよい理由にならなくなる。分岐元コミットがその区別を付ける — 古い既定ブランチから切られた人間のブランチは、このタスクの起点を含まない。v8 以前の行は NULL のままで、掃除は**所有を証明できない = ブランチを残す**と扱う（コミット数が数えられない場合と同じ倒し方）。v9 = #763 で `tasks.state_version` を追加（純追加、`NOT NULL DEFAULT 0`）。状態遷移を楽観的並行制御にするための版数で、既存の行は 0 から始まる（[ADR-0098](/decisions/adr-0098-task-state-optimistic-concurrency.md)）。
 
 `applied_by`（#275）は **その version を導入した totsuka のアプリ版数**（`CARGO_PKG_VERSION`。ワークスペース共通 version なので totsuka 本体の版数と一致する）。「この DB を上げたのはどの版か」を事後に追うための台帳であり、**互換判定の権威ではない**（権威はスキーマ版数）。nullable で、列を持たなかった旧バイナリが書いた行は NULL のまま = 「不明」。バックフィルはしない（その版が実際に適用したわけではないため）。
 
@@ -237,6 +239,8 @@ Claude Code フック（Stop / Notification / SessionStart / SessionEnd / heartb
 # ステートマシン（F-71）
 
 `domain::state` の純関数 `transition(from, event) -> Result<to>`。状態: `Queued / Pending / Dispatched / Running / WaitingInput / Verifying / Escalated / Publishing / Done / Failed / Cancelled`（`Verifying`=human 検収待ち・`Escalated`=人間対応待ちは #133 追加、どちらも非終端）。主要遷移: `queued→dispatched→running→publishing→done`、`running⇄waiting_input`、`queued⇄pending`（F-14）、非終端→`failed`/`cancelled`、`failed`/`cancelled`→`queued`（retry, F-44）。検収・エスカレーション遷移（#131/#133）: `running`/`waiting_input`/`escalated` →(SelfReportComplete)→ `verifying`（human 検収のみ。llm/none は既存 BeginPublish で `publishing` 直行 — `waiting_input`/`escalated` からの BeginPublish も可）、`verifying` →(ApproveVerification)→ `publishing` / →(VerificationFailed)→ `running`、全非終端 →(Escalate)→ `escalated`、`escalated` からは次シグナルで `verifying`/`publishing`/`waiting_input`/`running` へ復帰。`running`/`publishing` の実体はワークフロー（#54）が決め、ステートマシンはモード非依存。
+
+**遷移は読んだ版数に対してだけ書ける（v9/#763、[ADR-0098](/decisions/adr-0098-task-state-optimistic-concurrency.md)）。** `StateDb::apply_event` / `retry_task` は id ではなく `TaskRef`（id + `state_version`、`TaskRecord::task_ref()` で得る）を受け取り、トランザクション内で読み直した版数が違えば、遷移を判定する**前に** `StateError::Conflict` を返して何も書かない。書き込み元は Engine と `task cancel` / `retry` の DB 直接書き込み（フォールバック）の 2 つあり、Engine はタスクを読んでから数秒 await してから遷移を書くので、その間に状態が動きうる。状態の値の比較では cancel → retry → 再 dispatch で同じ状態に戻った場合（ABA）を見落とすため、版数で比べる。遷移のトランザクションは `BEGIN IMMEDIATE` で書き込みロックを先に取る（deferred だと、読んだ後に別の接続がコミットしたときの昇格が `SQLITE_BUSY_SNAPSHOT` になり、Conflict ではなく DB エラーとして表に出る）。成功すると更新済みの `TaskRef` が返り、同じタスクへ続けて書くときはそれを使う（`TaskRef` は `Clone` でないので、古い参照の使い回しはコンパイルが通らない）。取り込み時の reopen のように同じトランザクションの中で読んで書く内部経路だけは版数を持たない。
 
 # 再起動回復（F-37 / §5.3、#57）
 

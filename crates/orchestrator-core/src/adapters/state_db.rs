@@ -265,6 +265,20 @@ const MIGRATIONS: &[&str] = &[
     r#"
     ALTER TABLE tasks ADD COLUMN base_commit TEXT;
     "#,
+    // v9 — a version number for optimistic concurrency on state (#763).
+    //
+    // Two processes write task state: the engine, and `totsuka task cancel` /
+    // `retry` writing the DB directly when no engine answers (#760). The
+    // engine reads a task, awaits an agent for seconds, then writes a
+    // transition decided against what it read. Comparing the *state* at write
+    // time is not enough — cancel → retry → re-dispatch returns the task to
+    // the very state the engine read (ABA), and the stale write would land on
+    // the new attempt. A counter bumped by every transition is.
+    //
+    // Existing rows start at 0; only transitions bump it, never notes.
+    r#"
+    ALTER TABLE tasks ADD COLUMN state_version INTEGER NOT NULL DEFAULT 0;
+    "#,
 ];
 
 /// `events.detail` for the ingest event. Stored as JSON so consumers can
@@ -286,7 +300,7 @@ pub const NOTE_KEY: &str = "note";
 /// Columns of `tasks`, read by name in [`row_to_task`].
 const TASK_COLUMNS: &str = "id, source, source_task_id, workflow, mode, repo, \
      worktree_path, branch, base_commit, state, priority, title, url, source_payload, \
-     finished_at, created_at, updated_at, last_signal_at";
+     finished_at, created_at, updated_at, last_signal_at, state_version";
 
 /// Columns of `sessions`, read by name in [`row_to_session`].
 const SESSION_COLUMNS: &str = "id, task_id, plugin, session_id, created_at, tool_session_id";
@@ -303,6 +317,25 @@ pub enum StateError {
     /// An illegal state transition was requested.
     #[error(transparent)]
     Transition(#[from] InvalidTransition),
+    /// The task changed after the caller read it (#763): another writer
+    /// applied a transition in between, so the caller's decision was made
+    /// against a state that no longer exists. Nothing was written.
+    #[error(
+        "task {id} changed state while {event:?} was being applied \
+         (read at version {expected}, now {actual_state} at version {actual})"
+    )]
+    Conflict {
+        /// The task.
+        id: i64,
+        /// The version the caller read.
+        expected: i64,
+        /// The version found at write time.
+        actual: i64,
+        /// The state found at write time.
+        actual_state: TaskState,
+        /// The event that was not applied.
+        event: TaskEvent,
+    },
     /// JSON (de)serialization of `source_payload`/`detail` failed.
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
@@ -419,6 +452,47 @@ pub struct TaskRecord {
     pub updated_at: String,
     /// Timestamp of the last hook signal (R-10 timeout anchor; ISO 8601 UTC).
     pub last_signal_at: Option<String>,
+    /// Bumped by every state transition (#763) — the version a
+    /// [`TaskRef`] carries.
+    pub state_version: i64,
+}
+
+impl TaskRecord {
+    /// The reference a state transition of this record must be applied
+    /// through: it fails with [`StateError::Conflict`] if the task has moved
+    /// since this record was read.
+    pub fn task_ref(&self) -> TaskRef {
+        TaskRef {
+            id: self.id,
+            version: self.state_version,
+        }
+    }
+}
+
+/// A task as of one read: its id **and** the state version the caller's
+/// decision was made against (#763).
+///
+/// The only way to ask [`StateDb::apply_event`] / [`StateDb::retry_task`]
+/// for a transition. Bundling the two keeps an id from being passed as a
+/// version, or one task's version with another's id; neither `Clone` nor
+/// `Copy`, so applying a transition *consumes* it and hands back the updated
+/// one — reusing the stale reference for the next write does not compile.
+#[derive(Debug, PartialEq, Eq)]
+pub struct TaskRef {
+    id: i64,
+    version: i64,
+}
+
+impl TaskRef {
+    /// The task id.
+    pub fn id(&self) -> i64 {
+        self.id
+    }
+
+    /// The state version this reference was taken at.
+    pub fn version(&self) -> i64 {
+        self.version
+    }
 }
 
 /// A persisted agent session (F-37): the `session_id` returned by
@@ -1045,22 +1119,63 @@ impl StateDb {
     /// Apply a state-machine event to a task, recording an audit event.
     ///
     /// Sets `finished_at` on entering a terminal state and clears it otherwise
-    /// (e.g. on retry). Returns the new state, or an error for an illegal
-    /// transition (the DB is left unchanged).
+    /// (e.g. on retry). Returns the new state and the updated reference, or
+    /// an error with the DB left unchanged: [`StateError::Conflict`] when the
+    /// task moved since `task` was read (#763), [`StateError::Transition`]
+    /// when the event is illegal in the state it was read in.
     pub fn apply_event(
         &self,
-        id: i64,
+        task: TaskRef,
         event: TaskEvent,
         detail: Option<serde_json::Value>,
-    ) -> Result<TaskState, StateError> {
+    ) -> Result<(TaskState, TaskRef), StateError> {
         let now = self.clock.now_rfc3339();
         let detail = detail.as_ref().map(serde_json::to_string).transpose()?;
         // Update + audit event in one transaction: state never advances
         // without its recorded event (F-72).
-        let tx = self.conn.unchecked_transaction()?;
-        let to = apply_event_tx(&tx, &now, id, event, detail.as_deref())?;
+        let tx = self.write_transaction()?;
+        let (to, version) = apply_event_tx(
+            &tx,
+            &now,
+            task.id,
+            Some(task.version),
+            event,
+            detail.as_deref(),
+        )?;
         tx.commit()?;
-        Ok(to)
+        Ok((
+            to,
+            TaskRef {
+                id: task.id,
+                version,
+            },
+        ))
+    }
+
+    /// A transaction that holds the write lock from its first statement
+    /// (`BEGIN IMMEDIATE`), for a version check followed by a write (#763).
+    ///
+    /// A deferred transaction reads the version on a snapshot and only asks
+    /// for the write lock at the `UPDATE`. If another connection committed in
+    /// between, WAL refuses the upgrade with `SQLITE_BUSY_SNAPSHOT`, which the
+    /// busy handler does not retry — the race would surface as a fatal
+    /// [`StateError::Db`] instead of the [`StateError::Conflict`] it is.
+    /// Taking the lock first makes the other writer wait (busy timeout) and
+    /// this read see what it committed.
+    fn write_transaction(&self) -> Result<rusqlite::Transaction<'_>, StateError> {
+        Ok(rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        )?)
+    }
+
+    /// The current reference to task `id`, for a caller that decides on
+    /// nothing but the id. A transition applied through it still fails if
+    /// the task moves after this read.
+    pub fn task_ref(&self, id: i64) -> Result<TaskRef, StateError> {
+        self.get_task(id)?
+            .map(|t| t.task_ref())
+            .ok_or(StateError::NotFound(id))
     }
 
     /// Record the selected repository for a task (F-14 confirmation result).
@@ -1560,13 +1675,19 @@ impl StateDb {
             .optional()?;
         let state: TaskState = state.ok_or(StateError::NotFound(msg.task_id))?.parse()?;
         let reopened = if state.is_terminal() {
-            Some(apply_event_tx(
-                &tx,
-                &now,
-                msg.task_id,
-                TaskEvent::Reopen,
-                detail.as_deref(),
-            )?)
+            // Read and written in this one transaction: nothing can move in
+            // between, so there is no version to hold it to.
+            Some(
+                apply_event_tx(
+                    &tx,
+                    &now,
+                    msg.task_id,
+                    None,
+                    TaskEvent::Reopen,
+                    detail.as_deref(),
+                )?
+                .0,
+            )
         } else {
             None
         };
@@ -1640,7 +1761,14 @@ impl StateDb {
             tx.commit()?;
             return Ok(HandoffOutcome::Duplicate);
         }
-        apply_event_tx(&tx, &now, msg.task_id, TaskEvent::Reopen, detail.as_deref())?;
+        apply_event_tx(
+            &tx,
+            &now,
+            msg.task_id,
+            None,
+            TaskEvent::Reopen,
+            detail.as_deref(),
+        )?;
         tx.execute(
             "UPDATE tasks SET workflow = ?2, mode = ?3, source_payload = ?4, updated_at = ?5 \
              WHERE id = ?1",
@@ -1687,16 +1815,25 @@ impl StateDb {
     /// already. Reviving that one would replay an answered instruction
     /// alongside the new one.
     ///
-    /// Returns the new state and how many messages came back.
+    /// Returns the new state, the updated reference and how many messages
+    /// came back. Held to `task`'s version like [`apply_event`](Self::apply_event).
     pub fn retry_task(
         &self,
-        id: i64,
+        task: TaskRef,
         detail: Option<serde_json::Value>,
-    ) -> Result<(TaskState, usize), StateError> {
+    ) -> Result<(TaskState, TaskRef, usize), StateError> {
         let now = self.clock.now_rfc3339();
         let detail = detail.as_ref().map(serde_json::to_string).transpose()?;
-        let tx = self.conn.unchecked_transaction()?;
-        let to = apply_event_tx(&tx, &now, id, TaskEvent::Retry, detail.as_deref())?;
+        let tx = self.write_transaction()?;
+        let id = task.id;
+        let (to, version) = apply_event_tx(
+            &tx,
+            &now,
+            id,
+            Some(task.version),
+            TaskEvent::Retry,
+            detail.as_deref(),
+        )?;
         let already_queued: i64 = tx.query_row(
             "SELECT COUNT(*) FROM task_messages WHERE task_id = ?1 AND processed_at IS NULL",
             params![id],
@@ -1708,7 +1845,7 @@ impl StateDb {
             unprocess_last_batch_tx(&tx, id)?
         };
         tx.commit()?;
-        Ok((to, requeued))
+        Ok((to, TaskRef { id, version }, requeued))
     }
 
     /// Ids of tasks in `state` that still have messages nobody has sent
@@ -1720,14 +1857,19 @@ impl StateDb {
     pub fn conversations_with_unsent_messages(
         &self,
         state: TaskState,
-    ) -> Result<Vec<i64>, StateError> {
+    ) -> Result<Vec<TaskRef>, StateError> {
         let mut stmt = self.conn.prepare(
-            "SELECT DISTINCT t.id FROM tasks t \
+            "SELECT DISTINCT t.id, t.state_version FROM tasks t \
              JOIN task_messages m ON m.task_id = t.id \
              WHERE t.state = ?1 AND m.processed_at IS NULL \
              ORDER BY t.id",
         )?;
-        let rows = stmt.query_map(params![state.as_str()], |r| r.get(0))?;
+        let rows = stmt.query_map(params![state.as_str()], |r| {
+            Ok(TaskRef {
+                id: r.get(0)?,
+                version: r.get(1)?,
+            })
+        })?;
         rows.collect::<rusqlite::Result<_>>()
             .map_err(StateError::from)
     }
@@ -1951,6 +2093,7 @@ fn row_to_task(row: &Row<'_>) -> rusqlite::Result<TaskRecord> {
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
         last_signal_at: row.get("last_signal_at")?,
+        state_version: row.get("state_version")?,
     })
 }
 
@@ -2053,23 +2196,43 @@ fn insert_task_message_tx(
 /// Shared by [`StateDb::apply_event`] and
 /// [`StateDb::append_task_message_reopening`] so the two can never disagree
 /// about what a transition writes (state, `finished_at`, audit event).
+///
+/// `expected` is the state version the caller read (#763); `None` only for a
+/// caller that read the state inside this same transaction. The version is
+/// compared **before** the transition is judged, so a task another writer
+/// moved is reported as [`StateError::Conflict`] rather than as whatever the
+/// stale event happens to mean in the new state.
 fn apply_event_tx(
     conn: &Connection,
     now: &str,
     id: i64,
+    expected: Option<i64>,
     event: TaskEvent,
     detail: Option<&str>,
-) -> Result<TaskState, StateError> {
-    let from: Option<String> = conn
-        .query_row("SELECT state FROM tasks WHERE id = ?1", params![id], |r| {
-            r.get(0)
-        })
+) -> Result<(TaskState, i64), StateError> {
+    let row: Option<(String, i64)> = conn
+        .query_row(
+            "SELECT state, state_version FROM tasks WHERE id = ?1",
+            params![id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
         .optional()?;
-    let from: TaskState = from.ok_or(StateError::NotFound(id))?.parse()?;
+    let (from, version) = row.ok_or(StateError::NotFound(id))?;
+    let from: TaskState = from.parse()?;
+    if let Some(expected) = expected.filter(|&v| v != version) {
+        return Err(StateError::Conflict {
+            id,
+            expected,
+            actual: version,
+            actual_state: from,
+            event,
+        });
+    }
     let to = transition(from, event)?;
     let finished_at = to.is_terminal().then(|| now.to_string());
     conn.execute(
-        "UPDATE tasks SET state = ?1, updated_at = ?2, finished_at = ?3 WHERE id = ?4",
+        "UPDATE tasks SET state = ?1, updated_at = ?2, finished_at = ?3, \
+         state_version = state_version + 1 WHERE id = ?4",
         params![to.as_str(), now, finished_at, id],
     )?;
     if event == TaskEvent::Dispatch {
@@ -2096,7 +2259,7 @@ fn apply_event_tx(
          VALUES (?1, ?2, ?3, ?4, ?5)",
         params![id, from.as_str(), to.as_str(), now, detail],
     )?;
-    Ok(to)
+    Ok((to, version + 1))
 }
 
 /// Map a `task_messages` row (selected via [`TASK_MESSAGE_COLUMNS`]).
@@ -2213,9 +2376,10 @@ mod tests {
     /// Seed two tasks with a few events each; returns their ids.
     fn seed_export_fixture(db: &StateDb) -> (i64, i64) {
         let first = db.upsert_task(&sample_task()).unwrap();
-        db.apply_event(first, TaskEvent::Dispatch, None).unwrap();
+        db.apply_event(db.task_ref(first).unwrap(), TaskEvent::Dispatch, None)
+            .unwrap();
         db.apply_event(
-            first,
+            db.task_ref(first).unwrap(),
             TaskEvent::Start,
             Some(serde_json::json!({"kind": "dispatch", "plugin": "herdr"})),
         )
@@ -2226,7 +2390,7 @@ mod tests {
         other.title = "Another".to_string();
         let second = db.upsert_task(&other).unwrap();
         db.apply_event(
-            second,
+            db.task_ref(second).unwrap(),
             TaskEvent::Fail,
             Some(serde_json::json!({"kind": "hook"})),
         )
@@ -2371,7 +2535,7 @@ mod tests {
         // Keys deliberately out of alphabetical order, plus a nested object
         // and a number, since those are where a reshape would show up.
         db.apply_event(
-            id,
+            db.task_ref(id).unwrap(),
             TaskEvent::Dispatch,
             Some(serde_json::json!({
                 "kind": "hook_complete",
@@ -2557,15 +2721,24 @@ mod tests {
         let id = db.upsert_task(&sample_task()).unwrap();
 
         assert_eq!(
-            db.apply_event(id, TaskEvent::Dispatch, None).unwrap(),
+            db.apply_event(db.task_ref(id).unwrap(), TaskEvent::Dispatch, None)
+                .unwrap()
+                .0,
             TaskState::Dispatched
         );
-        db.apply_event(id, TaskEvent::Start, None).unwrap();
-        db.apply_event(id, TaskEvent::BeginPublish, None).unwrap();
+        db.apply_event(db.task_ref(id).unwrap(), TaskEvent::Start, None)
+            .unwrap();
+        db.apply_event(db.task_ref(id).unwrap(), TaskEvent::BeginPublish, None)
+            .unwrap();
         clock.advance(time::Duration::seconds(90));
         let final_state = db
-            .apply_event(id, TaskEvent::Complete, Some(serde_json::json!({"pr": 7})))
-            .unwrap();
+            .apply_event(
+                db.task_ref(id).unwrap(),
+                TaskEvent::Complete,
+                Some(serde_json::json!({"pr": 7})),
+            )
+            .unwrap()
+            .0;
         assert_eq!(final_state, TaskState::Done);
 
         let rec = db.get_task(id).unwrap().unwrap();
@@ -2585,9 +2758,157 @@ mod tests {
         let db = StateDb::open_in_memory().unwrap();
         let id = db.upsert_task(&sample_task()).unwrap();
         // Cannot Start straight from Queued.
-        assert!(db.apply_event(id, TaskEvent::Start, None).is_err());
+        assert!(
+            db.apply_event(db.task_ref(id).unwrap(), TaskEvent::Start, None)
+                .is_err()
+        );
         assert_eq!(db.get_task(id).unwrap().unwrap().state, TaskState::Queued);
         assert_eq!(db.event_count(id).unwrap(), 1); // only ingest
+    }
+
+    /// The race in #763: the engine read the task, another writer cancelled
+    /// it, and the engine's `Fail` lands on `Cancelled`. It must come back as
+    /// a conflict — judged before the transition, which on its own would call
+    /// this an illegal `Cancelled → Failed` — and write nothing.
+    #[test]
+    fn a_stale_reference_conflicts_and_writes_nothing() {
+        let db = StateDb::open_in_memory().unwrap();
+        let id = db.upsert_task(&sample_task()).unwrap();
+        let (_, engine_ref) = db
+            .apply_event(db.task_ref(id).unwrap(), TaskEvent::Dispatch, None)
+            .unwrap();
+        db.apply_event(db.task_ref(id).unwrap(), TaskEvent::Cancel, None)
+            .unwrap();
+        let events = db.event_count(id).unwrap();
+
+        let err = db
+            .apply_event(engine_ref, TaskEvent::Fail, None)
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                StateError::Conflict {
+                    id: i,
+                    expected: 1,
+                    actual: 2,
+                    actual_state: TaskState::Cancelled,
+                    event: TaskEvent::Fail,
+                } if i == id
+            ),
+            "{err:?}"
+        );
+        let rec = db.get_task(id).unwrap().unwrap();
+        assert_eq!(rec.state, TaskState::Cancelled);
+        assert_eq!(rec.state_version, 2);
+        assert_eq!(db.event_count(id).unwrap(), events);
+    }
+
+    /// Two connections, as in production (the engine and `task cancel`): the
+    /// other writer commits while this transition is waiting to start. With a
+    /// deferred transaction the version is read on a stale snapshot and the
+    /// write fails as `SQLITE_BUSY_SNAPSHOT` — a DB error, fatal to the
+    /// engine. Holding the write lock from the start turns it into the
+    /// conflict it is.
+    #[test]
+    fn a_transition_racing_another_connection_reports_a_conflict() {
+        let dir = std::env::temp_dir().join(format!("totsuka-{}-two_writers", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("state.db");
+        let db = StateDb::open(&path).unwrap();
+        let id = db.upsert_task(&sample_task()).unwrap();
+        let (_, engine_ref) = db
+            .apply_event(db.task_ref(id).unwrap(), TaskEvent::Dispatch, None)
+            .unwrap();
+
+        let other = Connection::open(&path).unwrap();
+        other.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let writer = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            other
+                .execute(
+                    "UPDATE tasks SET state = 'cancelled', state_version = state_version + 1 \
+                     WHERE id = ?1",
+                    params![id],
+                )
+                .unwrap();
+            other.execute_batch("COMMIT").unwrap();
+        });
+        let err = db
+            .apply_event(engine_ref, TaskEvent::Fail, None)
+            .unwrap_err();
+        writer.join().unwrap();
+        assert!(matches!(err, StateError::Conflict { .. }), "{err:?}");
+        assert_eq!(
+            db.get_task(id).unwrap().unwrap().state,
+            TaskState::Cancelled
+        );
+        drop(db);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Comparing states would not catch this: cancel → retry → re-dispatch
+    /// leaves the task `Dispatched` again, the state the old attempt read.
+    /// The version has moved on, so the old attempt's write is refused.
+    #[test]
+    fn a_task_back_in_the_state_it_was_read_in_still_conflicts() {
+        let db = StateDb::open_in_memory().unwrap();
+        let id = db.upsert_task(&sample_task()).unwrap();
+        let (_, first_attempt) = db
+            .apply_event(db.task_ref(id).unwrap(), TaskEvent::Dispatch, None)
+            .unwrap();
+        for event in [TaskEvent::Cancel, TaskEvent::Retry, TaskEvent::Dispatch] {
+            db.apply_event(db.task_ref(id).unwrap(), event, None)
+                .unwrap();
+        }
+        assert_eq!(
+            db.get_task(id).unwrap().unwrap().state,
+            TaskState::Dispatched
+        );
+
+        let err = db
+            .apply_event(first_attempt, TaskEvent::Fail, None)
+            .unwrap_err();
+        assert!(matches!(err, StateError::Conflict { .. }), "{err:?}");
+        assert_eq!(
+            db.get_task(id).unwrap().unwrap().state,
+            TaskState::Dispatched
+        );
+    }
+
+    /// Only transitions move the version: a note is not a change of state, and
+    /// counting it would turn every `status` note into a spurious conflict for
+    /// the engine that is about to write the task's next transition.
+    #[test]
+    fn transitions_bump_the_version_and_notes_do_not() {
+        let db = StateDb::open_in_memory().unwrap();
+        let id = db.upsert_task(&sample_task()).unwrap();
+        let before = db.task_ref(id).unwrap();
+        assert_eq!(before.version(), 0);
+        assert!(
+            db.note_task(id, &serde_json::json!({ NOTE_KEY: "blocked" }))
+                .unwrap()
+        );
+        let (_, after) = db.apply_event(before, TaskEvent::Dispatch, None).unwrap();
+        assert_eq!(after.version(), 1);
+        // The returned reference is the one to write through next.
+        let (state, after) = db.apply_event(after, TaskEvent::Start, None).unwrap();
+        assert_eq!((state, after.version()), (TaskState::Running, 2));
+    }
+
+    #[test]
+    fn retry_is_held_to_the_version_too() {
+        let db = StateDb::open_in_memory().unwrap();
+        let id = db.upsert_task(&sample_task()).unwrap();
+        db.apply_event(db.task_ref(id).unwrap(), TaskEvent::Fail, None)
+            .unwrap();
+        let stale = db.task_ref(id).unwrap();
+        let (state, _, _) = db.retry_task(db.task_ref(id).unwrap(), None).unwrap();
+        assert_eq!(state, TaskState::Queued);
+
+        let err = db.retry_task(stale, None).unwrap_err();
+        assert!(matches!(err, StateError::Conflict { .. }), "{err:?}");
+        assert_eq!(db.get_task(id).unwrap().unwrap().state, TaskState::Queued);
     }
 
     #[test]
@@ -2600,8 +2921,10 @@ mod tests {
         let id = {
             let db = StateDb::open(&path).unwrap();
             let id = db.upsert_task(&sample_task()).unwrap();
-            db.apply_event(id, TaskEvent::Dispatch, None).unwrap();
-            db.apply_event(id, TaskEvent::Start, None).unwrap();
+            db.apply_event(db.task_ref(id).unwrap(), TaskEvent::Dispatch, None)
+                .unwrap();
+            db.apply_event(db.task_ref(id).unwrap(), TaskEvent::Start, None)
+                .unwrap();
             id
         }; // db dropped, simulating process exit
 
@@ -2769,8 +3092,10 @@ mod tests {
         let id = {
             let db = StateDb::open(&path).unwrap();
             let id = db.upsert_task(&sample_task()).unwrap();
-            db.apply_event(id, TaskEvent::Dispatch, None).unwrap();
-            db.apply_event(id, TaskEvent::Start, None).unwrap();
+            db.apply_event(db.task_ref(id).unwrap(), TaskEvent::Dispatch, None)
+                .unwrap();
+            db.apply_event(db.task_ref(id).unwrap(), TaskEvent::Start, None)
+                .unwrap();
             db.record_session(id, "herdr", "sess-live").unwrap();
             id
         }; // db dropped, simulating process exit
@@ -2787,9 +3112,14 @@ mod tests {
     fn list_events_returns_full_history_in_order() {
         let db = StateDb::open_in_memory().unwrap();
         let id = db.upsert_task(&sample_task()).unwrap();
-        db.apply_event(id, TaskEvent::Dispatch, None).unwrap();
-        db.apply_event(id, TaskEvent::Start, Some(serde_json::json!({"k": 1})))
+        db.apply_event(db.task_ref(id).unwrap(), TaskEvent::Dispatch, None)
             .unwrap();
+        db.apply_event(
+            db.task_ref(id).unwrap(),
+            TaskEvent::Start,
+            Some(serde_json::json!({"k": 1})),
+        )
+        .unwrap();
 
         let events = db.list_events(id).unwrap();
         assert_eq!(events.len(), 3);
@@ -2830,7 +3160,8 @@ mod tests {
         // The note is not a transition: the task is still queued and still
         // dispatchable.
         assert_eq!(db.get_task(id).unwrap().unwrap().state, TaskState::Queued);
-        db.apply_event(id, TaskEvent::Dispatch, None).unwrap();
+        db.apply_event(db.task_ref(id).unwrap(), TaskEvent::Dispatch, None)
+            .unwrap();
         assert!(
             !db.open_notes().unwrap().contains_key(&id),
             "moving the task resolves the note with no resolution record"
@@ -2842,9 +3173,12 @@ mod tests {
         let db = StateDb::open_in_memory().unwrap();
         let id = db.upsert_task(&sample_task()).unwrap();
         db.note_task(id, &blocked_note()).unwrap();
-        db.apply_event(id, TaskEvent::Dispatch, None).unwrap();
-        db.apply_event(id, TaskEvent::Fail, None).unwrap();
-        db.apply_event(id, TaskEvent::Retry, None).unwrap();
+        db.apply_event(db.task_ref(id).unwrap(), TaskEvent::Dispatch, None)
+            .unwrap();
+        db.apply_event(db.task_ref(id).unwrap(), TaskEvent::Fail, None)
+            .unwrap();
+        db.apply_event(db.task_ref(id).unwrap(), TaskEvent::Retry, None)
+            .unwrap();
 
         assert!(
             db.note_task(id, &blocked_note()).unwrap(),
@@ -2871,7 +3205,7 @@ mod tests {
         let id = db.upsert_task(&sample_task()).unwrap();
         // Every transition detail carries `kind`; only a note carries `note`.
         db.apply_event(
-            id,
+            db.task_ref(id).unwrap(),
             TaskEvent::Dispatch,
             Some(serde_json::json!({"kind": "dispatch"})),
         )
@@ -2922,9 +3256,14 @@ mod tests {
     fn every_event_detail_is_valid_json_or_null() {
         let db = StateDb::open_in_memory().unwrap();
         let id = db.upsert_task(&sample_task()).unwrap();
-        db.apply_event(id, TaskEvent::Dispatch, None).unwrap();
-        db.apply_event(id, TaskEvent::Start, Some(serde_json::json!({"pid": 7})))
+        db.apply_event(db.task_ref(id).unwrap(), TaskEvent::Dispatch, None)
             .unwrap();
+        db.apply_event(
+            db.task_ref(id).unwrap(),
+            TaskEvent::Start,
+            Some(serde_json::json!({"pid": 7})),
+        )
+        .unwrap();
 
         // Read raw detail strings back and parse each as JSON (ingest + 2).
         let mut stmt = db
@@ -3669,6 +4008,49 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    /// v9 (#763): a task that existed before the version column starts at
+    /// 0, and can be moved through a reference taken after the upgrade.
+    #[test]
+    fn tasks_from_before_v9_start_at_version_zero() {
+        let dir = std::env::temp_dir().join(format!("totsuka-{}-pre_v9", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("state.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE schema_migrations \
+                 (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);",
+            )
+            .unwrap();
+            for (i, m) in MIGRATIONS[..8].iter().enumerate() {
+                conn.execute_batch(m).unwrap();
+                conn.execute(
+                    "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
+                    params![(i + 1) as i64, now()],
+                )
+                .unwrap();
+            }
+            conn.execute(
+                "INSERT INTO tasks (source, source_task_id, workflow, mode, state, title, \
+                 created_at, updated_at) VALUES ('github', '1', 'wf', 'implement', 'queued', \
+                 't', ?1, ?1)",
+                params![now()],
+            )
+            .unwrap();
+        }
+
+        let db = StateDb::open(&path).unwrap();
+        let task = db.find_by_source("github", "1").unwrap().unwrap();
+        assert_eq!(task.state_version, 0);
+        let (state, moved) = db
+            .apply_event(task.task_ref(), TaskEvent::Dispatch, None)
+            .unwrap();
+        assert_eq!((state, moved.version()), (TaskState::Dispatched, 1));
+        drop(db);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     /// The non-migrating open must not touch the file — no ledger rows, no
     /// bootstrap ALTER, no backup. This is the property that makes it safe to
     /// run outside `run.lock`.
@@ -3782,7 +4164,8 @@ mod tests {
             TaskEvent::BeginPublish,
             TaskEvent::Complete,
         ] {
-            db.apply_event(id, event, None).unwrap();
+            db.apply_event(db.task_ref(id).unwrap(), event, None)
+                .unwrap();
         }
         let before = db.get_task(id).unwrap().unwrap();
         assert!(before.finished_at.is_some());
@@ -3985,7 +4368,8 @@ mod tests {
         let id = db.upsert_task(&sample_task()).unwrap();
 
         // First execution: dispatched, and it proved itself alive.
-        db.apply_event(id, TaskEvent::Dispatch, None).unwrap();
+        db.apply_event(db.task_ref(id).unwrap(), TaskEvent::Dispatch, None)
+            .unwrap();
         db.touch_last_signal(id).unwrap();
         assert_eq!(
             db.get_task(id).unwrap().unwrap().last_signal_at.as_deref(),
@@ -3993,9 +4377,10 @@ mod tests {
         );
 
         // …then it failed, and a human retried it much later.
-        db.apply_event(id, TaskEvent::Fail, None).unwrap();
+        db.apply_event(db.task_ref(id).unwrap(), TaskEvent::Fail, None)
+            .unwrap();
         clock.advance(time::Duration::seconds(1600));
-        db.retry_task(id, None).unwrap();
+        db.retry_task(db.task_ref(id).unwrap(), None).unwrap();
         // The retry itself does not clear it — the anchor belongs to the
         // execution, and re-queueing has not started one yet.
         assert_eq!(
@@ -4005,7 +4390,8 @@ mod tests {
 
         // Dispatching does. Without this the sweep would compare `now` against
         // a 1600s-old anchor and escalate immediately.
-        db.apply_event(id, TaskEvent::Dispatch, None).unwrap();
+        db.apply_event(db.task_ref(id).unwrap(), TaskEvent::Dispatch, None)
+            .unwrap();
         assert_eq!(
             db.get_task(id).unwrap().unwrap().last_signal_at,
             None,

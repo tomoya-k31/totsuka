@@ -149,8 +149,10 @@ async fn crash_fails_task_and_host_survives() {
             last_signal_at: None,
         })
         .unwrap();
-    db.apply_event(task_id, TaskEvent::Dispatch, None).unwrap();
-    db.apply_event(task_id, TaskEvent::Start, None).unwrap();
+    db.apply_event(db.task_ref(task_id).unwrap(), TaskEvent::Dispatch, None)
+        .unwrap();
+    db.apply_event(db.task_ref(task_id).unwrap(), TaskEvent::Start, None)
+        .unwrap();
 
     let plugin = Plugin::launch(spec(">=0.6.0, <0.8")).await.expect("launch");
 
@@ -165,11 +167,12 @@ async fn crash_fails_task_and_host_survives() {
     // The caller reacts by failing the running task (§5.3).
     let state = db
         .apply_event(
-            task_id,
+            db.task_ref(task_id).unwrap(),
             TaskEvent::Fail,
             Some(serde_json::json!({ "reason": "plugin crashed" })),
         )
-        .unwrap();
+        .unwrap()
+        .0;
     assert_eq!(state, TaskState::Failed);
 
     // The host process is unaffected: a fresh plugin still launches and works.

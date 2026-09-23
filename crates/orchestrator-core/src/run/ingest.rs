@@ -609,7 +609,10 @@ mod tests {
             TaskEvent::BeginPublish,
             TaskEvent::Complete,
         ] {
-            engine.db.apply_event(id, event, None).unwrap();
+            engine
+                .db
+                .apply_event(engine.db.task_ref(id).unwrap(), event, None)
+                .unwrap();
         }
         assert_eq!(
             engine.db.get_task(id).unwrap().unwrap().state,
@@ -677,7 +680,10 @@ mod tests {
             .unwrap()
             .id;
         // Finish it: only a terminal conversation is handed over.
-        engine.db.apply_event(id, TaskEvent::Fail, None).unwrap();
+        engine
+            .db
+            .apply_event(engine.db.task_ref(id).unwrap(), TaskEvent::Fail, None)
+            .unwrap();
 
         let ack = engine
             .on_task_submit(
@@ -763,7 +769,10 @@ mod tests {
 
         // And once it finishes, the very same delivery does hand it over —
         // this is why dropping it unwritten is safe.
-        engine.db.apply_event(id, TaskEvent::Fail, None).unwrap();
+        engine
+            .db
+            .apply_event(engine.db.task_ref(id).unwrap(), TaskEvent::Fail, None)
+            .unwrap();
         let ack = engine
             .on_task_submit(
                 "slack".into(),
@@ -832,7 +841,10 @@ mod tests {
             .db
             .set_worktree(id, repo.to_str().unwrap(), Some("feat/prev"), "HEAD")
             .unwrap();
-        engine.db.apply_event(id, TaskEvent::Fail, None).unwrap();
+        engine
+            .db
+            .apply_event(engine.db.task_ref(id).unwrap(), TaskEvent::Fail, None)
+            .unwrap();
 
         engine
             .on_task_submit(
@@ -910,7 +922,10 @@ mod tests {
             .db
             .set_worktree(id, repo.to_str().unwrap(), None, "HEAD")
             .unwrap();
-        engine.db.apply_event(id, TaskEvent::Fail, None).unwrap();
+        engine
+            .db
+            .apply_event(engine.db.task_ref(id).unwrap(), TaskEvent::Fail, None)
+            .unwrap();
 
         // The handoff still completes — the detach is best-effort and its
         // failure is logged, never fatal to the ingest.
@@ -968,7 +983,10 @@ mod tests {
             .db
             .set_worktree(id, "/nonexistent/wt", Some("feat/prev"), "HEAD")
             .unwrap();
-        engine.db.apply_event(id, TaskEvent::Fail, None).unwrap();
+        engine
+            .db
+            .apply_event(engine.db.task_ref(id).unwrap(), TaskEvent::Fail, None)
+            .unwrap();
 
         engine
             .on_task_submit(
@@ -1031,7 +1049,10 @@ mod tests {
             .db
             .set_worktree(id, repo.to_str().unwrap(), Some("feat/prev"), "HEAD")
             .unwrap();
-        engine.db.apply_event(id, TaskEvent::Fail, None).unwrap();
+        engine
+            .db
+            .apply_event(engine.db.task_ref(id).unwrap(), TaskEvent::Fail, None)
+            .unwrap();
 
         engine
             .on_task_submit(
@@ -1070,7 +1091,10 @@ mod tests {
             .unwrap()
             .unwrap()
             .id;
-        engine.db.apply_event(id, TaskEvent::Fail, None).unwrap();
+        engine
+            .db
+            .apply_event(engine.db.task_ref(id).unwrap(), TaskEvent::Fail, None)
+            .unwrap();
 
         let ack = engine
             .on_task_submit(
@@ -1112,7 +1136,10 @@ mod tests {
             TaskEvent::BeginPublish,
             TaskEvent::Complete,
         ] {
-            engine.db.apply_event(id, event, None).unwrap();
+            engine
+                .db
+                .apply_event(engine.db.task_ref(id).unwrap(), event, None)
+                .unwrap();
         }
 
         let ack = engine
@@ -1151,9 +1178,12 @@ mod tests {
             .id;
         engine
             .db
-            .apply_event(id, TaskEvent::Dispatch, None)
+            .apply_event(engine.db.task_ref(id).unwrap(), TaskEvent::Dispatch, None)
             .unwrap();
-        engine.db.apply_event(id, TaskEvent::Start, None).unwrap();
+        engine
+            .db
+            .apply_event(engine.db.task_ref(id).unwrap(), TaskEvent::Start, None)
+            .unwrap();
 
         let ack = engine
             .on_task_submit(
@@ -1193,7 +1223,10 @@ mod tests {
             TaskEvent::BeginPublish,
             TaskEvent::Complete,
         ] {
-            engine.db.apply_event(id, event, None).unwrap();
+            engine
+                .db
+                .apply_event(engine.db.task_ref(id).unwrap(), event, None)
+                .unwrap();
         }
 
         assert_eq!(
@@ -1261,13 +1294,19 @@ mod tests {
         // Dispatched (messages handed over), then the agent failed.
         engine
             .db
-            .apply_event(id, TaskEvent::Dispatch, None)
+            .apply_event(engine.db.task_ref(id).unwrap(), TaskEvent::Dispatch, None)
             .unwrap();
         engine.db.mark_messages_processed(id).unwrap();
-        engine.db.apply_event(id, TaskEvent::Fail, None).unwrap();
+        engine
+            .db
+            .apply_event(engine.db.task_ref(id).unwrap(), TaskEvent::Fail, None)
+            .unwrap();
         assert!(engine.db.pending_task_messages(id).unwrap().is_empty());
 
-        let (state, requeued) = engine.db.retry_task(id, None).unwrap();
+        let (state, _, requeued) = engine
+            .db
+            .retry_task(engine.db.task_ref(id).unwrap(), None)
+            .unwrap();
         assert_eq!(state, TaskState::Queued);
         assert_eq!(requeued, 1);
         assert_eq!(
@@ -1298,10 +1337,13 @@ mod tests {
             .id;
         engine
             .db
-            .apply_event(id, TaskEvent::Dispatch, None)
+            .apply_event(engine.db.task_ref(id).unwrap(), TaskEvent::Dispatch, None)
             .unwrap();
         engine.db.mark_messages_processed(id).unwrap();
-        engine.db.apply_event(id, TaskEvent::Start, None).unwrap();
+        engine
+            .db
+            .apply_event(engine.db.task_ref(id).unwrap(), TaskEvent::Start, None)
+            .unwrap();
 
         // A message lands mid-flight: ingest leaves the running task alone.
         engine
@@ -1324,11 +1366,15 @@ mod tests {
         // Once it finishes, the sweep picks the message up.
         engine
             .db
-            .apply_event(id, TaskEvent::BeginPublish, None)
+            .apply_event(
+                engine.db.task_ref(id).unwrap(),
+                TaskEvent::BeginPublish,
+                None,
+            )
             .unwrap();
         engine
             .db
-            .apply_event(id, TaskEvent::Complete, None)
+            .apply_event(engine.db.task_ref(id).unwrap(), TaskEvent::Complete, None)
             .unwrap();
         engine
             .requeue_conversations_with_unsent_messages()
@@ -1348,16 +1394,23 @@ mod tests {
         engine.db.mark_messages_processed(id).unwrap();
         engine
             .db
-            .apply_event(id, TaskEvent::Dispatch, None)
-            .unwrap();
-        engine.db.apply_event(id, TaskEvent::Start, None).unwrap();
-        engine
-            .db
-            .apply_event(id, TaskEvent::BeginPublish, None)
+            .apply_event(engine.db.task_ref(id).unwrap(), TaskEvent::Dispatch, None)
             .unwrap();
         engine
             .db
-            .apply_event(id, TaskEvent::Complete, None)
+            .apply_event(engine.db.task_ref(id).unwrap(), TaskEvent::Start, None)
+            .unwrap();
+        engine
+            .db
+            .apply_event(
+                engine.db.task_ref(id).unwrap(),
+                TaskEvent::BeginPublish,
+                None,
+            )
+            .unwrap();
+        engine
+            .db
+            .apply_event(engine.db.task_ref(id).unwrap(), TaskEvent::Complete, None)
             .unwrap();
         engine
             .requeue_conversations_with_unsent_messages()
@@ -1391,7 +1444,10 @@ mod tests {
             .id;
         // A dispatch failure: the message stays unsent (it is stamped only on
         // success) and the task lands in Failed.
-        engine.db.apply_event(id, TaskEvent::Fail, None).unwrap();
+        engine
+            .db
+            .apply_event(engine.db.task_ref(id).unwrap(), TaskEvent::Fail, None)
+            .unwrap();
         assert_eq!(engine.db.pending_task_messages(id).unwrap().len(), 1);
 
         for _ in 0..3 {
@@ -1406,7 +1462,10 @@ mod tests {
             "sweeping Failed would loop on any permanent dispatch error"
         );
         // `task retry` is the deliberate way back, and it brings the message.
-        let (state, _) = engine.db.retry_task(id, None).unwrap();
+        let (state, _, _) = engine
+            .db
+            .retry_task(engine.db.task_ref(id).unwrap(), None)
+            .unwrap();
         assert_eq!(state, TaskState::Queued);
         assert_eq!(engine.db.pending_task_messages(id).unwrap().len(), 1);
     }
@@ -1432,17 +1491,24 @@ mod tests {
         // First message dispatched and answered.
         engine
             .db
-            .apply_event(id, TaskEvent::Dispatch, None)
+            .apply_event(engine.db.task_ref(id).unwrap(), TaskEvent::Dispatch, None)
             .unwrap();
         engine.db.mark_messages_processed(id).unwrap();
-        engine.db.apply_event(id, TaskEvent::Start, None).unwrap();
         engine
             .db
-            .apply_event(id, TaskEvent::BeginPublish, None)
+            .apply_event(engine.db.task_ref(id).unwrap(), TaskEvent::Start, None)
             .unwrap();
         engine
             .db
-            .apply_event(id, TaskEvent::Complete, None)
+            .apply_event(
+                engine.db.task_ref(id).unwrap(),
+                TaskEvent::BeginPublish,
+                None,
+            )
+            .unwrap();
+        engine
+            .db
+            .apply_event(engine.db.task_ref(id).unwrap(), TaskEvent::Complete, None)
             .unwrap();
 
         // A second message reopens it, but this dispatch fails before it is
@@ -1454,9 +1520,15 @@ mod tests {
                 delivery("C1:100", Some("C1:200"), "two"),
             )
             .unwrap();
-        engine.db.apply_event(id, TaskEvent::Fail, None).unwrap();
+        engine
+            .db
+            .apply_event(engine.db.task_ref(id).unwrap(), TaskEvent::Fail, None)
+            .unwrap();
 
-        let (_, requeued) = engine.db.retry_task(id, None).unwrap();
+        let (_, _, requeued) = engine
+            .db
+            .retry_task(engine.db.task_ref(id).unwrap(), None)
+            .unwrap();
         assert_eq!(
             requeued, 0,
             "nothing was handed over, so nothing to reclaim"
@@ -1640,7 +1712,10 @@ mod tests {
             .unwrap()
             .unwrap()
             .id;
-        engine.db.apply_event(id, TaskEvent::Cancel, None).unwrap();
+        engine
+            .db
+            .apply_event(engine.db.task_ref(id).unwrap(), TaskEvent::Cancel, None)
+            .unwrap();
 
         engine
             .requeue_conversations_with_unsent_messages()

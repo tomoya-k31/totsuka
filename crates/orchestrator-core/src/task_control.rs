@@ -37,9 +37,11 @@ pub fn cancel(
             task.state
         )));
     }
-    let to = match db.apply_event(id, TaskEvent::Cancel, Some(detail)) {
-        Ok(to) => to,
-        Err(StateError::Transition(e)) => return Ok(lost_race(id, &e)),
+    let to = match db.apply_event(task.task_ref(), TaskEvent::Cancel, Some(detail)) {
+        Ok((to, _)) => to,
+        Err(e @ (StateError::Conflict { .. } | StateError::Transition(_))) => {
+            return Ok(lost_race(id, &e));
+        }
         Err(e) => return Err(e),
     };
     Ok(TaskControlOutcome::applied(task.state, to, None))
@@ -74,9 +76,11 @@ pub fn retry(
     }
     // `retry_task`, not `apply_event(Retry)`: requeueing the task without the
     // messages its failed run was given would dispatch an empty prompt (#242).
-    let (to, requeued) = match db.retry_task(id, Some(detail)) {
-        Ok(applied) => applied,
-        Err(StateError::Transition(e)) => return Ok(lost_race(id, &e)),
+    let (to, requeued) = match db.retry_task(task.task_ref(), Some(detail)) {
+        Ok((to, _, requeued)) => (to, requeued),
+        Err(e @ (StateError::Conflict { .. } | StateError::Transition(_))) => {
+            return Ok(lost_race(id, &e));
+        }
         Err(e) => return Err(e),
     };
     Ok(TaskControlOutcome::applied(task.state, to, Some(requeued)))
@@ -84,7 +88,9 @@ pub fn retry(
 
 /// The state moved between the check above and the write — another writer
 /// (the CLI writing the DB directly, until #760's CLI switch-over) got there
-/// first. A refusal, not an error: inside the engine an `Err` is run-fatal,
+/// first. Since #763 that arrives as [`StateError::Conflict`]; `Transition`
+/// can no longer mean a race here, only a refusal the checks above missed,
+/// and is answered the same way rather than stopping `run`. A refusal, not an error: inside the engine an `Err` is run-fatal,
 /// and losing this race must not stop `run`.
 fn lost_race(id: i64, e: &impl std::fmt::Display) -> TaskControlOutcome {
     TaskControlOutcome::refused(format!(

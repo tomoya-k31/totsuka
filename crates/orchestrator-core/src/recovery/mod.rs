@@ -146,8 +146,9 @@ async fn recover_task<A: AgentSession>(
             ResumeDecision::Apply(events) => {
                 let detail = recovery_detail(agent);
                 let mut state = task.state;
+                let mut task_ref = task.task_ref();
                 for &event in events {
-                    state = db.apply_event(task.id, event, Some(detail.clone()))?;
+                    (state, task_ref) = db.apply_event(task_ref, event, Some(detail.clone()))?;
                 }
                 Ok(resumed(task.id, plugin, sid, state))
             }
@@ -441,7 +442,8 @@ mod tests {
             other => panic!("unsupported test state {other}"),
         };
         for &event in events {
-            db.apply_event(id, event, None).unwrap();
+            db.apply_event(db.task_ref(id).unwrap(), event, None)
+                .unwrap();
         }
         if let Some(sid) = session {
             db.record_session(id, "herdr", sid).unwrap();
