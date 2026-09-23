@@ -758,11 +758,7 @@ async fn a_spurious_end_from_wait_is_not_reported_as_failed() {
             shown(false, WORKTREE),
         ],
     );
-    let mut d = Driver::new(cli.clone());
-    d.init().await;
-    d.call("state/subscribe", json!({ "session_id": HANDLE }))
-        .await;
-    let note = d.recv_within(MINUTE).await.expect("a notification");
+    let (note, _) = deadman(&cli).await;
     assert_eq!(note["params"]["state"], "failed");
     assert_eq!(
         cli.calls_to("terminal wait").len(),
@@ -772,8 +768,6 @@ async fn a_spurious_end_from_wait_is_not_reported_as_failed() {
     assert_eq!(cli.calls_to("terminal show").len(), 3);
 }
 
-const MINUTE: std::time::Duration = std::time::Duration::from_secs(60);
-
 /// Subscribe, and return the one notification plus the (paused) time it took.
 async fn deadman(cli: &FakeCli) -> (Value, std::time::Duration) {
     let mut d = Driver::new(cli.clone());
@@ -781,7 +775,10 @@ async fn deadman(cli: &FakeCli) -> (Value, std::time::Duration) {
     d.call("state/subscribe", json!({ "session_id": HANDLE }))
         .await;
     let start = tokio::time::Instant::now();
-    let note = d.recv_within(60 * MINUTE).await.expect("a notification");
+    let note = d
+        .recv_within(std::time::Duration::from_secs(3600))
+        .await
+        .expect("a notification");
     (note, start.elapsed())
 }
 
