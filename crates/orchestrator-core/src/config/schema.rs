@@ -256,9 +256,6 @@ pub struct PluginConfig {
     /// RPC timeout in seconds.
     #[serde(default)]
     pub timeout_secs: Option<u64>,
-    /// Plugin log level.
-    #[serde(default)]
-    pub log_level: Option<String>,
     /// Whether a crash of this plugin is followed by a relaunch (#495).
     /// Defaults to `true`.
     ///

@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:d3f88264598b2f0cc2808f64b1c2fa3ed6676e0e89adf350bcc77904e5a85e64 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:32530d62974e7163dfe888e51d29337c994937604af776237c89733839c5361e -->
 
 # 設定リファレンス
 
@@ -141,8 +141,9 @@ project = "tomo-prj"
 | `kind` | enum | 必須 | `task_source` / `agent_ide` / `notifier` |
 | `max_concurrency` | int? | 無制限 | agent プラグイン単位の同時実行上限 |
 | `timeout_secs` | int? | 120 | プラグイン呼び出し 1 本のタイムアウト |
-| `log_level` | string? | なし | プラグインのログレベル |
 | `restart` | bool | true | クラッシュしたプラグインを起動し直すか。1 秒・2 秒・4 秒…と間隔を広げながら**最大 5 回・直近 5 分以内**まで試し、使い切ったら `escalated` を通知する。**`false` にしても死んだことの検知は残る** — ログに出て、実行サマリの `plugin_crashes` に計上され、`escalated` の通知も飛ぶ。エージェントのプラグインなら実行中のタスクも失敗として畳まれる。止まるのは起動し直す動作だけなので、プラグインを手元で調べたいときに使う |
+
+`log_level` というキーは無い。プラグインのログも `[log] level` で絞られる。`log_level` が書かれた設定は起動時にエラーになる。
 
 ## `[[workflows]]`
 

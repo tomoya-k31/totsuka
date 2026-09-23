@@ -88,12 +88,27 @@ struct SpanFields {
     level: tracing::Level,
 }
 
+/// Reserved field: the `target` of a relayed plugin record, which replaces
+/// the relaying call site's own target on the rendered line (ADR-0096).
+///
+/// `tracing` fixes an event's target at compile time, so a target that is
+/// only known once a plugin's stderr line is parsed has to travel as a field.
+pub const PLUGIN_TARGET_FIELD: &str = "plugin.target";
+
+/// Reserved field: a relayed plugin record's own fields as one JSON object,
+/// unpacked into individual fields — each redacted and prompt-gated like any
+/// other — before rendering (ADR-0096). One field because `tracing` field
+/// names are fixed at compile time too.
+pub const PLUGIN_FIELDS_FIELD: &str = "plugin.fields";
+
 /// Collects an event's fields into a redacted JSON map + message.
 struct FieldCollector {
     /// Whether prompt/payload fields may be recorded for *this* event
     /// (`log_prompts` AND the event level is DEBUG/TRACE).
     allow_prompts: bool,
     message: Option<String>,
+    /// [`PLUGIN_TARGET_FIELD`], if the event carried one.
+    target: Option<String>,
     fields: Map<String, Value>,
 }
 
@@ -102,12 +117,34 @@ impl FieldCollector {
         Self {
             allow_prompts,
             message: None,
+            target: None,
             fields: Map::new(),
         }
     }
 
     fn record(&mut self, field: &Field, value: String) {
-        let name = field.name();
+        self.record_named(field.name(), value);
+    }
+
+    fn record_named(&mut self, name: &str, value: String) {
+        if name == PLUGIN_TARGET_FIELD {
+            self.target = Some(value);
+            return;
+        }
+        // Anything but an object is not what the relay writes; it falls
+        // through and is kept whole rather than lost.
+        if name == PLUGIN_FIELDS_FIELD
+            && let Ok(Value::Object(inner)) = serde_json::from_str::<Value>(&value)
+        {
+            for (k, v) in inner {
+                let v = match v {
+                    Value::String(s) => s,
+                    other => other.to_string(),
+                };
+                self.record_named(&k, v);
+            }
+            return;
+        }
         // Drop prompt/payload fields unless allowed (§5.2): only at debug+
         // and only when `log_prompts` is enabled.
         if is_prompt_field(name) && !self.allow_prompts {
@@ -228,13 +265,14 @@ where
         fields.extend(collector.fields);
         collector.fields = fields;
         let ts = now_rfc3339();
+        let target = collector.target.as_deref().unwrap_or(meta.target());
 
         let line = match self.format {
             LogFormat::Json => {
                 let mut obj = Map::new();
                 obj.insert("timestamp".into(), Value::String(ts));
                 obj.insert("level".into(), Value::String(meta.level().to_string()));
-                obj.insert("target".into(), Value::String(meta.target().to_string()));
+                obj.insert("target".into(), Value::String(target.to_string()));
                 if let Some(message) = collector.message {
                     obj.insert("message".into(), Value::String(message));
                 }
@@ -246,7 +284,9 @@ where
             }
             LogFormat::Human => {
                 let level = level_label(meta.level(), self.ansi);
-                let mut line = format!("{ts} {level} {}", meta.target());
+                // Escaped because a relayed plugin target is plugin-authored
+                // text; our own module paths pass through unchanged.
+                let mut line = format!("{ts} {level} {}", safe(target));
                 // Field values carry externally-authored text (`run` logs
                 // `title = %task.title`, #297) and this stream goes straight
                 // to a terminal, so every value is escaped on the way out.
@@ -618,5 +658,38 @@ mod tests {
         );
         let v: Value = serde_json::from_str(out.lines().next().unwrap()).unwrap();
         assert!(v.get("prompt").is_none());
+    }
+
+    /// ADR-0096: a relayed plugin record renders under the **plugin's**
+    /// target with its fields unpacked — and each unpacked field meets the
+    /// field-name denylist, which a single opaque string never did.
+    #[test]
+    fn a_relayed_plugin_record_is_unpacked_and_redacted() {
+        let emit = || {
+            tracing::warn!(
+                { PLUGIN_TARGET_FIELD } = "agent_ide_orca::agent",
+                { PLUGIN_FIELDS_FIELD } = r#"{"retry_in":"2s","attempt":3,"api_token":"hunter2"}"#,
+                plugin = "orca",
+                "could not confirm the end"
+            );
+        };
+        let json = capture(false, emit);
+        let doc: Value = serde_json::from_str(json.trim()).unwrap();
+        assert_eq!(doc["level"], "WARN", "{json}");
+        assert_eq!(doc["target"], "agent_ide_orca::agent");
+        assert_eq!(doc["message"], "could not confirm the end");
+        assert_eq!(doc["plugin"], "orca");
+        assert_eq!(doc["retry_in"], "2s");
+        assert_eq!(doc["attempt"], "3");
+        assert_eq!(doc["api_token"], "***");
+        assert!(doc.get(PLUGIN_TARGET_FIELD).is_none(), "{json}");
+        assert!(doc.get(PLUGIN_FIELDS_FIELD).is_none(), "{json}");
+
+        let human = capture_as(LogFormat::Human, false, emit);
+        assert!(
+            human.contains(" WARN agent_ide_orca::agent: could not confirm the end"),
+            "{human}"
+        );
+        assert!(!human.contains("hunter2"), "{human}");
     }
 }

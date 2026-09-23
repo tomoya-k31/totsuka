@@ -4,7 +4,7 @@ title: ログ規約（JSON Lines・機密マスキング）
 description: totsuka の構造化ログ規約。JSON Lines 1行1イベント、task_id 相関、機密マスキング（フィールド denylist＋値パターン）、log_prompts、日次ローテーションと世代保持。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/orchestrator-core/src/logging
 tags: [logging, tracing, security, convention]
-generated: { by: human:tomoya-k31, at: 2026-07-12T00:40:00Z }
+generated: { by: claude-code/opus-5, at: 2026-09-24T10:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -14,6 +14,16 @@ owner: tomoya-k31
 - ファイル: `$XDG_STATE_HOME/totsuka/logs/totsuka.log.YYYY-MM-DD`（`tracing-appender` 日次ローテーション）。**JSON Lines**（1 行 = 1 イベント = 1 JSON オブジェクト、`jq` でパース可能）。
 - ターミナル: 人間可読の 1 行形式。`NO_COLOR` と 非 TTY を尊重（§7）。
 - 各行のキー: `timestamp`（ISO 8601 UTC）/ `level`（ERROR..TRACE）/ `target` / 任意 `message` / イベントフィールド。
+
+# プラグインのログ
+
+プラグインの stderr（SDK が書く JSON Lines）は、本体が分解して**プラグインのレベル・target・
+フィールドのまま**出し直す。`plugin` フィールドでどのプラグインかが分かる。判定は `[log] level`
+の 1 か所だけ（[ADR-0096](/decisions/adr-0096-plugin-log-relay.md)）。
+
+```json
+{"timestamp":"…","level":"WARN","target":"agent_ide_orca::agent","message":"could not confirm the end; waiting again","retry_in":"2s","plugin":"orca"}
+```
 
 # task_id 相関
 
@@ -32,7 +42,7 @@ owner: tomoya-k31
 
 # レベルとローテーション
 
-- レベル: `error` / `warn` / `info` / `debug` / `trace`。`[log] level` または `--debug`（#64）で調整。
+- レベル: `error` / `warn` / `info` / `debug` / `trace`。`[log] level` または `--debug`（#64）で調整。プラグインのログにも同じレベルがかかる。
 - 日次ローテーション＋世代保持: `[log] max_files`（既定 7）を超える古い日次ファイルを起動時に削除。
 
 # 設定（`[log]`）

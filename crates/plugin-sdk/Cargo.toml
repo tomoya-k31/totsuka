@@ -20,7 +20,8 @@ serde_json.workspace = true
 # `io-std` (stdin/stdout) is on top of the workspace tokio feature set.
 tokio = { workspace = true, features = ["io-std"] }
 tracing.workspace = true
-tracing-subscriber.workspace = true
+# `json`: the stderr log format the host parses back into records (ADR-0096).
+tracing-subscriber = { workspace = true, features = ["json"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["io-std", "test-util"] }

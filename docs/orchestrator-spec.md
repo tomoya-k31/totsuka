@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](orchestrator-spec.ja.md)
 
-<!-- generated-from: ai-docs/product/orchestrator-spec.md sha256:c7f949cf69c3f63b5b54c13f6c9ebd473aecf59efa89a303a3cb09862c3d76ae -->
+<!-- generated-from: ai-docs/product/orchestrator-spec.md sha256:cf015dd6a31681b598ad19face8b4eb0c862f01797911ca0d4baff75ac17b939 -->
 
 # What totsuka is
 

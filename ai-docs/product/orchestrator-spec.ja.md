@@ -3,7 +3,7 @@ type: Spec
 title: totsuka — ローカルAIエージェント Orchestrator 要件定義（v1）
 description: totsuka Orchestrator CLI の要件定義 — タスクソース/Agent IDE/Notifier プラグイン、git worktree ライフサイクル、ワークフロー、並列実行制御、v1 スコープ。
 tags: [orchestrator, requirements, plugin, worktree, cli, rust]
-generated: { by: claude-code/opus-5, at: 2026-09-23T03:45:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-24T10:00:00+09:00 }
 status: draft
 owner: tomoya-k31
 ---
@@ -162,7 +162,7 @@ Notion タスクや GitHub Projects に紐づく Issue などのタスク管理�
 | 場所 | 責務 |
 |---|---|
 | `$XDG_DATA_HOME/totsuka/plugins/{name}/` | バイナリ + manifest(install / uninstall の対象) |
-| `config.toml` の `[plugins.{name}]` | 有効/無効のロスター + 共通項目(`kind`, `max_concurrency`, `timeout_secs`, `log_level` 等。Orchestrator が解釈する) |
+| `config.toml` の `[plugins.{name}]` | 有効/無効のロスター + 共通項目(`kind`, `max_concurrency`, `timeout_secs`, `restart` 等。Orchestrator が解釈する) |
 | `config.toml` の `[<name>]` | プラグイン固有設定。Orchestrator は中身を解釈せず、JSON-RPC の initialize params としてそのまま渡す。`<name>` が上のロスターに居るときだけ正当 |
 
 ```toml

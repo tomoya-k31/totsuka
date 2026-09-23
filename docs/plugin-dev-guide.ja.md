@@ -1,7 +1,7 @@
 > 🌐 [English](plugin-dev-guide.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:9d4aeceb8473a8eb3731589da010cb4083ced8a6f20853b124757c6e70c50658 -->
+<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:02a4f19107c00542e98b708deb9e0213b5cc43bf8af097890794391139f104ec -->
 
 # プラグイン開発ガイド
 
@@ -127,14 +127,27 @@ Orchestrator は起動前に `protocol_version` の互換性を検査し、宣�
 
 ## ログと stderr
 
-**プラグインの stderr は Orchestrator のログにそのまま入る**（プラグイン名のタグ付き）。
-デバッグには便利だが、**秘密を書かないのは作者の責務である** — Orchestrator は
-プラグインが何を秘密と考えているか知らないので伏せられないし、プラグイン側から
-Orchestrator の伏字処理には手が届かない。
+ログは **stderr に書く**（stdout は JSON-RPC 専用）。Orchestrator はそれを 1 行ずつ読み、
+**プラグインのレベル・target・フィールドのまま**自分のログに出し直す（プラグイン名のタグ付き）。
+
+- **SDK を使うなら何もしなくてよい。** `main` の最初で `plugin_sdk::runtime::init_tracing()` を
+  呼べば、stderr がパイプのとき（Orchestrator の下）は全レベルの JSON Lines を書く。
+  端末のとき（手で動かしたとき）は人間向けの表示で、`RUST_LOG`（既定 `info`）に従う。
+- **レベルの判定は Orchestrator の `[log] level` だけで行う。** プラグイン側で絞らない。
+  プラグインの debug を見たいときは `[log] level = "debug"`（または `--debug`）にする。
+- **SDK を使わない場合**は、1 行 1 オブジェクトで `level`（`ERROR`〜`TRACE`）/ `target` /
+  `message` と任意のフィールドを書けば同じように扱われる。それ以外の行は `INFO` として
+  そのまま中継され、`thread '…' panicked at` の行とそれ以降は `ERROR` になる。
+
+フィールドは 1 つずつ Orchestrator の伏字処理を通るので、`api_token` のような名前の
+フィールドは `***` に伏せられる。ただし **message に埋め込んだ秘密は、既知のトークンの形
+（`Bearer …` / `ghp_…` など）に当たるものしか伏せられない** — Orchestrator はプラグインが
+何を秘密と考えているか知らないので、秘密を書かないのは作者の責務である。
 
 転送は **10 秒あたり 100 行**に制限され、超えた分は「N 行抑制」の 1 行にまとめられる。
 失敗ループに入ったプラグインは読む側より速く stderr を吐けるので、それで他のログが
 埋まらないようにするためである。抑制した行数は報告されるので、うるささ自体は数字として残る。
+数えるのは `[log] level` を通った行だけなので、どうせ捨てられる debug が枠を使い切ることはない。
 
 Orchestrator からプラグインへの呼び出しは、Orchestrator 側でメソッド別に時間と回数が
 記録される。`totsuka run --json` の `plugins` に、呼び出し数・結果の内訳・直近の

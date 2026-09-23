@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:d3f88264598b2f0cc2808f64b1c2fa3ed6676e0e89adf350bcc77904e5a85e64 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:32530d62974e7163dfe888e51d29337c994937604af776237c89733839c5361e -->
 
 # Configuration reference
 
@@ -140,8 +140,9 @@ The roster is also what makes a `[<name>]` table legitimate: **a top-level table
 | `kind` | enum | required | `task_source`, `agent_ide`, or `notifier` |
 | `max_concurrency` | int? | unlimited | Per-agent-plugin limit on tasks running at once |
 | `timeout_secs` | int? | 120 | Timeout for a single call to the plugin |
-| `log_level` | string? | none | The plugin's log level |
 | `restart` | bool | true | Whether a crashed plugin is launched again. Retries back off (1s, 2s, 4s, …) up to **5 attempts within a rolling 5 minutes**, then send an `escalated` notification. **Setting it to `false` keeps the detection** — the death is logged, counted in the run summary's `plugin_crashes`, and still sends an `escalated` notification; an agent plugin's in-flight tasks are still failed. Only the relaunch stops, which is what you want while investigating a plugin by hand |
+
+There is no `log_level` key: plugin logs are filtered by `[log] level` like everything else, and a config that still sets `log_level` fails at startup.
 
 ## `[[workflows]]`
 

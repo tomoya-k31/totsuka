@@ -28,7 +28,7 @@ use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::layer::{Layer, SubscriberExt};
 use tracing_subscriber::util::SubscriberInitExt;
 
-pub use layer::{LogFormat, RedactingLayer};
+pub use layer::{LogFormat, PLUGIN_FIELDS_FIELD, PLUGIN_TARGET_FIELD, RedactingLayer};
 
 /// Default number of daily log files to keep.
 pub const DEFAULT_MAX_FILES: usize = 7;

@@ -3,7 +3,7 @@ type: Spec
 title: totsuka — Local AI-Agent Orchestrator Requirements (v1)
 description: Requirements specification for the totsuka orchestrator CLI — task-source/agent-IDE/notifier plugins, git-worktree lifecycle, workflows, parallel execution control, and v1 scope.
 tags: [orchestrator, requirements, plugin, worktree, cli, rust]
-generated: { by: claude-code/opus-5, at: 2026-09-23T03:45:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-24T10:00:00+09:00 }
 status: draft
 owner: tomoya-k31
 ---
@@ -161,7 +161,7 @@ The configuration file is the single source of truth; a config distributed via g
 | Location | Responsibility |
 |---|---|
 | `$XDG_DATA_HOME/totsuka/plugins/{name}/` | Binary + manifest (target of install / uninstall) |
-| `[plugins.{name}]` in `config.toml` | Enable/disable roster + common fields (`kind`, `max_concurrency`, `timeout_secs`, `log_level`, etc. — interpreted by the orchestrator) |
+| `[plugins.{name}]` in `config.toml` | Enable/disable roster + common fields (`kind`, `max_concurrency`, `timeout_secs`, `restart`, etc. — interpreted by the orchestrator) |
 | `[<name>]` in `config.toml` | Plugin-specific config. The orchestrator does not interpret it; it is passed verbatim as JSON-RPC initialize params. Legitimate only when `<name>` is in the roster above |
 
 ```toml
