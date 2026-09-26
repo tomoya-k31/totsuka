@@ -2,6 +2,7 @@
 
 ## 2026-09-26
 
+* **Update**: [orchestrator-core](/components/orchestrator-core.md) — `dispatch_one` の起動前の判定（resume・会話の再利用・送るタスク・前回 pane）を純粋関数に分けた（#758）
 * **Update**: [orchestrator-core](/components/orchestrator-core.md) — `run::llm_monitor::LlmMonitor` を追加し、Engine の `llm` / `llm_health` / `llm_probe` を `Option<LlmMonitor>` 1 つにまとめた（#758、[ADR-0103](/decisions/adr-0103-engine-state-types.md)）
 * **Creation**: [ADR-0103](/decisions/adr-0103-engine-state-types.md) — Engine の状態は不変条件を持つものだけを型へ取り出し、その型はプラグイン・DB・git を呼ばない（#758）
 * **Update**: [orchestrator-core](/components/orchestrator-core.md) — `SlotManager` がスロットの持ち主（タスク ID）も持ち、`Engine.slot_holders` を吸収した。`active_slot_claims` はタスク ID つきの `(task_id, repo, plugin)` を返すようにした
