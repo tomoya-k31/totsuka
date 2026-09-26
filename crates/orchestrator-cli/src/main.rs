@@ -173,6 +173,12 @@ enum Command {
         /// audits and CI.
         #[arg(long)]
         no_repair: bool,
+        /// Read secret values from stdin, as `totsuka run --secrets-stdin`
+        /// does, so the checks see what that run sees: one JSON object on
+        /// one line, and no secret store is opened. Without it, `secret:`
+        /// references are noted and the checks that need them are skipped.
+        #[arg(long)]
+        secrets_stdin: bool,
         #[command(flatten)]
         json: common::JsonFlag,
     },
@@ -327,12 +333,14 @@ fn execute(
             json,
             online,
             no_repair,
+            secrets_stdin,
         } => doctor_cmd::run(
             &cx,
             doctor_cmd::DoctorArgs {
                 json: json.json,
                 online,
                 no_repair,
+                secrets_stdin,
             },
         ),
     }

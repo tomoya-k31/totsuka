@@ -43,7 +43,7 @@ owner: tomoya-k31
 - `${ENV_VAR}` を含む文字列 — 環境変数から展開。export 済みの値をそのまま使いたいときに。**`totsuka setup --secret-backend env` が書く名前は `TOTSUKA_SECRET_<ACCOUNT>`**（#705）で、この接頭辞は設定オーバーライドの未知キー警告から除外されている —— `TOTSUKA_*` は設定オーバーライドの名前空間なので、素朴な `TOTSUKA_GITHUB_TOKEN` は毎回 `unknown environment override` の警告を出す
 - `keychain:<service>/<account>` — macOS Keychain から解決。**macOS でしか動かない**ので、
   他プラットフォームへ持ち運ぶ設定には使わない
-- `secret:<name>` — **親プロセスが渡す値**（#754、[ADR-0100](/decisions/adr-0100-secrets-stdin.md)）。メニューバーアプリのように機密を自分で持つランチャーが `totsuka run --secrets-stdin` を起動し、stdin の 1 行目に `{"<name>": "<value>", …}` を書く。`<name>` は `[A-Za-z0-9_.-]+`。ストアを指さないので、値をどこから取るかはランチャーが決める。**`--secrets-stdin` を付けたプロセスは `keychain:` / `op://` / `cmd:` / `bw:` を一切解決しない**（backend を呼ばずにエラー）ので、その構成の config は全部 `secret:` で書く（`${ENV}` は使える）。フラグなしで `secret:` を解決しようとすると「`--secrets-stdin` で渡すか、別のスキームを使う」エラーになり、`totsuka run` は exit 4 で止まる。マップに無い名前もエラー、使われない名前は無視する。`totsuka doctor` は `secret:` を解決せず注記だけを出す。`[tools.<name>].env_file` の値にも書ける
+- `secret:<name>` — **親プロセスが渡す値**（#754、[ADR-0100](/decisions/adr-0100-secrets-stdin.md)）。メニューバーアプリのように機密を自分で持つランチャーが `totsuka run --secrets-stdin` を起動し、stdin の 1 行目に `{"<name>": "<value>", …}` を書く。`<name>` は `[A-Za-z0-9_.-]+`。ストアを指さないので、値をどこから取るかはランチャーが決める。**`--secrets-stdin` を付けたプロセスは `keychain:` / `op://` / `cmd:` / `bw:` を一切解決しない**（backend を呼ばずにエラー）ので、その構成の config は全部 `secret:` で書く（`${ENV}` は使える）。フラグなしで `secret:` を解決しようとすると「`--secrets-stdin` で渡すか、別のスキームを使う」エラーになり、`totsuka run` は exit 4 で止まる。マップに無い名前もエラー、使われない名前は無視する。`totsuka doctor` と `totsuka config validate` は、`--secrets-stdin` を付ければ同じ 1 行を読んで実際の値で検査し、付けなければ `secret:` を解決せずに注記して、それを使うプラグインの検査を飛ばす（失敗にはしない）。`[tools.<name>].env_file` の値にも書ける
 - `~` / `${ENV}` はパスでも展開される
 
 # トップレベル
@@ -902,39 +902,10 @@ Claude Code フックイベント受信（UDS）の設定（#131。全キー省�
 
 | キー | 型 | 既定 | 意味 |
 |---|---|---|---|
+| `auth_token_ref` | string? | なし | フック POST を認証する Bearer トークンのシークレット参照（E-03、例 `op://Dev/totsuka/hook-token`）。**運用上は必須**（未設定時の防御は 0600 の UDS パーミッションのみ）。未設定は #209 でツール側が検出するようになった: フック対応 agent（マニフェストが `hook_completion` を宣言）を使う workflow がある場合、`config validate` / `run` が該当 workflow ごとに警告を出し、`doctor` は **fail**（終了コード非 0）。フック対応 agent を使わない構成では doctor は warn 表示のみ（終了コードは成功）。参照を設定したのに解決できない場合は構成によらず fail |
 | `socket_path` | string? | 組み込み既定 | 受信 UDS のパス（例 `${XDG_RUNTIME_DIR}/totsuka/agent-events.sock`） |
 | `spool_dir` | string? | 組み込み既定 | POST 失敗時にイベントを退避するスプールディレクトリ（E-07、例 `${XDG_STATE_HOME}/totsuka/hooks/spool`） |
 | `block_retry_limit` | int? | 3 | Stop フック block 差し戻しの連続上限。超過でエスカレーション（D-02） |
-
-## hook の Bearer トークンは `run` が作る（#785）
-
-フック POST を認証する Bearer トークン（E-03）は設定しない。`totsuka run` が最初の起動で乱数から生成して
-`$XDG_STATE_HOME/totsuka/hook-token`（0600）に保存し、以後の起動で使い回す
-（[ADR-0099](/decisions/adr-0099-generated-hook-token.md)、[hook-security](/security/hook-security.md) §1）。
-`totsuka focus` と `totsuka doctor` は同じファイルを読む。
-
-- **ローテーション**: ファイルを消して `totsuka run` を再起動する
-- **確認**: `totsuka doctor` の `hook-token`（ファイルがあり 0600 か。初回 `run` 前で無いのは正常）と
-  `hook-socket`（自己 POST が 200 か）
-
-### 移行: `[hooks].auth_token_ref` は廃止した
-
-0.9 までは `[hooks].auth_token_ref`（と上書きの環境変数 `TOTSUKA_HOOKS_AUTH_TOKEN_REF`）で、利用者が
-Keychain などに作ったトークンを参照していた。**猶予期間なしで廃止した**ので、残っていると次のエラーで止まる
-（`run` は設定エラーとして exit 4、`config validate` と `doctor` も同じ文言）:
-
-```text
-[hooks].auth_token_ref was removed → delete this line; `totsuka run` generates the hook token itself ($XDG_STATE_HOME/totsuka/hook-token)
-```
-
-1. `config.toml` から `auth_token_ref = …` の行を消す（`[hooks]` に他のキーが無ければ見出しごと消してよい）。
-   `TOTSUKA_HOOKS_AUTH_TOKEN_REF` を export していれば外す
-2. `totsuka run` を再起動する。起動中のエージェントは古いトークンを env に持っているので、hook が 401 になる。
-   そのタスクは `totsuka task retry` で起動し直す
-3. 不要になった機密を消す（自動では消さない）。`totsuka setup` が作った Keychain の項目なら
-   `security delete-generic-password -s totsuka -a hook-token`。1Password / Bitwarden に作っていれば、その項目を削除する
-
-エージェントに注入する環境変数の名前 `TOTSUKA_HOOK_TOKEN` は変わらない。
 
 # `[github]`（task-source-github）
 

@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:7641f60a6433644e7baf9ce068d92ee49acb39a5a9c4cff6282459e2858fee7f -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:dd4215706488969269d3735b703549a1bea01ef123fd059eda99228f203bdfaf -->
 
 # 設定リファレンス
 
@@ -56,7 +56,7 @@ cmd:bw get item totsuka-slack | jq -r '.fields[]|select(.name=="api_token").valu
 - `--secrets-stdin` を付けずに `secret:` を解決しようとすると、「その方法で値を渡すか、別の形式を使う」エラーになり、`totsuka run` は終了コード 4 で止まる
 - 1 行が不正なとき（標準入力が端末、改行の前に入力が終わった、JSON オブジェクトでない、値が文字列でない）も終了コード 4。エラーは 1 行の中身を引用しない
 - `--dry-run` でも 1 行を読む。プラグインは起動されるので、その設定が使う名前は渡す必要がある
-- `totsuka doctor` は `secret:` を解決せず、注記を出して、それが要るチェックを飛ばす
+- `totsuka doctor` と `totsuka config validate` も `--secrets-stdin` を受け付ける。同じ 1 行を渡せば実際の値で検査し、そのときもシークレットストアは開かない。付けなければ `secret:` を解決せず、注記を出して、それが要るプラグインの検査を飛ばす（失敗にはしない）
 - `[tools.<name>].env_file` の値にも `secret:` を書ける
 
 ## トップレベルのキー
@@ -807,30 +807,12 @@ plan_cleanup = "immediate"            # plan: 即削除（既定）
 
 | キー | 型 | 既定 | 意味 |
 |---|---|---|---|
+| `auth_token_ref` | string? | なし | フックの POST を認証する Bearer トークンのシークレット参照（例 `op://Dev/totsuka/hook-token`）。**運用上は必須** — 未設定だとソケットのパーミッションだけが防御になる |
 | `socket_path` | string? | 組み込み既定 | 受信ソケットのパス |
 | `spool_dir` | string? | 組み込み既定 | POST に失敗したイベントを退避するディレクトリ |
 | `block_retry_limit` | int? | 3 | 停止のブロック差し戻しの連続上限。超えるとエスカレートする |
 
-### hook の Bearer トークンは `run` が作る
-
-フックの POST を認証する Bearer トークンは設定しない。`totsuka run` が最初の起動で乱数から生成して `$XDG_STATE_HOME/totsuka/hook-token`（0600）に保存し、以後の起動で使い回す。`totsuka focus` と `totsuka doctor` は同じファイルを読む。
-
-- **ローテーション**: ファイルを消して `totsuka run` を再起動する
-- **確認**: `totsuka doctor` の `hook-token`（ファイルがあり 0600 か。初回 `run` 前で無いのは正常）と `hook-socket`（自己 POST が 200 か）
-
-### 移行: `[hooks].auth_token_ref` は廃止した
-
-0.9 までは `[hooks].auth_token_ref`（と上書きの環境変数 `TOTSUKA_HOOKS_AUTH_TOKEN_REF`）で、Keychain などに作ったトークンを参照していた。猶予期間なしで廃止したので、残っていると次のエラーで止まる（`run` は設定エラーとして exit 4、`config validate` と `doctor` も同じ文言）:
-
-```text
-[hooks].auth_token_ref was removed → delete this line; `totsuka run` generates the hook token itself ($XDG_STATE_HOME/totsuka/hook-token)
-```
-
-1. `config.toml` から `auth_token_ref = …` の行を消す（`[hooks]` に他のキーが無ければ見出しごと消してよい）。`TOTSUKA_HOOKS_AUTH_TOKEN_REF` を export していれば外す
-2. `totsuka run` を再起動する。起動中のエージェントは古いトークンを env に持っているので、hook が 401 になる。そのタスクは `totsuka task retry` で起動し直す
-3. 不要になった機密を消す（自動では消さない）。`totsuka setup` が作った Keychain の項目なら `security delete-generic-password -s totsuka -a hook-token`。1Password / Bitwarden に作っていれば、その項目を削除する
-
-エージェントに注入する環境変数の名前 `TOTSUKA_HOOK_TOKEN` は変わらない。
+フック対応のエージェントを使うワークフローがある構成で `auth_token_ref` が未設定だと、`config validate` と `run` がワークフローごとに警告を出し、`doctor` は**失敗**する。フック対応エージェントを使わない構成では `doctor` は警告のみ。参照を設定したのに解決できない場合は、構成によらず失敗する。
 
 ## `[github]`
 

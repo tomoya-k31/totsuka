@@ -19,6 +19,7 @@ use orchestrator_core::ports::RepoClassifier;
 use orchestrator_core::config::{
     self, PluginKind as ConfigPluginKind, RootConfig, secret_resolver,
 };
+use orchestrator_core::platform::supplied;
 use orchestrator_core::plugins::claims::ClaimRegistry;
 use orchestrator_core::ports::git::GitRunner;
 use orchestrator_core::ports::{SecretRef, SecretString};
@@ -169,9 +170,11 @@ enum SecretScheme {
     /// prompt is why this must be gated rather than merely reported: it hangs
     /// an unattended run silently instead of failing.
     Bitwarden,
-    /// `secret:` — the value exists only in a process a launcher started
-    /// with `--secrets-stdin` (#754). A terminal-run doctor has nothing to
-    /// resolve it from, so it is never resolved here.
+    /// `secret:` without `--secrets-stdin` — the value exists only in a
+    /// process a launcher hands it to (#754), so it is never resolved here.
+    /// A doctor that *was* given the values classifies `secret:` as
+    /// [`Silent`](Self::Silent) instead: reading an in-memory map cannot
+    /// prompt.
     Supplied,
 }
 
@@ -189,6 +192,7 @@ impl SecretScheme {
             Ok(SecretRef::OnePassword { .. }) => Self::OnePassword,
             Ok(SecretRef::Command { .. }) => Self::Command,
             Ok(SecretRef::Bitwarden { .. }) => Self::Bitwarden,
+            Ok(SecretRef::Supplied { .. }) if supplied::installed().is_some() => Self::Silent,
             Ok(SecretRef::Supplied { .. }) => Self::Supplied,
         }
     }
@@ -278,12 +282,13 @@ impl SecretSkip {
     /// launcher and exists nowhere doctor could read it (#754).
     const SUPPLIED: Self = Self {
         label: "a secret: reference",
-        detail: "its secret: reference is supplied by the launcher to \
-                 `totsuka run --secrets-stdin`, and this doctor was given no values",
+        detail: "its secret: reference is supplied by the launcher, and this doctor \
+                 was not started with `--secrets-stdin`",
         summary: "its secret: reference is supplied by the launcher",
-        action: "the launcher supplies the value when it starts `totsuka run`; \
-                 check {target} from there",
-        note: "its value is supplied by the launcher to `totsuka run --secrets-stdin`",
+        action: "run `totsuka doctor --secrets-stdin` from the launcher that holds \
+                 the values to probe {target}",
+        note: "its value is supplied by the launcher; `totsuka doctor --secrets-stdin` \
+               resolves it",
         // Nothing here can ever hold the value.
         note_ready: None,
     };
@@ -389,11 +394,18 @@ pub struct DoctorArgs {
     /// user's `$CODEX_HOME`. This flag is that way. See [`DoctorArgs::no_repair`]
     /// usages for exactly which writes it suppresses.
     pub no_repair: bool,
+    /// Take secret values from stdin's first line, never from a store (#754).
+    pub secrets_stdin: bool,
 }
 
 /// Execute `totsuka doctor`.
 pub fn run(cx: &Cx, args: DoctorArgs) -> Result<(), CliError> {
     let DoctorArgs { json, .. } = args;
+    // Before any check: every probe below then resolves `secret:` from the
+    // line and refuses the stores, exactly like the run it diagnoses.
+    if args.secrets_stdin {
+        crate::common::install_supplied_secrets()?;
+    }
     let mut checks = Vec::new();
     // One environment snapshot, threaded through every check that needs it.
     let env: HashMap<String, String> = std::env::vars().collect();
