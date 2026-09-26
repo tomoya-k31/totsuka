@@ -14,7 +14,7 @@ use super::schema::{CleanupPolicyConfig, CleanupPolicyName, RootConfig, Workflow
 /// The `on_start` / `on_success` / `on_failure` keys the Orchestrator reads
 /// (#574).
 ///
-/// Kept beside [`outcome_action`] because that is what makes them
+/// Kept beside `outcome_action` because that is what makes them
 /// true. `config validate` — which `run` shares — rejects every other key, so
 /// a typo cannot silently drop a status write-back; add a key here in the same
 /// edit that teaches `outcome_action` to read it.
