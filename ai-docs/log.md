@@ -37,6 +37,8 @@
 * **Update**: [設定リファレンス](/development/config-reference.md) — シークレット参照に `secret:<name>` を追加
 * **Update**: [orchestrator-core](/components/orchestrator-core.md) — `platform::supplied` と、`PlatformSecretStore` が供給された値へ全参照を回すことを追記
 * **Update**: [orchestrator-cli](/components/orchestrator-cli.md) — `run --secrets-stdin` を追記
+* **Update**: [orchestrator-core](/components/orchestrator-core.md) — ソース側の task id を `domain::SourceTaskId` にし、plugin protocol の文字列との変換を境界に寄せた（#765 の 2 層目）
+* **Update**: [Task（タスク）](/glossary/task.md) — ソース側の id の Rust の型を追記
 * **Update**: [orchestrator-core](/components/orchestrator-core.md) — タスクの行 id を `domain::TaskId` にし、core の非テストコード全体で受け渡すようにした（#765 の 1 層目）。state DB の「セッションが無い」を `SessionNotFound` に分けた
 * **Update**: [Task（タスク）](/glossary/task.md) — 行 id とソース側の id の区別を追記
 * **Creation**: [ADR-0101](/decisions/adr-0101-typed-plugin-rpc.md) — プラグイン呼び出しのメソッド名と params/result 型の対応を `plugin_protocol::rpc` の型付き記述子に閉じ、`Plugin::request::<M>` で呼ぶようにした（#757）。生の `call` は `pub(crate)`、`call_no_params` は削除。kind ごとのクライアント trait と Engine のフェイク化は却下・切り出し

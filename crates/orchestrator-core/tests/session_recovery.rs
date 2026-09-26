@@ -9,6 +9,7 @@ use std::time::Duration;
 use orchestrator_core::adapters::plugin_host::{Plugin, PluginSpec};
 use orchestrator_core::adapters::state_db::NewTask;
 use orchestrator_core::adapters::{PluginAgentSession, StateDb};
+use orchestrator_core::domain::SourceTaskId;
 use orchestrator_core::domain::state::{TaskEvent, TaskState};
 use orchestrator_core::recovery::{RecoveryResult, recover};
 use plugin_protocol::Task;
@@ -42,7 +43,7 @@ protocol_version = ">=0.6.0, <0.8"
 fn new_task(source_task_id: &str) -> NewTask {
     NewTask {
         source: "github".into(),
-        source_task_id: source_task_id.into(),
+        source_task_id: SourceTaskId(source_task_id.into()),
         workflow: "implement".into(),
         mode: "implement".into(),
         repo: Some("totsuka".into()),

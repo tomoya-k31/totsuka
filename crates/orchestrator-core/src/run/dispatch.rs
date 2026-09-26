@@ -1027,7 +1027,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         let outcome = match self.plugins.sources.get(&record.source) {
             Some(source) if source.capabilities().task_claim => {
                 let params = TaskClaimParams {
-                    task_id: record.source_task_id.clone(),
+                    task_id: record.source_task_id.0.clone(),
                 };
                 source.request::<rpc::TaskClaim>(&params).await
             }
@@ -1738,6 +1738,7 @@ fn launch_env(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::SourceTaskId;
     use crate::domain::workflow::Trigger;
 
     fn settings(workflows: Vec<Workflow>, repos: Vec<RepoSettings>) -> EngineSettings {
@@ -1804,7 +1805,7 @@ mod tests {
         TaskRecord {
             id: TaskId(1),
             source: "github".to_string(),
-            source_task_id: "1".to_string(),
+            source_task_id: SourceTaskId("1".to_string()),
             workflow: workflow.to_string(),
             mode: "implement".to_string(),
             repo: repo.map(str::to_string),

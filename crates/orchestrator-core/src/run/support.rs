@@ -216,7 +216,7 @@ pub(super) fn task_from_record(record: &TaskRecord) -> Task {
         .clone()
         .and_then(|v| serde_json::from_value(v).ok())
         .unwrap_or_else(|| Task {
-            id: record.source_task_id.clone(),
+            id: record.source_task_id.0.clone(),
             source: record.source.clone(),
             title: record.title.clone(),
             body: None,
@@ -247,6 +247,8 @@ pub(super) fn routine_submit_ack(status: TaskSubmitStatus, state: Option<TaskSta
 
 #[cfg(test)]
 mod tests {
+    use crate::domain::SourceTaskId;
+
     #[test]
     fn only_a_duplicate_for_a_task_in_flight_is_routine() {
         use super::routine_submit_ack;
@@ -376,7 +378,7 @@ mod tests {
         let id = db
             .upsert_task(&NewTask {
                 source: "github".into(),
-                source_task_id: task.id.clone(),
+                source_task_id: SourceTaskId(task.id.clone()),
                 workflow: "implement".into(),
                 mode: "implement".into(),
                 repo: None,

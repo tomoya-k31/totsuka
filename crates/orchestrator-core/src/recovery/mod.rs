@@ -360,6 +360,7 @@ fn needs_confirmation(
 mod tests {
     use super::*;
     use crate::adapters::state_db::NewTask;
+    use crate::domain::SourceTaskId;
     use crate::ports::agent_session::AgentSessionError;
     use std::collections::HashMap;
     use std::future::Future;
@@ -412,7 +413,7 @@ mod tests {
     fn new_task(source_task_id: &str) -> NewTask {
         NewTask {
             source: "github".into(),
-            source_task_id: source_task_id.into(),
+            source_task_id: SourceTaskId(source_task_id.into()),
             workflow: "implement".into(),
             mode: "implement".into(),
             repo: Some("totsuka".into()),

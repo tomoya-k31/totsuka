@@ -937,6 +937,7 @@ fn strip_status_markers(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::SourceTaskId;
 
     #[test]
     fn strip_status_markers_removes_inline_and_standalone() {
@@ -1008,7 +1009,7 @@ mod tests {
             .db
             .upsert_task(&crate::adapters::state_db::NewTask {
                 source: "github".to_string(),
-                source_task_id: "42".to_string(),
+                source_task_id: SourceTaskId("42".to_string()),
                 workflow: "implement".to_string(),
                 mode: "implement".to_string(),
                 repo: Some("web".to_string()),

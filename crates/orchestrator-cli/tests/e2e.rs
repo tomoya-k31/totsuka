@@ -13,6 +13,7 @@
 //! `health.json` (written by every cycle) instead of sleeping, and every wait
 //! is capped.
 
+use orchestrator_core::domain::SourceTaskId;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, Command, Output, Stdio};
@@ -591,7 +592,7 @@ fn doctor_detects_orphan_panes_via_session_list() {
     let db = StateDb::open(&env.state_dir().join("state.db")).unwrap();
     let new = |sid: &str| NewTask {
         source: "mock_src".into(),
-        source_task_id: sid.into(),
+        source_task_id: SourceTaskId(sid.into()),
         workflow: "wf".into(),
         mode: "implement".into(),
         repo: None,

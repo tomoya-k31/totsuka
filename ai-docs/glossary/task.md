@@ -19,4 +19,4 @@ GitHub の Issue や PR、Notion ページなど、タスクソースが提供�
 | id | 何か | どこで使うか | Rust の型 |
 |---|---|---|---|
 | 行 id（`tasks.id`） | totsuka が取り込み時に振る連番 | `totsuka task show <id>`・`status` の ID 列・`JobId`（`job-<task>-<session>`）・`{task_number}` | `domain::TaskId` |
-| ソース側の id（`source_task_id`） | タスクソースが持つ id（Issue 番号、Notion のページ id、Slack のスレッドキー） | pane label・plugin protocol の `Task.id` | `String` |
+| ソース側の id（`source_task_id`） | タスクソースが持つ id（Issue 番号、Notion のページ id、Slack のスレッドキー） | pane label・plugin protocol の `Task.id` | `domain::SourceTaskId` |

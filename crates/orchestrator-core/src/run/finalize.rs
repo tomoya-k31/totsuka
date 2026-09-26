@@ -230,7 +230,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         // the plugin claims `publish` off `[[workflows]]` and reads it itself,
         // so nothing about delivery travels on this call.
         let params = ResultPublishParams {
-            task_id: record.source_task_id.clone(),
+            task_id: record.source_task_id.0.clone(),
             content,
             format: Some("markdown".to_string()),
         };
@@ -267,7 +267,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             return;
         };
         let params = TaskUpdateStatusParams {
-            task_id: record.source_task_id.clone(),
+            task_id: record.source_task_id.0.clone(),
             status: status.clone(),
             // Scope the write to the domains this workflow draws from (#626).
             // The source cannot derive it: `task/update_status` names a task,
@@ -627,6 +627,7 @@ pub(super) enum PaneRelease {
 mod tests {
     use super::*;
     use crate::adapters::state_db::NewTask;
+    use crate::domain::SourceTaskId;
 
     /// Drive a fresh task (`key` tells it apart) through `history`, one
     /// `(event, detail)` at a time.
@@ -639,7 +640,7 @@ mod tests {
             .db
             .upsert_task(&NewTask {
                 source: "mock".to_string(),
-                source_task_id: key.to_string(),
+                source_task_id: SourceTaskId(key.to_string()),
                 workflow: "implement".to_string(),
                 mode: "implement".to_string(),
                 repo: None,

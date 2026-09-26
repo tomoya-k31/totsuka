@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use orchestrator_core::adapters::state_db::TaskMessageInsert;
 use orchestrator_core::adapters::{NewTask, StateDb};
 use orchestrator_core::domain::EventDetail;
+use orchestrator_core::domain::SourceTaskId;
 use orchestrator_core::domain::state::TaskEvent;
 
 fn totsuka() -> PathBuf {
@@ -76,7 +77,7 @@ fn seed_db(base: &Path) -> (i64, i64, i64) {
     let db = StateDb::open(&state_dir.join("state.db")).unwrap();
     let new = |id: &str| NewTask {
         source: "github".into(),
-        source_task_id: id.into(),
+        source_task_id: SourceTaskId(id.into()),
         workflow: "implement".into(),
         mode: "implement".into(),
         repo: Some("web".into()),
@@ -330,7 +331,7 @@ fn menu_exits_quietly_when_the_reader_goes_away() {
             let id = db
                 .upsert_task(&NewTask {
                     source: "github".into(),
-                    source_task_id: i.to_string(),
+                    source_task_id: SourceTaskId(i.to_string()),
                     workflow: "implement".into(),
                     mode: "implement".into(),
                     repo: None,
@@ -428,7 +429,7 @@ fn task_export_exits_quietly_when_the_reader_goes_away() {
             let id = db
                 .upsert_task(&NewTask {
                     source: "github".into(),
-                    source_task_id: i.to_string(),
+                    source_task_id: SourceTaskId(i.to_string()),
                     workflow: "implement".into(),
                     mode: "implement".into(),
                     repo: None,
@@ -521,7 +522,7 @@ fn status_explains_why_a_queued_task_is_not_starting() {
     let id = db
         .upsert_task(&NewTask {
             source: "github".into(),
-            source_task_id: "7".into(),
+            source_task_id: SourceTaskId("7".into()),
             workflow: "github-implement".into(),
             mode: "implement".into(),
             repo: Some("web".into()),
@@ -598,7 +599,7 @@ fn external_text_cannot_repaint_the_terminal_yet_json_stays_verbatim() {
     let id = db
         .upsert_task(&NewTask {
             source: "github".into(),
-            source_task_id: source_task_id.clone(),
+            source_task_id: SourceTaskId(source_task_id.clone()),
             workflow: "implement".into(),
             mode: "implement".into(),
             repo: Some("web".into()),
@@ -2025,7 +2026,7 @@ fn menu_renders_the_glyph_the_count_and_a_focus_action() {
         let id = db
             .upsert_task(&NewTask {
                 source: "github".into(),
-                source_task_id: "waiting".into(),
+                source_task_id: SourceTaskId("waiting".into()),
                 workflow: "implement".into(),
                 mode: "implement".into(),
                 repo: Some("web".into()),

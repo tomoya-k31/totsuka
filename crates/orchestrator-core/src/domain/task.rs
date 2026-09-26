@@ -17,3 +17,18 @@ impl fmt::Display for TaskId {
         self.0.fmt(f)
     }
 }
+
+/// The source's own id for a task (`tasks.source_task_id`): the Issue number,
+/// the Notion page id, the Slack thread key.
+///
+/// What a pane label and the plugin protocol's `Task.id` carry — never the
+/// [`TaskId`] row id (#210, #765).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize)]
+#[serde(transparent)]
+pub struct SourceTaskId(pub String);
+
+impl fmt::Display for SourceTaskId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}

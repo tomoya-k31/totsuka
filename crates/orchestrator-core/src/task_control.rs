@@ -109,13 +109,14 @@ pub fn not_found(id: TaskId) -> String {
 mod tests {
     use super::*;
     use crate::adapters::state_db::NewTask;
+    use crate::domain::SourceTaskId;
 
     fn db_with_task() -> (StateDb, i64) {
         let db = StateDb::open_in_memory().unwrap();
         let id = db
             .upsert_task(&NewTask {
                 source: "github".to_string(),
-                source_task_id: "42".to_string(),
+                source_task_id: SourceTaskId("42".to_string()),
                 workflow: "implement".to_string(),
                 mode: "implement".to_string(),
                 repo: Some("web".to_string()),

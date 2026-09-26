@@ -5,8 +5,8 @@
 //! of its own and re-submits everything each tick.
 
 use super::*;
-use crate::domain::TaskId;
 use crate::domain::event_detail::{EventDetail, Reopen, WorkflowHandoff};
+use crate::domain::{SourceTaskId, TaskId};
 
 impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// Persist one normalized task under `wf`, idempotently (F-73), appending
@@ -24,7 +24,9 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         wf: &Workflow,
         task: &Task,
     ) -> Result<(TaskId, IngestOutcome), EngineError> {
-        let existing = self.db.find_by_source(&task.source, &task.id)?;
+        let existing = self
+            .db
+            .find_by_source(&task.source, &SourceTaskId(task.id.clone()))?;
         // A delivery under a **different workflow** hands the conversation
         // over to it (#565), when the conversation has finished. This is what
         // makes a column pipeline work: design finishes, its write-back puts
@@ -40,7 +42,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         }
         let new_task = NewTask {
             source: task.source.clone(),
-            source_task_id: task.id.clone(),
+            source_task_id: SourceTaskId(task.id.clone()),
             workflow: wf.name.clone(),
             mode: mode_str(wf.mode).to_string(),
             repo: None,
@@ -601,7 +603,7 @@ mod tests {
         assert_eq!(ack.status, TaskSubmitStatus::Accepted);
         let id = engine
             .db
-            .find_by_source("slack", "C1:100")
+            .find_by_source("slack", &SourceTaskId("C1:100".into()))
             .unwrap()
             .unwrap()
             .id;
@@ -679,7 +681,7 @@ mod tests {
             .unwrap();
         let id = engine
             .db
-            .find_by_source("slack", "C1:100")
+            .find_by_source("slack", &SourceTaskId("C1:100".into()))
             .unwrap()
             .unwrap()
             .id;
@@ -744,7 +746,7 @@ mod tests {
             .unwrap();
         let id = engine
             .db
-            .find_by_source("slack", "C1:100")
+            .find_by_source("slack", &SourceTaskId("C1:100".into()))
             .unwrap()
             .unwrap()
             .id;
@@ -836,7 +838,7 @@ mod tests {
             .unwrap();
         let id = engine
             .db
-            .find_by_source("slack", "C1:100")
+            .find_by_source("slack", &SourceTaskId("C1:100".into()))
             .unwrap()
             .unwrap()
             .id;
@@ -918,7 +920,7 @@ mod tests {
             .unwrap();
         let id = engine
             .db
-            .find_by_source("slack", "C1:100")
+            .find_by_source("slack", &SourceTaskId("C1:100".into()))
             .unwrap()
             .unwrap()
             .id;
@@ -977,7 +979,7 @@ mod tests {
             .unwrap();
         let id = engine
             .db
-            .find_by_source("slack", "C1:100")
+            .find_by_source("slack", &SourceTaskId("C1:100".into()))
             .unwrap()
             .unwrap()
             .id;
@@ -1045,7 +1047,7 @@ mod tests {
             .unwrap();
         let id = engine
             .db
-            .find_by_source("slack", "C1:100")
+            .find_by_source("slack", &SourceTaskId("C1:100".into()))
             .unwrap()
             .unwrap()
             .id;
@@ -1091,7 +1093,7 @@ mod tests {
             .unwrap();
         let id = engine
             .db
-            .find_by_source("slack", "C1:100")
+            .find_by_source("slack", &SourceTaskId("C1:100".into()))
             .unwrap()
             .unwrap()
             .id;
@@ -1130,7 +1132,7 @@ mod tests {
             .unwrap();
         let id = engine
             .db
-            .find_by_source("slack", "C1:100")
+            .find_by_source("slack", &SourceTaskId("C1:100".into()))
             .unwrap()
             .unwrap()
             .id;
@@ -1176,7 +1178,7 @@ mod tests {
             .unwrap();
         let id = engine
             .db
-            .find_by_source("slack", "C1:100")
+            .find_by_source("slack", &SourceTaskId("C1:100".into()))
             .unwrap()
             .unwrap()
             .id;
@@ -1220,7 +1222,12 @@ mod tests {
                 .status,
             TaskSubmitStatus::Accepted
         );
-        let id = engine.db.find_by_source("slack", "42").unwrap().unwrap().id;
+        let id = engine
+            .db
+            .find_by_source("slack", &SourceTaskId("42".into()))
+            .unwrap()
+            .unwrap()
+            .id;
         for event in [
             TaskEvent::Dispatch,
             TaskEvent::Start,
@@ -1263,7 +1270,7 @@ mod tests {
             .unwrap();
         let id = engine
             .db
-            .find_by_source("slack", "C1:100")
+            .find_by_source("slack", &SourceTaskId("C1:100".into()))
             .unwrap()
             .unwrap()
             .id;
@@ -1291,7 +1298,7 @@ mod tests {
             .unwrap();
         let id = engine
             .db
-            .find_by_source("slack", "C1:100")
+            .find_by_source("slack", &SourceTaskId("C1:100".into()))
             .unwrap()
             .unwrap()
             .id;
@@ -1335,7 +1342,7 @@ mod tests {
             .unwrap();
         let id = engine
             .db
-            .find_by_source("slack", "C1:100")
+            .find_by_source("slack", &SourceTaskId("C1:100".into()))
             .unwrap()
             .unwrap()
             .id;
@@ -1442,7 +1449,7 @@ mod tests {
             .unwrap();
         let id = engine
             .db
-            .find_by_source("slack", "C1:100")
+            .find_by_source("slack", &SourceTaskId("C1:100".into()))
             .unwrap()
             .unwrap()
             .id;
@@ -1488,7 +1495,7 @@ mod tests {
             .unwrap();
         let id = engine
             .db
-            .find_by_source("slack", "C1:100")
+            .find_by_source("slack", &SourceTaskId("C1:100".into()))
             .unwrap()
             .unwrap()
             .id;
@@ -1585,7 +1592,7 @@ mod tests {
             .unwrap();
         let id = engine
             .db
-            .find_by_source("slack", "C1:100")
+            .find_by_source("slack", &SourceTaskId("C1:100".into()))
             .unwrap()
             .unwrap()
             .id;
@@ -1712,7 +1719,7 @@ mod tests {
             .unwrap();
         let id = engine
             .db
-            .find_by_source("slack", "C1:100")
+            .find_by_source("slack", &SourceTaskId("C1:100".into()))
             .unwrap()
             .unwrap()
             .id;

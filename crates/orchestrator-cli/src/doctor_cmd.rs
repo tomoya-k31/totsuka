@@ -2484,7 +2484,7 @@ fn classify_orphan_panes(
                 .label
                 .as_deref()
                 .and_then(|l| l.strip_prefix("totsuka "))
-                .map(|id| tasks.iter().filter(|t| t.source_task_id == id).collect())
+                .map(|id| tasks.iter().filter(|t| t.source_task_id.0 == id).collect())
                 .unwrap_or_default();
             let reason = if matches.is_empty() {
                 "no matching task in the DB".to_string()
@@ -2731,6 +2731,7 @@ fn check_orphan_panes(
 mod tests {
     use super::*;
     use orchestrator_core::adapters::TaskRecord;
+    use orchestrator_core::domain::SourceTaskId;
     use orchestrator_core::domain::TaskId;
     use orchestrator_core::domain::state::TaskState;
     use plugin_protocol::methods::SessionInfo;
@@ -3052,7 +3053,7 @@ location = "${MY_ROOT}/wt/{worktree_name}"
         TaskRecord {
             id: TaskId(1000),
             source: "slack".into(),
-            source_task_id: source_task_id.into(),
+            source_task_id: SourceTaskId(source_task_id.into()),
             workflow: "reply".into(),
             mode: "implement".into(),
             repo: Some("web".into()),
