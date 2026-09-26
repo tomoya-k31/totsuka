@@ -1,0 +1,1 @@
+* **Update**: [orchestrator-core](/components/orchestrator-core.md) — `run::supervise::SupervisionLedger` を追加し、Engine の `restarts` / `abandoned_plugins` / `retired_stats` / `plugin_events` と `RestartLedger` を 1 つの帳簿にまとめた（#758、[ADR-0103](/decisions/adr-0103-engine-state-types.md)）
