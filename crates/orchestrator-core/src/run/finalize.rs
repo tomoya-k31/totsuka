@@ -218,7 +218,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             format: Some("markdown".to_string()),
         };
         source
-            .call::<_, Value>(method::RESULT_PUBLISH, &params)
+            .request::<rpc::ResultPublish>(&params)
             .await
             .map(|_| ())
             .map_err(|e| format!("result/publish failed: {e}"))
@@ -257,10 +257,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             // and an issue can sit on several of the plugin's boards.
             projects: wf.projects.clone(),
         };
-        match source
-            .call::<_, Value>(method::TASK_UPDATE_STATUS, &params)
-            .await
-        {
+        match source.request::<rpc::TaskUpdateStatus>(&params).await {
             Ok(_) => {
                 tracing::info!(task_id = record.id, status = %status, "source status updated (F-84)");
             }
@@ -530,10 +527,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             expect_cwd: record.worktree_path.clone(),
             expect_label: None,
         };
-        match agent
-            .call::<_, SessionReleaseResult>(method::SESSION_RELEASE, &params)
-            .await
-        {
+        match agent.request::<rpc::SessionRelease>(&params).await {
             Ok(result) => {
                 self.released_panes.insert(session.id);
                 match (result.released, result.not_released) {

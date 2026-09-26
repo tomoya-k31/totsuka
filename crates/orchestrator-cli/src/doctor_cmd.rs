@@ -2527,10 +2527,7 @@ fn check_orphan_panes(
 ) -> Result<(), CliError> {
     use plugin_protocol::manifest::PluginKind;
     let json = args.json;
-    use plugin_protocol::methods::{
-        NotReleased, SessionListParams, SessionListResult, SessionReleaseParams,
-        SessionReleaseResult,
-    };
+    use plugin_protocol::methods::{NotReleased, SessionListParams, SessionReleaseParams};
 
     let Some(db) = db else {
         return Ok(());
@@ -2585,8 +2582,8 @@ fn check_orphan_panes(
         };
         let listed = runtime.block_on(async {
             let plugin = plugin_host::Plugin::launch(spec).await?;
-            let result: Result<SessionListResult, _> = plugin
-                .call(plugin_protocol::method::SESSION_LIST, &SessionListParams {})
+            let result = plugin
+                .request::<plugin_protocol::rpc::SessionList>(&SessionListParams {})
                 .await;
             let _ = plugin.shutdown(std::time::Duration::from_secs(5)).await;
             result
@@ -2678,18 +2675,15 @@ fn check_orphan_panes(
             };
             let released = runtime.block_on(async {
                 let plugin = plugin_host::Plugin::launch(spec).await?;
-                let result: Result<SessionReleaseResult, _> = plugin
-                    .call(
-                        plugin_protocol::method::SESSION_RELEASE,
-                        &SessionReleaseParams {
-                            session_id: orphan.session.session_id.clone(),
-                            expect_cwd: None,
-                            // The label we just enumerated is the identity
-                            // guard against the pane id being reassigned
-                            // between listing and this release.
-                            expect_label: orphan.session.label.clone(),
-                        },
-                    )
+                let result = plugin
+                    .request::<plugin_protocol::rpc::SessionRelease>(&SessionReleaseParams {
+                        session_id: orphan.session.session_id.clone(),
+                        expect_cwd: None,
+                        // The label we just enumerated is the identity
+                        // guard against the pane id being reassigned
+                        // between listing and this release.
+                        expect_label: orphan.session.label.clone(),
+                    })
                     .await;
                 let _ = plugin.shutdown(std::time::Duration::from_secs(5)).await;
                 result

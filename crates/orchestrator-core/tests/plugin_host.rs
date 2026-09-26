@@ -11,6 +11,18 @@ use orchestrator_core::adapters::{NewTask, StateDb};
 use orchestrator_core::config::RootConfig;
 use orchestrator_core::domain::state::{TaskEvent, TaskState};
 use plugin_protocol::manifest::Manifest;
+use plugin_protocol::methods::StateSubscribeParams;
+use plugin_protocol::rpc::{self, Method};
+
+/// The mock's test-only `crash` method: the plugin exits without answering.
+/// Not a protocol method, so the test describes it itself.
+enum Crash {}
+
+impl Method for Crash {
+    const NAME: &'static str = "crash";
+    type Params = ();
+    type Result = serde_json::Value;
+}
 
 /// Path to the compiled mock plugin binary (provided by cargo to integration
 /// tests of this crate).
@@ -157,7 +169,7 @@ async fn crash_fails_task_and_host_survives() {
     let plugin = Plugin::launch(spec(">=0.6.0, <0.8")).await.expect("launch");
 
     // The `crash` method makes the plugin exit without responding.
-    let result: Result<serde_json::Value, _> = plugin.call("crash", &()).await;
+    let result = plugin.request::<Crash>(&()).await;
     assert!(
         matches!(result, Err(HostError::Crashed(_))),
         "got {result:?}"
@@ -200,8 +212,9 @@ async fn call_after_close_returns_promptly_not_after_timeout() {
     assert!(plugin.is_closed());
 
     let start = std::time::Instant::now();
-    let result: Result<serde_json::Value, _> =
-        plugin.call("config/validate", &serde_json::json!({})).await;
+    let result = plugin
+        .config_validate(serde_json::json!({}), vec![], vec![], vec![])
+        .await;
     assert!(result.is_err());
     assert!(
         start.elapsed() < Duration::from_secs(5),
@@ -218,8 +231,10 @@ async fn receives_plugin_notifications() {
         .expect("receiver available");
 
     // The mock emits a `state/notification` before acking `state/subscribe`.
-    let _: serde_json::Value = plugin
-        .call("state/subscribe", &serde_json::json!({ "session_id": "s" }))
+    plugin
+        .request::<rpc::StateSubscribe>(&StateSubscribeParams {
+            session_id: "s".to_string(),
+        })
         .await
         .unwrap();
 
@@ -402,7 +417,7 @@ async fn incoming_channel_closes_on_crash_and_late_answer_is_harmless() {
         .expect("incoming channel closed");
 
     // The plugin dies before its request is answered.
-    let result: Result<serde_json::Value, _> = plugin.call("crash", &()).await;
+    let result = plugin.request::<Crash>(&()).await;
     assert!(matches!(result, Err(HostError::Crashed(_))));
 
     // The reader task ended, so the incoming channel closes for its consumer…
@@ -452,7 +467,7 @@ async fn a_crash_is_reported_as_crashed() {
     let mut liveness = plugin.liveness();
     assert_eq!(*liveness.borrow_and_update(), Liveness::Live);
 
-    let _: Result<serde_json::Value, _> = plugin.call("crash", &()).await;
+    let _ = plugin.request::<Crash>(&()).await;
     liveness.changed().await.expect("liveness must change");
     assert_eq!(*liveness.borrow(), Liveness::Crashed);
 }

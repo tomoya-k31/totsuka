@@ -8,9 +8,8 @@
 use std::collections::HashMap;
 use std::future::Future;
 
-use plugin_protocol::method;
-use plugin_protocol::methods::{SessionAttachParams, SessionAttachResult, StateSubscribeParams};
-use serde_json::Value;
+use plugin_protocol::methods::{SessionAttachParams, StateSubscribeParams};
+use plugin_protocol::rpc;
 
 use crate::adapters::plugin_host::Plugin;
 use crate::ports::agent_session::{AgentSession, AgentSessionError, AttachOutcome};
@@ -45,13 +44,10 @@ impl AgentSession for PluginAgentSession<'_> {
                 reason: "not launched".to_string(),
             })?;
 
-            let result: SessionAttachResult = handle
-                .call(
-                    method::SESSION_ATTACH,
-                    &SessionAttachParams {
-                        session_id: session_id.clone(),
-                    },
-                )
+            let result = handle
+                .request::<rpc::SessionAttach>(&SessionAttachParams {
+                    session_id: session_id.clone(),
+                })
                 .await
                 .map_err(|e| AgentSessionError::Attach {
                     plugin: plugin.clone(),
@@ -65,11 +61,8 @@ impl AgentSession for PluginAgentSession<'_> {
             // Re-establish the state/log stream so recovery resumes streaming
             // (F-38). A failure here means the re-attach did not fully succeed,
             // so surface it rather than pretend the session is live.
-            let _: Value = handle
-                .call(
-                    method::STATE_SUBSCRIBE,
-                    &StateSubscribeParams { session_id },
-                )
+            handle
+                .request::<rpc::StateSubscribe>(&StateSubscribeParams { session_id })
                 .await
                 .map_err(|e| AgentSessionError::Attach {
                     plugin: plugin.clone(),

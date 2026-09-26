@@ -13,8 +13,8 @@ use orchestrator_core::domain::state::{TaskEvent, TaskState};
 use orchestrator_core::recovery::{RecoveryResult, recover};
 use plugin_protocol::Task;
 use plugin_protocol::manifest::Manifest;
-use plugin_protocol::method;
-use plugin_protocol::methods::{ExecutionMode, TaskDispatchParams, TaskDispatchResult};
+use plugin_protocol::methods::{ExecutionMode, TaskDispatchParams};
+use plugin_protocol::rpc;
 
 fn spec() -> PluginSpec {
     PluginSpec {
@@ -85,21 +85,18 @@ async fn kill9_restart_attach_resumes_running() {
 
     // Dispatch through a plugin, persist the returned session, then start work.
     let plugin1 = Plugin::launch(spec()).await.expect("launch");
-    let disp: TaskDispatchResult = plugin1
-        .call(
-            method::TASK_DISPATCH,
-            &TaskDispatchParams {
-                task: dispatch_task(),
-                worktree_path: "/wt/agent-github-1".into(),
-                mode: ExecutionMode::Implement,
-                extra_context: None,
-                job_id: None,
-                task_number: None,
-                resume_session_id: None,
-                repo_name: Some("clone".into()),
-                tool_launch: None,
-            },
-        )
+    let disp = plugin1
+        .request::<rpc::TaskDispatch>(&TaskDispatchParams {
+            task: dispatch_task(),
+            worktree_path: "/wt/agent-github-1".into(),
+            mode: ExecutionMode::Implement,
+            extra_context: None,
+            job_id: None,
+            task_number: None,
+            resume_session_id: None,
+            repo_name: Some("clone".into()),
+            tool_launch: None,
+        })
         .await
         .expect("dispatch");
     db.apply_event(db.task_ref(id).unwrap(), TaskEvent::Dispatch, None)

@@ -1,15 +1,16 @@
 //! totsuka orchestrator core.
 //!
-//! Hexagonal architecture skeleton. The crate is split into three layers:
+//! Hexagonal architecture. The core of the split is three layers:
 //!
 //! - [`domain`]: pure domain types and the task state machine.
-//! - [`ports`]: trait boundaries (`TaskSource`, `AgentIde`, `RepoClassifier`,
-//!   `SecretStore`, ...) that adapters implement.
-//! - [`adapters`]: concrete implementations (JSON-RPC plugin bridge, SQLite,
+//! - [`ports`]: trait boundaries that adapters implement — agent-session
+//!   re-attach, clock, git, repository classification, secrets, signal/control
+//!   ingress and process probing. Plugins are **not** behind a port: the run
+//!   loop holds them directly and calls them through
+//!   [`Plugin::request`](adapters::plugin_host::Plugin::request), whose
+//!   method/params/result pairing lives in [`plugin_protocol::rpc`] (#757).
+//! - [`adapters`]: concrete implementations (JSON-RPC plugin host, SQLite,
 //!   Keychain, ...).
-//!
-//! Individual features are filled in by later tasks; this task only lays down
-//! the module skeleton.
 
 pub mod adapters;
 pub mod agent_tools;

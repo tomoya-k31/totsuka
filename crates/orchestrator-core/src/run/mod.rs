@@ -36,11 +36,11 @@ use std::time::Duration;
 use plugin_protocol::method;
 use plugin_protocol::methods::{
     AgentState, ExecutionMode, NotReleased, NotifierEvent, NotifyParams, ResultPublishParams,
-    SessionReleaseParams, SessionReleaseResult, StateNotification, TaskClaimOutcome,
-    TaskClaimParams, TaskClaimResult, TaskDispatchParams, TaskDispatchResult, TaskLookupParams,
-    TaskLookupResult, TaskSubmitParams, TaskSubmitResult, TaskSubmitStatus, TaskUpdateStatusParams,
+    SessionReleaseParams, StateNotification, TaskClaimOutcome, TaskClaimParams, TaskClaimResult,
+    TaskDispatchParams, TaskDispatchResult, TaskLookupParams, TaskLookupResult, TaskSubmitParams,
+    TaskSubmitResult, TaskSubmitStatus, TaskUpdateStatusParams,
 };
-use plugin_protocol::{Notification, Task, jsonrpc};
+use plugin_protocol::{Notification, Task, jsonrpc, rpc};
 use serde_json::Value;
 use tokio::sync::{Semaphore, mpsc};
 
