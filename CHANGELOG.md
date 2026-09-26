@@ -11,6 +11,14 @@ Note: the plugin protocol is versioned independently of the application (see
 `crates/plugin-protocol`); a totsuka release does not imply a protocol-version
 change.
 
+## [0.10.2](https://github.com/tomoya-k31/totsuka/compare/v0.10.1...v0.10.2) (2026-09-26)
+
+
+### Features
+
+* **cli:** ホスト別 config (hosts/&lt;host&gt;.toml) を自動選択する ([#833](https://github.com/tomoya-k31/totsuka/issues/833)) ([a1a4736](https://github.com/tomoya-k31/totsuka/commit/a1a4736bf221a4341402cf5142199e88a59bccd7))
+* **core:** opencode プラグインで claude フックの残りを揃え、サブエージェントを報告しない ([#835](https://github.com/tomoya-k31/totsuka/issues/835)) ([d0ac3c6](https://github.com/tomoya-k31/totsuka/commit/d0ac3c6066e3ebbddb8e829b3a6ee21f67b221b0))
+
 ## [0.10.1](https://github.com/tomoya-k31/totsuka/compare/v0.10.0...v0.10.1) (2026-09-26)
 
 
