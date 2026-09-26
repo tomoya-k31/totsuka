@@ -642,11 +642,11 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// `session/attach` on retry reuse, F-44), `state/subscribe`. The slot has
     /// already been acquired; failure paths release it and fail the task.
     ///
-    /// Every decision before the launch is a pure function —
-    /// [`resolve_dispatch_target`] (#471), then one per step (#758):
-    /// [`resume_session_id`], [`reusable_session`], [`dispatch_task`] and
-    /// [`pane_refusal`]. What remains here is the order the side effects have
-    /// to happen in.
+    /// Every decision is a pure function — [`resolve_dispatch_target`] (#471),
+    /// then one per step (#758): [`resume_session_id`], [`reusable_session`],
+    /// [`dispatch_task`], [`pane_refusal`], [`route_extra_context`],
+    /// [`dispatch_params`] and [`unresumable`]. What remains here is the order
+    /// the side effects have to happen in.
     async fn dispatch_one(&mut self, task_id: i64) -> Result<(), EngineError> {
         let record = self
             .db
@@ -864,77 +864,29 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
 
         // task/dispatch (F-31) → session id → persist (F-37) → subscribe (F-38).
         let agent = self.plugins.agents.get(&agent_name).expect("checked above");
-        // Context routing: hook dispatches deliver everything invisibly via
-        // `TOTSUKA_PROMPT_CONTEXT` above when the tool supports it; a tool
-        // without invisible injection got the same content as
-        // `visible_hook_context` instead. Non-hook dispatches (the mock)
-        // have no invisible channel — fall back to the task's instructions as
-        // visible string extra_context (no marker convention: non-hook agents
-        // don't report completion through hooks).
-        let extra_context = match (&hook_spec, visible_hook_context) {
-            // Hook dispatch, tool without invisible injection: the context is
-            // delivered visibly (see above).
-            (Some(_), Some(ctx)) => Some(serde_json::Value::String(ctx)),
-            (Some(_), None) => None,
-            (None, _) => task.instructions.clone().map(serde_json::Value::String),
-        };
-        let mode = execution_mode(&record.mode);
-        // Fully-resolved tool launch (#196): the argv (base command, mode
-        // flags, hook settings, resume id) is assembled in core from the
-        // resolved profile; the plugin launches it verbatim. This is the only
-        // launch channel since protocol 0.4.0 (#411) — the `hook` spec that
-        // used to ride along for pre-0.2.3 plugins is gone, and `hook_spec`
-        // below is a core-internal `(settings_path, env)` pair, not a wire
-        // type. `tool_launch` bakes the resume flag into the argv, so a retry
-        // without resume has to rebuild the whole spec — hence a closure
-        // rather than a mutated struct.
-        let build_params = |resume: Option<String>| TaskDispatchParams {
-            task: task.clone(),
-            worktree_path: worktree_path.display().to_string(),
-            mode,
-            // `initial_prompt` (#415) rides the *visible* channel, ahead of
-            // everything else, and only when the agent is about to start a
-            // fresh conversation. The test is `resume.is_none()` and it is
-            // deliberately inside this closure: the `SESSION_UNRESUMABLE`
-            // retry below rebuilds the params without a resume id, and that
-            // dispatch really is a new conversation — the agent remembers
-            // nothing, so the instructions have to come back with it.
-            extra_context: prepend_initial_prompt(
-                extra_context.clone(),
-                initial_prompt.as_deref().filter(|_| resume.is_none()),
+        let inputs = DispatchInputs {
+            task: &task,
+            worktree_path: &worktree_path,
+            mode: execution_mode(&record.mode),
+            extra_context: route_extra_context(
+                hook_spec.is_some(),
+                visible_hook_context,
+                task.instructions.as_deref(),
             ),
-            job_id: job_id.clone(),
-            // 0.7.1 (#645): unconditional, where `job_id` above is not — an
-            // agent that declares no `hook_completion` (the mock; orca too before
-            // ADR-0082) never receives one, and the plugin still has to name what it creates after
-            // *something* an operator can carry back to `totsuka status`.
-            task_number: Some(record.id),
-            tool_launch: tool_profile.launch_spec(&LaunchInputs {
-                plan: mode == plugin_protocol::methods::ExecutionMode::Plan,
-                profile: wf_profile,
-                settings_path: hook_spec.as_ref().map(|(path, _)| path.as_str()),
-                resume_session_id: resume.as_deref(),
-                env: launch_env(
-                    hook_spec.as_ref().map(|(_, env)| env),
-                    self.settings.tool_env.get(&tool_name),
-                ),
-            }),
-            resume_session_id: resume,
-            // 0.4.1 (#417): for the IDE plugin to show which repository the
-            // agent is in. The *configured* name, not the worktree's directory
-            // name, so the sidebar says what the logs and `totsuka status`
-            // already say.
-            repo_name: Some(repo.name.clone()),
+            initial_prompt: initial_prompt.as_deref(),
+            job_id: job_id.as_deref(),
+            task_number: record.id,
+            tool_profile: &tool_profile,
+            profile: wf_profile,
+            hook_spec: hook_spec.as_ref(),
+            tool_env: self.settings.tool_env.get(&tool_name),
+            repo_name: &repo.name,
         };
-        let params = build_params(resume_session_id.clone());
-        let mut attempt = agent.request::<rpc::TaskDispatch>(&params).await;
-        // `SESSION_UNRESUMABLE` (0.2.4, #242): the session we asked to resume
-        // is gone. Resuming is an optimization — the work itself does not
-        // depend on it — so drop it and dispatch once more. The retry cannot
-        // fail the same way (it names no session), so this never loops.
-        if let (Err(HostError::Rpc { code, message, .. }), Some(sid)) =
-            (&attempt, &resume_session_id)
-            && *code == plugin_protocol::error_code::SESSION_UNRESUMABLE
+        let mut attempt = agent
+            .request::<rpc::TaskDispatch>(&dispatch_params(&inputs, resume_session_id.clone()))
+            .await;
+        if let Some(sid) = &resume_session_id
+            && let Some(message) = unresumable(&attempt)
         {
             tracing::warn!(
                 task_id = record.id,
@@ -943,7 +895,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                  the agent starts without the earlier conversation"
             );
             attempt = agent
-                .request::<rpc::TaskDispatch>(&build_params(None))
+                .request::<rpc::TaskDispatch>(&dispatch_params(&inputs, None))
                 .await;
         }
         let dispatched: TaskDispatchResult = match attempt {
@@ -1648,6 +1600,110 @@ fn pane_refusal(outcome: PaneRelease) -> Option<&'static str> {
     ))
 }
 
+/// The visible `extra_context` of a dispatch.
+///
+/// Context routing: hook dispatches deliver everything invisibly via
+/// `TOTSUKA_PROMPT_CONTEXT` when the tool supports it; a tool without
+/// invisible injection gets the same content as `visible_hook_context`
+/// instead. Non-hook dispatches (the mock) have no invisible channel — fall
+/// back to the task's instructions as visible string extra_context (no marker
+/// convention: non-hook agents don't report completion through hooks).
+fn route_extra_context(
+    hook_wired: bool,
+    visible_hook_context: Option<String>,
+    instructions: Option<&str>,
+) -> Option<Value> {
+    if hook_wired {
+        visible_hook_context.map(Value::String)
+    } else {
+        instructions.map(|i| Value::String(i.to_string()))
+    }
+}
+
+/// Everything a `task/dispatch` carries except the resume id, which
+/// [`dispatch_params`] takes separately because the `SESSION_UNRESUMABLE`
+/// retry rebuilds the params without one.
+struct DispatchInputs<'a> {
+    task: &'a Task,
+    worktree_path: &'a Path,
+    mode: plugin_protocol::methods::ExecutionMode,
+    extra_context: Option<Value>,
+    initial_prompt: Option<&'a str>,
+    job_id: Option<&'a str>,
+    task_number: i64,
+    tool_profile: &'a ToolProfile,
+    profile: Option<Profile>,
+    /// The core-internal `(settings_path, env)` of a hook-wired dispatch.
+    hook_spec: Option<&'a (String, std::collections::BTreeMap<String, String>)>,
+    tool_env: Option<&'a std::collections::BTreeMap<String, crate::ports::SecretString>>,
+    repo_name: &'a str,
+}
+
+/// The `task/dispatch` params, resuming `resume` when given.
+///
+/// Fully-resolved tool launch (#196): the argv (base command, mode flags, hook
+/// settings, resume id) is assembled in core from the resolved profile; the
+/// plugin launches it verbatim. This is the only launch channel since protocol
+/// 0.4.0 (#411) — the `hook` spec that used to ride along for pre-0.2.3
+/// plugins is gone, and `hook_spec` is a core-internal `(settings_path, env)`
+/// pair, not a wire type. `tool_launch` bakes the resume flag into the argv,
+/// so a retry without resume has to rebuild the whole spec — hence a function
+/// of `resume` rather than a mutated struct.
+fn dispatch_params(inp: &DispatchInputs<'_>, resume: Option<String>) -> TaskDispatchParams {
+    TaskDispatchParams {
+        task: inp.task.clone(),
+        worktree_path: inp.worktree_path.display().to_string(),
+        mode: inp.mode,
+        // `initial_prompt` (#415) rides the *visible* channel, ahead of
+        // everything else, and only when the agent is about to start a fresh
+        // conversation. The test is `resume.is_none()` and it is deliberately
+        // made per call: the `SESSION_UNRESUMABLE` retry rebuilds the params
+        // without a resume id, and that dispatch really is a new conversation
+        // — the agent remembers nothing, so the instructions have to come back
+        // with it.
+        extra_context: prepend_initial_prompt(
+            inp.extra_context.clone(),
+            inp.initial_prompt.filter(|_| resume.is_none()),
+        ),
+        job_id: inp.job_id.map(str::to_string),
+        // 0.7.1 (#645): unconditional, where `job_id` above is not — an agent
+        // that declares no `hook_completion` (the mock; orca too before
+        // ADR-0082) never receives one, and the plugin still has to name what
+        // it creates after *something* an operator can carry back to
+        // `totsuka status`.
+        task_number: Some(inp.task_number),
+        tool_launch: inp.tool_profile.launch_spec(&LaunchInputs {
+            plan: inp.mode == plugin_protocol::methods::ExecutionMode::Plan,
+            profile: inp.profile,
+            settings_path: inp.hook_spec.map(|(path, _)| path.as_str()),
+            resume_session_id: resume.as_deref(),
+            env: launch_env(inp.hook_spec.map(|(_, env)| env), inp.tool_env),
+        }),
+        resume_session_id: resume,
+        // 0.4.1 (#417): for the IDE plugin to show which repository the agent
+        // is in. The *configured* name, not the worktree's directory name, so
+        // the sidebar says what the logs and `totsuka status` already say.
+        repo_name: Some(inp.repo_name.to_string()),
+    }
+}
+
+/// The plugin's message when a dispatch failed only because the session it
+/// was asked to resume is gone (`SESSION_UNRESUMABLE`, 0.2.4, #242).
+///
+/// Resuming is an optimization — the work itself does not depend on it — so
+/// the caller drops the resume id and dispatches once more. That retry cannot
+/// fail the same way (it names no session), so it never loops.
+fn unresumable(attempt: &Result<TaskDispatchResult, HostError>) -> Option<&str> {
+    match attempt {
+        Err(HostError::Rpc { code, message, .. })
+            if *code == plugin_protocol::error_code::SESSION_UNRESUMABLE =>
+        {
+            Some(message)
+        }
+        _ => None,
+    }
+}
+
 /// The launch env: the hook runtime's `TOTSUKA_*` (when there is one) plus
 /// the tool's resolved `env_file` (#744) — the latter whether or not the
 /// dispatch is hook-wired, since it belongs to the tool. The two never share a
@@ -2180,5 +2236,83 @@ mod tests {
             assert_eq!(pane_refusal(outcome), None, "{outcome:?}");
         }
         assert!(pane_refusal(PaneRelease::Refused).is_some_and(|r| r.contains("task retry")));
+    }
+
+    #[test]
+    fn extra_context_follows_the_channel_the_dispatch_has() {
+        let visible = || Some("ctx".to_string());
+        assert_eq!(
+            route_extra_context(true, visible(), Some("instr")),
+            Some(Value::String("ctx".to_string())),
+            "hook-wired, tool without invisible injection"
+        );
+        assert_eq!(
+            route_extra_context(true, None, Some("instr")),
+            None,
+            "hook-wired and delivered invisibly"
+        );
+        assert_eq!(
+            route_extra_context(false, visible(), Some("instr")),
+            Some(Value::String("instr".to_string())),
+            "no hooks: the instructions ride visibly"
+        );
+        assert_eq!(route_extra_context(false, None, None), None);
+    }
+
+    #[test]
+    fn the_initial_prompt_rides_only_a_fresh_conversation() {
+        let task = task_from_record(&record("wf", Some("web")));
+        let tool = claude();
+        let inputs = DispatchInputs {
+            task: &task,
+            worktree_path: Path::new("/tmp/wt"),
+            mode: plugin_protocol::methods::ExecutionMode::Implement,
+            extra_context: None,
+            initial_prompt: Some("read the README first"),
+            job_id: Some("job-1"),
+            task_number: 7,
+            tool_profile: &tool,
+            profile: None,
+            hook_spec: None,
+            tool_env: None,
+            repo_name: "web",
+        };
+        let fresh = dispatch_params(&inputs, None);
+        assert_eq!(
+            fresh.extra_context,
+            prepend_initial_prompt(None, Some("read the README first"))
+        );
+        assert_eq!(fresh.resume_session_id, None);
+        assert_eq!(fresh.task_number, Some(7));
+        assert_eq!(fresh.job_id.as_deref(), Some("job-1"));
+        assert_eq!(fresh.repo_name.as_deref(), Some("web"));
+        assert_eq!(fresh.worktree_path, "/tmp/wt");
+
+        let resumed = dispatch_params(&inputs, Some("tool-1".to_string()));
+        assert_eq!(resumed.extra_context, None, "the session already has it");
+        assert_eq!(resumed.resume_session_id.as_deref(), Some("tool-1"));
+    }
+
+    #[test]
+    fn only_session_unresumable_triggers_the_fresh_retry() {
+        let rpc = |code| -> Result<TaskDispatchResult, HostError> {
+            Err(HostError::Rpc {
+                name: "herdr".to_string(),
+                method: "task/dispatch".to_string(),
+                code,
+                message: "gone".to_string(),
+            })
+        };
+        assert_eq!(
+            unresumable(&rpc(plugin_protocol::error_code::SESSION_UNRESUMABLE)),
+            Some("gone")
+        );
+        assert_eq!(unresumable(&rpc(-32000)), None);
+        assert_eq!(
+            unresumable(&Ok(TaskDispatchResult {
+                session_id: "s".to_string()
+            })),
+            None
+        );
     }
 }
