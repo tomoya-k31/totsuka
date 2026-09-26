@@ -26,9 +26,3 @@ impl fmt::Display for TaskId {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize)]
 #[serde(transparent)]
 pub struct SourceTaskId(pub String);
-
-impl fmt::Display for SourceTaskId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
-    }
-}
