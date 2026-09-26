@@ -1,7 +1,7 @@
 > 🌐 [English](click-to-focus-setup.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/click-to-focus-setup.md sha256:6605ee8853b108567de3b15c2264ae6fc07ac326fab77a9e72b1ae6fd328e74f -->
+<!-- generated-from: ai-docs/operations/click-to-focus-setup.md sha256:d0dd01461c45091382b4379225c74c0deb063b2cea434cd1a9434f5bdc256c56 -->
 
 # 通知をクリックしてタスクの pane を開く
 
@@ -81,7 +81,7 @@ terminal-notifier -title "test" -subtitle "click-to-focus" -message "click me" \
 | クリックでコマンドは走るがアプリが前面に来ない | `activate_bundle_id` が未設定か誤り | 手順 2 で確認し直す |
 | `config validate` が terminal-notifier のエラーを出す | 未導入／`PATH` 外／`terminal_notifier_bin` が誤り | 導入するか絶対パスを書く。使わずに済ませるなら `backend = "osascript"` に戻す（通知は届くがクリックは効かない） |
 | 通知は届くがクリックが一度も効かず、ログに terminal-notifier の警告が出る | 未導入。送信ごとに `osascript` へフォールバックしている | 通知自体には影響しない。click-to-focus が要るなら導入する |
-| `totsuka focus` が 401 を返す | 動いているイベント receiver と設定中の認証トークンが食い違っている | トークンを揃えて `totsuka run` を再起動する |
+| `totsuka focus` が 401 を返す | `totsuka run` の起動後にトークンファイル `$XDG_STATE_HOME/totsuka/hook-token` が消された・作り直された | `totsuka run` を再起動する |
 
 ## どのイベントで通知するか
 

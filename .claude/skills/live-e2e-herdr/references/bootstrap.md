@@ -152,7 +152,6 @@ source .env && tt config validate && tt doctor
 | 駆動・A（`reactions:write` 等） | `xoxp-` | `.env` の `E2E_SLACK_A` |
 | 駆動・B（`chat:write`） | `xoxp-` | `.env` の `E2E_SLACK_B` |
 | GitHub | OAuth or PAT | `.env` の `E2E_GH_TOKEN` |
-| フック認証 | 任意文字列 | `.env` の `E2E_HOOK_TOKEN` |
 
 > **1Password を使うと、常駐プロセスは人間のターミナルからしか起動できない。**
 > 全部 `.env` の環境変数にすればエージェントからも起動できるが、トークンが平文でディスクに載る。

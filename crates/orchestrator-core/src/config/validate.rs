@@ -615,21 +615,10 @@ pub struct Finding {
 ///
 /// `source_outputs` returns a task-source plugin's declared output
 /// capabilities (from its manifest offline, or `None` when unknown).
-/// `agent_hook_capable` returns whether an agent plugin declares
-/// `Capabilities::hook_completion` (#131, renamed from a `resume_session ||
-/// diagnostics_snapshot` heuristic in 0.5.0 / #496), or `None` when unknown —
-/// then the
-/// `[hooks].auth_token_ref` advisory is skipped.
-pub fn validate<E, F, H>(
-    cfg: &RootConfig,
-    env: &E,
-    source_outputs: F,
-    agent_hook_capable: H,
-) -> Vec<Finding>
+pub fn validate<E, F>(cfg: &RootConfig, env: &E, source_outputs: F) -> Vec<Finding>
 where
     E: Fn(&str) -> Option<String>,
     F: Fn(&str) -> Option<Vec<OutputCapability>>,
-    H: Fn(&str) -> Option<bool>,
 {
     let mut findings: Vec<Finding> = validate_static(cfg, env)
         .into_iter()
@@ -649,16 +638,13 @@ where
             message: issue.message,
         });
     }
-    hook_findings(cfg, &agent_hook_capable, &mut findings);
+    hook_findings(cfg, &mut findings);
     findings
 }
 
 /// Hook/verification advisory checks (#135) — warnings only, in the
 /// "cause + next action" style.
-fn hook_findings<H>(cfg: &RootConfig, agent_hook_capable: &H, findings: &mut Vec<Finding>)
-where
-    H: Fn(&str) -> Option<bool>,
-{
+fn hook_findings(cfg: &RootConfig, findings: &mut Vec<Finding>) {
     let has_notifier = cfg
         .plugins
         .values()
@@ -672,17 +658,6 @@ where
                 message: format!(
                     "workflow `{}` uses verification = human but no enabled notifier plugin is configured → add an enabled `[plugins.*]` with kind = \"notifier\" so verification requests are noticed",
                     wf.name
-                ),
-            });
-        }
-
-        // Hook-capable agents need the Bearer token to authenticate (E-03).
-        if cfg.hooks.auth_token_ref.is_none() && agent_hook_capable(&wf.agent) == Some(true) {
-            findings.push(Finding {
-                severity: FindingSeverity::Warning,
-                message: format!(
-                    "workflow `{}` uses hook-capable agent `{}` but `[hooks].auth_token_ref` is unset → set it (e.g. \"keychain:totsuka/hook-token\") so hook events can be authenticated",
-                    wf.name, wf.agent
                 ),
             });
         }
@@ -1773,7 +1748,7 @@ tool = "codex-cli"
 "#,
         )
         .unwrap();
-        let findings = validate(&cfg, &env_from(&[]), |_| Some(vec![]), |_| None);
+        let findings = validate(&cfg, &env_from(&[]), |_| Some(vec![]));
         assert!(
             findings
                 .iter()
@@ -1826,7 +1801,7 @@ verification = "none"
 rubric = "the PR is open"
 "#;
         let cfg = RootConfig::from_toml_str(toml).unwrap();
-        let findings = validate(&cfg, &env_from(&[]), |_| Some(vec![]), |_| None);
+        let findings = validate(&cfg, &env_from(&[]), |_| Some(vec![]));
 
         assert!(has_errors(&findings), "{findings:?}");
         assert!(
@@ -1880,7 +1855,7 @@ verification = "human"
 "#
         );
         let cfg = RootConfig::from_toml_str(&toml).unwrap();
-        let findings = validate(&cfg, &env_from(&[]), |_| None, |_| None);
+        let findings = validate(&cfg, &env_from(&[]), |_| None);
         assert!(
             warnings_of(&findings)
                 .iter()
@@ -1909,74 +1884,10 @@ verification = "human"
 "#
         );
         let cfg = RootConfig::from_toml_str(&toml).unwrap();
-        let findings = validate(&cfg, &env_from(&[]), |_| None, |_| None);
+        let findings = validate(&cfg, &env_from(&[]), |_| None);
         assert!(
             !findings.iter().any(|f| f.message.contains("notifier")),
             "unexpected notifier warning: {findings:?}"
-        );
-    }
-
-    #[test]
-    fn missing_auth_token_ref_with_hook_capable_agent_warns() {
-        let toml = format!(
-            r#"{PLUGIN_PAIR}
-[[projects]]
-name = "github"
-source = "github"
-
-[[workflows]]
-name = "impl"
-projects = ["github"]
-mode = "implement"
-agent = "herdr"
-output = "none"
-"#
-        );
-        let cfg = RootConfig::from_toml_str(&toml).unwrap();
-
-        // Hook-capable agent + no [hooks].auth_token_ref -> warning.
-        let findings = validate(&cfg, &env_from(&[]), |_| None, |name| Some(name == "herdr"));
-        assert!(
-            warnings_of(&findings)
-                .iter()
-                .any(|f| f.message.contains("[hooks].auth_token_ref")),
-            "expected auth_token_ref warning: {findings:?}"
-        );
-
-        // Capability unknown (None) -> the advisory is skipped.
-        let findings = validate(&cfg, &env_from(&[]), |_| None, |_| None);
-        assert!(
-            !findings
-                .iter()
-                .any(|f| f.message.contains("auth_token_ref")),
-            "unknown capability must not warn: {findings:?}"
-        );
-
-        // Token configured -> no warning.
-        let toml = format!(
-            r#"{PLUGIN_PAIR}
-[hooks]
-auth_token_ref = "keychain:totsuka/hook-token"
-
-[[projects]]
-name = "github"
-source = "github"
-
-[[workflows]]
-name = "impl"
-projects = ["github"]
-mode = "implement"
-agent = "herdr"
-output = "none"
-"#
-        );
-        let cfg = RootConfig::from_toml_str(&toml).unwrap();
-        let findings = validate(&cfg, &env_from(&[]), |_| None, |name| Some(name == "herdr"));
-        assert!(
-            !findings
-                .iter()
-                .any(|f| f.message.contains("auth_token_ref")),
-            "configured token must not warn: {findings:?}"
         );
     }
 
@@ -2114,7 +2025,7 @@ tool = "codex"
 "#
         );
         let cfg = RootConfig::from_toml_str(&toml).unwrap();
-        let findings = validate(&cfg, &env_from(&[]), |_| None, |_| None);
+        let findings = validate(&cfg, &env_from(&[]), |_| None);
         assert!(
             warnings_of(&findings)
                 .iter()
@@ -2146,7 +2057,7 @@ verification = "llm"
 "#
         );
         let cfg = RootConfig::from_toml_str(&toml).unwrap();
-        let findings = validate(&cfg, &env_from(&[]), |_| None, |_| None);
+        let findings = validate(&cfg, &env_from(&[]), |_| None);
         assert!(
             warnings_of(&findings).iter().any(
                 |f| f.message.contains("`unpinned`") && f.message.contains("tool = \"claude\"")
@@ -2171,7 +2082,7 @@ verification = "llm"
 "#
         );
         let cfg = RootConfig::from_toml_str(&toml).unwrap();
-        let findings = validate(&cfg, &env_from(&[]), |_| None, |_| None);
+        let findings = validate(&cfg, &env_from(&[]), |_| None);
         assert!(
             !findings.iter().any(|f| f.message.contains("tool")),
             "claude-only must not warn: {findings:?}"
@@ -2288,7 +2199,7 @@ verification = "llm"
     fn a_stray_brace_in_a_rubric_warns() {
         // `"{ {rubric}"` renders as one unknown key emitted verbatim (#328).
         let cfg = prompts_cfg("rubric = \"{ {rubric}\"\n");
-        let findings = validate(&cfg, &env_from(&[]), |_| None, |_| None);
+        let findings = validate(&cfg, &env_from(&[]), |_| None);
         assert!(
             warnings_of(&findings)
                 .iter()
@@ -2296,7 +2207,7 @@ verification = "llm"
             "got {findings:?}"
         );
         // The stock config is clean.
-        let findings = validate(&prompts_cfg(""), &env_from(&[]), |_| None, |_| None);
+        let findings = validate(&prompts_cfg(""), &env_from(&[]), |_| None);
         assert!(
             !warnings_of(&findings)
                 .iter()
@@ -2350,7 +2261,7 @@ location = "/tmp/{{repo-name}}"
         // An empty rubric reads as "leave it out" but lands as nothing at all,
         // leaving the judge with only the exemptions and no criterion.
         let cfg = prompts_cfg("rubric = \"\"\n");
-        let findings = validate(&cfg, &env_from(&[]), |_| None, |_| None);
+        let findings = validate(&cfg, &env_from(&[]), |_| None);
         assert!(
             warnings_of(&findings)
                 .iter()
@@ -2375,7 +2286,7 @@ location = "/tmp/{{repo-name}}"
                         | ValidationError::UnknownPromptPlaceholder { .. }
                 ))
         );
-        let findings = validate(&cfg, &env_from(&[]), |_| None, |_| None);
+        let findings = validate(&cfg, &env_from(&[]), |_| None);
         assert!(
             !warnings_of(&findings)
                 .iter()
@@ -2432,7 +2343,7 @@ rubric = "実調査に基づくこと"
 "#
         );
         let cfg = RootConfig::from_toml_str(&toml).unwrap();
-        let findings = validate(&cfg, &env_from(&[]), |_| None, |_| None);
+        let findings = validate(&cfg, &env_from(&[]), |_| None);
         // verification = none + rubric -> warning naming the workflow.
         assert!(
             warnings_of(&findings)

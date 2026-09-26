@@ -93,12 +93,6 @@ const OVERRIDES: &[(&str, Applier)] = &[
         cfg.worktree.location = Some(v.to_string());
         Ok(())
     }),
-    ("TOTSUKA_HOOKS_AUTH_TOKEN_REF", |cfg, v| {
-        // A *secret reference* (`${ENV}` / `keychain:` / `op://` / `cmd:` / `bw:`), not the
-        // secret itself; resolution stays with SecretResolver (F-65).
-        cfg.hooks.auth_token_ref = Some(v.to_string());
-        Ok(())
-    }),
     ("TOTSUKA_HOOKS_SOCKET_PATH", |cfg, v| {
         cfg.hooks.socket_path = Some(v.to_string());
         Ok(())
@@ -183,6 +177,16 @@ where
     for (name, value) in vars {
         if RESERVED.contains(&name.as_str()) || name.starts_with(SECRET_PREFIX) {
             continue;
+        }
+        if name == "TOTSUKA_HOOKS_AUTH_TOKEN_REF" {
+            // Removed with `[hooks].auth_token_ref` (#785) — an error, not an
+            // "unknown" warning, because it used to mean something.
+            return Err(ConfigError::EnvOverride {
+                var: name,
+                reason: "[hooks].auth_token_ref was removed → unset this variable; \
+                         `totsuka run` generates the hook token itself"
+                    .to_string(),
+            });
         }
         let Some((_, apply)) = OVERRIDES.iter().find(|(key, _)| *key == name) else {
             warnings.push(format!(
@@ -271,7 +275,6 @@ max_files = 7
 location = "/from/file/{worktree_name}"
 
 [hooks]
-auth_token_ref = "keychain:file"
 socket_path = "/from/file.sock"
 spool_dir = "/from/file/spool"
 block_retry_limit = 3
@@ -282,7 +285,6 @@ block_retry_limit = 3
                 ("TOTSUKA_LOG_PROMPTS", "false"),
                 ("TOTSUKA_LOG_MAX_FILES", "14"),
                 ("TOTSUKA_WORKTREE_LOCATION", "/from/env/{worktree_name}"),
-                ("TOTSUKA_HOOKS_AUTH_TOKEN_REF", "keychain:env"),
                 ("TOTSUKA_HOOKS_SOCKET_PATH", "/from/env.sock"),
                 ("TOTSUKA_HOOKS_SPOOL_DIR", "/from/env/spool"),
                 ("TOTSUKA_HOOKS_BLOCK_RETRY_LIMIT", "9"),
@@ -298,7 +300,6 @@ block_retry_limit = 3
             cfg.worktree.location.as_deref(),
             Some("/from/env/{worktree_name}")
         );
-        assert_eq!(cfg.hooks.auth_token_ref.as_deref(), Some("keychain:env"));
         assert_eq!(cfg.hooks.socket_path.as_deref(), Some("/from/env.sock"));
         assert_eq!(cfg.hooks.spool_dir.as_deref(), Some("/from/env/spool"));
         assert_eq!(cfg.hooks.block_retry_limit, Some(9));
@@ -436,6 +437,13 @@ block_retry_limit = 3
         )
         .unwrap();
         assert!(warnings.is_empty(), "{warnings:?}");
+    }
+
+    /// #785: the removed override is an error naming the fix, not a warning.
+    #[test]
+    fn the_removed_auth_token_ref_override_is_an_error() {
+        let err = apply("", &[("TOTSUKA_HOOKS_AUTH_TOKEN_REF", "keychain:x")]).unwrap_err();
+        assert!(err.to_string().contains("was removed"), "{err}");
     }
 
     #[test]

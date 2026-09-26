@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](setup-playbook.ja.md)
 
-<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:e29b2b7fd960b2d6731137bb679106e775ab28feb0c37aba0aa081ee2214b4be -->
+<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:25c97712dde109d70d1d6f431b5f8e6c07f7f2baf4bb389ac60d3dd8e6422883 -->
 
 # Setup playbook
 
@@ -149,6 +149,10 @@ The app-level token (`xapp-`) does not change on reinstall. Update it only when 
 
 The scopes themselves have a trap too: without `reactions:read`, `channels:read`, and `groups:read`, **events simply never arrive and nothing reports an error**.
 
+### Hook token — nothing to register
+
+`totsuka run` generates the hook bearer token into `$XDG_STATE_HOME/totsuka/hook-token` (0600) on its first start and reuses it afterwards. To rotate it, delete that file and restart `run`.
+
 ### In general
 
 You do not need to re-run `setup`. The reference names have not changed, only the values, so overwrite them with `-U` (update existing) and run `totsuka doctor`.
@@ -203,7 +207,8 @@ The [operations guide](operations-guide.md) covers how to read it. The ones that
 | `plugin:<name>` — secret not found | A secret from the checklist was not registered |
 | `plugin:<name>` — crashed or exited | You skipped `xattr -dr com.apple.quarantine` |
 | `bundled-plugins` (warning) | A `cargo install` build ships no bundled plugins. Use `--from-source` |
-| `hook-token` (warning) | `[hooks].auth_token_ref` is unset. Set it before using a hook-capable agent |
+| `hook-token` (fail) | Other users can read the token file `$XDG_STATE_HOME/totsuka/hook-token` that `run` generated. Delete it and restart `totsuka run` (a missing file before the first `run` is normal) |
+| `config` — `[hooks].auth_token_ref was removed` | A setting from 0.9 or earlier is left over. Delete that line — `run` generates the hook token itself (see "Migrating" in the [configuration reference](config-reference.md)) |
 
 ---
 

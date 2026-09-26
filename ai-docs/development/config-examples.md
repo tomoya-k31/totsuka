@@ -4,7 +4,7 @@ title: 設定例集（config.toml）
 description: そのまま貼って動く config.toml の完全版注釈付き例と、選択肢を持つキー（kind・mode・output・verification・cleanup・trigger・シークレット参照・並列上限）の選び分け基準、TOTSUKA_* 環境変数オーバーライドの対応表、および最小構成／GitHub Projects／Slack／設計→実装ハンドオフのシナリオ別レシピ。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-cli/templates/config.toml
 tags: [config, toml, examples, recipes, workflow, secrets, slack, github, herdr, environment]
-generated: { by: claude-code/opus-5, at: 2026-09-24T10:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-09-26T12:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -66,7 +66,6 @@ owner: tomoya-k31
 | `TOTSUKA_LOG_PROMPTS` | `[log].log_prompts` | `true` / `false` のみ |
 | `TOTSUKA_LOG_MAX_FILES` | `[log].max_files` | 非負整数 |
 | `TOTSUKA_WORKTREE_LOCATION` | `[worktree].location` | 文字列（`~` / `${ENV}` 展開は従来どおり後段で行われる） |
-| `TOTSUKA_HOOKS_AUTH_TOKEN_REF` | `[hooks].auth_token_ref` | 文字列（**シークレット参照**。値そのものではない） |
 | `TOTSUKA_HOOKS_SOCKET_PATH` | `[hooks].socket_path` | 文字列 |
 | `TOTSUKA_HOOKS_SPOOL_DIR` | `[hooks].spool_dir` | 文字列 |
 | `TOTSUKA_HOOKS_BLOCK_RETRY_LIMIT` | `[hooks].block_retry_limit` | 非負整数 |
@@ -94,10 +93,11 @@ owner: tomoya-k31
 | 対応表の変数の値が型変換・検証に失敗（`TOTSUKA_MAX_CONCURRENCY=abc`） | **起動エラー**（変数名・値・期待型を表示） |
 | `TOTSUKA_LLM_*` を設定したが `[llm]` が無い | **起動エラー** |
 | 対応表に無い `TOTSUKA_*`（typo した `TOTSUKA_MAX_CONCURENCY` 等） | **警告**（stderr）。起動は継続 |
+| 廃止した `TOTSUKA_HOOKS_AUTH_TOKEN_REF`（#785） | **起動エラー**（`unset this variable`）。以前は意味を持っていたので未知の変数と同じ警告にはしない |
 | 値が空文字列（`TOTSUKA_MAX_CONCURRENCY=`） | **警告 + 未設定扱い**（シェルの「空 = unset」慣習） |
 
 いま有効になっているオーバーライドは `totsuka config show` の末尾に一覧表示される
-（`--redacted` を付けると `..._TOKEN_REF` / `..._KEY_REF` の値はマスクされる）。
+（`--redacted` を付けると `..._KEY_REF` の値はマスクされる）。
 
 ## 注入系の環境変数との違い（混同注意）
 
@@ -106,7 +106,7 @@ owner: tomoya-k31
 
 | 系統 | 変数 | 向き | 役割 |
 |---|---|---|---|
-| 設定オーバーライド | 上の対応表の 14 個 | 人／CI → Orchestrator | `config.toml` の値を差し替える |
+| 設定オーバーライド | 上の対応表の 15 個 | 人／CI → Orchestrator | `config.toml` の値を差し替える |
 | 注入（フック） | `TOTSUKA_JOB_ID` / `TOTSUKA_HOOK_ENDPOINT` / `TOTSUKA_HOOK_TOKEN` / `TOTSUKA_HOOK_SPOOL_DIR` / `TOTSUKA_PROMPT_CONTEXT` | Orchestrator → エージェント pane | フックスクリプトへジョブ固有値を渡す（[フックシグナルフロー](/architecture/hook-signal-flow.md)） |
 
 特に紛らわしいのが 1 字違いのこの 2 つ:
@@ -240,7 +240,6 @@ max_files = 7         # 日次ログの保持世代数
 
 # ── Claude Code フック受信 ───────────────────────────────────
 [hooks]
-auth_token_ref = "op://Dev/totsuka/hook-token"                    # 運用上ほぼ必須（後述）
 socket_path = "${XDG_RUNTIME_DIR}/totsuka/agent-events.sock"     # 省略時は組み込み既定
 spool_dir = "${XDG_STATE_HOME}/totsuka/hooks/spool"               # POST 失敗時の退避先
 block_retry_limit = 3                                             # Stop フック差し戻しの連続上限
@@ -299,7 +298,7 @@ initial_prompt = "/grill-me スキルを使用して、詳細設計を行って�
 | `op://<vault>/<item>/<field>` | `op://Dev/Openrouter/api_key` | **長命の秘密の推奨。**cross-platform で、非 macOS でも動く（`keychain:` は macOS 専用）。1Password CLI へのシェルアウトなので事前に `op signin` 済みであること |
 | `bw:<item>/<field>` | `bw:totsuka-slack/password` | **Bitwarden を使っているならこれ**（#699）。cross-platform で、`op://` と並ぶもう 1 つのシークレットストア。`<field>` は `bw get <object>` の object 名そのもの。分割は**最後の** `/` なので `/` を含むアイテム名も書ける。`bw unlock` して `BW_SESSION` を export したシェルから `totsuka run` を起動すること |
 | `cmd:<command>` | `cmd:gh auth token` | **別ツールが管理・ローテートする credential の推奨**（#444）。解決のたびにコマンドを実行して stdout を使うので、コピーの陳腐化が起きない。ローテートする token を op/keychain に写すとコピーが黙って死ぬ — その罠がこの形式の起点 |
-| `keychain:<service>/<account>` | `keychain:totsuka/hook-token` | macOS 専用。1Password を使っていない環境向け。`security add-generic-password` で登録済みであること |
+| `keychain:<service>/<account>` | `keychain:totsuka/github-token` | macOS 専用。1Password を使っていない環境向け。`security add-generic-password` で登録済みであること |
 | `${ENV_VAR}` を含む文字列 | `${GITHUB_TOKEN}` | CI・使い捨て環境向け。**未設定だと起動時エラー**（既定値へのフォールバックはしない）。永続運用には非推奨 |
 
 パス値（`path`、`socket_path`、`spool_dir`、`location`）では加えて `~` が展開される。
@@ -509,24 +508,15 @@ notion では `property_map.assignee` が必須で、`@me` を使うなら `noti
 | リポジトリ | `[[repositories]].max_concurrency` | 無制限 | 同一リポジトリでの worktree 乱立・コンフリクト抑制 |
 | エージェント | `[plugins.{name}].max_concurrency` | 無制限 | `agent_ide` のみ有効。API レート・ライセンス数の制約 |
 
-## `[hooks].auth_token_ref` — 設定すべきか
+## hook の Bearer トークン — 設定しない
 
-**すべき。**未設定でもフック POST は受理されるが、その場合の防御は 0600 の UDS パーミッションのみになる。
+`[hooks]` にトークンのキーは無い。`totsuka run` が初回起動時に 32 バイトの乱数を `$XDG_STATE_HOME/totsuka/hook-token`
+（0600）へ生成し、以後の起動で使い回す（#785、[ADR-0099](/decisions/adr-0099-generated-hook-token.md)）。
+ローテーションはこのファイルを消して `run` を再起動する。
 
-未設定はツール側が検出する（#209）。判定材料は agent プラグインのマニフェストで、`hook_completion` を宣言していれば
-「フック対応 agent」とみなす（herdr と orca が該当。mock は非該当。orca は [ADR-0082](/decisions/adr-0082-orca-herdr-parity.md) から）。**0.5.0 より前は
-`resume_session || diagnostics_snapshot` という de-facto の OR だった**が、
-`diagnostics_snapshot` は `diagnostics/snapshot` に応答できることしか言っておらず、
-フック対応を含意しない（[ADR-0052](/decisions/adr-0052-declaration-consumed.md)）:
-
-- `config validate` / `totsuka run` — フック対応 agent を使う workflow ごとに**警告**（終了コードは変わらない。`run` は表示して続行）
-- `totsuka doctor` — 同じ条件で **fail**（終了コード非 0）。フック対応 agent を使わない構成では warn 表示のみで成功のまま。
-  参照を設定したのに解決できない場合は構成によらず fail
-
-```bash
-# 例: ランダムトークンを生成して保管する（macOS Keychain の場合。1Password なら item を作る）
-security add-generic-password -s totsuka -a hook-token -w "$(openssl rand -hex 32)"
-```
+0.9 までの `[hooks].auth_token_ref` / `TOTSUKA_HOOKS_AUTH_TOKEN_REF` は猶予なしで廃止した。書かれていると
+`config validate` / `run` / `doctor` が `[hooks].auth_token_ref was removed → delete this line` で止まるので、行を消す
+（手順は [config-reference](/development/config-reference.md) の「移行」）。
 
 # Part 2: `[<name>]`（主要 3 プラグイン）
 
@@ -775,9 +765,6 @@ base_url = "https://openrouter.ai/api/v1"
 model = "anthropic/claude-haiku-4-5"
 api_key_ref = "op://Dev/Openrouter/api_key"
 
-[hooks]
-auth_token_ref = "op://Dev/totsuka/hook-token"
-
 [[projects]]
 name = "slack"                             # domain を持たないソースもエントリが要る（#626）
 source = "slack"
@@ -864,7 +851,6 @@ totsuka doctor                     # 依存コマンド・ソケット・シー�
 | 環境変数未設定 | `${VAR}` 参照先が export されていない |
 
 **警告**（実行は止まらない）の代表例: トリガーの重複、`verification = "human"` なのに notifier が無い、
-`verification != "llm"` なのに `rubric` がある、
-フック対応 agent を使う workflow があるのに `[hooks].auth_token_ref` が未設定（最後の 1 つは `doctor` では fail 扱い。前述）。
+`verification != "llm"` なのに `rubric` がある。
 
 `totsuka run` はエラーがあると起動を中止し、警告は表示した上で続行する。

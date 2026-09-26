@@ -4,7 +4,7 @@ title: セットアップ Playbook（新マシン / 開発機 / ローテーシ�
 description: "ゼロから totsuka が動くまでを通しで示す導入手順。新マシン（tarball 配置 → totsuka setup でプラグイン選択と config.toml 生成 → config.toml を編集 → シークレット登録 → doctor → run）、開発機（クローン → チェックアウトからのビルド）、トークンローテーション、中断・失敗時の復旧と別マシンでの再現を扱う。"
 resource: https://github.com/tomoya-k31/totsuka/issues/350
 tags: [setup, onboarding, runbook, playbook, secrets, doctor, rotation]
-generated: { by: claude-code/opus-5, at: 2026-09-17T12:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-09-26T12:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -185,6 +185,11 @@ security add-generic-password -U -s totsuka -a slack-bot  -w 'xoxb-…'
 
 scope 自体の落とし穴として、`reactions:read` / `channels:read` / `groups:read` が欠けると**イベントが届かないだけでエラーも出ない**。詳細は [Slack Quickstart](/operations/slack-quickstart.md)。
 
+## hook トークン — 登録しない
+
+hook の Bearer トークンは `totsuka run` が初回起動時に `$XDG_STATE_HOME/totsuka/hook-token`（0600）へ生成し、以後使い回す
+（[ADR-0099](/decisions/adr-0099-generated-hook-token.md)）。ローテーションはこのファイルを消して `run` を再起動するだけ。
+
 ## 全般
 
 `setup` を再実行する必要はない。参照名は変わっておらず、変わったのは値だけなので、`security add-generic-password -U`（`-U` = 既存を更新）で上書きして `totsuka doctor` を打てばよい。
@@ -247,4 +252,5 @@ cp ~/dotfiles/totsuka-config.toml ~/.config/totsuka/config.toml
 | `plugin:<name>` — secret not found | チェックリストの登録漏れ |
 | `plugin:<name>` — crashed or exited | `xattr -dr com.apple.quarantine` の実行漏れ |
 | `bundled-plugins`（warning） | `cargo install` 由来のビルドで同梱ゼロ。`--from-source` を使う |
-| `hook-token`（warning） | `[hooks].auth_token_ref` 未設定。フック対応エージェントを使う前に設定する |
+| `hook-token`（fail） | `run` が生成したトークンファイル `$XDG_STATE_HOME/totsuka/hook-token` を他のユーザーが読める。消して `totsuka run` を再起動する（無いのは初回 `run` 前なので正常） |
+| `config` — `[hooks].auth_token_ref was removed` | 0.9 までの設定が残っている。その行を消す（hook トークンは `run` が作る。[config-reference](/development/config-reference.md) の「移行」） |

@@ -3,7 +3,7 @@ type: Spec
 title: totsuka — ローカルAIエージェント Orchestrator 要件定義（v1）
 description: totsuka Orchestrator CLI の要件定義 — タスクソース/Agent IDE/Notifier プラグイン、git worktree ライフサイクル、ワークフロー、並列実行制御、v1 スコープ。
 tags: [orchestrator, requirements, plugin, worktree, cli, rust]
-generated: { by: claude-code/opus-5, at: 2026-09-24T10:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-09-26T12:00:00+09:00 }
 status: draft
 owner: tomoya-k31
 ---
@@ -258,11 +258,11 @@ on_success = { status = "In review" }
 
 ### 4.11 決定的な完了シグナル(Claude Code フック)
 
-Claude Code は Lifecycle Authority を持たないため、herdr の screen-manifest(画面パターン認識)由来の完了検知は構造的にロスが避けられない(遅延・取りこぼし・誤検知)。そこで完了は **Claude Code のフックを介して決定的に**通知する: herdr の pane が `claude --settings <hooks_dir>/orchestrator-<workflow>.json [--resume <sid>]` を起動し、command 型の `Stop` / `Notification` / `SessionStart` / `SessionEnd` フックが Unix ドメインソケット経由で Orchestrator へ POST する(`verification = "llm"` のワークフローは追加で、rubric をセッション内で適用する prompt 型 `Stop` フックも持ち、design / implement profile は `AskUserQuestion` 向けの `PreToolUse` フックも持つ。F-108)。本節がこの機構の要件のホームであり、エンドツーエンドの流れは `architecture/hook-signal-flow.md`、配置の意思決定は ADR-0004、設定面は `[hooks]`(`auth_token_ref` / `socket_path` / `spool_dir` / `block_retry_limit`)とワークフロー別の `verification` / `timeout_secs` / `rubric` キーが担う。
+Claude Code は Lifecycle Authority を持たないため、herdr の screen-manifest(画面パターン認識)由来の完了検知は構造的にロスが避けられない(遅延・取りこぼし・誤検知)。そこで完了は **Claude Code のフックを介して決定的に**通知する: herdr の pane が `claude --settings <hooks_dir>/orchestrator-<workflow>.json [--resume <sid>]` を起動し、command 型の `Stop` / `Notification` / `SessionStart` / `SessionEnd` フックが Unix ドメインソケット経由で Orchestrator へ POST する(`verification = "llm"` のワークフローは追加で、rubric をセッション内で適用する prompt 型 `Stop` フックも持ち、design / implement profile は `AskUserQuestion` 向けの `PreToolUse` フックも持つ。F-108)。本節がこの機構の要件のホームであり、エンドツーエンドの流れは `architecture/hook-signal-flow.md`、配置の意思決定は ADR-0004、設定面は `[hooks]`(`socket_path` / `spool_dir` / `block_retry_limit`。Bearer トークンは設定せず `run` が生成する、ADR-0099)とワークフロー別の `verification` / `timeout_secs` / `rubric` キーが担う。
 
 | ID | 要件 | 優先度 |
 |---|---|---|
-| F-100 | **UDS 受信**: Orchestrator は完了シグナルを Unix ドメインソケット(モード `0600`)上でコアの driving adapter(`adapters::hook_uds`、自作の `UnixListener` + 最小 HTTP/1.1)で受信する。`POST /agent-events`、`Authorization: Bearer` を `[hooks].auth_token_ref` と定数時間比較、body 上限 1 MiB、`job_id` 必須(欠落は `400`)。受信側は即 `200` を返し非同期に処理し、JSON body を `ports::SignalPort` 経由で `domain::signal::AgentSignal` へ正規化する | M |
+| F-100 | **UDS 受信**: Orchestrator は完了シグナルを Unix ドメインソケット(モード `0600`)上でコアの driving adapter(`adapters::hook_uds`、自作の `UnixListener` + 最小 HTTP/1.1)で受信する。`POST /agent-events`、`Authorization: Bearer` を `run` が生成・保存したトークン(`$XDG_STATE_HOME/totsuka/hook-token`、0600、ADR-0099)と定数時間比較、body 上限 1 MiB、`job_id` 必須(欠落は `400`)。受信側は即 `200` を返し非同期に処理し、JSON body を `ports::SignalPort` 経由で `domain::signal::AgentSignal` へ正規化する | M |
 | F-101 | **ステータスマーカー規約**: 完了はアシスタント応答の最終行のマーカーで自己申告する(同一行に複数あれば最後が勝つ): `<<STATUS:COMPLETED>>` / `<<STATUS:NEEDS_INPUT reason="...">>` / `<<STATUS:FAILED reason="...">>`(正準形は二重カッコだが、実エージェントが区切りを正規化するためパーサは単一 `<STATUS:...>` も受理する)。マーカー欠落 & `stop_hook_active=false` ⇒ `Stop` フックが `block` して Claude に再出力させる。`stop_hook_active=true` ⇒ block せず `UNKNOWN` を POST。`background_tasks` が非空なら heartbeat のみ(中間 Stop、完了ではない) | M |
 | F-102 | **検収**(`verification = "llm"`(既定) / `"human"` / `"none"`): `llm` はセッション内 prompt 型 `Stop` フック(rubric)を実行 — `COMPLETED` 受信で Engine は直ちに Publishing へ進む。`human` はタスクを `Verifying` に留め `totsuka task verify --pass/--fail` を待つ。`none` は直接 publish する。**ツール能力による縮退**: prompt 型 `Stop` フックは claude 系ツールにしか存在しない(`ToolCapabilities.prompt_verification`)ため、解決されたツールが codex / opencode のタスクでは、完了信号の受信時に実効モードが `llm` から `human` へ縮退する — 未検証のまま publish せず `Verifying` で止まり、run ログに warn を 1 回出す。`config validate` は事前に警告を出し、明示的な pin を促す(#301) | M |
 | F-103 | **エスカレーション**: 連続 3 回の `UNKNOWN` stop(DB から再計算 — フックの自己申告は信用しない。`[hooks].block_retry_limit`、既定 3) OR 最後のシグナルからワークフローの `timeout_secs` を超える沈黙(既定 `0` = 掃引なし。権限 / idle プロンプト待ちは沈黙に数えない、ADR-0086) OR 相関の異常 ⇒ タスクを `Escalated`(非終端)へ遷移し、notifier 通知と `diagnostics/snapshot`(herdr `pane.read`)を伴う | M |

@@ -15,8 +15,6 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use orchestrator_core::config::secret_resolver;
-
 use crate::common::{CliError, Cx, hook_socket_path};
 
 /// Ask the running orchestrator to focus the task's pane. Never fails: every
@@ -37,19 +35,13 @@ pub fn run(cx: &Cx, task_id: i64) -> Result<(), CliError> {
             socket.display()
         ));
     }
-    // A configured-but-unresolvable token means the running receiver would
-    // answer an unexplained 401 — name the real cause instead of trying bare.
-    let token = match &cfg.hooks.auth_token_ref {
-        Some(reference) => match secret_resolver(&env).resolve(reference) {
-            Ok(secret) => Some(secret),
-            Err(e) => {
-                return skipped(format!(
-                    "[hooks].auth_token_ref did not resolve ({e}) → fix the reference; \
-                     the control endpoint rejects unauthenticated requests"
-                ));
-            }
-        },
-        None => None,
+    // `run` wrote the token before binding the socket (#785); a missing file
+    // just means an old `run` without one, so try bare.
+    let token = match orchestrator_core::hooks::token::read(&orchestrator_core::hooks::token::path(
+        &cx.paths,
+    )) {
+        Ok(token) => token,
+        Err(e) => return skipped(format!("cannot read the hook token: {e}")),
     };
     match post_focus(&socket, token.as_ref().map(|t| t.expose()), task_id) {
         Ok((200, body)) => report_outcome(task_id, &body),

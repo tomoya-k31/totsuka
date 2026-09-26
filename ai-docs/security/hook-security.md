@@ -1,17 +1,17 @@
 ---
 type: Policy
 title: Claude Code フック機構のセキュリティポリシー
-description: "フック完了判定の UDS Bearer トークン管理（keychain 参照・socket 0600 第一層・定数時間比較・herdr env 配送）、スプールファイルの機密保持（N-05: last_assistant_message は機微・$XDG_STATE_HOME 配下・drain 後削除・隔離の注意）、フックアセットの改ざん耐性（N-02: 0700/0600・内容ハッシュ冪等修復・静的埋め込み）を定める。"
+description: "フック完了判定の UDS Bearer トークン管理（run が生成する 0600 ファイル・socket 0600 第一層・定数時間比較・herdr env 配送）、スプールファイルの機密保持（N-05: last_assistant_message は機微・$XDG_STATE_HOME 配下・drain 後削除・隔離の注意）、フックアセットの改ざん耐性（N-02: 0700/0600・内容ハッシュ冪等修復・静的埋め込み）を定める。"
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/orchestrator-core
 tags: [security, hook, claude-code, uds, token, keychain, spool, tamper, epic-131]
-generated: { by: claude-code/opus-5, at: 2026-08-20T00:00:00Z }
+generated: { by: claude-code/opus-5.5, at: 2026-09-26T12:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
 
 # 前提: フック機構が導入する新しい攻撃面
 
-Claude Code の完了判定は、pane 内の `claude` が発火するフックスクリプトから Unix ドメインソケットへ POST する経路で成立する（[F-100〜F-107](/product/orchestrator-spec.ja.md)、[ADR-0004](/decisions/adr-0004-hook-completion-signal.md)、フロー: [hook-signal-flow](/architecture/hook-signal-flow.md)）。これにより 3 つの守るべき資産が生じる: **UDS への認証**、**スプールに残る機密**、**フックアセットの完全性**。関連する設定は `[hooks]`（`auth_token_ref` / `socket_path` / `spool_dir` / `block_retry_limit`）。
+Claude Code の完了判定は、pane 内の `claude` が発火するフックスクリプトから Unix ドメインソケットへ POST する経路で成立する（[F-100〜F-107](/product/orchestrator-spec.ja.md)、[ADR-0004](/decisions/adr-0004-hook-completion-signal.md)、フロー: [hook-signal-flow](/architecture/hook-signal-flow.md)）。これにより 3 つの守るべき資産が生じる: **UDS への認証**、**スプールに残る機密**、**フックアセットの完全性**。関連する設定は `[hooks]`（`socket_path` / `spool_dir` / `block_retry_limit`）。
 
 なお、Slack ユーザートークン（xoxp/xapp）の取り扱いは別ドキュメント [Slack ユーザートークンの取り扱いポリシー](/security/slack-user-token.md) が扱う。本ドキュメントはフック経路に固有の資産のみを対象とする。
 
@@ -20,16 +20,16 @@ Claude Code の完了判定は、pane 内の `claude` が発火するフック�
 ローカルの UDS だが、同一ホスト上の他プロセス（別ユーザー・悪性プロセス）からの偽シグナル注入を防ぐため **2 層で認証**する:
 
 - **第一層 = socket パーミッション 0600**: `adapters::hook_uds` は stale ソケットを unlink → bind 後、**0600** を設定する。所有ユーザー以外はそもそも connect できない。socket は既定で `${XDG_RUNTIME_DIR}/totsuka/agent-events.sock`（ユーザー専用の runtime dir）。
-- **第二層 = Bearer トークンの定数時間比較（E-03）**: `POST /agent-events` の `Authorization: Bearer <token>` を `[hooks].auth_token_ref` が解決した値と**定数時間で比較**する（タイミング攻撃防止）。不一致は 401。`job_id` 欠落/不正は 400。
+- **第二層 = Bearer トークンの定数時間比較（E-03）**: `POST /agent-events` の `Authorization: Bearer <token>` を `run` が生成したトークンと**定数時間で比較**する（タイミング攻撃防止）。不一致は 401。`job_id` 欠落/不正は 400。
 
 トークンの供給と保管:
 
-- `auth_token_ref` は**シークレット参照**（`${ENV}` または `keychain:<service>/<account>`）で書く。設定ファイルに平文で書かない（F-62/65。解決は Orchestrator 側のみ、プラグインに Keychain 権限を渡さない）。
-- 解決済みトークンは herdr プラグイン経由で pane に **env（`TOTSUKA_HOOK_TOKEN`）として注入**される（H-02）。フックスクリプトはファイルではなく env からトークンを読むため、`--settings` ファイル（0600 でレンダリング）にトークンは書かれない。これにより 1 本の `--settings` を `claude --resume` を跨いで再利用できる（H-03）一方、トークンはプロセス env に閉じる。
+- **トークンは `totsuka run` が作る**（#785、[ADR-0099](/decisions/adr-0099-generated-hook-token.md)）。初回起動時に 32 バイトの乱数を `$XDG_STATE_HOME/totsuka/hook-token` へ **0600** で保存し、以後の起動で使い回す（再起動しても生き残ったエージェントの hook が 401 にならない）。起動のたびにパーミッションを 0600 へ戻す。`focus` と `doctor` は同じファイルを読む。利用者が管理する機密ではない — 同じユーザーのプロセスは以前もエージェントの env（`ps -E`）から読めたので、同じユーザーに対する防御は変わらない。以前の `[hooks].auth_token_ref`（Keychain などへの参照）は廃止し、書いてあれば「この行を消す」専用のエラーにする。
+- トークンは herdr プラグイン経由で pane に **env（`TOTSUKA_HOOK_TOKEN`）として注入**される（H-02）。フックスクリプトはファイルではなく env からトークンを読むため、`--settings` ファイル（0600 でレンダリング）にトークンは書かれない。これにより 1 本の `--settings` を `claude --resume` を跨いで再利用できる（H-03）一方、トークンはプロセス env に閉じる。
 - **ログへ出さない**: トークン・Authorization ヘッダは logging layer で無条件 redact（§5.2）。フックスクリプトの POST も compact JSON のみを stdout の block 用途に限定し、トークンを標準出力へ出さない（H-13）。
 - **人間が叩くシェル pane には載せない**（#356）。herdr は workspace とともに初期シェル pane を開き、その pane は `workspace.create` の `env` を継承する — つまり**エージェントの隣に、トークンを持ったシェルが常駐していた**（実測で確認）。dispatch はこの初期 pane を close し、`env` を継承しない `pane.split` でシェルを作り直すため、そこでは `TOTSUKA_HOOK_TOKEN` は空になる（[ADR-0030](/decisions/adr-0030-herdr-pane-layout.md)）。エージェント pane には従来どおり注入される（完了検知の幹線）。
 
-トークン失効・ローテーション時は `keychain:` の実体を差し替え、`totsuka doctor` の `hook-token` チェック（`auth_token_ref` 解決）と `hook-socket` チェック（自己 POST → 200）で疎通を確認する（[hook-troubleshooting](/operations/hook-troubleshooting.md)）。
+ローテーションはファイルを消して `totsuka run` を再起動する。`totsuka doctor` の `hook-token` チェック（ファイルの有無と 0600）と `hook-socket` チェック（自己 POST → 200）で疎通を確認する（[hook-troubleshooting](/operations/hook-troubleshooting.md)）。
 
 # 2. スプールファイルの機密保持（N-05）
 
@@ -58,14 +58,15 @@ POST 失敗時、`on-stop.sh` は送信予定の JSON を NDJSON 1 行として 
 `totsuka doctor` のフック系プローブがポリシーの実効性を点検する（[orchestrator-cli](/components/orchestrator-cli.md) / [hook-troubleshooting](/operations/hook-troubleshooting.md)）:
 
 - `check_hook_assets` — スクリプト + `orchestrator-*.json` の存在・**0700/0600 パーミッション**・**内容ハッシュ一致**
-- `check_hook_token` — `[hooks].auth_token_ref` が解決できる。あわせて**未設定**も検出する（#209）: フック対応 agent（マニフェストが `hook_completion` を宣言）を使う workflow が 1 つでもあれば **fail**（そのまま運用すると第二層が無効のまま POST を受理するため）、フック対応 agent を使わない構成なら warning に留める。doctor で唯一、構成によって severity が変わるチェック
-- `hook-socket` — **まず connect だけを試して受信側が実在することを確かめ**、その後に自己 POST が 200 か（Bearer/権限の疎通）。この 2 段は分けてある: socket ファイルは listener より長生きするので、ファイル種別（`is_socket`）だけでは live と stale を区別できない。`op://` / `cmd:` のトークンは doctor が非対話を保つために解決を飛ばすので、**自己 POST まで到達しない経路がある** —— connect を先に置かないと、その経路では「receiver が live」と検証せずに言うことになる（実際そうなっていた）
+- `check_hook_token` — `run` が生成したトークンファイル。無いのは初回 `run` の前なので ok、他のユーザーが読めるパーミッションなら **fail**（漏れたトークン。消して `run` を再起動すると作り直す）
+- `hook-socket` — **まず connect だけを試して受信側が実在することを確かめ**、その後に自己 POST が 200 か（Bearer/権限の疎通）。この 2 段は分けてある: socket ファイルは listener より長生きするので、ファイル種別（`is_socket`）だけでは live と stale を区別できない。自己 POST にはトークンファイルの値を使う。401 は `run` の起動後にファイルが変わった（消した・作り直した）ことを意味する
 - `hook-deps` — `curl` / `jq` の存在（H-14。無いと送信系フックはスプール退避、`on-user-prompt-submit.sh` は無出力縮退）
 - `hook-spool` — `spool_dir` の書き込み可否とバックログ件数（>0 は warning）
 
 # 関連
 
 - [ADR-0004 フック完了シグナルの受信配置](/decisions/adr-0004-hook-completion-signal.md)
+- [ADR-0099 hook トークンは run が生成する](/decisions/adr-0099-generated-hook-token.md)
 - [F-100〜F-107 決定的な完了シグナル](/product/orchestrator-spec.ja.md)
 - [フックシグナルフロー](/architecture/hook-signal-flow.md)
 - [フックのトラブルシューティング](/operations/hook-troubleshooting.md)

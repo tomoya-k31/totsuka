@@ -175,7 +175,6 @@ pub fn purpose_of(account: &str) -> &'static str {
         "slack-bot" => "sends the notification nudge (self-replies raise none)",
         "discord-bot-token" => "reads and posts as the Discord app",
         "llm-api-key" => "picks which repository a task belongs to",
-        "hook-token" => "authenticates the agent's hook events",
         _ => "referenced by the config setup just wrote",
     }
 }

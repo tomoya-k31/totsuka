@@ -1,7 +1,7 @@
 > 🌐 [English](setup-playbook.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:e29b2b7fd960b2d6731137bb679106e775ab28feb0c37aba0aa081ee2214b4be -->
+<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:25c97712dde109d70d1d6f431b5f8e6c07f7f2baf4bb389ac60d3dd8e6422883 -->
 
 # セットアップ Playbook
 
@@ -147,6 +147,10 @@ App-Level Token（`xapp-`）は再インストールでは変わらない。明�
 
 scope 自体にも落とし穴があり、`reactions:read` / `channels:read` / `groups:read` が欠けると**イベントが届かないだけでエラーも出ない**。
 
+### hook トークン — 登録しない
+
+hook の Bearer トークンは `totsuka run` が初回起動時に `$XDG_STATE_HOME/totsuka/hook-token`（0600）へ生成し、以後使い回す。ローテーションはこのファイルを消して `run` を再起動するだけ。
+
 ### 全般
 
 `setup` を再実行する必要はない。参照名は変わっておらず値だけが変わったので、`-U`（既存を更新）付きで上書きしてから `totsuka doctor` を打てばよい。
@@ -201,7 +205,8 @@ cp ~/dotfiles/totsuka-config.toml ~/.config/totsuka/config.toml
 | `plugin:<name>` — secret not found | チェックリストの登録漏れ |
 | `plugin:<name>` — crashed or exited | `xattr -dr com.apple.quarantine` の実行漏れ |
 | `bundled-plugins`（警告） | `cargo install` 由来のビルドには同梱プラグインが無い。`--from-source` を使う |
-| `hook-token`（警告） | `[hooks].auth_token_ref` が未設定。フック対応エージェントを使う前に設定する |
+| `hook-token`（失敗） | `run` が生成したトークンファイル `$XDG_STATE_HOME/totsuka/hook-token` を他のユーザーが読める。消して `totsuka run` を再起動する（初回 `run` 前に無いのは正常） |
+| `config` — `[hooks].auth_token_ref was removed` | 0.9 までの設定が残っている。その行を消す（hook トークンは `run` が作る。[設定リファレンス](config-reference.ja.md) の「移行」） |
 
 ---
 

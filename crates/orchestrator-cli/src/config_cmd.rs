@@ -181,7 +181,7 @@ fn print_active_env_overrides(env: &HashMap<String, String>, redacted: bool) {
     println!("\n# active env overrides (TOTSUKA_*)");
     for (key, value) in active {
         // Same masking rule as the TOML bodies above, applied to the variable
-        // name (`..._AUTH_TOKEN_REF`, `..._API_KEY_REF`).
+        // name (`..._API_KEY_REF`).
         let shown = if redacted && is_secret_key(key) {
             "***redacted***"
         } else {

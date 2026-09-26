@@ -23,7 +23,7 @@
 //!   #760, below); **every other path** is signal ingestion (E-08
 //!   forward-compat for the hook scripts is unchanged).
 //! - **Auth** (E-03): `Authorization: Bearer <token>`, constant-time compared
-//!   to the resolved `[hooks].auth_token_ref`. A mismatch is `401` + a warning;
+//!   to the token `run` generated ([`hooks::token`](crate::hooks::token)). A mismatch is `401` + a warning;
 //!   the listener stays up.
 //! - **Body cap**: requests over [`MAX_BODY_BYTES`] get `413`.
 //! - **Normalization**: the JSON body becomes an [`AgentSignal`]; unknown

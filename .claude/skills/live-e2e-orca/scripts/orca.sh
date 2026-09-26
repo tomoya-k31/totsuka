@@ -133,8 +133,8 @@ else:
 removed = [k for k in ("agent", "setup", "repo_selector", "plan_prompt_prefix", "poll_interval_ms") if k in cfg.get("orca", {})]
 if removed:
     print("  FAIL  [orca] に廃止キー: " + ", ".join(removed) + "（initialize が CONFIG_INVALID になる）"); ok = False
-if not cfg.get("hooks", {}).get("auth_token_ref"):
-    print("  FAIL  [hooks].auth_token_ref が無い（orca は hook_completion を宣言する）"); ok = False
+if "auth_token_ref" in cfg.get("hooks", {}):
+    print("  FAIL  [hooks].auth_token_ref は廃止（#785）→ 行を消す。トークンは run が作る"); ok = False
 sys.exit(0 if ok else 1)
 EOF
   if [ "$FAILED" != 0 ]; then

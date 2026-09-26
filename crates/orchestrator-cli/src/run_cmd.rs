@@ -186,19 +186,13 @@ async fn run_async(cx: &Cx, args: RunArgs) -> Result<(), CliError> {
         if legacy_socket != socket_path {
             let _ = std::fs::remove_file(&legacy_socket);
         }
-        let auth_token = match &cfg.hooks.auth_token_ref {
-            Some(reference) => Some(
-                secret_resolver(&env)
-                    .resolve(reference)
-                    .map_err(needs_fix)?,
-            ),
-            None => {
-                eprintln!(
-                    "hook auth token not configured ([hooks].auth_token_ref) → hook POSTs are accepted without a Bearer token (0600 socket only)"
-                );
-                None
-            }
-        };
+        // Generated on first start and reused after, so a restart does not
+        // 401 the hooks of agents that outlived the previous run (#785).
+        let token_path = orchestrator_core::hooks::token::path(paths);
+        let auth_token = Some(
+            orchestrator_core::hooks::token::load_or_create(&token_path)
+                .map_err(|e| format!("hook token {}: {e}", token_path.display()))?,
+        );
         let spool_dir = Some(match &cfg.hooks.spool_dir {
             Some(p) => config::expand_path(p, &env_fn).map_err(needs_fix)?,
             None => paths.state_dir().join("hooks").join("spool"),
