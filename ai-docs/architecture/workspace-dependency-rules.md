@@ -1,10 +1,10 @@
 ---
 type: Architecture
 title: ワークスペース依存境界ルール（Fitness Function）
-description: ヘキサゴナル構成の依存不変条件（plugins → plugin-protocol / plugin-sdk / repo-classifier のみ、plugin-protocol と repo-classifier は leaf、依存循環なし）と、それを CI で機械検証する scripts/arch-lint.sh の仕組み・正当な依存追加時の更新手順。
+description: ヘキサゴナル構成の依存不変条件（plugins → plugin-protocol / plugin-sdk / repo-classifier のみ、plugin-protocol と repo-classifier は leaf、依存循環なし、core の domain / ports は config と adapters を参照しない）と、それを CI で機械検証する scripts/arch-lint.sh の仕組み・正当な依存追加時の更新手順。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/scripts/arch-lint.sh
 tags: [architecture, fitness-function, ci, workspace, dependency]
-generated: { by: claude-code/opus-5, at: 2026-09-19T12:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-09-26T21:00:00+09:00 }
 status: stable
 ---
 
@@ -68,9 +68,23 @@ graph BT
 
 `totsuka plugin install` は「`plugin.toml` の `name` と同名のバイナリ」を要求し、ストアも `<plugin dir>/<name>` として配置する。ここが食い違っていると導入のたびに手作業のリネームと dist ディレクトリ組み立てが要る（実際に長らくそうなっていた: `task-source-slack` vs `slack`）。揃えておくと `target/{profile}/<name>` がそのまま install 可能・配布可能になる（[ADR-0027](/decisions/adr-0027-plugin-artifact-naming.md)）。
 
+### orchestrator-core 内部の層（`core-layer`）
+
+クレート**内**の向きも 1 つだけ機械検査する（#762、[ADR-0102](/decisions/adr-0102-core-internal-layering.md)）。上の検査は `cargo metadata` に現れるクレート間の依存しか見ないので、これはソースをテキストとして読む。
+
+| 対象 | 参照してはいけないもの |
+|---|---|
+| `orchestrator-core/src/domain/**` | `config`（設定ファイルのスキーマ）・`adapters`（具体的な実装） |
+| `orchestrator-core/src/ports/**` | 同上 |
+
+- **数えないもの**: コメント（ports の doc は実装へのリンクを持つが、rustdoc のリンクは依存ではない）と、各ファイルの `#[cfg(test)]` 以降（domain のテストは TOML から `Workflow` を組み立てるために config を使う）。
+- 各行のパス（`crate::config` とパスの途中の `config::` / `adapters::`）に加えて、`use` 文を `;` まで 1 つにまとめて読み、区切りに `config` / `adapters` という名前が現れたら違反にする。`use super::super::config::X` も、`use crate::{config};` や複数行のグループに `as` で別名を付けた形も捕まる。外部クレートの `…::config` を use すると誤検知になるが、今の domain / ports にその形は無い。
+- 対象ファイルが 0 件なら検査の失敗（exit 2）にする。ディレクトリを動かしたときに黙って素通りしないため。
+- **3 層の外のモジュール**（`run`・`scheduler`・`recovery`・`worktree`・`plugins` などのアプリケーション層、`platform`・`logging`・`paths` などの基盤）は検査しない。アプリケーション層が adapters を組み立てて使うのは正当な向きである（`recovery` → state DB、`plugins::spec` → `PluginSpec`）。
+
 ## ガードの仕組み
 
-- **スクリプト**: `scripts/arch-lint.sh`。`cargo metadata --no-deps`（依存解決なし・ネットワーク不要・数秒）の出力を jq で抽出し、許可リスト照合・Kahn 法による循環検査・プラグイン成果物の命名検査を行う。違反 1 件以上で exit 1。
+- **スクリプト**: `scripts/arch-lint.sh`。`cargo metadata --no-deps`（依存解決なし・ネットワーク不要・数秒）の出力を jq で抽出し、許可リスト照合・Kahn 法による循環検査・プラグイン成果物の命名検査を行う。core 内部の層（`core-layer`）だけは awk でソースを読む。違反 1 件以上で exit 1。
 - **CI**: `ci.yml` の `clippy / rustfmt` ジョブ内の step `Check architecture invariants` として毎 PR 実行（ジョブは増やさない — [ADR-0007](/decisions/adr-0007-ci-cost-optimization.md) の「既存ジョブへのステップ追加を優先」に従う）。
 - **ローカル**: pre-PR チェックの Rust set（`.claude/rules/dev-flow.md`）に含まれる。
 

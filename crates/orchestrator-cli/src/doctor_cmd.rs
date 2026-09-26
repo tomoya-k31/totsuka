@@ -948,7 +948,7 @@ const AGENT_TOOL_CAVEAT: &str = concat!(
 /// exists, rather than passing silently and reading as "checked".
 fn check_agent_tools(cfg: &RootConfig, checks: &mut Vec<Check>) {
     use orchestrator_core::agent_tools::{self, AgentTool};
-    use orchestrator_core::config::Profile;
+    use orchestrator_core::domain::Profile;
 
     let mut needed: Vec<AgentTool> = Vec::new();
     let mut unchecked: Vec<&str> = Vec::new();

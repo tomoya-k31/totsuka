@@ -15,10 +15,10 @@ use plugin_protocol::methods::{LlmApiKind, LlmInfo, ProjectInfo, RepoInfo, Workf
 use serde_json::Value;
 
 use crate::adapters::plugin_host::PluginSpec;
+use crate::config::interpret::outcome_action;
 use crate::config::{
     self, ConfigError, LlmApi, ResolveError, RootConfig, resolve_strings, secret_resolver,
 };
-use crate::domain::workflow::OutcomeAction;
 use crate::plugins::{PluginStore, StoreError};
 
 /// Default per-call plugin RPC timeout when `timeout_secs` is omitted.
@@ -103,15 +103,13 @@ pub fn plugin_spec(
 /// The status columns a workflow writes back to, in `on_start` →
 /// `on_success` → `on_failure` order with duplicates dropped (#626).
 ///
-/// Read through [`OutcomeAction::from_table`] rather than off the tables here:
+/// Read through [`outcome_action`] rather than off the tables here:
 /// which key names a column is stated in one place, and a second reader could
 /// drift from it without anything failing.
 fn status_writebacks(w: &config::WorkflowConfig) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for table in [&w.on_start, &w.on_success, &w.on_failure] {
-        if let Some(status) = table
-            .as_ref()
-            .and_then(|t| OutcomeAction::from_table(t).status)
+        if let Some(status) = table.as_ref().and_then(|t| outcome_action(t).status)
             && !out.contains(&status)
         {
             out.push(status);
@@ -330,8 +328,8 @@ pub fn plugin_init_config(
 /// `answer` has no prefix on purpose: it *is* the conversation, and taking the
 /// plain id is what makes a follow-up mention continue it rather than open a
 /// second one.
-fn task_id_prefix(profile: crate::config::Profile) -> Option<&'static str> {
-    use crate::config::Profile;
+fn task_id_prefix(profile: crate::domain::Profile) -> Option<&'static str> {
+    use crate::domain::Profile;
     match profile {
         Profile::Implement => Some("impl"),
         // `books:` is #324's existing design for the Slack triage flow; this
@@ -350,8 +348,8 @@ fn task_id_prefix(profile: crate::config::Profile) -> Option<&'static str> {
 /// publish path, so the plugin already knows what to say and has always said
 /// it. Sending a kind it has no text for would be a key that reads as
 /// configured and does nothing.
-fn instructions_kind(profile: crate::config::Profile) -> Option<&'static str> {
-    use crate::config::Profile;
+fn instructions_kind(profile: crate::domain::Profile) -> Option<&'static str> {
+    use crate::domain::Profile;
     match profile {
         Profile::Triage => Some("triage"),
         Profile::Design => Some("design"),

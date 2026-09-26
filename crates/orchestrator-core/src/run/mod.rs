@@ -52,13 +52,12 @@ use crate::adapters::state_db::{
     TaskMessageOutcome, TaskRecord, TaskRef, TransitionConflict,
 };
 use crate::adapters::{EngineSignalSink, hook_uds};
-use crate::config::{
-    CleanupPolicyConfig, CleanupPolicyName, DEFAULT_GLOBAL_CONCURRENCY, OutputPolicy, PluginKind,
-    Profile, RootConfig, WorkflowMode, resolve::ResolveError,
-};
+use crate::config::{DEFAULT_GLOBAL_CONCURRENCY, PluginKind, RootConfig, resolve::ResolveError};
+use crate::domain::CleanupPolicy;
 use crate::domain::signal::{AgentSignal, JobId};
 use crate::domain::state::{TaskEvent, TaskState};
 use crate::domain::workflow::Workflow;
+use crate::domain::{OutputPolicy, Profile, WorkflowMode};
 use crate::paths::Paths;
 use crate::ports::agent_session::AttachOutcome;
 use crate::ports::clock::Clock;
@@ -73,8 +72,8 @@ use crate::repo_select::{ReadmeCache, RepoDecision, SelectConfig, select_repo};
 use crate::scheduler::{Limits, ReadyTask, SlotManager, counts_toward_slot, plan_dispatch};
 use crate::tool::{LaunchInputs, ToolProfile};
 use crate::worktree::{
-    CleanupDecision, CleanupOutcome, CleanupPolicy, CreateRequest, HintedStart, WorktreeError,
-    WorktreeManager, default_location_template,
+    CleanupDecision, CleanupOutcome, CreateRequest, HintedStart, WorktreeError, WorktreeManager,
+    default_location_template,
 };
 
 mod dispatch;

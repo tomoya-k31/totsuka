@@ -487,7 +487,7 @@ agent = "herdr"
 "#,
         )
         .unwrap();
-        let workflows = crate::domain::Workflow::from_configs(&cfg.workflows, &cfg.projects);
+        let workflows = cfg.domain_workflows();
         for (wf, expected) in workflows.iter().zip(["plan", "plan", "plan", "implement"]) {
             assert_eq!(mode_str(wf.mode), expected, "{}", wf.name);
         }

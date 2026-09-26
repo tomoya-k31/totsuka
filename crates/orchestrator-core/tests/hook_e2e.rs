@@ -26,13 +26,13 @@ use orchestrator_core::adapters::git::SystemGitRunner;
 use orchestrator_core::adapters::llm::GatewayClassifier;
 use orchestrator_core::adapters::plugin_host::{Plugin, PluginSpec};
 use orchestrator_core::config::RootConfig;
+use orchestrator_core::domain::CleanupPolicy;
 use orchestrator_core::domain::state::TaskState;
 use orchestrator_core::domain::workflow::Workflow;
 use orchestrator_core::ports::SecretString;
 use orchestrator_core::repo_select::SelectConfig;
 use orchestrator_core::run::{Engine, EngineSettings, HookRuntime, PluginSet, RepoSettings};
 use orchestrator_core::scheduler::Limits;
-use orchestrator_core::worktree::CleanupPolicy;
 use plugin_protocol::manifest::Manifest;
 use serde_json::json;
 use test_support::{bare_origin_and_clone as setup_repo, scratch};
@@ -110,7 +110,7 @@ on_failure = {{ status = "failed" }}
 "#
     ))
     .unwrap();
-    Workflow::from_configs(&cfg.workflows, &cfg.projects)
+    cfg.domain_workflows()
 }
 
 /// Engine settings on a real repo clone with a hook runtime bound to `socket`.

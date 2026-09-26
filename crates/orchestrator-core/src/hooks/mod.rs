@@ -24,7 +24,8 @@ pub mod token;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::config::{RootConfig, VerificationMode, WorkflowConfig};
+use crate::config::{RootConfig, WorkflowConfig};
+use crate::domain::VerificationMode;
 use crate::paths::Paths;
 use crate::prompts::Prompts;
 use crate::tool::{ToolKind, ToolProfile};
@@ -191,7 +192,7 @@ pub fn install(paths: &Paths, cfg: &RootConfig) -> io::Result<()> {
 /// Render a workflow's `orchestrator-<workflow>.json`. The `Stop` array always
 /// carries the `on-stop.sh` command hook; `verification = "llm"` workflows also
 /// get a `prompt`-type hook running the rubric in-session (D-01). A read-only
-/// [`Profile`](crate::config::Profile) additionally gets its `permissions.deny`
+/// [`Profile`](crate::domain::Profile) additionally gets its `permissions.deny`
 /// set (#395), and a profile that confirms with a human gets the
 /// `AskUserQuestion` PreToolUse relay (#487).
 ///
@@ -1236,7 +1237,7 @@ agent = "herdr"
             .collect();
         assert_eq!(
             deny,
-            permissions::deny_rules(crate::config::Profile::Answer).unwrap(),
+            permissions::deny_rules(crate::domain::Profile::Answer).unwrap(),
             "the rendered set must be the module's, not a copy that can drift"
         );
         // The three that actually hold, by bare name.

@@ -17,6 +17,7 @@ use orchestrator_core::adapters::Degradation;
 use orchestrator_core::adapters::plugin_host::{Plugin, PluginSpec};
 use orchestrator_core::adapters::state_db::StateDb;
 use orchestrator_core::config::RootConfig;
+use orchestrator_core::domain::CleanupPolicy;
 use orchestrator_core::domain::state::TaskState;
 use orchestrator_core::domain::workflow::Workflow;
 use orchestrator_core::repo_select::SelectConfig;
@@ -24,7 +25,6 @@ use orchestrator_core::run::{
     Engine, EngineSettings, PluginSet, RepoSettings, RestartPolicy, RunSummary,
 };
 use orchestrator_core::scheduler::Limits;
-use orchestrator_core::worktree::CleanupPolicy;
 use plugin_protocol::manifest::Manifest;
 use serde_json::json;
 
@@ -93,7 +93,7 @@ output = "none"
 "#,
     )
     .unwrap();
-    Workflow::from_configs(&cfg.workflows, &cfg.projects)
+    cfg.domain_workflows()
 }
 
 /// Settings with a **zero backoff** — the seam that keeps these tests instant.
@@ -653,7 +653,7 @@ output = "none"
     .unwrap();
 
     let mut settings = settings_with_backoff(5, Duration::from_secs(30));
-    settings.workflows = Workflow::from_configs(&cfg.workflows, &cfg.projects);
+    settings.workflows = cfg.domain_workflows();
     settings.repos = vec![RepoSettings {
         name: "clone".to_string(),
         path: repo.clone(),

@@ -2,6 +2,8 @@
 //! (§4.7, F-60–F-66).
 //!
 //! - [`schema`]: `config.toml` types and parsing.
+//! - [`interpret`]: config → [`domain`](crate::domain) values (the one place
+//!   the file's spelling is translated, #762).
 //! - [`resolve`]: `${ENV}` / `keychain:` secret resolution and path expansion.
 //! - [`env_file`]: `[tools.<name>].env_file` parsing and startup resolution.
 //! - [`env_overrides`]: `TOTSUKA_*` overrides, layer 2 of the CLI > env >
@@ -11,6 +13,7 @@
 pub mod edit;
 pub mod env_file;
 pub mod env_overrides;
+pub mod interpret;
 pub mod resolve;
 pub mod schema;
 pub mod validate;
@@ -27,9 +30,9 @@ pub use resolve::{
 pub use schema::{
     CURRENT_SCHEMA_VERSION, CleanupPolicyConfig, CleanupPolicyName, ConfigError,
     DEFAULT_BLOCK_RETRY_LIMIT, DEFAULT_GLOBAL_CONCURRENCY, DEFAULT_WORKFLOW_TIMEOUT_SECS,
-    HooksConfig, LlmApi, LlmConfig, LogSettings, OutputPolicy, PluginConfig, PluginKind, Profile,
-    ProjectConfig, RepositoryConfig, RootConfig, ToolConfig, VerificationMode, WorkflowConfig,
-    WorkflowMode, WorktreeConfig, is_reserved_top_level_key,
+    HooksConfig, LlmApi, LlmConfig, LogSettings, PluginConfig, PluginKind, ProjectConfig,
+    RepositoryConfig, RootConfig, ToolConfig, WorkflowConfig, WorktreeConfig,
+    is_reserved_top_level_key,
 };
 pub use validate::{
     Finding, FindingSeverity, ValidationError, has_errors, validate, validate_static,

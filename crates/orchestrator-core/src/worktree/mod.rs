@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use plugin_protocol::identifier::{Case, IdentifierCore, IdentifierPolicy};
 
 use crate::config::resolve::{ResolveError, expand_env};
+use crate::domain::CleanupPolicy;
 use crate::paths::Paths;
 use crate::ports::git::GitRunner;
 
@@ -235,17 +236,6 @@ impl HintedStart<'_> {
             HintedStart::On(b) | HintedStart::DetachedAt(b) => b,
         }
     }
-}
-
-/// The worktree cleanup policy for a workflow mode (F-23, F-85).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CleanupPolicy {
-    /// Remove as soon as the task finishes (default for plan mode).
-    Immediate,
-    /// Keep for N days after the task finished, then remove.
-    RetentionDays(u32),
-    /// Never auto-remove; a human cleans up.
-    Manual,
 }
 
 /// The outcome of a cleanup attempt.

@@ -23,12 +23,12 @@ use orchestrator_core::adapters::git::SystemGitRunner;
 use orchestrator_core::adapters::llm::GatewayClassifier;
 use orchestrator_core::adapters::plugin_host::{Plugin, PluginSpec};
 use orchestrator_core::config::RootConfig;
+use orchestrator_core::domain::CleanupPolicy;
 use orchestrator_core::domain::state::{TaskEvent, TaskState};
 use orchestrator_core::domain::workflow::Workflow;
 use orchestrator_core::repo_select::SelectConfig;
 use orchestrator_core::run::{Engine, EngineSettings, PluginSet, RepoSettings};
 use orchestrator_core::scheduler::Limits;
-use orchestrator_core::worktree::CleanupPolicy;
 use plugin_protocol::manifest::Manifest;
 use serde_json::json;
 use std::sync::Arc;
@@ -88,7 +88,7 @@ on_success = { status = "レビュー待ち" }
 "#,
     )
     .unwrap();
-    Workflow::from_configs(&cfg.workflows, &cfg.projects)
+    cfg.domain_workflows()
 }
 
 /// Engine settings over one repo, worktrees under `<base>/wt/`, immediate
@@ -153,7 +153,7 @@ on_failure = {{ status = "失敗" }}
 "#
     ))
     .unwrap();
-    Workflow::from_configs(&cfg.workflows, &cfg.projects)
+    cfg.domain_workflows()
 }
 
 /// One pushable task in the mock source's config shape. The `source` field
@@ -360,7 +360,7 @@ on_success = { status = "レビュー待ち" }
 "#,
     )
     .unwrap();
-    settings.workflows = Workflow::from_configs(&cfg.workflows, &cfg.projects);
+    settings.workflows = cfg.domain_workflows();
     let mut engine = Engine::new(
         StateDb::open(&db_path).unwrap(),
         settings,
@@ -499,7 +499,7 @@ on_success = { status = "レビュー待ち" }
 "#,
     )
     .unwrap();
-    settings.workflows = Workflow::from_configs(&cfg.workflows, &cfg.projects);
+    settings.workflows = cfg.domain_workflows();
     let mut engine = Engine::new(
         StateDb::open(&db_path).unwrap(),
         settings,
@@ -635,7 +635,7 @@ on_failure = { status = "失敗" }
 "#,
     )
     .unwrap();
-    settings.workflows = Workflow::from_configs(&cfg.workflows, &cfg.projects);
+    settings.workflows = cfg.domain_workflows();
     let mut engine = Engine::new(
         StateDb::open(&db_path).unwrap(),
         settings,
@@ -1246,7 +1246,7 @@ output = "none"
 "#,
     )
     .unwrap();
-    settings.workflows = Workflow::from_configs(&cfg.workflows, &cfg.projects);
+    settings.workflows = cfg.domain_workflows();
     settings.cleanup_plan = CleanupPolicy::Immediate;
     let mut engine = Engine::new(
         StateDb::open(&db_path).unwrap(),
@@ -3143,7 +3143,7 @@ output = "none"
 "#
     ))
     .unwrap();
-    Workflow::from_configs(&cfg.workflows, &cfg.projects)
+    cfg.domain_workflows()
 }
 
 /// #410's last open item: a read-only profile whose worktree lands on a branch

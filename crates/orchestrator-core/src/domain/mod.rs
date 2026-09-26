@@ -6,4 +6,7 @@ pub mod workflow;
 
 pub use signal::{AgentSignal, InvalidJobId, JobId, SignalEvent, SignalSource, StopStatus};
 pub use state::{InvalidTransition, TaskEvent, TaskState, UnknownState, transition};
-pub use workflow::{OutcomeAction, Severity, Trigger, Workflow, WorkflowIssue, validate_workflows};
+pub use workflow::{
+    CleanupPolicy, OutcomeAction, OutputPolicy, Profile, Severity, Trigger, VerificationMode,
+    Workflow, WorkflowIssue, WorkflowMode, validate_workflows,
+};

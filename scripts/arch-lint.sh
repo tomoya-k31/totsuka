@@ -19,6 +19,8 @@
 #                       同ディレクトリの plugin.toml の `name` と一致する
 #   [E] declaration-consumed : plugin-protocol が公開する宣言（Capabilities の各
 #                       フィールド・error_code の各定数）を、実際に誰かが読んでいる
+#   [E] core-layer    : orchestrator-core の domain / ports は config と adapters を
+#                       参照しない（クレート内の層の向き。テストコードは対象外）
 #
 # 使い方: scripts/arch-lint.sh
 # 終了コード: 違反 1 件以上で 1、前提ツール欠如・検査自体の失敗で 2
@@ -234,6 +236,76 @@ done <<<"$PLUGIN_BINS"
   exit 2
 }
 
+# ---------- [E] core-layer ----------
+#
+# 上の検査はクレート**間**の依存しか見ない。orchestrator-core の中の向き
+# （domain / ports は設定ファイルのスキーマにも具体的な実装にも依存しない）は
+# cargo metadata に現れないので、ソースをテキストとして読む（#762）。
+#
+# Rust は自分の import を列挙できないので、ここも awk で読む。数えないもの:
+# - コメント行と行末コメント。ports の doc は実装へのリンク
+#   （[`SystemClock`](crate::adapters::clock::SystemClock)）を持つが、それは
+#   rustdoc のリンクであって依存ではない
+# - 各ファイルの `#[cfg(test)]` 以降。domain のテストは TOML から Workflow を
+#   組み立てるために config を使う。読みやすさのための依存で、本番コードの
+#   向きではない（config-template-lint と同じ区切り方）
+#
+# 2 通りに読む:
+# - 各行のパス: `crate::config` だけでなく途中の `config::` / `adapters::` も拾う。
+#   `use super::super::config::X` やコード中の `config::X` をこれで捕まえる
+# - `use` 文は `;` まで（複数行にわたっても）1 つにまとめて読み、パスの区切りに
+#   `config` / `adapters` という名前が現れたら違反にする。`use crate::{config};`
+#   や `use crate::{\n    config as c,\n};` のように `config::` と書かない
+#   グループ形式を捕まえるため（#802 のレビュー）
+# 外部クレートの `…::config` を use すると誤検知になるが、今の domain / ports に
+# その形は無い。現れたら別名で逃がさず、この検査のほうを直すこと。
+CORE_LAYER_DIRS="$ROOT/crates/orchestrator-core/src/domain $ROOT/crates/orchestrator-core/src/ports"
+# shellcheck disable=SC2086 # 2 つのディレクトリを別々の引数として渡す
+CORE_LAYER_FILES="$(find $CORE_LAYER_DIRS -name '*.rs' | sort)" || {
+  echo "arch-lint: core-layer の対象ファイルの列挙に失敗" >&2
+  exit 2
+}
+# フェイルクローズ: ディレクトリの移動や改名で 0 件になったら、違反なしではなく
+# 検査の失敗。
+[ -n "$CORE_LAYER_FILES" ] || {
+  echo "arch-lint: core-layer の対象ファイルを 1 つも見つけられなかった（$CORE_LAYER_DIRS）" >&2
+  exit 2
+}
+CORE_LAYER_HITS="$(
+  # shellcheck disable=SC2086
+  awk '
+    FNR == 1 { in_test = 0; in_use = 0 }
+    in_test { next }
+    /^#\[cfg\(test\)\]/ { in_test = 1; next }
+    {
+      line = $0
+      sub(/\/\/.*$/, "", line)
+      if (line ~ /(^|[^A-Za-z0-9_])(config|adapters)::/ ||
+          line ~ /crate::(config|adapters)([^A-Za-z0-9_]|$)/)
+        print FILENAME ":" FNR ": " $0
+      if (!in_use && line ~ /^[[:space:]]*(pub(\([^)]*\))?[[:space:]]+)?use[[:space:]]/) {
+        in_use = 1; stmt = ""; start = FNR; first = $0
+      }
+      if (in_use) {
+        stmt = stmt " " line
+        if (line ~ /;/) {
+          in_use = 0
+          if (stmt ~ /[{,:[:space:]](config|adapters)([^A-Za-z0-9_]|$)/)
+            print FILENAME ":" start ": " first
+        }
+      }
+    }' $CORE_LAYER_FILES | sort -u
+)" || {
+  echo "arch-lint: core-layer の解析（awk）に失敗" >&2
+  exit 2
+}
+N_CORE_LAYER="$(printf '%s\n' "$CORE_LAYER_FILES" | grep -c .)"
+while IFS= read -r hit; do
+  [ -n "$hit" ] || continue
+  error core-layer "orchestrator-core" \
+    "domain / ports が config か adapters を参照している: ${hit#"$ROOT/"} → 値型は domain に置き、設定からの変換は config 側で行うこと（ai-docs/architecture/workspace-dependency-rules.md）"
+done <<<"$CORE_LAYER_HITS"
+
 # ---------- [E] declaration-consumed ----------
 #
 # plugin-protocol は契約であって実装ではない。そこに宣言があるのに誰も読んで
@@ -377,6 +449,6 @@ N_PKGS="$(jq -r '.packages | length' <<<"$META")"
 N_DEPS=0
 [ -z "$DEPS" ] || N_DEPS="$(printf '%s\n' "$DEPS" | grep -c .)"
 echo ""
-echo "arch-lint: ${ERRORS} error(s)（${N_PKGS} crates / ワークスペース内依存 ${N_DEPS} 本 / プラグイン ${N_PLUGINS} 個 / protocol の宣言 ${N_DECLS} 個を検査）"
+echo "arch-lint: ${ERRORS} error(s)（${N_PKGS} crates / ワークスペース内依存 ${N_DEPS} 本 / プラグイン ${N_PLUGINS} 個 / protocol の宣言 ${N_DECLS} 個 / core の domain・ports ${N_CORE_LAYER} ファイルを検査）"
 [ "$ERRORS" -eq 0 ] || exit 1
 exit 0
