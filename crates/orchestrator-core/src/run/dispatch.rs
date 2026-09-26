@@ -240,14 +240,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                 priority: record.priority,
             });
         }
-        let pair_by_id: HashMap<i64, (String, String)> = ready
-            .iter()
-            .map(|t| (t.task_id, (t.repo.clone(), t.agent.clone())))
-            .collect();
         for task_id in plan_dispatch(&mut self.slots, &ready) {
-            if let Some(pair) = pair_by_id.get(&task_id) {
-                self.slot_holders.insert(task_id, pair.clone());
-            }
             let dispatched = self.dispatch_one(task_id).await;
             self.isolate_task(task_id, dispatched)?;
         }
@@ -1215,9 +1208,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
 
     /// Release the slot a task holds, if it holds one (per-task ledger).
     pub(super) fn release_slot(&mut self, task_id: i64) {
-        if let Some((repo, agent)) = self.slot_holders.remove(&task_id) {
-            self.slots.release(&repo, &agent);
-        }
+        self.slots.release(task_id);
     }
 
     /// Release the slots of tasks that stopped holding one without this run
@@ -1226,7 +1217,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// it, so without this the slot would stay taken until the next restart.
     pub(super) fn release_slots_of_settled_tasks(&mut self) -> Result<(), EngineError> {
         let mut stale = Vec::new();
-        for &task_id in self.slot_holders.keys() {
+        for task_id in self.slots.holders() {
             if self
                 .db
                 .get_task(task_id)?
@@ -2010,10 +2001,7 @@ mod tests {
     #[tokio::test]
     async fn the_bulkhead_contains_only_what_belongs_to_one_task() {
         let mut engine = crate::run::test_engine(std::time::Duration::from_secs(3600)).await;
-        assert!(engine.slots.acquire("web", "mock"));
-        engine
-            .slot_holders
-            .insert(7, ("web".to_string(), "mock".to_string()));
+        assert!(engine.slots.acquire(7, "web", "mock"));
         let conflict = TransitionConflict {
             id: 7,
             expected: 1,
@@ -2025,8 +2013,8 @@ mod tests {
         engine
             .isolate_task(7, Err(EngineError::Conflict(conflict)))
             .expect("a conflict is the task's, not the run's");
-        assert!(engine.slot_holders.is_empty(), "the slot came back");
-        assert!(engine.slots.acquire("web", "mock"));
+        assert!(!engine.slots.holds(7), "the slot came back");
+        assert!(engine.slots.acquire(8, "web", "mock"));
 
         let db_failure = engine.isolate_task(7, Err(StateError::NotFound(7).into()));
         assert!(matches!(db_failure, Err(EngineError::Db(_))));

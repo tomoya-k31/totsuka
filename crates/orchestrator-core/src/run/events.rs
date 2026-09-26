@@ -219,17 +219,14 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                 for &event in events {
                     (_, task) = self.db.apply_event(task, event, Some(detail.clone()))?;
                 }
-                if resuming && !self.slot_holders.contains_key(&task_id) {
+                if resuming && !self.slots.holds(task_id) {
                     // A waiting task keeps its slot (F-45), so this is
                     // only for one that holds none — waiting since before the
                     // run that tracks it. Reality wins over the cap: the agent
                     // *is* running, so a full tier only logs — but the ledger
                     // stays empty, so this task's completion will not release
                     // a slot another task holds.
-                    if self.slots.acquire(&repo, agent_plugin) {
-                        self.slot_holders
-                            .insert(task_id, (repo.clone(), agent_plugin.to_string()));
-                    } else {
+                    if !self.slots.acquire(task_id, &repo, agent_plugin) {
                         tracing::warn!(
                             task_id,
                             "resumed task exceeds a concurrency cap temporarily"
