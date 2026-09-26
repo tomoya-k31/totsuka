@@ -1,0 +1,1 @@
+* **Update**: [state-db](/data/state-db.md) — 遷移行の `detail` を書く API（`apply_event` / `retry_task` / メッセージ追記 + reopen 系 / `task_control`）が `Option<EventDetail>` を受けるようにし、`json!` の書き手を全部移した。保存されるバイト列は不変（#766、積み上げ PR の 2/3）

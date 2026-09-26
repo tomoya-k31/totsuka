@@ -45,6 +45,7 @@ use super::{
     SUBMIT_IN_FLIGHT_BUDGET, StatusMoment, deliver_notification, state_event,
 };
 use crate::adapters::plugin_host::{CallStats, HostError, Liveness, Plugin};
+use crate::domain::EventDetail;
 use crate::ports::git::GitRunner;
 use crate::ports::llm::RepoClassifier;
 use plugin_protocol::manifest::PluginKind as ManifestKind;
@@ -333,7 +334,9 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             if let Err(e) = self.db.apply_event(
                 record.task_ref(),
                 crate::domain::state::TaskEvent::Fail,
-                Some(serde_json::json!({ "kind": "plugin_crash", "plugin": plugin })),
+                Some(EventDetail::PluginCrash {
+                    plugin: plugin.to_string(),
+                }),
             ) {
                 self.isolate_task(task_id, Err(e.into()))?;
                 continue;

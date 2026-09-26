@@ -5,7 +5,7 @@
 //! a detached `HEAD`; naming the branch is the agent's job (ADR-0026).
 
 use super::*;
-use crate::adapters::state_db::AUTO_RETRY_KIND;
+use crate::domain::event_detail::{Dispatch, EventDetail, Reopen};
 
 impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// Select a repository for every queued task that has none (F-10–F-14).
@@ -35,7 +35,9 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                 self.db.apply_event(
                     record.task_ref(),
                     TaskEvent::NeedRepoConfirmation,
-                    Some(serde_json::json!({ "kind": "repo_select", "reason": reason })),
+                    Some(EventDetail::RepoSelect {
+                        reason: reason.clone(),
+                    }),
                 )?;
                 notify_all(
                     &self.plugins.notifiers,
@@ -49,7 +51,9 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                 self.db.apply_event(
                     record.task_ref(),
                     TaskEvent::Fail,
-                    Some(serde_json::json!({ "kind": "repo_select", "reason": reason })),
+                    Some(EventDetail::RepoSelect {
+                        reason: reason.clone(),
+                    }),
                 )?;
                 self.stats.failed += 1;
                 self.write_back_status(record, StatusMoment::Failure).await;
@@ -555,8 +559,9 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         let (_, task) = self.db.apply_event(
             record.task_ref(),
             TaskEvent::Dispatch,
-            Some(serde_json::json!({
-                "kind": "dispatch", "plugin": agent_name, "session_id": dispatched.session_id,
+            Some(EventDetail::Dispatch(Dispatch::Started {
+                plugin: agent_name.to_string(),
+                session_id: dispatched.session_id.clone(),
             })),
         )?;
         // The messages are in the agent's hands now. Stamped only after the
@@ -756,8 +761,9 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             self.db.apply_event(
                 record.task_ref(),
                 TaskEvent::Dispatch,
-                Some(serde_json::json!({
-                    "kind": "dispatch", "reused_session": session_id, "plugin": plugin,
+                Some(EventDetail::Dispatch(Dispatch::Reattached {
+                    reused_session: session_id.clone(),
+                    plugin: plugin.clone(),
                 })),
             )?;
             self.sessions
@@ -964,8 +970,8 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             if let Err(e) = self.db.apply_event(
                 task,
                 TaskEvent::Reopen,
-                Some(serde_json::json!({
-                    "kind": "reopen", "cause": "messages_arrived_while_working",
+                Some(EventDetail::Reopen(Reopen::Cause {
+                    cause: "messages_arrived_while_working".to_string(),
                 })),
             ) {
                 self.isolate_task(task_id, Err(e.into()))?;
@@ -1045,7 +1051,9 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                 self.db.apply_event(
                     record.task_ref(),
                     TaskEvent::Skip,
-                    Some(serde_json::json!({ "kind": "claim_lost", "holder": holder })),
+                    Some(EventDetail::ClaimLost {
+                        holder: holder.clone(),
+                    }),
                 )?;
                 self.stats.skipped += 1;
                 tracing::info!(
@@ -1063,7 +1071,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                 self.db.apply_event(
                     record.task_ref(),
                     TaskEvent::Fail,
-                    Some(serde_json::json!({ "kind": "claim_forbidden" })),
+                    Some(EventDetail::ClaimForbidden),
                 )?;
                 self.stats.failed += 1;
                 notify_all(
@@ -1206,7 +1214,9 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         let (_, task) = self.db.apply_event(
             task,
             TaskEvent::Fail,
-            Some(serde_json::json!({ "kind": "dispatch", "reason": reason })),
+            Some(EventDetail::Dispatch(Dispatch::Failed {
+                reason: reason.clone(),
+            })),
         )?;
 
         // #492: most dispatch failures are transient — an agent CLI whose
@@ -1226,11 +1236,10 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         match self.db.auto_retry_streak(record.id) {
             Ok(spent) if spent < DISPATCH_RETRY_LIMIT => {
                 let attempt = spent + 1;
-                let detail = serde_json::json!({
-                    "kind": AUTO_RETRY_KIND,
-                    "attempt": attempt,
-                    "limit": DISPATCH_RETRY_LIMIT,
-                });
+                let detail = EventDetail::AutoRetry {
+                    attempt,
+                    limit: DISPATCH_RETRY_LIMIT,
+                };
                 match self.db.retry_task(task, Some(detail)) {
                     Ok(_) => {
                         // No notification, no status write-back: the task is

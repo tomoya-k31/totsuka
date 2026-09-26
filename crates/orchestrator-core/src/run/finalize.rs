@@ -5,6 +5,7 @@
 //! keeps its worktree and commits, so `task retry` can resume from here.
 
 use super::*;
+use crate::domain::event_detail::{EventDetail, Publish};
 
 impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// Terminal processing for a task whose agent finished: run the workflow's
@@ -69,26 +70,24 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             record.id,
             record.worktree_path.as_deref().unwrap_or("<worktree>"),
         ) {
-            return self
-                .fail_publish(record, task, "read_only_violation", reason)
-                .await;
+            let detail = EventDetail::ReadOnlyViolation {
+                reason: reason.clone(),
+            };
+            return self.fail_publish(record, task, detail, reason).await;
         }
         // A finished task whose workflow vanished from config still holds the
         // agent's commits; treat it as a recoverable publish failure rather
         // than silently completing and deleting the worktree (never confuse a
         // missing workflow with an explicit `output = none`).
         let Some((_, policy)) = resolved else {
-            return self
-                .fail_publish(
-                    record,
-                    task,
-                    "publish",
-                    format!(
-                        "workflow `{}` is no longer configured → restore it (worktree and commits are kept) or `totsuka task cancel {}`",
-                        record.workflow, record.id
-                    ),
-                )
-                .await;
+            let reason = format!(
+                "workflow `{}` is no longer configured → restore it (worktree and commits are kept) or `totsuka task cancel {}`",
+                record.workflow, record.id
+            );
+            let detail = EventDetail::Publish(Publish::Failed {
+                reason: reason.clone(),
+            });
+            return self.fail_publish(record, task, detail, reason).await;
         };
 
         match self.execute_output_policy(record, policy).await {
@@ -98,10 +97,9 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                 self.db.apply_event(
                     task,
                     TaskEvent::Complete,
-                    Some(serde_json::json!({
-                        "kind": "publish",
-                        "policy": policy_str(policy),
-                        "pr_url": pr_url,
+                    Some(EventDetail::Publish(Publish::Succeeded {
+                        policy: policy_str(policy).to_string(),
+                        pr_url,
                     })),
                 )?;
                 self.release_slot(record.id);
@@ -113,7 +111,12 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                 tracing::info!(task_id = record.id, "task done");
                 Ok(())
             }
-            Err(reason) => self.fail_publish(record, task, "publish", reason).await,
+            Err(reason) => {
+                let detail = EventDetail::Publish(Publish::Failed {
+                    reason: reason.clone(),
+                });
+                self.fail_publish(record, task, detail, reason).await
+            }
         }
     }
 
@@ -124,8 +127,8 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// recoverable failure must not flap the source task to `on_failure` and
     /// back on the next successful retry.
     ///
-    /// `kind` names *which* check refused, and it is not decoration: it is the
-    /// audit `detail.kind` **and** the log line. Named `fail_publish` because
+    /// `detail`'s kind names *which* check refused, and it is not decoration:
+    /// it is the audit `detail.kind` **and** the log line. Named `fail_publish` because
     /// publishing was the only caller at first; since
     /// [`enforce_read_only`](Self::enforce_read_only) it is not, and a log line
     /// hardcoded to "output policy failed" was reporting a mid-run violation as
@@ -134,15 +137,15 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         &mut self,
         record: &TaskRecord,
         task: TaskRef,
-        kind: &str,
+        detail: EventDetail,
         reason: String,
     ) -> Result<(), EngineError> {
-        tracing::error!(task_id = record.id, kind, "task failed: {reason}");
-        self.db.apply_event(
-            task,
-            TaskEvent::Fail,
-            Some(serde_json::json!({ "kind": kind, "reason": reason.clone() })),
-        )?;
+        tracing::error!(
+            task_id = record.id,
+            kind = detail.kind(),
+            "task failed: {reason}"
+        );
+        self.db.apply_event(task, TaskEvent::Fail, Some(detail))?;
         self.release_slot(record.id);
         self.agent_output.remove(&record.id);
         self.stats.failed += 1;

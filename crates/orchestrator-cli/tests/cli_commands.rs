@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use orchestrator_core::adapters::state_db::TaskMessageInsert;
 use orchestrator_core::adapters::{NewTask, StateDb};
+use orchestrator_core::domain::EventDetail;
 use orchestrator_core::domain::state::TaskEvent;
 
 fn totsuka() -> PathBuf {
@@ -441,7 +442,9 @@ fn task_export_exits_quietly_when_the_reader_goes_away() {
             db.apply_event(
                 db.task_ref(id).unwrap(),
                 TaskEvent::Dispatch,
-                Some(serde_json::json!({"publish_artifact": bulky})),
+                Some(EventDetail::HookComplete {
+                    publish_artifact: Some(bulky.clone()),
+                }),
             )
             .unwrap();
         }

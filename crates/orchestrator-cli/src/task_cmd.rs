@@ -10,6 +10,7 @@ use std::io::Write;
 
 use clap::Subcommand;
 use orchestrator_core::adapters::state_db::{EventExportFilter, StateError};
+use orchestrator_core::domain::event_detail::{Cli, EventDetail};
 use orchestrator_core::domain::state::{TaskEvent, TaskState};
 use orchestrator_core::task_control;
 use serde::Serialize;
@@ -444,7 +445,9 @@ fn cancel(cx: &Cx, id: i64) -> Result<(), CliError> {
     let outcome = task_control::cancel(
         &db,
         id,
-        serde_json::json!({ "kind": "cli", "command": "task cancel" }),
+        EventDetail::Cli(Cli::Plain {
+            command: "task cancel".to_string(),
+        }),
     )?;
     if !outcome.ok {
         return Err(outcome.reason.unwrap_or_default().into());
@@ -471,7 +474,9 @@ fn retry(cx: &Cx, id: i64) -> Result<(), CliError> {
     let outcome = task_control::retry(
         &db,
         id,
-        serde_json::json!({ "kind": "cli", "command": "task retry" }),
+        EventDetail::Cli(Cli::Plain {
+            command: "task retry".to_string(),
+        }),
     )?;
     if !outcome.ok {
         return Err(outcome.reason.unwrap_or_default().into());
@@ -527,7 +532,9 @@ fn verify(
         db.apply_event(
             task.task_ref(),
             TaskEvent::ApproveVerification,
-            Some(serde_json::json!({ "kind": "cli", "command": "task verify --pass" })),
+            Some(EventDetail::Cli(Cli::Plain {
+                command: "task verify --pass".to_string(),
+            })),
         )
         .map_err(lost_race)?;
         println!("task {id} verification passed → `totsuka run` publishes it on the next cycle");
@@ -538,8 +545,9 @@ fn verify(
         db.apply_event(
             task.task_ref(),
             TaskEvent::VerificationFailed,
-            Some(serde_json::json!({
-                "kind": "cli", "command": "task verify --fail", "reason": reason,
+            Some(EventDetail::Cli(Cli::WithReason {
+                command: "task verify --fail".to_string(),
+                reason,
             })),
         )
         .map_err(lost_race)?;

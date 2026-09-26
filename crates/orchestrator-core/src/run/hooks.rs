@@ -28,6 +28,7 @@ use crate::adapters::hook_uds;
 use crate::adapters::state_db::{HookEventInsert, HookEventOutcome, StateError, TaskRecord};
 use crate::config::{DEFAULT_BLOCK_RETRY_LIMIT, DEFAULT_WORKFLOW_TIMEOUT_SECS};
 use crate::domain::VerificationMode;
+use crate::domain::event_detail::{EventDetail, HookStart};
 use crate::domain::signal::{AgentSignal, SignalEvent, StopStatus};
 use crate::domain::state::{TaskEvent, TaskState};
 use crate::ports::git::GitRunner;
@@ -124,7 +125,9 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             self.db.apply_event(
                 record.task_ref(),
                 TaskEvent::Start,
-                Some(serde_json::json!({ "kind": "hook_start", "event": event_str })),
+                Some(EventDetail::HookStart(HookStart::Signal {
+                    event: event_str.to_string(),
+                })),
             )?;
         }
 
@@ -240,10 +243,9 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                     let (_, task) = self.db.apply_event(
                         record.task_ref(),
                         TaskEvent::BeginPublish,
-                        Some(serde_json::json!({
-                            "kind": "hook_complete",
-                            "publish_artifact": self.agent_output.get(&record.id),
-                        })),
+                        Some(EventDetail::HookComplete {
+                            publish_artifact: self.agent_output.get(&record.id).cloned(),
+                        }),
                     )?;
                     self.finalize_success(record, task).await?;
                 } else {
@@ -259,7 +261,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                     (_, task) = self.db.apply_event(
                         task,
                         TaskEvent::Start,
-                        Some(serde_json::json!({ "kind": "hook_start" })),
+                        Some(EventDetail::HookStart(HookStart::Plain {})),
                     )?;
                 }
                 // Persist the artifact on the transition so a restart can verify
@@ -267,10 +269,9 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                 self.db.apply_event(
                     task,
                     TaskEvent::SelfReportComplete,
-                    Some(serde_json::json!({
-                        "kind": "self_report",
-                        "publish_artifact": self.agent_output.get(&record.id),
-                    })),
+                    Some(EventDetail::SelfReport {
+                        publish_artifact: self.agent_output.get(&record.id).cloned(),
+                    }),
                 )?;
                 notify_all(
                     &self.plugins.notifiers,
@@ -296,7 +297,10 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             // second NEEDS_INPUT does not re-notify.)
             TaskState::WaitingInput => Ok(()),
             _ => {
-                self.park_waiting_input(record, agent_plugin, reason, "hook")
+                let detail = EventDetail::Hook {
+                    reason: reason.clone(),
+                };
+                self.park_waiting_input(record, agent_plugin, reason, detail)
                     .await
             }
         }
@@ -329,7 +333,10 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                 Ok(())
             }
             _ => {
-                self.park_waiting_input(record, agent_plugin, message, "question_pending")
+                let detail = EventDetail::QuestionPending {
+                    reason: message.clone(),
+                };
+                self.park_waiting_input(record, agent_plugin, message, detail)
                     .await
             }
         }
@@ -344,16 +351,13 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         record: &TaskRecord,
         agent_plugin: &str,
         reason: Option<String>,
-        kind: &str,
+        detail: EventDetail,
     ) -> Result<(), EngineError> {
         match record.state {
             // Resume from an escalation straight into WaitingInput.
             TaskState::Escalated => {
-                self.db.apply_event(
-                    record.task_ref(),
-                    TaskEvent::WaitInput,
-                    Some(serde_json::json!({ "kind": kind, "reason": reason })),
-                )?;
+                self.db
+                    .apply_event(record.task_ref(), TaskEvent::WaitInput, Some(detail))?;
                 notify_all(
                     &self.plugins.notifiers,
                     NotifierEvent::WaitingInput,
@@ -366,7 +370,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                     .await?;
             }
             _ => {
-                tracing::debug!(task_id = record.id, state = %record.state, kind, "ignoring a park request in a non-pipeline state")
+                tracing::debug!(task_id = record.id, state = %record.state, kind = detail.kind(), "ignoring a park request in a non-pipeline state")
             }
         }
         Ok(())
@@ -385,7 +389,9 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         self.db.apply_event(
             record.task_ref(),
             TaskEvent::Fail,
-            Some(serde_json::json!({ "kind": "hook", "reason": reason })),
+            Some(EventDetail::Hook {
+                reason: reason.clone(),
+            }),
         )?;
         self.release_slot(record.id);
         self.drop_task_sessions(record.id);
@@ -490,11 +496,10 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         self.db.apply_event(
             record.task_ref(),
             TaskEvent::Escalate,
-            Some(serde_json::json!({
-                "kind": "escalate",
-                "reason": reason,
-                "diagnostics": snapshot,
-            })),
+            Some(EventDetail::Escalate {
+                reason: reason.clone(),
+                diagnostics: snapshot,
+            }),
         )?;
         notify_all(
             &self.plugins.notifiers,
@@ -576,12 +581,16 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             TaskOp::Cancel => crate::task_control::cancel(
                 &self.db,
                 task_id,
-                serde_json::json!({ "kind": "control", "command": "task cancel" }),
+                EventDetail::Control {
+                    command: "task cancel".to_string(),
+                },
             )?,
             TaskOp::Retry => crate::task_control::retry(
                 &self.db,
                 task_id,
-                serde_json::json!({ "kind": "control", "command": "task retry" }),
+                EventDetail::Control {
+                    command: "task retry".to_string(),
+                },
             )?,
         };
         if !outcome.ok {
