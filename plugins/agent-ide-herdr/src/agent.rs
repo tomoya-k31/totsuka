@@ -298,7 +298,7 @@ impl<T: HerdrTransport> HerdrAgent<T> {
         // visible from `agent.prompt`, so the prompt has to be able to send the
         // dispatch back to `agent.start` rather than keep asking an agent that
         // does not exist.
-        let prompt = compose_prompt(params);
+        let prompt = plugin_sdk::compose_prompt(params);
         let deadline = tokio::time::Instant::now() + STARTUP_RETRY_BUDGET;
         let mut restarts = 0;
         loop {
@@ -1954,39 +1954,6 @@ async fn read_pane_text<T: HerdrTransport>(
     Some(envelope.read.text)
 }
 
-/// Compose the agent prompt: any extra context as a preamble, then the task
-/// (body, or the title when there is no body).
-///
-/// The title is typed only when there is no body: sources truncate it to a
-/// snippet (e.g. Slack's `TITLE_SNIPPET_CHARS`) and the body carries the full
-/// task text, so prepending the title would just show a cut-off duplicate line
-/// in the pane. A string `extra_context` is rendered as raw text (not JSON — no
-/// surrounding quotes); non-string values keep their JSON rendering.
-///
-/// Hook-capable dispatches usually arrive with no `extra_context` at all: the
-/// orchestrator delivers instructions invisibly via the `UserPromptSubmit`
-/// hook (`TOTSUKA_PROMPT_CONTEXT` env). `extra_context` remains the VISIBLE
-/// fallback for non-hook dispatches (e.g. the task's instructions when no
-/// hook channel exists).
-///
-/// The extra context comes FIRST, and stays first. It originally had to:
-/// `submit_prompt` confirmed arrival by matching the prompt's **tail** on
-/// screen, and extra context repeats across dispatches, so as a suffix it made
-/// every dispatch's tail identical — on a `claude --resume` pane the check
-/// could match the PREVIOUS turn's prompt and submit before the new one was
-/// typed. Protocol 17's `agent.prompt` removed that check, so the ordering is
-/// no longer load-bearing; it is kept because a preamble-then-task prompt is
-/// what the agent has been reading all along, and reordering it would change
-/// every dispatch's input for no reason.
-fn compose_prompt(params: &TaskDispatchParams) -> String {
-    let task_text = params.task.body.as_ref().unwrap_or(&params.task.title);
-    match &params.extra_context {
-        Some(Value::String(s)) => format!("{s}\n\n---\n{task_text}"),
-        Some(other) => format!("{other}\n\n---\n{task_text}"),
-        None => task_text.clone(),
-    }
-}
-
 /// herdr's constraints on an `agent.start` `name`
 /// ([ADR-0071](../../../ai-docs/decisions/adr-0071-task-identifier-naming.md)).
 ///
@@ -2389,52 +2356,6 @@ mod tests {
             tool_launch: None,
             repo_name: None,
         }
-    }
-
-    #[test]
-    fn compose_prompt_skips_the_truncated_title_when_a_body_exists() {
-        // Sources truncate the title to a snippet; the body carries the full
-        // text. Typing both showed a cut-off duplicate first line in the pane.
-        let params = dispatch_params(
-            "Slack: tomoya in #dev: エイリアスはどのフ",
-            Some("full task body"),
-        );
-        assert_eq!(compose_prompt(&params), "full task body");
-
-        // Title-only tasks still get a prompt.
-        let params = dispatch_params("bare title", None);
-        assert_eq!(compose_prompt(&params), "bare title");
-    }
-
-    #[test]
-    fn compose_prompt_puts_string_extra_context_first_as_raw_text() {
-        // A string extra_context (e.g. core's marker self-report instruction) is
-        // a PREAMBLE: the task text must stay last so the prompt's tail — what
-        // submit_prompt matches on screen — stays unique per task (a constant
-        // suffix would false-match the previous turn's prompt on a resume pane).
-        // Raw text: quotes inside the instruction (e.g. reason="...") must come
-        // through unescaped, with no JSON wrapping around the whole string.
-        let mut params = dispatch_params("t", Some("unique task body"));
-        params.extra_context = Some(Value::String(
-            "end with <<STATUS:NEEDS_INPUT reason=\"...\">> when blocked".into(),
-        ));
-        let prompt = compose_prompt(&params);
-        assert_eq!(
-            prompt,
-            "end with <<STATUS:NEEDS_INPUT reason=\"...\">> when blocked\n\n---\nunique task body"
-        );
-        assert!(
-            prompt.ends_with("unique task body"),
-            "the task text is the tail"
-        );
-        assert!(
-            !prompt.contains("\\\""),
-            "quotes are not JSON-escaped: {prompt}"
-        );
-
-        // Non-string values keep their JSON rendering (still as preamble).
-        params.extra_context = Some(serde_json::json!({"base": "main"}));
-        assert!(compose_prompt(&params).starts_with("{\"base\":\"main\"}\n\n---\n"));
     }
 
     #[test]
