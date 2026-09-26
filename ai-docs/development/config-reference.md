@@ -43,7 +43,7 @@ owner: tomoya-k31
 - `${ENV_VAR}` を含む文字列 — 環境変数から展開。export 済みの値をそのまま使いたいときに。**`totsuka setup --secret-backend env` が書く名前は `TOTSUKA_SECRET_<ACCOUNT>`**（#705）で、この接頭辞は設定オーバーライドの未知キー警告から除外されている —— `TOTSUKA_*` は設定オーバーライドの名前空間なので、素朴な `TOTSUKA_GITHUB_TOKEN` は毎回 `unknown environment override` の警告を出す
 - `keychain:<service>/<account>` — macOS Keychain から解決。**macOS でしか動かない**ので、
   他プラットフォームへ持ち運ぶ設定には使わない
-- `secret:<name>` — **親プロセスが渡す値**（#754、[ADR-0099](/decisions/adr-0099-secrets-stdin.md)）。メニューバーアプリのように機密を自分で持つランチャーが `totsuka run --secrets-stdin` を起動し、stdin の 1 行目に `{"<name>": "<value>", …}` を書く。`<name>` は `[A-Za-z0-9_.-]+`。ストアを指さないので、値をどこから取るかはランチャーが決める。**`--secrets-stdin` を付けたプロセスは `keychain:` / `op://` / `cmd:` / `bw:` を一切解決しない**（backend を呼ばずにエラー）ので、その構成の config は全部 `secret:` で書く（`${ENV}` は使える）。フラグなしで `secret:` を解決しようとすると「`--secrets-stdin` で渡すか、別のスキームを使う」エラーになり、`totsuka run` は exit 4 で止まる。マップに無い名前もエラー、使われない名前は無視する。`totsuka doctor` は `secret:` を解決せず注記だけを出す。`[tools.<name>].env_file` の値にも書ける
+- `secret:<name>` — **親プロセスが渡す値**（#754、[ADR-0100](/decisions/adr-0100-secrets-stdin.md)）。メニューバーアプリのように機密を自分で持つランチャーが `totsuka run --secrets-stdin` を起動し、stdin の 1 行目に `{"<name>": "<value>", …}` を書く。`<name>` は `[A-Za-z0-9_.-]+`。ストアを指さないので、値をどこから取るかはランチャーが決める。**`--secrets-stdin` を付けたプロセスは `keychain:` / `op://` / `cmd:` / `bw:` を一切解決しない**（backend を呼ばずにエラー）ので、その構成の config は全部 `secret:` で書く（`${ENV}` は使える）。フラグなしで `secret:` を解決しようとすると「`--secrets-stdin` で渡すか、別のスキームを使う」エラーになり、`totsuka run` は exit 4 で止まる。マップに無い名前もエラー、使われない名前は無視する。`totsuka doctor` は `secret:` を解決せず注記だけを出す。`[tools.<name>].env_file` の値にも書ける
 - `~` / `${ENV}` はパスでも展開される
 
 # トップレベル

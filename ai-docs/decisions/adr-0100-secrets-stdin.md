@@ -1,6 +1,6 @@
 ---
 type: Decision
-title: ADR-0099 run が親プロセスから解決済みの機密情報を stdin で受け取る（secret:<name> と --secrets-stdin）
+title: ADR-0100 run が親プロセスから解決済みの機密情報を stdin で受け取る（secret:<name> と --secrets-stdin）
 description: "メニューバーアプリが run を子プロセスとして起動する構成のため、secret:<name> スキームと run --secrets-stdin を足した決定。値は stdin の 1 行目の JSON で受け取り、EOF は待たない。フラグを付けたプロセスは Keychain・op・bw・cmd: を backend を呼ばずに拒否する（プロセス全体で 1 か所の関門）。取得元はアプリが持ち、config には名前だけを書く。env・[secrets] テーブル・アプリへの問い合わせ窓口は却下した。"
 resource: https://github.com/tomoya-k31/totsuka/issues/754
 tags: [decision, config, secrets, macos, menubar, adr]

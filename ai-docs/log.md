@@ -7,7 +7,7 @@
 * **Update**: [config-reference](/development/config-reference.md) — `[hooks]` から `auth_token_ref` を削除し、トークンの仕組みと移行手順（行の削除・Keychain 項目の消し方）を追記
 * **Update**: [hook-troubleshooting](/operations/hook-troubleshooting.md) — `hook-token` / `hook-socket` の読み方、廃止エラーへの対処、ローテーション手順
 * **Update**: [ADR-0004](/decisions/adr-0004-hook-completion-signal.md) / [ADR-0094](/decisions/adr-0094-task-control-endpoints.md) — トークンの出どころが ADR-0099 で変わったことを相互参照
-* **Creation**: [ADR-0099](/decisions/adr-0099-secrets-stdin.md) — `run` が親プロセスから解決済みの機密情報を受け取れるようにした（#754）。`secret:<name>` スキームと `run --secrets-stdin`（stdin の 1 行目の JSON、EOF は待たない）。フラグを付けたプロセスは Keychain・`op`・`bw`・`cmd:` を backend を呼ばずに拒否する。`doctor` は `secret:` を解決せず注記する
+* **Creation**: [ADR-0100](/decisions/adr-0100-secrets-stdin.md) — `run` が親プロセスから解決済みの機密情報を受け取れるようにした（#754）。`secret:<name>` スキームと `run --secrets-stdin`（stdin の 1 行目の JSON、EOF は待たない）。フラグを付けたプロセスは Keychain・`op`・`bw`・`cmd:` を backend を呼ばずに拒否する。`doctor` は `secret:` を解決せず注記する
 * **Update**: [設定リファレンス](/development/config-reference.md) — シークレット参照に `secret:<name>` を追加
 * **Update**: [orchestrator-core](/components/orchestrator-core.md) — `platform::supplied` と、`PlatformSecretStore` が供給された値へ全参照を回すことを追記
 * **Update**: [orchestrator-cli](/components/orchestrator-cli.md) — `run --secrets-stdin` を追記
