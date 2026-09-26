@@ -80,7 +80,9 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             })
             .collect();
         match &self.llm {
-            Some(llm) => select_repo(task, &candidates, llm.as_ref(), &self.settings.select).await,
+            Some(llm) => {
+                select_repo(task, &candidates, llm.classifier(), &self.settings.select).await
+            }
             None => select_repo(task, &candidates, &NoClassifier, &self.settings.select).await,
         }
     }
