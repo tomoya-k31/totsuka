@@ -4,7 +4,7 @@ title: 状態DB（SQLite state.db）スキーマ
 description: タスク実行状態を永続化する SQLite DB（$XDG_STATE_HOME/totsuka/state.db）の tasks/sessions/events/hook_events/task_messages/schema_migrations スキーマと設計判断。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/adapters/state_db.rs
 tags: [sqlite, state, schema, statemachine, hooks]
-generated: { by: claude-code/opus-5.5, at: 2026-09-27T09:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-09-26T16:14:00+09:00 }
 verified:
   - { by: claude-code/opus-5, at: 2026-08-19T02:36:00Z }
 status: stable
@@ -198,7 +198,7 @@ Claude Code フック（Stop / Notification / SessionStart / SessionEnd / heartb
 
 **全状態遷移**を記録する監査ログ（F-72。状態が動くときは必ず 1 行増える）と、**動いていないタスクについてのノート行**（#407、下記）が同居する。`from_state`（取り込み時 NULL）→ `to_state`、`occurred_at`、`detail`（JSON）。実行ログ断片（F-38）は含めず JSONL ログ側（#49）に置く。
 
-**遷移行の `detail` は型 `domain::EventDetail` でしか書けない（#766）。** `apply_event` / `retry_task` / `append_task_message_reopening` / `append_task_message_handing_off`（と `task_control::cancel` / `retry`）は `Option<EventDetail>` を受け、取り込み時の `ingested` / `submitted` も同じ型から作る。列に入るのは `EventDetail::to_json` の出力で、`serde_json::Value` を経由するのでキーはソート済みになる — #766 以前の `json!` の書き手が保存したのと同じバイト列で、形ごとのゴールデンテストがそれを固定している。kind とフィールドの対応は `EventDetail` の定義が唯一の一覧。ノート行（下記）は別の語彙で、`note_task` が `serde_json::Value` のまま受ける。
+**遷移行の `detail` は型 `domain::EventDetail` でしか書けない（#766）。** `apply_event` / `retry_task` / `append_task_message_reopening` / `append_task_message_handing_off` は `Option<EventDetail>` を、`task_control::cancel` / `retry` は（detail を必ず記録するので）`EventDetail` を受け、取り込み時の `ingested` / `submitted` も同じ型から作る。列に入るのは `EventDetail::to_json` の出力で、`serde_json::Value` を経由するのでキーはソート済みになる — #766 以前の `json!` の書き手が保存したのと同じバイト列で、形ごとのゴールデンテストがそれを固定している。kind とフィールドの対応は `EventDetail` の定義が唯一の一覧。ノート行（下記）は別の語彙で、`note_task` が `serde_json::Value` のまま受ける。
 
 ### ノート行（#407、[ADR-0037](/decisions/adr-0037-task-notes-in-the-event-log.md)）
 
