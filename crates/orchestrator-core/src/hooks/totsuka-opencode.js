@@ -128,6 +128,9 @@ export default {
       const data = event?.data ?? {}
       const sessionID = data.sessionID ?? ""
       if (t === "session.execution.started") {
+        // A turn that ends without text must not report the previous turn's
+        // message (its marker, and its prompt_id as a duplicate).
+        lastText.delete(sessionID)
         // v2 has no session-created event on the stream; the first execution
         // of a session stands in for it.
         if (sessionID && !started.has(sessionID)) {

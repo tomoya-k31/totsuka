@@ -33,7 +33,7 @@ discord-clip を opencode（v2.0.18）で動かすと、エージェントは co
    - `session.execution.interrupted` → `reason` が `shutdown` 以外なら `Stop`（v1 で中断後に idle が来ていたのと同じ扱い）。`shutdown` は opencode の終了で、ターンの終わりではない
    - `session.execution.failed` → `Stop{FAILED}`
    - `form.created` かつ `metadata.kind = "question"` → `QuestionPending`。`prompt_id` はフォーム id（質問ごとに distinct）。フォームが開いている間はターン終了イベントが来ないので、v1 の `pendingQuestions` による idle 抑止は要らなくなった
-2. **opencode の argv の先頭に `--standalone` を固定する。** pane の子として専用サーバーが立ち、env を継ぐ。`mode_args` / `plan_args` の置き換えでは消えない位置に置く — これが無いと完了検知が無言で止まるので、運用者が上書きで外せる値にしない
+2. **opencode の argv に `--standalone` を固定する**（`command` の基本引数の直後、`mode_args` / `plan_args` の前）。 pane の子として専用サーバーが立ち、env を継ぐ。`mode_args` / `plan_args` の置き換えでは消えない位置に置く — これが無いと完了検知が無言で止まるので、運用者が上書きで外せる値にしない
    - サーバーの env を外から設定する案（`opencode service set` 等）は却下。サーバーは全 pane・個人セッションで共有されるので、タスクごとの `TOTSUKA_JOB_ID` を持てない
    - プラグインの `options` で渡す案も却下。options は設定ファイルに書くもので、タスクごとに変わる値を運べない
 3. **v1 互換は捨てる。** 1 ファイルで両方の形を出すと、v1 ローダーは全エクスポートを関数として呼ぶので既定エクスポートのオブジェクトで壊れる。`--standalone` も v1 には無い。opencode は自動更新が既定で、v1 に留まる利用者を想定しない
@@ -50,5 +50,5 @@ discord-clip を opencode（v2.0.18）で動かすと、エージェントは co
 
 - [OpenCode ツールのセットアップと運用](/operations/opencode-tool-setup.md)
 - [POST /agent-events](/apis/agent-events.md)
-- [ADR-0050](/decisions/adr-0050-question-tool-asking.md)（質問ツールの経路。opencode 側の送出元はこの ADR で変わった）
+- [ADR-0050](/decisions/adr-0050-question-tool-asking.md)（質問ツールの経路。opencode 側の送出元 `tool.execute.before` / `callID` はこの ADR で `form.created` / フォーム id に置き換わった）
 - [ADR-0014](/decisions/adr-0014-tool-abstraction.md)（ツール抽象）

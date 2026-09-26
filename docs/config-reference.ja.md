@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:8eed3f8ec32a52f4a7a7307fe4312bef25a3ab7290b77f1344a3f675fbd6da84 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:ddb8c07ecfc475fb0c3578f7731ce32e054d608758d0af71e5dfc82915b78f55 -->
 
 # 設定リファレンス
 
@@ -546,7 +546,7 @@ pane 内で起動する AI ツール CLI の定義。組み込みとして `clau
 | `kind` | enum | 必須 | アダプタ種別: `claude` / `codex` / `opencode`。コマンドラインの組み立て方と完了検知の方式を決める |
 | `command` | string? | kind 名 | 空白区切りのコマンドライン。先頭がプログラムで残りが基本引数（例 `"claude --model haiku"`） |
 | `mode_args` | string[]? | kind ごと | implement モードで追加する引数。codex: `["--sandbox", "workspace-write", "--ask-for-approval", "never"]`、opencode: `["--auto"]`、claude: なし |
-| `plan_args` | string[]? | kind ごと | plan モードで追加する引数。claude: `["--permission-mode", "plan"]`、codex: `["--sandbox", "read-only", "--ask-for-approval", "never"]`、opencode: `["--agent", "totsuka-plan", "--auto"]`。opencode には `mode_args` / `plan_args` の値によらず先頭に `--standalone` が必ず付く（無いとセッションが opencode の共有バックグラウンドサーバーで動き、タスクの環境変数が届かないため完了が検知されない）。opencode v2 が必要 |
+| `plan_args` | string[]? | kind ごと | plan モードで追加する引数。claude: `["--permission-mode", "plan"]`、codex: `["--sandbox", "read-only", "--ask-for-approval", "never"]`、opencode: `["--agent", "totsuka-plan", "--auto"]`。opencode には `mode_args` / `plan_args` の値によらず（その前に）`--standalone` が必ず付く（無いとセッションが opencode の共有バックグラウンドサーバーで動き、タスクの環境変数が届かないため完了が検知されない）。opencode v2 が必要 |
 | `env_file` | string? | なし | `KEY=value` を並べたファイル。値はこの tool が起動するエージェントの環境変数に加わる（下記）。`~` / `${VAR}` を展開した結果が絶対パスであること |
 
 `kind = "codex"` はツール側での一回きりの信頼設定が要る。`kind = "opencode"` は信頼設定こそ不要だが、縮退する箇所が多い。

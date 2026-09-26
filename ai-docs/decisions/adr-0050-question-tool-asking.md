@@ -20,6 +20,8 @@ sources:
 
 stable（[#487](https://github.com/tomoya-k31/totsuka/issues/487)）。[ADR-0043](/decisions/adr-0043-human-approved-completion.md)（人間承認の完了プロトコル）の「訊き方」を質問ツール保有ツール向けに改める。**実機検収は未了**（検証節参照）。
 
+opencode 側の送出元（`tool.execute.before` / `callID` / idle 抑止）は opencode v2 への移行で [ADR-0105](/decisions/adr-0105-opencode-v2-plugin.md) に置き換わった（`form.created` / フォーム id）。以下の opencode の記述は v1 当時のもの。
+
 # Context
 
 [ADR-0043](/decisions/adr-0043-human-approved-completion.md) で design / implement の完了は人間が pane 上で承認する形になったが、確認依頼は「平文で要約 + `<<STATUS:NEEDS_INPUT reason="awaiting completion confirmation">>` で停止」であり、人間は自由テキストを打って応答する。これを各ツールの選択 UI（単一選択ピッカー）にしたい。

@@ -28,7 +28,7 @@ UDS POST（Bun fetch `unix:`）、plan agent の `permission` が v2 の
 `edit` / `shell` / `subagent: deny` に変換されること。
 v1（1.x）は非対応 — プラグインの形が違い、`--standalone` フラグも無い。
 
-totsuka は opencode を必ず **`--standalone`** で起動する（`mode_args` /
+totsuka は opencode の argv に必ず **`--standalone`** を付ける（`mode_args` /
 `plan_args` で上書きできない）。v2 の既定は共有バックグラウンドサーバー
 （`opencode serve --service`）でセッションを動かすが、プラグインはその
 サーバー側で動くので、pane に渡した `TOTSUKA_*` env が届かず完了通知が
