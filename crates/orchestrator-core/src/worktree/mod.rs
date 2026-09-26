@@ -1394,6 +1394,12 @@ impl<G: GitRunner> WorktreeManager<G> {
         branch: &str,
         base_commit: Option<&str>,
     ) -> Result<(), WorktreeError> {
+        // Both tests below pass for the default branch itself, which a row
+        // written before #694 can carry as the task's branch.
+        if branch == self.detect_default_branch(repo_path)? {
+            tracing::info!(branch, "branch kept: it is the default branch");
+            return Ok(());
+        }
         if !self.branch_descends_from_base(repo_path, branch, base_commit)? {
             tracing::info!(
                 branch,

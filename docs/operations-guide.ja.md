@@ -1,7 +1,7 @@
 > 🌐 [English](operations-guide.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/operations-guide.md sha256:e1cce61c5dff459d3dae42b82beaf44c52ba5566fa75cd006a154070064206aa -->
+<!-- generated-from: ai-docs/operations/operations-guide.md sha256:49247c8cb0f86fda0d53c3ee328d4619311dc8bbf889571664a300e62d39af1b -->
 
 # 運用ガイド
 
@@ -120,6 +120,7 @@ worktree を削除するとき、その `agent/*` ブランチも一緒に消す
 
 - 全てのコミットが origin のどこかから辿れる → 削除する（失うものが無い）
 - 1 つでも origin に無い → **ブランチを残す**。未 push の成果物がそこにしかないため。`run` のログに `branch kept: it has commits that are not on origin` が出る
+- origin の既定ブランチ（`main` など）と同じ名前 → **常に残す**。古いタスクの記録には、既定ブランチがタスクのブランチとして入っていることがあるため。ログは `branch kept: it is the default branch`
 
 squash merge されたブランチは、元のコミットハッシュが origin に存在しない。`origin/{branch}` が削除されると「未 push」と数えられ、以後は残り続ける。失敗する方向が「残す」なので失うものは無い。溜まったものは同じ基準で手動掃除できる。
 

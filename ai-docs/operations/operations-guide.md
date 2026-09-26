@@ -144,6 +144,7 @@ worktree を削除するとき、その `agent/*` ブランチも一緒に消す
 
 - 全コミットが origin のどこかのリファレンスから辿れる → `git branch -D` で削除（失うものが無い）
 - 1 つでも origin に無い → **ブランチを残す**（未 push の成果物がそこにしか無い）。`totsuka run` のログに `branch kept: it has commits that are not on origin` が出る
+- origin の既定ブランチ（`main` 等）と同名 → **常に残す**。#694 の修正前に書かれたタスク行は、既定ブランチをタスクのブランチとして記録していることがあり、上の判定は既定ブランチ自身を素通りさせるため。ログは `branch kept: it is the default branch`
 
 > squash merge されたブランチは、元のコミットハッシュが origin に存在しない。`origin/{branch}` が prune されると「未 push」と数えられ、以後は保持され続ける（totsuka 自身は prune しないが、グローバル設定 `fetch.prune = true` があると踏む）。失敗方向は保持なので失うものは無く、下記のワンライナーで手動削除できる。
 

@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](operations-guide.ja.md)
 
-<!-- generated-from: ai-docs/operations/operations-guide.md sha256:e1cce61c5dff459d3dae42b82beaf44c52ba5566fa75cd006a154070064206aa -->
+<!-- generated-from: ai-docs/operations/operations-guide.md sha256:49247c8cb0f86fda0d53c3ee328d4619311dc8bbf889571664a300e62d39af1b -->
 
 # Operations guide
 
@@ -119,6 +119,7 @@ When a worktree is deleted, its `agent/*` branch goes with it — including when
 
 - Every commit is reachable from origin → delete the branch, since nothing is lost
 - Even one commit is not → **keep the branch**, because unpushed work exists only there. `run` logs `branch kept: it has commits that are not on origin`
+- The branch has the same name as origin's default branch (`main` or similar) → **always kept**, because an old task record may name the default branch as the task's branch. `run` logs `branch kept: it is the default branch`
 
 A squash-merged branch has commit hashes that no longer exist on origin. Once `origin/{branch}` is pruned, those commits count as unpushed and the branch is kept from then on. The failure direction is "keep", so nothing is lost; clean the accumulation up by hand with the same test:
 
