@@ -107,6 +107,27 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             return Ok(());
         }
 
+        // Any sign of the agent at work starts a `Dispatched` task (#790). An
+        // agent IDE whose state stream reports `Running` (herdr) gets there
+        // first and this is a no-op; one whose stream only reports death
+        // (orca) has no other path until the task parks or finishes. Only
+        // `Dispatched` — resuming `WaitingInput`/`Escalated` from a heartbeat
+        // could unpark a task whose question is still open.
+        if record.state == TaskState::Dispatched
+            && matches!(
+                sig.event,
+                SignalEvent::SessionStart { .. }
+                    | SignalEvent::Heartbeat
+                    | SignalEvent::Notification { .. }
+            )
+        {
+            self.db.apply_event(
+                record.task_ref(),
+                TaskEvent::Start,
+                Some(serde_json::json!({ "kind": "hook_start", "event": event_str })),
+            )?;
+        }
+
         // The owning agent plugin (for slot resume / diagnostics). Empty when no
         // session was recorded yet — only used where a plugin is truly needed.
         let agent_plugin = self

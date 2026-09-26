@@ -1,0 +1,1 @@
+* **Update**: [agent-events](/apis/agent-events.md) / [hook-signal-flow](/architecture/hook-signal-flow.md) — `dispatched` のタスクに `SessionStart` / `Heartbeat` / `Notification` が届いたら `running` へ進めるようにした。orca 構成で作業中のタスクが `dispatched` のまま残っていた（#790）

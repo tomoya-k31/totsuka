@@ -38,7 +38,7 @@ driving adapter [`adapters::hook_uds`](/components/orchestrator-core.md) が実�
 | `job_id` | ✔ | `"job-{task_id}-{session_row}"`。`TOTSUKA_JOB_ID` のエコーバック。相関はこれのみで行い session_id からの推測はしない（E-09） |
 | `session_id` | | ツールネイティブのセッション id（相関補助・冪等キー要素。DB では `tool_session_id`） |
 | `prompt_id` | | 冪等キー要素（codex では stdin の `turn_id`、opencode では最終メッセージ id を送信側がこのフィールドへ載せ替える — ワイヤ形は不変、#196） |
-| `hook_event_name` | | `Stop` / `Notification` / `QuestionPending` / `SessionStart` / `SessionEnd`。未知/欠落は `Heartbeat`（生存のみ、誤完了を避ける最も非断定な扱い）へ正規化。**これが正本のイベント種別キー**（旧 `event` フィールドではない。フックスクリプト `on-stop.sh` 等はこの名で送出する #138） |
+| `hook_event_name` | | `Stop` / `Notification` / `QuestionPending` / `SessionStart` / `SessionEnd`。未知/欠落は `Heartbeat`（生存の証跡。誤完了を避ける最も非断定な扱い）へ正規化。`dispatched` のタスクに `SessionStart` / `Heartbeat` / `Notification` が新規に届くと `running` へ進める（#790。状態ストリームが `Running` を送らない orca でも作業中が反映される）。**これが正本のイベント種別キー**（旧 `event` フィールドではない。フックスクリプト `on-stop.sh` 等はこの名で送出する #138） |
 | `status` | | `Stop` 時: `completed` / `needs_input` / `failed` / `unknown`。**大小無視で照合**（`on-stop.sh` はマーカー語 `COMPLETED` 等を大文字のまま送るため） |
 | `reason` | | 補足理由 |
 | `last_assistant_message` / `transcript_path` | | `Stop` 時の補助 |

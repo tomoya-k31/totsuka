@@ -1001,6 +1001,68 @@ async fn a_second_question_renotifies_and_a_redelivery_does_not() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// #790: orca's state stream never reports `Running`, so a hook showing the
+/// agent at work is what moves a `Dispatched` task on. Before the fix the task
+/// stayed `dispatched` until it parked or finished.
+#[tokio::test]
+async fn a_heartbeat_starts_a_dispatched_task() {
+    let base = scratch("hook_heartbeat_start");
+    let notify_log = base.join("notify.ndjson");
+    let db = StateDb::open(&base.join("state.db")).unwrap();
+    let id = db.upsert_task(&new_task("1", None)).unwrap();
+    db.apply_event(db.task_ref(id).unwrap(), TaskEvent::Dispatch, None)
+        .unwrap();
+    let row = db.record_session(id, "mock_agent", "sess-1").unwrap();
+
+    let mut engine = Engine::new(
+        db,
+        engine_settings(workflows("llm", "none"), None),
+        plugin_set(json!({}), &notify_log).await,
+        SystemGitRunner::default(),
+        no_llm(),
+    )
+    .await;
+
+    engine.on_signal(heartbeat(id, row, "p1")).await.unwrap();
+    assert_eq!(
+        engine.db().get_task(id).unwrap().unwrap().state,
+        TaskState::Running
+    );
+    let last = engine.db().list_events(id).unwrap().pop().unwrap();
+    assert_eq!(last.detail.unwrap()["kind"], "hook_start");
+    engine.shutdown(GRACE).await;
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// #790: herdr reports `Running` through its state stream too, so the hook
+/// start must be a no-op on a task that is already running.
+#[tokio::test]
+async fn a_heartbeat_leaves_a_running_task_alone() {
+    let base = scratch("hook_heartbeat_running");
+    let notify_log = base.join("notify.ndjson");
+    let db = StateDb::open(&base.join("state.db")).unwrap();
+    let (id, row) = seed_running(&db, "sess-1");
+    let before = db.list_events(id).unwrap().len();
+
+    let mut engine = Engine::new(
+        db,
+        engine_settings(workflows("llm", "none"), None),
+        plugin_set(json!({}), &notify_log).await,
+        SystemGitRunner::default(),
+        no_llm(),
+    )
+    .await;
+
+    engine.on_signal(heartbeat(id, row, "p1")).await.unwrap();
+    assert_eq!(
+        engine.db().get_task(id).unwrap().unwrap().state,
+        TaskState::Running
+    );
+    assert_eq!(engine.db().list_events(id).unwrap().len(), before);
+    engine.shutdown(GRACE).await;
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 #[tokio::test]
 async fn duplicate_signal_transitions_once() {
     let base = scratch("hook_dup");
