@@ -5,6 +5,7 @@
 // subset of it; unused helpers in one crate are not dead code.
 #![allow(dead_code)]
 
+use plugin_sdk::LineHandler;
 use std::collections::VecDeque;
 use std::future::Future;
 use std::sync::{Arc, Mutex};

@@ -4,6 +4,7 @@
 
 * **Update**: [plugin-sdk クレート](/components/plugin-sdk.md) — agent_ide 向けの `AgentIdeHandler` / `AgentIdeServer`（`state/subscribe` の ACK → 通知の順序を SDK が保証）、`template`（`{placeholder}` の単一パス置換）、`compose_prompt`、`not_initialized()`、task_source の `handle_line` を追加（#759）
 * **Update**: [プラグイン開発ガイド](/development/plugin-dev-guide.md) — 「SDK のハンドラで書く」節を追加
+* **Update**: [task-source-slack](/components/task-source-slack.md) — server を plugin-sdk の `TaskSourceHandler` に載せ、`template` モジュールを SDK のものに置き換えた（#759）
 * **Creation**: [ADR-0099](/decisions/adr-0099-generated-hook-token.md) — hook の Bearer トークンは `totsuka run` が生成して `$XDG_STATE_HOME/totsuka/hook-token`（0600）に保存し、以後は使い回す（#785）。`[hooks].auth_token_ref` と `TOTSUKA_HOOKS_AUTH_TOKEN_REF` は猶予なしで廃止し、書いてあれば「この行を消す」専用のエラーにする
 * **Update**: [hook-security](/security/hook-security.md) — §1 のトークンの供給と保管、ローテーション、`hook-token` / `hook-socket` チェックを生成ファイル方式に書き換えた
 * **Update**: [config-reference](/development/config-reference.md) — `[hooks]` から `auth_token_ref` を削除し、トークンの仕組みと移行手順（行の削除・Keychain 項目の消し方）を追記

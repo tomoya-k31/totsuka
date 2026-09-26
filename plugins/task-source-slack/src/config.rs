@@ -462,7 +462,7 @@ impl SlackPrompts {
                 .find(|(k, _)| k == key)
                 .map(|(_, a)| *a)
                 .unwrap_or(&[]);
-            for name in crate::template::scan(value) {
+            for name in plugin_sdk::template::scan(value) {
                 let entry = (*key, name.to_string());
                 // A template that repeats `{bogus}` should log once, not once
                 // per occurrence.
@@ -1223,12 +1223,12 @@ mod tests {
         // Was `format!("\n返信スタイル: {style}")`; the label is English now,
         // but `{style}` itself stays whatever the operator wrote.
         assert_eq!(
-            crate::template::render(&p.reply_style_suffix, &[("style", "簡潔に")]),
+            plugin_sdk::template::render(&p.reply_style_suffix, &[("style", "簡潔に")]),
             "\nReply style: 簡潔に"
         );
         // Was the body `format!`.
         assert_eq!(
-            crate::template::render(
+            plugin_sdk::template::render(
                 &p.body_template,
                 &[
                     ("sender", "太郎"),
@@ -1245,7 +1245,8 @@ mod tests {
         // steers it away from the one route that works (its own Slack tool,
         // via the permalink) — which is how the file was actually read in
         // production.
-        let attachments = crate::template::render(&p.body_attachment_header, &[("count", "2")]);
+        let attachments =
+            plugin_sdk::template::render(&p.body_attachment_header, &[("count", "2")]);
         assert!(
             attachments.contains("## 添付ファイル（2 件）"),
             "{attachments}"
@@ -1259,15 +1260,18 @@ mod tests {
             "{attachments}"
         );
         assert_eq!(
-            crate::template::render(&p.body_attachment_line, &[("file", "a.md（text/plain）")]),
+            plugin_sdk::template::render(
+                &p.body_attachment_line,
+                &[("file", "a.md（text/plain）")]
+            ),
             "- a.md（text/plain）\n"
         );
         assert_eq!(
-            crate::template::render(&p.body_thread_header, &[("count", "3")]),
+            plugin_sdk::template::render(&p.body_thread_header, &[("count", "3")]),
             "\n## スレッド文脈（直近 3 件・古い順）\n\n"
         );
         assert_eq!(
-            crate::template::render(&p.body_thread_line, &[("line", "発言")]),
+            plugin_sdk::template::render(&p.body_thread_line, &[("line", "発言")]),
             "- 発言\n"
         );
         assert_eq!(
@@ -1276,7 +1280,7 @@ mod tests {
         );
         // Was the classifier `format!`s in `llm::request_body`.
         assert_eq!(
-            crate::template::render(&p.classifier_system, &[("repo_names", "a, b")]),
+            plugin_sdk::template::render(&p.classifier_system, &[("repo_names", "a, b")]),
             "You classify which local repository a Slack mention is about. \
              Answer with ONLY a JSON object of the exact shape \
              {\"repo\": string, \"confidence\": number, \"reason\": string} — \
@@ -1284,7 +1288,7 @@ mod tests {
              is 0.0-1.0, your own estimate of how sure you are."
         );
         assert_eq!(
-            crate::template::render(
+            plugin_sdk::template::render(
                 &p.classifier_user,
                 &[
                     ("mention_text", "M"),
@@ -1307,7 +1311,7 @@ mod tests {
     /// escape `format!`; in TOML it is literal, so it needs pinning.
     #[test]
     fn classifier_system_json_shape_survives_rendering() {
-        let rendered = crate::template::render(
+        let rendered = plugin_sdk::template::render(
             &SlackPrompts::default().classifier_system,
             &[("repo_names", "x")],
         );

@@ -5,6 +5,7 @@
 
 mod common;
 
+use plugin_sdk::LineHandler;
 use std::time::Duration;
 
 use serde_json::{Value, json};
