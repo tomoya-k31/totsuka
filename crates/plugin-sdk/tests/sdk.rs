@@ -481,3 +481,183 @@ async fn lookup_and_submit_clients_do_not_steal_each_other_s_answers() {
     );
     driver.await.unwrap();
 }
+
+// ---------------------------------------------------------------------------
+// agent_ide dispatch
+// ---------------------------------------------------------------------------
+
+mod agent_ide {
+    use super::*;
+    use plugin_protocol::methods::{
+        SessionAttachParams, SessionAttachResult, SessionReleaseParams, SessionReleaseResult,
+        StateNotification, StateSubscribeParams, TaskCancelParams, TaskDispatchParams,
+        TaskDispatchResult,
+    };
+    use plugin_sdk::{AgentIdeHandler, AgentIdeServer};
+
+    /// Overrides only the required methods; `state/subscribe` hands back a
+    /// stream that already holds two notifications, so the forwarder could
+    /// write them the instant it starts.
+    struct Agent;
+
+    impl AgentIdeHandler for Agent {
+        async fn initialize(&mut self, _: InitializeParams) -> Result<InitializeResult, Error> {
+            unreachable!("not exercised")
+        }
+        async fn config_validate(
+            &mut self,
+            _: ConfigValidateParams,
+        ) -> Result<ConfigValidateResult, Error> {
+            unreachable!("not exercised")
+        }
+        async fn task_dispatch(
+            &mut self,
+            _: TaskDispatchParams,
+        ) -> Result<TaskDispatchResult, Error> {
+            unreachable!("not exercised")
+        }
+        async fn session_attach(
+            &mut self,
+            _: SessionAttachParams,
+        ) -> Result<SessionAttachResult, Error> {
+            unreachable!("not exercised")
+        }
+        async fn task_cancel(&mut self, _: TaskCancelParams) -> Result<(), Error> {
+            Ok(())
+        }
+        async fn state_subscribe(
+            &mut self,
+            params: StateSubscribeParams,
+        ) -> Result<mpsc::UnboundedReceiver<StateNotification>, Error> {
+            let (tx, rx) = mpsc::unbounded_channel();
+            for state in ["running", "idle"] {
+                let note: StateNotification = serde_json::from_value(json!({
+                    "session_id": params.session_id, "state": state
+                }))
+                .unwrap();
+                tx.send(note).unwrap();
+            }
+            Ok(rx)
+        }
+        async fn session_release(
+            &mut self,
+            _: SessionReleaseParams,
+        ) -> Result<SessionReleaseResult, Error> {
+            unreachable!("not exercised")
+        }
+    }
+
+    fn server() -> (AgentIdeServer<Agent>, mpsc::UnboundedReceiver<String>) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        (AgentIdeServer::new(Agent, Writer::from_channel(tx)), rx)
+    }
+
+    /// F-38: the host must read the ACK before any notification. The ACK is
+    /// written through the shared writer by the server itself — returned as
+    /// the `Reply` instead, `serve` would write it only after `handle_line`
+    /// returned, behind notifications the forwarder had already sent.
+    #[tokio::test]
+    async fn state_subscribe_acks_before_the_first_notification() {
+        let (mut server, mut out) = server();
+        let reply = server
+            .handle_line(&line(json!({
+                "jsonrpc": "2.0", "id": 7, "method": "state/subscribe",
+                "params": { "session_id": "s1" }
+            })))
+            .await;
+        assert!(reply.line.is_none(), "the ACK must not wait for `serve`");
+
+        let mut next = async || -> Value {
+            let line = tokio::time::timeout(Duration::from_secs(5), out.recv())
+                .await
+                .expect("no output within 5s")
+                .expect("writer closed");
+            serde_json::from_str(&line).unwrap()
+        };
+        let ack = next().await;
+        assert_eq!(ack["id"], 7, "first line is the ACK: {ack}");
+        assert_eq!(ack["result"], Value::Null);
+        for state in ["running", "idle"] {
+            let note = next().await;
+            assert_eq!(note["method"], "state/notification", "{note}");
+            assert_eq!(note["params"]["state"], state);
+        }
+    }
+
+    /// The capability-gated methods refuse by default, naming the capability
+    /// not to declare — in a message free of source indentation (the guard
+    /// `task_claim`'s default carries, for the same reason).
+    #[tokio::test]
+    async fn capability_gated_methods_refuse_by_default() {
+        let (mut server, _out) = server();
+        for (method, params, capability) in [
+            (
+                "session/focus",
+                json!({ "session_id": "s" }),
+                "pane_control",
+            ),
+            ("session/list", json!({}), "pane_control"),
+            (
+                "diagnostics/snapshot",
+                json!({ "session_id": "s" }),
+                "diagnostics_snapshot",
+            ),
+        ] {
+            let reply = server
+                .handle_line(&line(json!({
+                    "jsonrpc": "2.0", "id": 1, "method": method, "params": params
+                })))
+                .await;
+            let response: Value = serde_json::from_str(&reply.line.unwrap()).unwrap();
+            assert_eq!(response["error"]["code"], error_code::METHOD_NOT_FOUND);
+            let message = response["error"]["message"].as_str().unwrap();
+            assert!(message.contains(capability), "{method}: {message}");
+            assert!(!message.contains("  "), "{method}: {message:?}");
+        }
+    }
+
+    /// The rest of the line protocol is the task_source one: a unit result is
+    /// `null`, junk is PARSE_ERROR, notifications are silent, `shutdown` stops.
+    #[tokio::test]
+    async fn the_line_protocol_matches_the_task_source_side() {
+        let (mut server, _out) = server();
+        let reply = server
+            .handle_line(&line(json!({
+                "jsonrpc": "2.0", "id": 1, "method": "task/cancel",
+                "params": { "session_id": "s" }
+            })))
+            .await;
+        let response: Value = serde_json::from_str(&reply.line.unwrap()).unwrap();
+        assert_eq!(response["result"], Value::Null, "{response}");
+
+        let reply = server
+            .handle_line(&line(json!({
+                "jsonrpc": "2.0", "id": 2, "method": "task/cancel", "params": {}
+            })))
+            .await;
+        let response: Value = serde_json::from_str(&reply.line.unwrap()).unwrap();
+        assert_eq!(response["error"]["code"], error_code::INVALID_PARAMS);
+
+        let reply = server.handle_line("not json").await;
+        let response: Value = serde_json::from_str(&reply.line.unwrap()).unwrap();
+        assert_eq!(response["error"]["code"], error_code::PARSE_ERROR);
+        assert!(
+            server
+                .handle_line(&line(json!({"jsonrpc": "2.0", "method": "notify"})))
+                .await
+                .line
+                .is_none()
+        );
+        let reply = server
+            .handle_line(&line(json!({"jsonrpc": "2.0", "id": 3, "method": "nope"})))
+            .await;
+        let response: Value = serde_json::from_str(&reply.line.unwrap()).unwrap();
+        assert_eq!(response["error"]["code"], error_code::METHOD_NOT_FOUND);
+        let reply = server
+            .handle_line(&line(
+                json!({"jsonrpc": "2.0", "id": 4, "method": "shutdown"}),
+            ))
+            .await;
+        assert!(reply.shutdown);
+    }
+}

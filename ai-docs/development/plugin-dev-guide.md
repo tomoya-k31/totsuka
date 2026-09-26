@@ -4,7 +4,7 @@ title: プラグイン開発ガイド
 description: totsuka プラグインの作り方。plugin-protocol クレートの型、JSON-RPC(NDJSON/stdio) メソッド、plugin.toml マニフェスト、capability 宣言、開発ループ（plugin install --from-source）とビルド手順（bin 名 = plugin.toml の name という不変条件）、install/enable の流れ、参照実装。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/plugin-protocol
 tags: [plugin, protocol, json-rpc, manifest, guide]
-generated: { by: claude-code/opus-5, at: 2026-09-24T12:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-26T14:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -138,6 +138,20 @@ O→P 呼び出しは Orchestrator 側でメソッド別に会計されており
 # 状態の対応（F-32）
 
 エージェントの状態 `AgentState` は Orchestrator のステートマシンへ写像される（dispatched→running は `Start`、blocked は `waiting_input`（スロットは保持したまま）、done は publishing へ）。プラグインは自分のツールの状態を 5 値へ正直に写像する。
+
+# SDK のハンドラで書く（#759）
+
+JSON-RPC の行処理（パースエラー、notification への無応答、`shutdown`、未知メソッド、params の型検査）は自分で書かなくてよい。[plugin-sdk](/components/plugin-sdk.md) の型付きハンドラを実装すれば、残りは SDK が受け持つ。
+
+| kind | 実装する trait | stdio に載せる形 |
+|---|---|---|
+| `task_source` | `TaskSourceHandler`（initialize / config_validate / update_status / result_publish、任意で task_claim） | `serve(TaskSourceServer(handler), &stdio)`。server 自身が handler を兼ねるなら、`LineHandler` を `plugin_sdk::dispatch::handle_line(self, line)` で実装する |
+| `agent_ide` | `AgentIdeHandler`（initialize / config_validate / task_dispatch / session_attach / task_cancel / state_subscribe / session_release、任意で session_focus / session_list / diagnostics_snapshot） | `serve(AgentIdeServer::new(handler, stdio.writer.clone()), &stdio)` |
+
+- 各メソッドは params の型を受け取り、result の型か `plugin_protocol::jsonrpc::Error` を返す。`initialize` 前の呼び出しには `plugin_sdk::not_initialized()` を返す。
+- **能力で守られたメソッドは既定で `METHOD_NOT_FOUND` を返す**（`task_claim`、`session_focus` / `session_list`、`diagnostics_snapshot`）。上書きするなら対応する capability を宣言し、宣言するなら上書きすること。
+- **`state_subscribe` は状態変化の受信チャネルを返すだけでよい。** ACK を先に返してから `state/notification` を流す順序（F-38）は `AgentIdeServer` が保証する。
+- 設定可能なプロンプトや指示文の `{placeholder}` 置換には `plugin_sdk::template::render` を使う（単一パス。外部入力に書かれた `{…}` を展開しない）。agent_ide がエージェントへ渡すプロンプトは `plugin_sdk::compose_prompt` で組み立てられる。
 
 # ビルドと install（開発ループ）
 
