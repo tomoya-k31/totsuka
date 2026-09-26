@@ -29,8 +29,8 @@
 //!    this plugin ([`HOST_REQUESTS`], filtered by the manifest's
 //!    capabilities) is refused with `INVALID_REQUEST` — with well-formed
 //!    params and with `{}`. A notifier instead answers nothing to an early
-//!    `notify`. A request before `initialize` must say so rather than fail on
-//!    an absent session.
+//!    `notify`. A request before `initialize` is refused with that code rather
+//!    than failing on an absent session; what the message says is not checked.
 //! 2. A line that is not JSON gets `PARSE_ERROR` with a `null` id: there is
 //!    no id to correlate against, and a made-up one (an empty string) would
 //!    match nothing the host sent.
