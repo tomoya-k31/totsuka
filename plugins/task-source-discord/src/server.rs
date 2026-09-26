@@ -93,6 +93,13 @@ where
     F: TransportFactory + Send,
     F::Transport: Send + Sync + 'static,
 {
+    /// Read by the SDK only for params that do not parse: before
+    /// `initialize` they are answered "initialize first", as this server did
+    /// when it checked the session before reading params.
+    fn initialized(&self) -> bool {
+        self.session.is_some()
+    }
+
     async fn initialize(&mut self, init: InitializeParams) -> Result<InitializeResult, Error> {
         let config: DiscordConfig = match serde_json::from_value(init.config) {
             Ok(config) => config,
