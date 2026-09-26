@@ -616,6 +616,13 @@ where
     F::Transport: Send + Sync + 'static,
     F::Chat: Send + Sync + 'static,
 {
+    /// Read by the SDK only for params that do not parse: before
+    /// `initialize` they are answered "initialize first", as this server did
+    /// when it checked the session before reading params.
+    fn initialized(&self) -> bool {
+        self.session.is_some()
+    }
+
     /// `initialize`: deserialize the config, adopt the orchestrator-supplied
     /// repositories when `[[repos]]` is omitted (#109) and the orchestrator's
     /// `[llm]` when the plugin's own is omitted (#119), validate the merged
