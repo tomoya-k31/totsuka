@@ -169,6 +169,10 @@ enum SecretScheme {
     /// prompt is why this must be gated rather than merely reported: it hangs
     /// an unattended run silently instead of failing.
     Bitwarden,
+    /// `secret:` — the value exists only in a process a launcher started
+    /// with `--secrets-stdin` (#754). A terminal-run doctor has nothing to
+    /// resolve it from, so it is never resolved here.
+    Supplied,
 }
 
 impl SecretScheme {
@@ -185,6 +189,7 @@ impl SecretScheme {
             Ok(SecretRef::OnePassword { .. }) => Self::OnePassword,
             Ok(SecretRef::Command { .. }) => Self::Command,
             Ok(SecretRef::Bitwarden { .. }) => Self::Bitwarden,
+            Ok(SecretRef::Supplied { .. }) => Self::Supplied,
         }
     }
 
@@ -196,6 +201,7 @@ impl SecretScheme {
             Self::OnePassword => Some(SecretSkip::ONEPASSWORD),
             Self::Command => Some(SecretSkip::COMMAND),
             Self::Bitwarden => Some(SecretSkip::BITWARDEN),
+            Self::Supplied => Some(SecretSkip::SUPPLIED),
         }
     }
 }
@@ -268,6 +274,20 @@ impl SecretSkip {
         note_ready: Some("the Bitwarden vault is unlocked, so `totsuka run` will resolve it"),
     };
 
+    /// `secret:` — unconditional: its value is handed to `totsuka run` by the
+    /// launcher and exists nowhere doctor could read it (#754).
+    const SUPPLIED: Self = Self {
+        label: "a secret: reference",
+        detail: "its secret: reference is supplied by the launcher to \
+                 `totsuka run --secrets-stdin`, and this doctor was given no values",
+        summary: "its secret: reference is supplied by the launcher",
+        action: "the launcher supplies the value when it starts `totsuka run`; \
+                 check {target} from there",
+        note: "its value is supplied by the launcher to `totsuka run --secrets-stdin`",
+        // Nothing here can ever hold the value.
+        note_ready: None,
+    };
+
     /// The next action, naming what would have been probed.
     fn action(self, target: &str) -> String {
         self.action.replace("{target}", target)
@@ -291,14 +311,16 @@ struct SecretReadiness {
 impl SecretReadiness {
     /// What was measured for `scheme`.
     ///
-    /// `Silent` is `NotUsed` (nothing to gate) and `Command` is permanently
-    /// `WouldPrompt` (nothing to measure); the rest report their backend.
+    /// `Silent` is `NotUsed` (nothing to gate); `Command` and `Supplied` are
+    /// permanently `WouldPrompt` (nothing to measure — a command is never
+    /// run here, and a supplied value is never here); the rest report their
+    /// backend.
     fn readiness_of(self, scheme: SecretScheme) -> BackendReadiness {
         match scheme {
             SecretScheme::Silent => BackendReadiness::NotUsed,
             SecretScheme::OnePassword => self.onepassword,
             SecretScheme::Bitwarden => self.bitwarden,
-            SecretScheme::Command => BackendReadiness::WouldPrompt,
+            SecretScheme::Command | SecretScheme::Supplied => BackendReadiness::WouldPrompt,
         }
     }
 
@@ -3175,6 +3197,29 @@ location = "${MY_ROOT}/wt/{worktree_name}"
             );
             assert!(readiness.skip_for("keychain:totsuka/token").is_none());
             assert!(readiness.skip_for("${TOTSUKA_TOKEN}").is_none());
+        }
+    }
+
+    /// `secret:` is never resolved by a terminal-run doctor, whatever the
+    /// measured sessions say: its value exists only inside the process a
+    /// launcher started with `--secrets-stdin` (#754). Treating it as
+    /// `Silent` would fall through to `resolve()` and fail every check that
+    /// uses one, which is the wrong report for a correct config.
+    #[test]
+    fn a_secret_reference_is_always_deferred() {
+        assert_eq!(SecretScheme::of("secret:github"), SecretScheme::Supplied);
+        for readiness in [
+            readiness(BackendReadiness::Ready),
+            readiness(BackendReadiness::WouldPrompt),
+        ] {
+            assert_eq!(
+                readiness.skip_for("secret:github"),
+                Some(SecretSkip::SUPPLIED)
+            );
+            let note = readiness
+                .deferred_note("secret:hook", "[hooks].auth_token_ref")
+                .expect("a note");
+            assert!(note.contains("--secrets-stdin"), "{note}");
         }
     }
 

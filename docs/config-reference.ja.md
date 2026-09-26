@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:16fcae12ec1cbad48b4b1dce6f7356259513a62317ff8eb45febde0d0db7d257 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:ba2b18ff9471f143a2e0cb537af921a4ce8ee3ef36bb60d8ce63608f2099e87b -->
 
 # 設定リファレンス
 
@@ -29,6 +29,7 @@
 | `cmd:<command>` | コマンドの標準出力 | 別ツールが管理・ローテートする credential（例 `cmd:gh auth token`） |
 | `${ENV_VAR}` を含む文字列 | 環境変数 | すでに export してある値を使うとき。`totsuka setup --secret-backend env` が書く名前は `TOTSUKA_SECRET_<ACCOUNT>` で、この接頭辞は他の未知の `TOTSUKA_*` が受ける「unknown environment override」警告から除外されている |
 | `keychain:<service>/<account>` | macOS Keychain | macOS 専用 |
+| `secret:<name>` | ランチャーが `totsuka run --secrets-stdin` に渡す値 | 機密を自分で持つアプリが `totsuka` を起動するとき |
 
 `~` と `${ENV}` はパスでも展開される。
 
@@ -47,6 +48,16 @@ cmd:bw get item totsuka-slack | jq -r '.fields[]|select(.name=="api_token").valu
 **`cmd:`** はコマンドを `/bin/sh -c` で実行し、その標準出力を秘密値として使う（末尾の改行は除去される）。`token = "cmd:gh auth token"` のように、**別のツールが管理・ローテートしている credential** 向けである — 毎回その時点の値を取るので、コピーが黙って古くなることがない。非ゼロ終了や空出力は起動時エラーで、stderr の先頭行を引用する（標準出力はどこにも引用しない）。コマンドが走るのは `totsuka run` がシークレットを解決するときだけで、パースや `config show` では実行されない。
 
 **コマンド文字列に秘密を直書きしないこと。** 参照文字列は設定の一部としてエラーメッセージに引用されうる。「設定に平文の秘密を書かない」規則はコマンド文字列にも及ぶ — 秘密はコマンドに**取得させる**のがこの形式の目的である。
+
+**`secret:<name>`** はストアではなく値の名前を指す。機密を自分で持つランチャー（メニューバーアプリなど）が `totsuka run --secrets-stdin` を起動し、標準入力に 1 行で JSON オブジェクト `{"<name>": "<value>", …}` を書いて改行する。`totsuka` はその 1 行目だけを読み、入力の終わりは待たないので、ランチャーはパイプを開けたままでよい。`<name>` に使えるのは `A–Z`・`a–z`・`0–9`・`_`・`.`・`-`。
+
+- **`--secrets-stdin` を付けた run はシークレットストアを一切開かない。** `keychain:`・`op://`・`cmd:`・`bw:` の参照はエラーになる（コマンドは実行されず、CLI も起動されない）。そのようなランチャー向けの設定は全部 `secret:` で書く。`${ENV}` は使える
+- 1 行に含まれない名前はエラー。設定が使わない名前は無視される
+- `--secrets-stdin` を付けずに `secret:` を解決しようとすると、「その方法で値を渡すか、別の形式を使う」エラーになり、`totsuka run` は終了コード 4 で止まる
+- 1 行が不正なとき（標準入力が端末、改行の前に入力が終わった、JSON オブジェクトでない、値が文字列でない）も終了コード 4。エラーは 1 行の中身を引用しない
+- `--dry-run` でも 1 行を読む。プラグインは起動されるので、その設定が使う名前は渡す必要がある
+- `totsuka doctor` は `secret:` を解決せず、注記を出して、それが要るチェックを飛ばす
+- `[tools.<name>].env_file` の値にも `secret:` を書ける
 
 ## トップレベルのキー
 

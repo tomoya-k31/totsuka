@@ -95,6 +95,16 @@ enum Command {
         /// up on a source that is still mid-handshake.
         #[arg(long, hide = true, value_name = "MS")]
         one_shot_grace_ms: Option<u64>,
+        /// Read secret values from stdin instead of the secret stores.
+        ///
+        /// For a launcher that already holds every secret (#754): write one
+        /// JSON object on one line, `{"<name>": "<value>", …}`, and config
+        /// refers to each value as `secret:<name>`. With this flag the run
+        /// never opens Keychain, 1Password, Bitwarden or a `cmd:` command —
+        /// any such reference is an error. stdin may stay open; only the
+        /// first line is read.
+        #[arg(long)]
+        secrets_stdin: bool,
         #[command(flatten)]
         json: common::JsonFlag,
     },
@@ -293,6 +303,7 @@ fn execute(
             watch,
             dry_run,
             one_shot_grace_ms,
+            secrets_stdin,
             json,
         } => run_cmd::run(
             &cx,
@@ -301,6 +312,7 @@ fn execute(
                 dry_run,
                 debug,
                 one_shot_grace_ms,
+                secrets_stdin,
                 json: json.json,
             },
         ),

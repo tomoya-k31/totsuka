@@ -3,7 +3,7 @@
 //! core (`orchestrator_core::plugins::spec` / `config::resolve`, #217).
 
 use std::collections::HashMap;
-use std::io;
+use std::io::{self, BufRead, IsTerminal};
 use std::path::{Path, PathBuf};
 
 use orchestrator_core::adapters::StateDb;
@@ -12,6 +12,7 @@ use orchestrator_core::adapters::run_health::{self, RunHealth};
 use orchestrator_core::config::{self, Finding, FindingSeverity, RootConfig};
 use orchestrator_core::paths::Paths;
 use orchestrator_core::platform::PlatformProcessProbe;
+use orchestrator_core::platform::supplied::{self, SuppliedSecrets};
 use orchestrator_core::plugins::PluginStore;
 use orchestrator_core::ports::Clock;
 use orchestrator_core::ports::ProcessProbe;
@@ -70,6 +71,42 @@ impl std::fmt::Display for ExitWith {
 }
 
 impl std::error::Error for ExitWith {}
+
+/// Read `--secrets-stdin`'s JSON line and make it the only source this
+/// process resolves secret references from (#754).
+///
+/// Exactly one newline-terminated line is read and EOF is not awaited: the
+/// launcher may keep stdin open, and #756 can add later lines (replacement
+/// values) without changing what the first one means. A terminal is refused
+/// up front — waiting on one would look like a hang. The error never quotes
+/// the line: it is the secrets.
+pub fn install_supplied_secrets() -> Result<(), String> {
+    let stdin = io::stdin();
+    let secrets = read_supplied_secrets(&mut stdin.lock(), stdin.is_terminal())?;
+    supplied::install(secrets);
+    Ok(())
+}
+
+/// The parsing half of [`install_supplied_secrets`], over any reader.
+fn read_supplied_secrets(
+    reader: &mut impl BufRead,
+    is_terminal: bool,
+) -> Result<SuppliedSecrets, String> {
+    let fail = |why: &dyn std::fmt::Display| format!("--secrets-stdin: {why}");
+    if is_terminal {
+        return Err(fail(
+            &"stdin is a terminal → pipe the values in: one JSON object on one line",
+        ));
+    }
+    let mut line = String::new();
+    reader.read_line(&mut line).map_err(|e| fail(&e))?;
+    if !line.ends_with('\n') {
+        return Err(fail(
+            &"stdin ended before the first line did → write the JSON object followed by a newline",
+        ));
+    }
+    SuppliedSecrets::from_json(&line).map_err(|e| fail(&e))
+}
 
 /// The shared `--json` flag (machine-readable contract: parseable output on
 /// stdout, nothing else). Flattened into every command that supports JSON
@@ -389,4 +426,32 @@ pub fn git_version() -> Option<String> {
             .unwrap_or(text.trim())
             .to_string(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use orchestrator_core::ports::{SecretRef, SecretStore};
+
+    fn read(input: &str, is_terminal: bool) -> Result<SuppliedSecrets, String> {
+        read_supplied_secrets(&mut io::Cursor::new(input.as_bytes()), is_terminal)
+    }
+
+    /// Only the first line counts; what follows is left unread for #756.
+    #[test]
+    fn reads_only_the_first_line() {
+        let s = read("{\"a\":\"1\"}\n{\"a\":\"2\"}\n", false).unwrap();
+        assert_eq!(s.get(&SecretRef::supplied("a")).unwrap().expose(), "1");
+    }
+
+    #[test]
+    fn refuses_a_terminal_and_a_line_without_its_newline() {
+        let err = read("{}\n", true).unwrap_err();
+        assert!(err.contains("terminal"), "{err}");
+        for unterminated in ["", "{\"a\":\"secret-value\"}"] {
+            let err = read(unterminated, false).unwrap_err();
+            assert!(err.contains("newline"), "{err}");
+            assert!(!err.contains("secret-value"), "{err}");
+        }
+    }
 }

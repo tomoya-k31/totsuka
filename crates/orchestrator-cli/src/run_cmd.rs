@@ -36,6 +36,8 @@ pub struct RunArgs {
     pub debug: bool,
     /// One-shot's quiet-period floor override (test affordance).
     pub one_shot_grace_ms: Option<u64>,
+    /// Take secret values from stdin's first line, never from a store (#754).
+    pub secrets_stdin: bool,
     /// Emit the summary as JSON on stdout instead of prose (#462).
     pub json: bool,
 }
@@ -52,11 +54,19 @@ async fn run_async(cx: &Cx, args: RunArgs) -> Result<(), CliError> {
         dry_run,
         debug,
         one_shot_grace_ms,
+        secrets_stdin,
         json,
     } = args;
     let paths = &cx.paths;
     let env: HashMap<String, String> = std::env::vars().collect();
     let env_fn = |k: &str| env.get(k).cloned();
+
+    // Before anything else (#754): a malformed line stops the run before a
+    // single file is read. A dry run reads it too — it still launches the
+    // plugins, and an unread pipe would block or EPIPE the launcher's write.
+    if secrets_stdin {
+        crate::common::install_supplied_secrets().map_err(needs_fix)?;
+    }
 
     // Config load (incl. `TOTSUKA_*` overrides, F-66 layer 2) + full
     // validation (static + workflow semantics).
