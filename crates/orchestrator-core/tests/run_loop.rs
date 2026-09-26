@@ -24,6 +24,7 @@ use orchestrator_core::adapters::llm::GatewayClassifier;
 use orchestrator_core::adapters::plugin_host::{Plugin, PluginSpec};
 use orchestrator_core::config::RootConfig;
 use orchestrator_core::domain::CleanupPolicy;
+use orchestrator_core::domain::SourceTaskId;
 use orchestrator_core::domain::state::{TaskEvent, TaskState};
 use orchestrator_core::domain::workflow::Workflow;
 use orchestrator_core::repo_select::SelectConfig;
@@ -252,7 +253,7 @@ async fn full_path_fetch_worktree_dispatch_done_cleanup() {
     let summary = run_watch_until(&mut engine, move || {
         StateDb::open(&db_probe)
             .unwrap()
-            .find_by_source("mock_src", "1")
+            .find_by_source("mock_src", &SourceTaskId("1".into()))
             .unwrap()
             .is_some_and(|t| t.state == TaskState::Done)
     })
@@ -268,7 +269,10 @@ async fn full_path_fetch_worktree_dispatch_done_cleanup() {
 
     // The task is done, with its session and worktree recorded.
     let db = StateDb::open(&db_path).unwrap();
-    let task = db.find_by_source("mock_src", "1").unwrap().unwrap();
+    let task = db
+        .find_by_source("mock_src", &SourceTaskId("1".into()))
+        .unwrap()
+        .unwrap();
     assert_eq!(task.state, TaskState::Done);
     assert!(task.finished_at.is_some());
     assert_eq!(task.repo.as_deref(), Some("clone"));
@@ -374,7 +378,7 @@ on_success = { status = "レビュー待ち" }
     run_watch_until(&mut engine, move || {
         StateDb::open(&db_probe)
             .unwrap()
-            .find_by_source("mock_src", "os1")
+            .find_by_source("mock_src", &SourceTaskId("os1".into()))
             .unwrap()
             .is_some_and(|t| t.state == TaskState::Done)
     })
@@ -433,7 +437,7 @@ async fn absent_on_start_writes_nothing_at_dispatch() {
     run_watch_until(&mut engine, move || {
         StateDb::open(&db_probe)
             .unwrap()
-            .find_by_source("mock_src", "os2")
+            .find_by_source("mock_src", &SourceTaskId("os2".into()))
             .unwrap()
             .is_some_and(|t| t.state == TaskState::Done)
     })
@@ -513,7 +517,7 @@ on_success = { status = "レビュー待ち" }
     run_watch_until(&mut engine, move || {
         StateDb::open(&db_probe)
             .unwrap()
-            .find_by_source("mock_src", "cw1")
+            .find_by_source("mock_src", &SourceTaskId("cw1".into()))
             .unwrap()
             .is_some_and(|t| t.state == TaskState::Done)
     })
@@ -570,7 +574,7 @@ async fn claim_lost_skips_without_touching_the_source() {
     let summary = run_watch_until(&mut engine, move || {
         StateDb::open(&db_probe)
             .unwrap()
-            .find_by_source("mock_src", "cl1")
+            .find_by_source("mock_src", &SourceTaskId("cl1".into()))
             .unwrap()
             .is_some_and(|t| t.state == TaskState::Skipped)
     })
@@ -582,7 +586,10 @@ async fn claim_lost_skips_without_touching_the_source() {
     assert_eq!(summary.stats.failed, 0);
 
     let db = StateDb::open(&db_path).unwrap();
-    let task = db.find_by_source("mock_src", "cl1").unwrap().unwrap();
+    let task = db
+        .find_by_source("mock_src", &SourceTaskId("cl1".into()))
+        .unwrap()
+        .unwrap();
     assert_eq!(task.state, TaskState::Skipped);
     assert!(
         task.worktree_path.is_none(),
@@ -649,7 +656,7 @@ on_failure = { status = "失敗" }
     run_watch_until(&mut engine, move || {
         StateDb::open(&db_probe)
             .unwrap()
-            .find_by_source("mock_src", "cf1")
+            .find_by_source("mock_src", &SourceTaskId("cf1".into()))
             .unwrap()
             .is_some_and(|t| t.state == TaskState::Failed)
     })
@@ -725,7 +732,10 @@ async fn claim_error_leaves_the_task_queued_and_retries() {
     assert_eq!(summary.stats.failed, 0);
     assert_eq!(summary.stats.dispatched, 0);
     let db = StateDb::open(&db_path).unwrap();
-    let task = db.find_by_source("mock_src", "ce1").unwrap().unwrap();
+    let task = db
+        .find_by_source("mock_src", &SourceTaskId("ce1".into()))
+        .unwrap()
+        .unwrap();
     assert_eq!(task.state, TaskState::Queued);
 
     let _ = std::fs::remove_dir_all(&base);
@@ -764,7 +774,7 @@ async fn run_settles_with_waiting_task_left_in_place() {
     let summary = run_watch_until(&mut engine, move || {
         StateDb::open(&db_probe)
             .unwrap()
-            .find_by_source("mock_src", "7")
+            .find_by_source("mock_src", &SourceTaskId("7".into()))
             .unwrap()
             .is_some_and(|t| t.state == TaskState::WaitingInput)
     })
@@ -776,7 +786,10 @@ async fn run_settles_with_waiting_task_left_in_place() {
     engine.shutdown(Duration::from_secs(5)).await;
 
     let db = StateDb::open(&db_path).unwrap();
-    let task = db.find_by_source("mock_src", "7").unwrap().unwrap();
+    let task = db
+        .find_by_source("mock_src", &SourceTaskId("7".into()))
+        .unwrap()
+        .unwrap();
     assert_eq!(task.state, TaskState::WaitingInput);
     assert_eq!(db.list_tasks().unwrap().len(), 1);
     assert_eq!(db.list_sessions(task.id).unwrap().len(), 1);
@@ -826,13 +839,16 @@ async fn restart_recovers_in_flight_task() {
         run_watch_until(&mut engine, move || {
             StateDb::open(&db_probe)
                 .unwrap()
-                .find_by_source("mock_src", "9")
+                .find_by_source("mock_src", &SourceTaskId("9".into()))
                 .unwrap()
                 .is_some_and(|t| t.state == TaskState::Running)
         })
         .await;
         let db = StateDb::open(&db_path).unwrap();
-        let task = db.find_by_source("mock_src", "9").unwrap().unwrap();
+        let task = db
+            .find_by_source("mock_src", &SourceTaskId("9".into()))
+            .unwrap()
+            .unwrap();
         assert_eq!(task.state, TaskState::Running);
     }
 
@@ -860,7 +876,7 @@ async fn restart_recovers_in_flight_task() {
 
     let task = engine
         .db()
-        .find_by_source("mock_src", "9")
+        .find_by_source("mock_src", &SourceTaskId("9".into()))
         .unwrap()
         .unwrap();
     assert_eq!(task.state, TaskState::Running, "resumed and synced forward");
@@ -944,7 +960,7 @@ async fn unrecoverable_task_does_not_wedge_one_shot_exit() {
         run_watch_until(&mut engine, move || {
             StateDb::open(&db_probe)
                 .unwrap()
-                .find_by_source("mock_src", "11")
+                .find_by_source("mock_src", &SourceTaskId("11".into()))
                 .unwrap()
                 .is_some_and(|t| t.state == TaskState::Dispatched)
         })
@@ -978,7 +994,7 @@ async fn unrecoverable_task_does_not_wedge_one_shot_exit() {
     // The task is left for the human (not auto-failed, §5.3).
     let task = engine
         .db()
-        .find_by_source("mock_src", "11")
+        .find_by_source("mock_src", &SourceTaskId("11".into()))
         .unwrap()
         .unwrap();
     assert_eq!(task.state, TaskState::Dispatched);
@@ -1019,7 +1035,7 @@ async fn task_finished_while_down_is_finalized_on_recovery() {
         run_watch_until(&mut engine, move || {
             StateDb::open(&db_probe)
                 .unwrap()
-                .find_by_source("mock_src", "13")
+                .find_by_source("mock_src", &SourceTaskId("13".into()))
                 .unwrap()
                 .is_some_and(|t| t.state == TaskState::Dispatched)
         })
@@ -1043,7 +1059,7 @@ async fn task_finished_while_down_is_finalized_on_recovery() {
 
     let task = engine
         .db()
-        .find_by_source("mock_src", "13")
+        .find_by_source("mock_src", &SourceTaskId("13".into()))
         .unwrap()
         .unwrap();
     assert_eq!(task.state, TaskState::Done, "finalized during recovery");
@@ -1106,7 +1122,7 @@ async fn agent_without_state_stream_fails_dispatch_instead_of_hanging() {
     let summary = run_watch_until(&mut engine, move || {
         StateDb::open(&db_probe)
             .unwrap()
-            .find_by_source("mock_src", "17")
+            .find_by_source("mock_src", &SourceTaskId("17".into()))
             .unwrap()
             .is_some_and(|t| t.state == TaskState::Failed)
     })
@@ -1115,7 +1131,7 @@ async fn agent_without_state_stream_fails_dispatch_instead_of_hanging() {
 
     let task = engine
         .db()
-        .find_by_source("mock_src", "17")
+        .find_by_source("mock_src", &SourceTaskId("17".into()))
         .unwrap()
         .unwrap();
     assert_eq!(task.state, TaskState::Failed);
@@ -1163,7 +1179,7 @@ async fn output_source_publishes_result_artifact() {
     let summary = run_watch_until(&mut engine, move || {
         StateDb::open(&db_probe)
             .unwrap()
-            .find_by_source("mock_src", "5")
+            .find_by_source("mock_src", &SourceTaskId("5".into()))
             .unwrap()
             .is_some_and(|t| t.state == TaskState::Done)
     })
@@ -1171,7 +1187,7 @@ async fn output_source_publishes_result_artifact() {
     assert_eq!(summary.stats.done, 1);
     let task = engine
         .db()
-        .find_by_source("mock_src", "5")
+        .find_by_source("mock_src", &SourceTaskId("5".into()))
         .unwrap()
         .unwrap();
     assert_eq!(task.state, TaskState::Done);
@@ -1261,7 +1277,7 @@ output = "none"
     run_watch_until(&mut engine, move || {
         let db = StateDb::open(&db_probe).unwrap();
         ["7", "8"].iter().all(|id| {
-            db.find_by_source("mock_src", id)
+            db.find_by_source("mock_src", &SourceTaskId(id.to_string()))
                 .unwrap()
                 .is_some_and(|t| t.state == TaskState::Done)
         })
@@ -1271,7 +1287,7 @@ output = "none"
 
     let db = StateDb::open(&db_path).unwrap();
     let worktree_of = |id: &str| {
-        db.find_by_source("mock_src", id)
+        db.find_by_source("mock_src", &SourceTaskId(id.into()))
             .unwrap()
             .unwrap()
             .worktree_path
@@ -1320,8 +1336,11 @@ async fn a_task_waiting_for_input_keeps_its_slot() {
     )
     .await;
 
-    let state_of =
-        |db: &StateDb, id: &str| db.find_by_source("mock_src", id).unwrap().map(|t| t.state);
+    let state_of = |db: &StateDb, id: &str| {
+        db.find_by_source("mock_src", &SourceTaskId(id.into()))
+            .unwrap()
+            .map(|t| t.state)
+    };
     let db_probe = db_path.clone();
     run_watch_until(&mut engine, move || {
         let db = StateDb::open(&db_probe).unwrap();
@@ -1346,7 +1365,11 @@ async fn a_task_waiting_for_input_keeps_its_slot() {
 
     // `totsuka task cancel` only writes the DB; the running engine must still
     // notice and hand the slot on.
-    let id = db.find_by_source("mock_src", waiting).unwrap().unwrap().id;
+    let id = db
+        .find_by_source("mock_src", &SourceTaskId(waiting.into()))
+        .unwrap()
+        .unwrap()
+        .id;
     db.apply_event(db.task_ref(id).unwrap(), TaskEvent::Cancel, None)
         .unwrap();
     engine.cycle().await.unwrap();
@@ -1408,7 +1431,7 @@ async fn a_retry_releases_the_stale_pane_before_dispatching_again() {
     run_watch_until(&mut engine, move || {
         StateDb::open(&db_probe)
             .unwrap()
-            .find_by_source("mock_src", "1")
+            .find_by_source("mock_src", &SourceTaskId("1".into()))
             .unwrap()
             .is_some_and(|t| t.state == TaskState::Failed)
     })
@@ -1417,7 +1440,7 @@ async fn a_retry_releases_the_stale_pane_before_dispatching_again() {
 
     let task = StateDb::open(&db_path)
         .unwrap()
-        .find_by_source("mock_src", "1")
+        .find_by_source("mock_src", &SourceTaskId("1".into()))
         .unwrap()
         .unwrap();
     let worktree = task.worktree_path.clone().expect("worktree kept");
@@ -1468,7 +1491,7 @@ async fn a_retry_releases_the_stale_pane_before_dispatching_again() {
 
     let task = engine
         .db()
-        .find_by_source("mock_src", "1")
+        .find_by_source("mock_src", &SourceTaskId("1".into()))
         .unwrap()
         .unwrap();
     assert_eq!(task.state, TaskState::Done, "the retry ran to completion");
@@ -1542,14 +1565,14 @@ async fn retry_after_a_publish_failure_can_publish_again() {
     run_watch_until(&mut engine, move || {
         StateDb::open(&db_probe)
             .unwrap()
-            .find_by_source("mock_src", "1")
+            .find_by_source("mock_src", &SourceTaskId("1".into()))
             .unwrap()
             .is_some_and(|t| t.state == TaskState::Failed)
     })
     .await;
     let task = engine
         .db()
-        .find_by_source("mock_src", "1")
+        .find_by_source("mock_src", &SourceTaskId("1".into()))
         .unwrap()
         .unwrap();
     assert_eq!(
@@ -1614,7 +1637,7 @@ async fn retry_after_a_publish_failure_can_publish_again() {
     .unwrap();
     let task = engine
         .db()
-        .find_by_source("mock_src", "1")
+        .find_by_source("mock_src", &SourceTaskId("1".into()))
         .unwrap()
         .unwrap();
     assert_eq!(
@@ -1670,7 +1693,7 @@ async fn missing_workflow_at_finalize_keeps_worktree_not_deletes() {
     run_watch_until(&mut engine, move || {
         StateDb::open(&db_probe)
             .unwrap()
-            .find_by_source("mock_src", "1")
+            .find_by_source("mock_src", &SourceTaskId("1".into()))
             .unwrap()
             .is_some_and(|t| t.state == TaskState::Dispatched)
     })
@@ -1678,7 +1701,10 @@ async fn missing_workflow_at_finalize_keeps_worktree_not_deletes() {
     engine.shutdown(Duration::from_secs(5)).await;
 
     let db = StateDb::open(&db_path).unwrap();
-    let task = db.find_by_source("mock_src", "1").unwrap().unwrap();
+    let task = db
+        .find_by_source("mock_src", &SourceTaskId("1".into()))
+        .unwrap()
+        .unwrap();
     let worktree = PathBuf::from(task.worktree_path.clone().unwrap());
     // Force the task into Publishing (agent done) directly, then finalize with a
     // config that no longer has the workflow.
@@ -1712,7 +1738,7 @@ async fn missing_workflow_at_finalize_keeps_worktree_not_deletes() {
     engine.recover().await.unwrap();
     let task = engine
         .db()
-        .find_by_source("mock_src", "1")
+        .find_by_source("mock_src", &SourceTaskId("1".into()))
         .unwrap()
         .unwrap();
     assert_eq!(task.state, TaskState::Failed);
@@ -1824,7 +1850,7 @@ async fn submitted_task_is_persisted_acked_and_dispatched_without_polling() {
     let summary = run_watch_until(&mut engine, move || {
         StateDb::open(&db_probe)
             .unwrap()
-            .find_by_source("mock_src", "s1")
+            .find_by_source("mock_src", &SourceTaskId("s1".into()))
             .unwrap()
             .is_some_and(|t| t.state == TaskState::Done)
     })
@@ -1939,7 +1965,11 @@ async fn submit_without_matching_workflow_is_rejected() {
     assert_eq!(acks[0], ("submit-0".to_string(), "rejected".to_string()));
     // Rejected → never persisted.
     let db = StateDb::open(&db_path).unwrap();
-    assert!(db.find_by_source("stray_src", "r1").unwrap().is_none());
+    assert!(
+        db.find_by_source("stray_src", &SourceTaskId("r1".into()))
+            .unwrap()
+            .is_none()
+    );
 
     engine.shutdown(Duration::from_secs(5)).await;
     let _ = std::fs::remove_dir_all(&base);
@@ -1985,7 +2015,7 @@ async fn persist_undispatched_submission(repo: &Path, source_log: &Path, db_path
     let summary = run_watch_until(&mut engine, move || {
         StateDb::open(&db_probe)
             .unwrap()
-            .find_by_source("mock_src", "s9")
+            .find_by_source("mock_src", &SourceTaskId("s9".into()))
             .unwrap()
             .is_some()
     })
@@ -2045,7 +2075,10 @@ async fn restart_dispatches_persisted_but_undispatched_submission() {
         assert_eq!(summary.stats.submitted, 0);
         assert_eq!(summary.stats.dispatched, 1);
         let db = StateDb::open(&db_path).unwrap();
-        let task = db.find_by_source("mock_src", "s9").unwrap().unwrap();
+        let task = db
+            .find_by_source("mock_src", &SourceTaskId("s9".into()))
+            .unwrap()
+            .unwrap();
         assert_eq!(task.state, TaskState::Done);
         engine.shutdown(Duration::from_secs(5)).await;
     }
@@ -2103,7 +2136,10 @@ async fn a_stop_requested_before_run_dispatches_nothing() {
     assert!(summary.interrupted);
     assert_eq!(summary.stats.dispatched, 0);
     let db = StateDb::open(&db_path).unwrap();
-    let task = db.find_by_source("mock_src", "s9").unwrap().unwrap();
+    let task = db
+        .find_by_source("mock_src", &SourceTaskId("s9".into()))
+        .unwrap()
+        .unwrap();
     assert_eq!(task.state, TaskState::Queued);
     engine.shutdown(Duration::from_secs(5)).await;
     let _ = std::fs::remove_dir_all(&base);
@@ -2173,7 +2209,7 @@ async fn a_stray_directory_does_not_get_its_branch_recorded_on_the_task() {
     run_watch_until(&mut engine, move || {
         StateDb::open(&db_probe)
             .unwrap()
-            .find_by_source("mock_src", "1")
+            .find_by_source("mock_src", &SourceTaskId("1".into()))
             .unwrap()
             .is_some_and(|t| t.state == TaskState::Done)
     })
@@ -2181,7 +2217,10 @@ async fn a_stray_directory_does_not_get_its_branch_recorded_on_the_task() {
     engine.shutdown(Duration::from_secs(5)).await;
 
     let db = StateDb::open(&db_path).unwrap();
-    let task = db.find_by_source("mock_src", "1").unwrap().unwrap();
+    let task = db
+        .find_by_source("mock_src", &SourceTaskId("1".into()))
+        .unwrap()
+        .unwrap();
     let worktree = PathBuf::from(task.worktree_path.clone().unwrap());
     assert!(!worktree.exists(), "immediate cleanup removed the worktree");
     assert_eq!(task.branch, None, "the mock agent never branched");
@@ -2220,7 +2259,10 @@ async fn a_stray_directory_does_not_get_its_branch_recorded_on_the_task() {
     engine.shutdown(Duration::from_secs(5)).await;
 
     let db = StateDb::open(&db_path).unwrap();
-    let task = db.find_by_source("mock_src", "1").unwrap().unwrap();
+    let task = db
+        .find_by_source("mock_src", &SourceTaskId("1".into()))
+        .unwrap()
+        .unwrap();
     assert_eq!(
         task.branch, None,
         "the enclosing repo's branch must not be recorded as the task's"
@@ -2261,7 +2303,7 @@ async fn done_task_releases_its_pane_before_immediate_worktree_removal() {
     run_watch_until(&mut engine, move || {
         StateDb::open(&db_probe)
             .unwrap()
-            .find_by_source("mock_src", "1")
+            .find_by_source("mock_src", &SourceTaskId("1".into()))
             .unwrap()
             .is_some_and(|t| t.state == TaskState::Done)
     })
@@ -2269,7 +2311,10 @@ async fn done_task_releases_its_pane_before_immediate_worktree_removal() {
     engine.shutdown(Duration::from_secs(5)).await;
 
     let db = StateDb::open(&db_path).unwrap();
-    let task = db.find_by_source("mock_src", "1").unwrap().unwrap();
+    let task = db
+        .find_by_source("mock_src", &SourceTaskId("1".into()))
+        .unwrap()
+        .unwrap();
     let worktree = task.worktree_path.clone().unwrap();
     assert!(
         !PathBuf::from(&worktree).exists(),
@@ -2328,7 +2373,7 @@ async fn elapsed_retention_sweep_releases_pane_and_removes_worktree() {
     run_watch_until(&mut engine, move || {
         StateDb::open(&db_probe)
             .unwrap()
-            .find_by_source("mock_src", "1")
+            .find_by_source("mock_src", &SourceTaskId("1".into()))
             .unwrap()
             .is_some_and(|t| t.state == TaskState::Done)
     })
@@ -2336,7 +2381,10 @@ async fn elapsed_retention_sweep_releases_pane_and_removes_worktree() {
     engine.shutdown(Duration::from_secs(5)).await;
 
     let db = StateDb::open(&db_path).unwrap();
-    let task = db.find_by_source("mock_src", "1").unwrap().unwrap();
+    let task = db
+        .find_by_source("mock_src", &SourceTaskId("1".into()))
+        .unwrap()
+        .unwrap();
     let worktree = task.worktree_path.clone().unwrap();
     assert!(
         PathBuf::from(&worktree).exists(),
@@ -2418,7 +2466,7 @@ async fn a_branch_whose_worktree_was_removed_by_hand_is_swept() {
     run_watch_until(&mut engine, move || {
         StateDb::open(&db_probe)
             .unwrap()
-            .find_by_source("mock_src", "1")
+            .find_by_source("mock_src", &SourceTaskId("1".into()))
             .unwrap()
             .is_some_and(|t| t.state == TaskState::Done)
     })
@@ -2427,7 +2475,7 @@ async fn a_branch_whose_worktree_was_removed_by_hand_is_swept() {
 
     let task = StateDb::open(&db_path)
         .unwrap()
-        .find_by_source("mock_src", "1")
+        .find_by_source("mock_src", &SourceTaskId("1".into()))
         .unwrap()
         .unwrap();
     let branch = task.branch.clone().expect("the agent branched");
@@ -2502,7 +2550,7 @@ async fn dirty_worktree_keeps_both_worktree_and_pane() {
     run_watch_until(&mut engine, move || {
         StateDb::open(&db_probe)
             .unwrap()
-            .find_by_source("mock_src", "1")
+            .find_by_source("mock_src", &SourceTaskId("1".into()))
             .unwrap()
             .is_some_and(|t| t.state == TaskState::Done)
     })
@@ -2510,7 +2558,10 @@ async fn dirty_worktree_keeps_both_worktree_and_pane() {
     engine.shutdown(Duration::from_secs(5)).await;
 
     let db = StateDb::open(&db_path).unwrap();
-    let task = db.find_by_source("mock_src", "1").unwrap().unwrap();
+    let task = db
+        .find_by_source("mock_src", &SourceTaskId("1".into()))
+        .unwrap()
+        .unwrap();
     assert!(
         PathBuf::from(task.worktree_path.unwrap()).exists(),
         "a dirty worktree is preserved (F-23)"
@@ -2557,7 +2608,7 @@ async fn manual_policy_never_releases_the_pane() {
     run_watch_until(&mut engine, move || {
         StateDb::open(&db_probe)
             .unwrap()
-            .find_by_source("mock_src", "1")
+            .find_by_source("mock_src", &SourceTaskId("1".into()))
             .unwrap()
             .is_some_and(|t| t.state == TaskState::Done)
     })
@@ -2565,7 +2616,10 @@ async fn manual_policy_never_releases_the_pane() {
     engine.shutdown(Duration::from_secs(5)).await;
 
     let db = StateDb::open(&db_path).unwrap();
-    let task = db.find_by_source("mock_src", "1").unwrap().unwrap();
+    let task = db
+        .find_by_source("mock_src", &SourceTaskId("1".into()))
+        .unwrap()
+        .unwrap();
     assert!(
         PathBuf::from(task.worktree_path.unwrap()).exists(),
         "manual policy keeps the worktree"
@@ -2618,7 +2672,7 @@ async fn release_is_sent_once_even_when_removal_keeps_failing() {
     run_watch_until(&mut engine, move || {
         StateDb::open(&db_probe)
             .unwrap()
-            .find_by_source("mock_src", "1")
+            .find_by_source("mock_src", &SourceTaskId("1".into()))
             .unwrap()
             .is_some_and(|t| t.state == TaskState::Done)
     })
@@ -2626,7 +2680,10 @@ async fn release_is_sent_once_even_when_removal_keeps_failing() {
     engine.shutdown(Duration::from_secs(5)).await;
 
     let db = StateDb::open(&db_path).unwrap();
-    let task = db.find_by_source("mock_src", "1").unwrap().unwrap();
+    let task = db
+        .find_by_source("mock_src", &SourceTaskId("1".into()))
+        .unwrap()
+        .unwrap();
     let worktree = task.worktree_path.clone().unwrap();
     clock.advance(time::Duration::days(8));
     // `git worktree remove` refuses a locked worktree — a deterministic,
@@ -2727,7 +2784,7 @@ async fn a_re_dispatch_makes_the_task_releasable_again() {
     run_watch_until(&mut engine, move || {
         StateDb::open(&db_probe)
             .unwrap()
-            .find_by_source("mock_src", "1")
+            .find_by_source("mock_src", &SourceTaskId("1".into()))
             .unwrap()
             .is_some_and(|t| t.state == TaskState::Done)
     })
@@ -2735,7 +2792,10 @@ async fn a_re_dispatch_makes_the_task_releasable_again() {
     engine.shutdown(Duration::from_secs(5)).await;
 
     let db = StateDb::open(&db_path).unwrap();
-    let task = db.find_by_source("mock_src", "1").unwrap().unwrap();
+    let task = db
+        .find_by_source("mock_src", &SourceTaskId("1".into()))
+        .unwrap()
+        .unwrap();
     let worktree = task.worktree_path.clone().unwrap();
     // Retention elapses and the removal is made to fail, so the sweep releases
     // the pane and then keeps the memo.
@@ -2868,7 +2928,7 @@ async fn redispatch_after_release(
     run_watch_until(&mut engine, move || {
         StateDb::open(&db_probe)
             .unwrap()
-            .find_by_source("mock_src", "1")
+            .find_by_source("mock_src", &SourceTaskId("1".into()))
             .unwrap()
             .is_some_and(|t| t.state == TaskState::Done)
     })
@@ -2876,7 +2936,7 @@ async fn redispatch_after_release(
 
     let task = StateDb::open(&db_path)
         .unwrap()
-        .find_by_source("mock_src", "1")
+        .find_by_source("mock_src", &SourceTaskId("1".into()))
         .unwrap()
         .unwrap();
     StateDb::open(&db_path)
@@ -3011,7 +3071,7 @@ async fn a_transient_dispatch_failure_recovers_without_a_human() {
     run_watch_until(&mut engine, move || {
         StateDb::open(&db_probe)
             .unwrap()
-            .find_by_source("mock_src", "1")
+            .find_by_source("mock_src", &SourceTaskId("1".into()))
             .unwrap()
             .is_some_and(|t| t.state == TaskState::Done)
     })
@@ -3019,7 +3079,10 @@ async fn a_transient_dispatch_failure_recovers_without_a_human() {
     engine.shutdown(Duration::from_secs(5)).await;
 
     let db = StateDb::open(&db_path).unwrap();
-    let task = db.find_by_source("mock_src", "1").unwrap().unwrap();
+    let task = db
+        .find_by_source("mock_src", &SourceTaskId("1".into()))
+        .unwrap()
+        .unwrap();
     assert_eq!(task.state, TaskState::Done, "the retry carried it through");
     assert_eq!(
         read_log(&dispatch_log)
@@ -3085,11 +3148,11 @@ async fn a_permanent_dispatch_failure_stops_after_three_and_notifies_once() {
     let db_probe = db_path.clone();
     run_watch_until(&mut engine, move || {
         let db = StateDb::open(&db_probe).unwrap();
-        db.find_by_source("mock_src", "1")
+        db.find_by_source("mock_src", &SourceTaskId("1".into()))
             .unwrap()
             .is_some_and(|t| t.state == TaskState::Failed)
             && db
-                .find_by_source("mock_src", "1")
+                .find_by_source("mock_src", &SourceTaskId("1".into()))
                 .unwrap()
                 .is_some_and(|t| db.auto_retry_streak(t.id).unwrap() == 3)
     })
@@ -3097,7 +3160,10 @@ async fn a_permanent_dispatch_failure_stops_after_three_and_notifies_once() {
     engine.shutdown(Duration::from_secs(5)).await;
 
     let db = StateDb::open(&db_path).unwrap();
-    let task = db.find_by_source("mock_src", "1").unwrap().unwrap();
+    let task = db
+        .find_by_source("mock_src", &SourceTaskId("1".into()))
+        .unwrap()
+        .unwrap();
     assert_eq!(task.state, TaskState::Failed, "it gives up");
     assert_eq!(
         read_log(&dispatch_log)
@@ -3195,7 +3261,10 @@ async fn a_read_only_task_that_branches_mid_run_is_failed_and_its_pane_closed() 
     let branched = std::cell::Cell::new(false);
     run_watch_until(&mut engine, move || {
         let db = StateDb::open(&db_probe).unwrap();
-        let Some(task) = db.find_by_source("mock_src", "1").unwrap() else {
+        let Some(task) = db
+            .find_by_source("mock_src", &SourceTaskId("1".into()))
+            .unwrap()
+        else {
             return false;
         };
         // Stand in for the agent running `git switch -c`, once the worktree it
@@ -3213,7 +3282,10 @@ async fn a_read_only_task_that_branches_mid_run_is_failed_and_its_pane_closed() 
     engine.shutdown(Duration::from_secs(5)).await;
 
     let db = StateDb::open(&db_path).unwrap();
-    let task = db.find_by_source("mock_src", "1").unwrap().unwrap();
+    let task = db
+        .find_by_source("mock_src", &SourceTaskId("1".into()))
+        .unwrap()
+        .unwrap();
     assert_eq!(task.state, TaskState::Failed);
     let worktree = task.worktree_path.clone().unwrap();
     assert!(
@@ -3319,7 +3391,7 @@ async fn run_hinted(
     run_watch_until(&mut engine, move || {
         StateDb::open(&db_probe)
             .unwrap()
-            .find_by_source("mock_src", "1")
+            .find_by_source("mock_src", &SourceTaskId("1".into()))
             .unwrap()
             .is_some_and(|t| matches!(t.state, TaskState::Done | TaskState::Failed))
     })
@@ -3327,7 +3399,10 @@ async fn run_hinted(
     engine.shutdown(Duration::from_secs(5)).await;
 
     let db = StateDb::open(&db_path).unwrap();
-    let record = db.find_by_source("mock_src", "1").unwrap().unwrap();
+    let record = db
+        .find_by_source("mock_src", &SourceTaskId("1".into()))
+        .unwrap()
+        .unwrap();
     let reasons = db
         .list_events(record.id)
         .unwrap()
@@ -3439,14 +3514,17 @@ async fn cancel_task_1_while_the_engine_awaits(
         if !gate.exists() {
             if waiting.exists() {
                 // FIFO among equal priorities: the first call is task `1`'s.
-                let task = db.find_by_source("mock_src", "1").unwrap().unwrap();
+                let task = db
+                    .find_by_source("mock_src", &SourceTaskId("1".into()))
+                    .unwrap()
+                    .unwrap();
                 db.apply_event(task.task_ref(), TaskEvent::Cancel, None)
                     .unwrap();
                 std::fs::write(&gate, "").unwrap();
             }
             return false;
         }
-        db.find_by_source("mock_src", "2")
+        db.find_by_source("mock_src", &SourceTaskId("2".into()))
             .unwrap()
             .is_some_and(|t| t.state == TaskState::Done)
     })
@@ -3455,7 +3533,7 @@ async fn cancel_task_1_while_the_engine_awaits(
 
     let state = StateDb::open(&db_path)
         .unwrap()
-        .find_by_source("mock_src", "1")
+        .find_by_source("mock_src", &SourceTaskId("1".into()))
         .unwrap()
         .unwrap()
         .state;

@@ -32,7 +32,7 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, Row, params};
 use crate::adapters::clock::SystemClock;
 use crate::domain::EventDetail;
 use crate::domain::state::{InvalidTransition, TaskEvent, TaskState, UnknownState, transition};
-use crate::domain::task::TaskId;
+use crate::domain::task::{SourceTaskId, TaskId};
 use crate::ports::clock::Clock;
 
 /// Ordered, immutable schema migrations. Index + 1 is the version number.
@@ -305,6 +305,18 @@ impl rusqlite::types::FromSql for TaskId {
     }
 }
 
+impl rusqlite::ToSql for SourceTaskId {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+        self.0.to_sql()
+    }
+}
+
+impl rusqlite::types::FromSql for SourceTaskId {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+        String::column_result(value).map(SourceTaskId)
+    }
+}
+
 /// Columns of `tasks`, read by name in [`row_to_task`].
 const TASK_COLUMNS: &str = "id, source, source_task_id, workflow, mode, repo, \
      worktree_path, branch, base_commit, state, priority, title, url, source_payload, \
@@ -409,7 +421,7 @@ pub struct NewTask {
     /// Source plugin instance name (e.g. `github`).
     pub source: String,
     /// The source's own task id (Issue number, Notion page id).
-    pub source_task_id: String,
+    pub source_task_id: SourceTaskId,
     /// Matched workflow name.
     pub workflow: String,
     /// Execution mode copied from the workflow (`plan`/`implement`).
@@ -437,7 +449,7 @@ pub struct TaskRecord {
     /// Source plugin instance name.
     pub source: String,
     /// Source's own task id.
-    pub source_task_id: String,
+    pub source_task_id: SourceTaskId,
     /// Matched workflow name.
     pub workflow: String,
     /// Execution mode.
@@ -621,7 +633,7 @@ pub struct ExportedTask {
     /// Source plugin instance name.
     pub source: String,
     /// Id within that source.
-    pub source_task_id: String,
+    pub source_task_id: SourceTaskId,
     /// Matched workflow name.
     pub workflow: String,
     /// Task title.
@@ -1102,7 +1114,7 @@ impl StateDb {
     pub fn find_by_source(
         &self,
         source: &str,
-        source_task_id: &str,
+        source_task_id: &SourceTaskId,
     ) -> Result<Option<TaskRecord>, StateError> {
         let sql =
             format!("SELECT {TASK_COLUMNS} FROM tasks WHERE source = ?1 AND source_task_id = ?2");
@@ -2344,7 +2356,7 @@ mod tests {
     fn sample_task() -> NewTask {
         NewTask {
             source: "github".to_string(),
-            source_task_id: "42".to_string(),
+            source_task_id: SourceTaskId("42".to_string()),
             workflow: "implement".to_string(),
             mode: "implement".to_string(),
             repo: None,
@@ -2427,7 +2439,7 @@ mod tests {
         .unwrap();
 
         let mut other = sample_task();
-        other.source_task_id = "43".to_string();
+        other.source_task_id = SourceTaskId("43".to_string());
         other.title = "Another".to_string();
         let second = db.upsert_task(&other).unwrap();
         db.apply_event(
@@ -2470,7 +2482,7 @@ mod tests {
         let ingest = &all[0];
         assert_eq!(ingest.from, None, "the ingest event has no prior state");
         assert_eq!(ingest.task.source, "github");
-        assert_eq!(ingest.task.source_task_id, "42");
+        assert_eq!(ingest.task.source_task_id, SourceTaskId("42".into()));
         assert_eq!(ingest.task.workflow, "implement");
         assert_eq!(ingest.task.title, "Fix the bug");
     }
@@ -2722,7 +2734,7 @@ mod tests {
         let a = db.upsert_task(&sample_task()).unwrap();
         let b = db
             .upsert_task(&NewTask {
-                source_task_id: "43".to_string(),
+                source_task_id: SourceTaskId("43".to_string()),
                 ..sample_task()
             })
             .unwrap();
@@ -2977,7 +2989,7 @@ mod tests {
         let db = StateDb::open(&path).unwrap();
         let rec = db.get_task(id).unwrap().unwrap();
         assert_eq!(rec.state, TaskState::Running);
-        assert_eq!(rec.source_task_id, "42");
+        assert_eq!(rec.source_task_id, SourceTaskId("42".into()));
         // Events survived too.
         assert_eq!(db.event_count(id).unwrap(), 3);
 
@@ -3267,7 +3279,7 @@ mod tests {
         // Nor is the ingest event, which is the latest one for a fresh task.
         let other = db
             .upsert_task(&NewTask {
-                source_task_id: "43".to_string(),
+                source_task_id: SourceTaskId("43".to_string()),
                 ..sample_task()
             })
             .unwrap();
@@ -3434,7 +3446,10 @@ mod tests {
         );
 
         // The v1 row survived; the new columns read back as NULL on it.
-        let task = db.find_by_source("github", "7").unwrap().unwrap();
+        let task = db
+            .find_by_source("github", &SourceTaskId("7".into()))
+            .unwrap()
+            .unwrap();
         assert_eq!(task.title, "legacy");
         assert_eq!(task.last_signal_at, None);
 
@@ -3839,7 +3854,10 @@ mod tests {
 
         let db = StateDb::open(&path).unwrap();
 
-        let task = db.find_by_source("slack", "C1:100.1").unwrap().unwrap();
+        let task = db
+            .find_by_source("slack", &SourceTaskId("C1:100.1".into()))
+            .unwrap()
+            .unwrap();
         assert_eq!(task.title, "legacy");
         assert_eq!(task.state, TaskState::Done);
         assert_eq!(task.priority, 3);
@@ -4166,7 +4184,10 @@ mod tests {
         }
 
         let db = StateDb::open(&path).unwrap();
-        let task = db.find_by_source("github", "1").unwrap().unwrap();
+        let task = db
+            .find_by_source("github", &SourceTaskId("1".into()))
+            .unwrap()
+            .unwrap();
         assert_eq!(task.state_version, 0);
         let (state, moved) = db
             .apply_event(task.task_ref(), TaskEvent::Dispatch, None)

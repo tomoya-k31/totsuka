@@ -15,7 +15,7 @@ use plugin_protocol::identifier::{Case, IdentifierCore, IdentifierPolicy};
 
 use crate::config::resolve::{ResolveError, expand_env};
 use crate::domain::CleanupPolicy;
-use crate::domain::TaskId;
+use crate::domain::{SourceTaskId, TaskId};
 use crate::paths::Paths;
 use crate::ports::git::GitRunner;
 
@@ -314,7 +314,7 @@ fn location_core<'a>(ctx: &LocationContext<'a>) -> IdentifierCore<'a> {
     IdentifierCore {
         task_number: ctx.task_number.map(|n| n.0),
         source: ctx.source,
-        source_task_id: ctx.task_id,
+        source_task_id: &ctx.task_id.0,
         handle: ctx.handle,
     }
 }
@@ -329,7 +329,7 @@ pub struct LocationContext<'a> {
     /// Source plugin name.
     pub source: &'a str,
     /// Task id as the source spells it.
-    pub task_id: &'a str,
+    pub task_id: &'a SourceTaskId,
     /// The Orchestrator's own task number (`tasks.id`), for `{task_number}`.
     pub task_number: Option<TaskId>,
     /// The source's short name for the task (0.7.2, #646), for `{handle}`.
@@ -394,7 +394,7 @@ pub fn render_location(
             "{handle}",
             &WorktreeLeaf.handle_for_path(ctx.handle).unwrap_or_default(),
         )
-        .replace("{task_id}", ctx.task_id)
+        .replace("{task_id}", &ctx.task_id.0)
         .replace("{source}", ctx.source);
     // A leading `~` expands to `$HOME` (e.g. `worktree_location = "~/.worktrees/{worktree_name}"`).
     if let Some(rest) = rendered.strip_prefix("~/") {
@@ -447,7 +447,7 @@ pub struct CreateRequest<'a> {
     /// Source plugin name.
     pub source: &'a str,
     /// Task id.
-    pub task_id: &'a str,
+    pub task_id: &'a SourceTaskId,
     /// The branch this task is already known to be on, from a previous run.
     ///
     /// `None` — the normal first dispatch — creates the worktree **detached**
@@ -1816,7 +1816,7 @@ mod tests {
             repo_path: Path::new("/repos/totsuka"),
             repo_name: "totsuka",
             source: "github",
-            task_id: "123",
+            task_id: &SourceTaskId("123".into()),
             task_number: Some(TaskId(1)),
             handle: None,
         };
@@ -1891,7 +1891,7 @@ mod tests {
             repo_path: Path::new("/repos/totsuka"),
             repo_name: "totsuka",
             source: "slack",
-            task_id: "C1:{hash}",
+            task_id: &SourceTaskId("C1:{hash}".into()),
             task_number: Some(TaskId(7)),
             handle: None,
         };
@@ -1915,7 +1915,7 @@ mod tests {
             repo_path: Path::new("/repos/totsuka"),
             repo_name: "totsuka",
             source: "notion",
-            task_id: "1f2a3b4c-5d6e-7f80-9a1b-2c3d4e5f6a7b",
+            task_id: &SourceTaskId("1f2a3b4c-5d6e-7f80-9a1b-2c3d4e5f6a7b".into()),
             task_number: Some(TaskId(7)),
             handle: None,
         };
@@ -1944,7 +1944,7 @@ mod tests {
             repo_path: Path::new("/repos/totsuka"),
             repo_name: "totsuka",
             source: "slack",
-            task_id: "C1:100.1",
+            task_id: &SourceTaskId("C1:100.1".into()),
             task_number: Some(TaskId(7)),
             handle: Some("../../outside"),
         };
@@ -1977,7 +1977,7 @@ mod tests {
             repo_path: Path::new("/repos/totsuka"),
             repo_name: "totsuka",
             source: "slack",
-            task_id: "C1:100.1",
+            task_id: &SourceTaskId("C1:100.1".into()),
             task_number: Some(TaskId(42)),
             handle: None,
         };
@@ -2022,7 +2022,7 @@ mod tests {
             repo_path: Path::new("/repos/totsuka"),
             repo_name: "totsuka",
             source: "slack",
-            task_id: "C1:100.1",
+            task_id: &SourceTaskId("C1:100.1".into()),
             task_number: Some(TaskId(1)),
             handle: None,
         };
@@ -2054,7 +2054,7 @@ mod tests {
             repo_path: Path::new("/repos/totsuka"),
             repo_name: "totsuka",
             source: "github",
-            task_id: "123",
+            task_id: &SourceTaskId("123".into()),
             task_number: Some(TaskId(1)),
             handle: None,
         };
@@ -2082,7 +2082,7 @@ mod tests {
             repo_path: Path::new("/repos/totsuka"),
             repo_name: "totsuka",
             source: "github",
-            task_id: "1",
+            task_id: &SourceTaskId("1".into()),
             task_number: Some(TaskId(1)),
             handle: None,
         };
@@ -2563,7 +2563,7 @@ mod tests {
             repo_path: Path::new("/r"),
             repo_name: "r",
             source: "github",
-            task_id: "1",
+            task_id: &SourceTaskId("1".into()),
             task_number: Some(TaskId(1)),
             handle: None,
         };
@@ -2585,7 +2585,7 @@ mod tests {
             repo_path: Path::new("/r"),
             repo_name: "r",
             source: "s",
-            task_id: "1",
+            task_id: &SourceTaskId("1".into()),
             task_number: Some(TaskId(1)),
             handle: None,
         };

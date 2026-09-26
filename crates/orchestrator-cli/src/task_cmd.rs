@@ -229,7 +229,7 @@ fn show(cx: &Cx, id: TaskId, json: bool) -> Result<(), CliError> {
     let detail = TaskDetail {
         id: task.id,
         source: task.source,
-        source_task_id: task.source_task_id,
+        source_task_id: task.source_task_id.0,
         workflow: task.workflow,
         mode: task.mode,
         state: task.state.to_string(),

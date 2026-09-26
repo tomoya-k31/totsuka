@@ -19,6 +19,7 @@ use orchestrator_core::adapters::state_db::{HookEventInsert, TaskMessageInsert};
 use orchestrator_core::adapters::{NewTask, StateDb};
 use orchestrator_core::config::RootConfig;
 use orchestrator_core::domain::CleanupPolicy;
+use orchestrator_core::domain::SourceTaskId;
 use orchestrator_core::domain::TaskId;
 use orchestrator_core::domain::signal::{
     AgentSignal, JobId, SignalEvent, SignalSource, StopStatus,
@@ -195,7 +196,7 @@ async fn plugin_set(agent_config: serde_json::Value, notify_log: &Path) -> Plugi
 fn new_task(source_task_id: &str, last_signal_at: Option<&str>) -> NewTask {
     NewTask {
         source: "mock_src".into(),
-        source_task_id: source_task_id.into(),
+        source_task_id: SourceTaskId(source_task_id.into()),
         workflow: "wf".into(),
         mode: "implement".into(),
         repo: Some("clone".into()),
@@ -1633,7 +1634,7 @@ async fn dispatch_wires_job_id_and_hook_launch_spec() {
 
     let task = engine
         .db()
-        .find_by_source("mock_src", "1")
+        .find_by_source("mock_src", &SourceTaskId("1".into()))
         .unwrap()
         .unwrap();
     let row = engine.db().latest_session(task.id).unwrap().unwrap().id;
@@ -2751,7 +2752,7 @@ async fn failed_hook_dispatch_rolls_back_reserved_session() {
     run_until(&mut engine, move || {
         StateDb::open(&db_probe)
             .unwrap()
-            .find_by_source("mock_src", "1")
+            .find_by_source("mock_src", &SourceTaskId("1".into()))
             .unwrap()
             .is_some_and(|t| t.state == TaskState::Failed)
     })
@@ -2759,7 +2760,7 @@ async fn failed_hook_dispatch_rolls_back_reserved_session() {
 
     let task = engine
         .db()
-        .find_by_source("mock_src", "1")
+        .find_by_source("mock_src", &SourceTaskId("1".into()))
         .unwrap()
         .unwrap();
     assert_eq!(
@@ -3026,7 +3027,7 @@ async fn a_follow_up_message_reopens_the_conversation_and_resumes_its_session() 
     assert_eq!(tasks.len(), 1, "a reply is the same conversation");
     let follow = engine
         .db()
-        .find_by_source("mock_src", "1")
+        .find_by_source("mock_src", &SourceTaskId("1".into()))
         .unwrap()
         .unwrap();
     assert_eq!(follow.id, TaskId(conversation));
@@ -3310,7 +3311,7 @@ async fn an_unresumable_session_is_dispatched_once_more_without_it() {
     // went out with it (a failed dispatch would have left it queued).
     let task = engine
         .db()
-        .find_by_source("mock_src", "1")
+        .find_by_source("mock_src", &SourceTaskId("1".into()))
         .unwrap()
         .unwrap();
     assert!(

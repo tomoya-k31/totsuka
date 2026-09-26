@@ -6,8 +6,8 @@
 //! [`finalize`](super::finalize).
 
 use super::*;
-use crate::domain::TaskId;
 use crate::domain::event_detail::{AgentStateChange, EventDetail};
+use crate::domain::{SourceTaskId, TaskId};
 
 impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// Handle one plugin event.
@@ -95,7 +95,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                         // for a duplicate, and a failed one keeps `info`.
                         let state = if result.status == TaskSubmitStatus::Duplicate {
                             self.db
-                                .find_by_source(&source, &task_id)
+                                .find_by_source(&source, &SourceTaskId(task_id.clone()))
                                 .ok()
                                 .flatten()
                                 .map(|t| t.state)
@@ -147,16 +147,19 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                 task_id,
                 respond,
             } => {
-                let answer = self.db.find_by_source(&source, &task_id).map(|found| {
-                    // `repo: None` on a known task is a real state, not a
-                    // miss: selection has not settled (a human is being
-                    // asked, or classification was inconclusive). The plugin
-                    // reads it as "no hint", never as "no repository".
-                    TaskLookupResult {
-                        known: found.is_some(),
-                        repo: found.and_then(|t| t.repo),
-                    }
-                });
+                let answer = self
+                    .db
+                    .find_by_source(&source, &SourceTaskId(task_id.clone()))
+                    .map(|found| {
+                        // `repo: None` on a known task is a real state, not a
+                        // miss: selection has not settled (a human is being
+                        // asked, or classification was inconclusive). The plugin
+                        // reads it as "no hint", never as "no repository".
+                        TaskLookupResult {
+                            known: found.is_some(),
+                            repo: found.and_then(|t| t.repo),
+                        }
+                    });
                 // Host API audit (#497). Read-only, so `debug` rather than
                 // `info`: a lookup changes nothing, and a polling source can
                 // issue many. What matters is being able to see them at all

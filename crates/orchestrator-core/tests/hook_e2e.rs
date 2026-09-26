@@ -27,6 +27,7 @@ use orchestrator_core::adapters::llm::GatewayClassifier;
 use orchestrator_core::adapters::plugin_host::{Plugin, PluginSpec};
 use orchestrator_core::config::RootConfig;
 use orchestrator_core::domain::CleanupPolicy;
+use orchestrator_core::domain::SourceTaskId;
 use orchestrator_core::domain::state::TaskState;
 use orchestrator_core::domain::workflow::Workflow;
 use orchestrator_core::ports::SecretString;
@@ -286,7 +287,7 @@ async fn e2e_socket_completion_dispatches_to_done() {
     run_until(&mut engine, move || {
         StateDb::open(&db_probe)
             .unwrap()
-            .find_by_source("mock_src", "1")
+            .find_by_source("mock_src", &SourceTaskId("1".into()))
             .unwrap()
             .is_some_and(|t| t.state == TaskState::Done)
     })
@@ -294,7 +295,7 @@ async fn e2e_socket_completion_dispatches_to_done() {
 
     let task = engine
         .db()
-        .find_by_source("mock_src", "1")
+        .find_by_source("mock_src", &SourceTaskId("1".into()))
         .unwrap()
         .unwrap();
     assert_eq!(
@@ -342,7 +343,7 @@ async fn e2e_socket_duplicate_delivery_transitions_once() {
     run_until(&mut engine, move || {
         StateDb::open(&db_probe)
             .unwrap()
-            .find_by_source("mock_src", "1")
+            .find_by_source("mock_src", &SourceTaskId("1".into()))
             .unwrap()
             .is_some_and(|t| t.state == TaskState::Done)
     })
@@ -350,7 +351,7 @@ async fn e2e_socket_duplicate_delivery_transitions_once() {
 
     let task = engine
         .db()
-        .find_by_source("mock_src", "1")
+        .find_by_source("mock_src", &SourceTaskId("1".into()))
         .unwrap()
         .unwrap();
     assert_eq!(task.state, TaskState::Done);
@@ -399,7 +400,7 @@ async fn e2e_socket_needs_input_parks_in_waiting() {
     run_until(&mut engine, move || {
         StateDb::open(&db_probe)
             .unwrap()
-            .find_by_source("mock_src", "1")
+            .find_by_source("mock_src", &SourceTaskId("1".into()))
             .unwrap()
             .is_some_and(|t| t.state == TaskState::WaitingInput)
     })
@@ -407,7 +408,7 @@ async fn e2e_socket_needs_input_parks_in_waiting() {
 
     let task = engine
         .db()
-        .find_by_source("mock_src", "1")
+        .find_by_source("mock_src", &SourceTaskId("1".into()))
         .unwrap()
         .unwrap();
     assert_eq!(
@@ -538,7 +539,7 @@ async fn e2e_a_follow_up_reopens_the_conversation_and_re_creates_its_worktree() 
     run_until(&mut engine, move || {
         StateDb::open(&probe)
             .unwrap()
-            .find_by_source("mock_src", conversation)
+            .find_by_source("mock_src", &SourceTaskId(conversation.into()))
             .unwrap()
             .is_some_and(|t| t.state == TaskState::Done)
     })
@@ -546,7 +547,7 @@ async fn e2e_a_follow_up_reopens_the_conversation_and_re_creates_its_worktree() 
 
     let opened = engine
         .db()
-        .find_by_source("mock_src", conversation)
+        .find_by_source("mock_src", &SourceTaskId(conversation.into()))
         .unwrap()
         .unwrap();
     let worktree = PathBuf::from(opened.worktree_path.clone().expect("a worktree"));
@@ -614,7 +615,7 @@ async fn e2e_a_follow_up_reopens_the_conversation_and_re_creates_its_worktree() 
     );
     let reopened = engine
         .db()
-        .find_by_source("mock_src", conversation)
+        .find_by_source("mock_src", &SourceTaskId(conversation.into()))
         .unwrap()
         .unwrap();
     assert_eq!(reopened.id, opened.id);

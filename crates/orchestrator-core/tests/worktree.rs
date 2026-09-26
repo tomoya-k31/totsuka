@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use orchestrator_core::adapters::git::SystemGitRunner;
 use orchestrator_core::domain::CleanupPolicy;
+use orchestrator_core::domain::SourceTaskId;
 use orchestrator_core::domain::TaskId;
 use orchestrator_core::paths::Paths;
 use orchestrator_core::worktree::{
@@ -31,7 +32,7 @@ fn env(state_dir: &Path) -> HashMap<String, String> {
 
 fn request<'a>(
     clone: &'a Path,
-    task_id: &'a str,
+    task_id: &'a SourceTaskId,
     env: &'a HashMap<String, String>,
 ) -> CreateRequest<'a> {
     CreateRequest {
@@ -52,7 +53,7 @@ fn request<'a>(
 /// A re-creation request: the task is known to have been on `branch`.
 fn resume<'a>(
     clone: &'a Path,
-    task_id: &'a str,
+    task_id: &'a SourceTaskId,
     branch: &'a str,
     env: &'a HashMap<String, String>,
 ) -> CreateRequest<'a> {
@@ -92,7 +93,7 @@ fn default_location_creates_a_worktree_without_xdg_state_home() {
             repo_path: &clone,
             repo_name: "myrepo",
             source: "slack",
-            task_id: "C0ABCDEF12:1720000000.123456",
+            task_id: &SourceTaskId("C0ABCDEF12:1720000000.123456".into()),
             existing_branch: None,
             task_number: Some(TaskId(1)),
             handle: None,
@@ -137,7 +138,9 @@ fn create_cleanup_and_orphan_detection() {
     let mgr = WorktreeManager::new(SystemGitRunner::default());
 
     // Create.
-    let wt = mgr.create(&request(&clone, "123", &env)).unwrap();
+    let wt = mgr
+        .create(&request(&clone, &SourceTaskId("123".into()), &env))
+        .unwrap();
     assert_eq!(wt.branch, None, "created detached");
     assert!(wt.path.is_dir(), "worktree dir must exist");
     let leaf = wt.path.file_name().unwrap().to_str().unwrap().to_string();
@@ -204,7 +207,9 @@ fn recreates_a_cleaned_up_worktree_at_the_same_path() {
     let env = env(&state);
     let mgr = WorktreeManager::new(SystemGitRunner::default());
 
-    let first = mgr.create(&request(&clone, "42", &env)).unwrap();
+    let first = mgr
+        .create(&request(&clone, &SourceTaskId("42".into()), &env))
+        .unwrap();
     let branch = agent_branches(&first.path, "fix/flaky-test");
     mgr.remove(&clone, &first.path, Some(&branch), Some(&first.base_commit))
         .unwrap();
@@ -213,7 +218,9 @@ fn recreates_a_cleaned_up_worktree_at_the_same_path() {
     // Nothing of the branch survived (it held nothing origin did not), so the
     // agent names the work again — but the path is still a pure function of
     // the task, which is what keeps the agent session attached to it.
-    let second = mgr.create(&request(&clone, "42", &env)).unwrap();
+    let second = mgr
+        .create(&request(&clone, &SourceTaskId("42".into()), &env))
+        .unwrap();
     assert_eq!(second.path, first.path, "same task → same path");
     assert_eq!(second.branch, None);
     assert!(second.path.is_dir());
@@ -237,7 +244,9 @@ fn a_stray_directory_at_a_removed_worktree_path_is_gone_not_an_error() {
     let env = env(&state);
     let mgr = WorktreeManager::new(SystemGitRunner::default());
 
-    let wt = mgr.create(&request(&clone, "44", &env)).unwrap();
+    let wt = mgr
+        .create(&request(&clone, &SourceTaskId("44".into()), &env))
+        .unwrap();
     let branch = agent_branches(&wt.path, "chore/tidy");
     mgr.remove(&clone, &wt.path, Some(&branch), Some(&wt.base_commit))
         .unwrap();
@@ -326,7 +335,9 @@ fn a_stray_repository_at_a_removed_worktree_path_is_gone_too() {
     let env = env(&state);
     let mgr = WorktreeManager::new(SystemGitRunner::default());
 
-    let wt = mgr.create(&request(&clone, "45", &env)).unwrap();
+    let wt = mgr
+        .create(&request(&clone, &SourceTaskId("45".into()), &env))
+        .unwrap();
     mgr.remove(&clone, &wt.path, None, Some(&wt.base_commit))
         .unwrap();
     std::fs::create_dir_all(&wt.path).unwrap();
@@ -362,7 +373,9 @@ fn recreates_over_a_surviving_branch_without_losing_its_commits() {
     let env = env(&state);
     let mgr = WorktreeManager::new(SystemGitRunner::default());
 
-    let first = mgr.create(&request(&clone, "43", &env)).unwrap();
+    let first = mgr
+        .create(&request(&clone, &SourceTaskId("43".into()), &env))
+        .unwrap();
     let branch = agent_branches(&first.path, "feat/keep-my-commits");
     git(
         &first.path,
@@ -380,7 +393,9 @@ fn recreates_over_a_surviving_branch_without_losing_its_commits() {
         "the branch must survive for this test to mean anything"
     );
 
-    let second = mgr.create(&resume(&clone, "43", &branch, &env)).unwrap();
+    let second = mgr
+        .create(&resume(&clone, &SourceTaskId("43".into()), &branch, &env))
+        .unwrap();
     assert_eq!(second.branch.as_deref(), Some(branch.as_str()));
     assert_eq!(
         git(&second.path, &["rev-parse", "HEAD"]),
@@ -404,7 +419,9 @@ fn recreates_from_the_remote_branch_after_a_published_branch_was_cleaned_up() {
     let env = env(&state);
     let mgr = WorktreeManager::new(SystemGitRunner::default());
 
-    let first = mgr.create(&request(&clone, "45", &env)).unwrap();
+    let first = mgr
+        .create(&request(&clone, &SourceTaskId("45".into()), &env))
+        .unwrap();
     let branch = agent_branches(&first.path, "feat/published");
     git(
         &first.path,
@@ -420,7 +437,9 @@ fn recreates_from_the_remote_branch_after_a_published_branch_was_cleaned_up() {
         "the local branch really is deleted once published — that is the hazard"
     );
 
-    let second = mgr.create(&resume(&clone, "45", &branch, &env)).unwrap();
+    let second = mgr
+        .create(&resume(&clone, &SourceTaskId("45".into()), &branch, &env))
+        .unwrap();
     assert_eq!(
         git(&second.path, &["rev-parse", "HEAD"]),
         published,
@@ -447,14 +466,18 @@ fn recreates_after_a_manual_directory_removal_leaves_a_stale_registration() {
     let env = env(&state);
     let mgr = WorktreeManager::new(SystemGitRunner::default());
 
-    let first = mgr.create(&request(&clone, "44", &env)).unwrap();
+    let first = mgr
+        .create(&request(&clone, &SourceTaskId("44".into()), &env))
+        .unwrap();
     std::fs::remove_dir_all(&first.path).unwrap();
     assert!(
         git(&clone, &["worktree", "list", "--porcelain"]).contains("prunable"),
         "the registration must still be there for this test to mean anything"
     );
 
-    let second = mgr.create(&request(&clone, "44", &env)).unwrap();
+    let second = mgr
+        .create(&request(&clone, &SourceTaskId("44".into()), &env))
+        .unwrap();
     assert_eq!(second.path, first.path);
     assert!(second.path.is_dir());
 
@@ -475,7 +498,9 @@ fn branches_from_origin_even_with_stale_local_default() {
     let local_main = git(&clone, &["rev-parse", "main"]);
     assert_ne!(local_main, origin_main);
 
-    let wt = mgr.create(&request(&clone, "9", &env)).unwrap();
+    let wt = mgr
+        .create(&request(&clone, &SourceTaskId("9".into()), &env))
+        .unwrap();
     let head = git(&wt.path, &["rev-parse", "HEAD"]);
     assert_eq!(
         head, origin_main,
@@ -494,7 +519,9 @@ fn dirty_worktree_is_not_removed() {
     let env = env(&state);
     let mgr = WorktreeManager::new(SystemGitRunner::default());
 
-    let wt = mgr.create(&request(&clone, "7", &env)).unwrap();
+    let wt = mgr
+        .create(&request(&clone, &SourceTaskId("7".into()), &env))
+        .unwrap();
     let branch = agent_branches(&wt.path, "chore/dirty");
     // Leave an uncommitted change.
     std::fs::write(wt.path.join("scratch.txt"), b"work in progress").unwrap();
@@ -525,7 +552,9 @@ fn retain_policies_do_not_remove() {
     let mgr = WorktreeManager::new(SystemGitRunner::default());
 
     // Manual: never auto-remove.
-    let wt = mgr.create(&request(&clone, "m", &env)).unwrap();
+    let wt = mgr
+        .create(&request(&clone, &SourceTaskId("m".into()), &env))
+        .unwrap();
     let branch = agent_branches(&wt.path, "chore/manual");
     let outcome = mgr
         .cleanup(&CleanupRequest {
@@ -542,7 +571,9 @@ fn retain_policies_do_not_remove() {
     assert!(wt.path.is_dir(), "manual policy must keep the worktree");
 
     // RetentionDays not yet elapsed: keep.
-    let wt2 = mgr.create(&request(&clone, "r", &env)).unwrap();
+    let wt2 = mgr
+        .create(&request(&clone, &SourceTaskId("r".into()), &env))
+        .unwrap();
     let branch2 = agent_branches(&wt2.path, "chore/retained");
     let outcome = mgr
         .cleanup(&CleanupRequest {
@@ -579,7 +610,8 @@ fn parallel_creation_does_not_deadlock() {
             std::thread::spawn(move || {
                 let env = env(&state);
                 let task_id = format!("p{i}");
-                mgr.create(&request(&clone, &task_id, &env)).map(|w| w.path)
+                mgr.create(&request(&clone, &SourceTaskId(task_id.clone()), &env))
+                    .map(|w| w.path)
             })
         })
         .collect();
@@ -625,7 +657,9 @@ fn cleanup_deletes_the_branch_even_when_the_local_default_lags_origin() {
         "the local default must lag origin for this test to mean anything"
     );
 
-    let wt = mgr.create(&request(&clone, "11", &env)).unwrap();
+    let wt = mgr
+        .create(&request(&clone, &SourceTaskId("11".into()), &env))
+        .unwrap();
     let branch = agent_branches(&wt.path, "fix/lagging-default");
     assert!(
         git(&clone, &["branch", "--list", &branch]).contains(&branch),
@@ -664,7 +698,9 @@ fn cleanup_keeps_a_branch_whose_commits_are_not_on_origin() {
     let env = env(&state);
     let mgr = WorktreeManager::new(SystemGitRunner::default());
 
-    let wt = mgr.create(&request(&clone, "12", &env)).unwrap();
+    let wt = mgr
+        .create(&request(&clone, &SourceTaskId("12".into()), &env))
+        .unwrap();
     let branch = agent_branches(&wt.path, "feat/unpushed");
     // The agent committed, and nothing pushed it.
     std::fs::write(wt.path.join("work.txt"), b"the agent's output").unwrap();
@@ -704,7 +740,9 @@ fn cleanup_deletes_a_pushed_branch_that_is_not_merged_into_the_default() {
     let env = env(&state);
     let mgr = WorktreeManager::new(SystemGitRunner::default());
 
-    let wt = mgr.create(&request(&clone, "13", &env)).unwrap();
+    let wt = mgr
+        .create(&request(&clone, &SourceTaskId("13".into()), &env))
+        .unwrap();
     let branch = agent_branches(&wt.path, "feat/pushed-open-pr");
     std::fs::write(wt.path.join("work.txt"), b"the agent's output").unwrap();
     git(&wt.path, &["add", "work.txt"]);
@@ -755,7 +793,9 @@ fn cleanup_keeps_a_branch_that_does_not_descend_from_the_base_commit() {
     git(&clone, &["commit", "--allow-empty", "-m", "upstream work"]);
     git(&clone, &["push", "origin", "main"]);
 
-    let wt = mgr.create(&request(&clone, "14", &env)).unwrap();
+    let wt = mgr
+        .create(&request(&clone, &SourceTaskId("14".into()), &env))
+        .unwrap();
     assert_ne!(
         wt.base_commit,
         git(&clone, &["rev-parse", "feat/human-work"]),
@@ -800,7 +840,9 @@ fn a_gone_worktree_never_takes_the_default_branch_with_it() {
     let env = env(&state);
     let mgr = WorktreeManager::new(SystemGitRunner::default());
 
-    let wt = mgr.create(&request(&clone, "16", &env)).unwrap();
+    let wt = mgr
+        .create(&request(&clone, &SourceTaskId("16".into()), &env))
+        .unwrap();
     std::fs::remove_dir_all(&wt.path).unwrap();
     // Off `main`, so git itself would not refuse to delete it.
     git(&clone, &["switch", "-c", "elsewhere"]);
@@ -825,7 +867,9 @@ fn cleanup_keeps_a_branch_when_no_base_commit_was_recorded() {
     let env = env(&state);
     let mgr = WorktreeManager::new(SystemGitRunner::default());
 
-    let wt = mgr.create(&request(&clone, "15", &env)).unwrap();
+    let wt = mgr
+        .create(&request(&clone, &SourceTaskId("15".into()), &env))
+        .unwrap();
     let branch = agent_branches(&wt.path, "feat/legacy-row");
 
     assert_eq!(
@@ -863,7 +907,9 @@ fn a_detached_worktree_with_commits_is_kept() {
     let env = env(&state);
     let mgr = WorktreeManager::new(SystemGitRunner::default());
 
-    let wt = mgr.create(&request(&clone, "16", &env)).unwrap();
+    let wt = mgr
+        .create(&request(&clone, &SourceTaskId("16".into()), &env))
+        .unwrap();
     // The agent ignored the instruction to branch and just committed.
     std::fs::write(wt.path.join("work.txt"), b"the agent's output").unwrap();
     git(&wt.path, &["add", "work.txt"]);
@@ -917,7 +963,9 @@ fn a_detached_worktree_with_no_commits_is_removed() {
     let env = env(&state);
     let mgr = WorktreeManager::new(SystemGitRunner::default());
 
-    let wt = mgr.create(&request(&clone, "17", &env)).unwrap();
+    let wt = mgr
+        .create(&request(&clone, &SourceTaskId("17".into()), &env))
+        .unwrap();
     assert_eq!(
         mgr.cleanup(&CleanupRequest {
             repo_path: &clone,
@@ -965,7 +1013,7 @@ fn someone_pushes(base: &Path, branch: &str, content: &str, rewrite: bool) -> St
 
 fn hinted<'a>(
     clone: &'a Path,
-    task_id: &'a str,
+    task_id: &'a SourceTaskId,
     hint: HintedStart<'a>,
     env: &'a HashMap<String, String>,
 ) -> CreateRequest<'a> {
@@ -987,7 +1035,12 @@ fn a_hinted_branch_puts_a_writable_worktree_on_it() {
     let theirs = someone_pushes(&base, "renovate/x", "v1", false);
 
     let wt = mgr
-        .create(&hinted(&clone, "pr-1", HintedStart::On("renovate/x"), &env))
+        .create(&hinted(
+            &clone,
+            &SourceTaskId("pr-1".into()),
+            HintedStart::On("renovate/x"),
+            &env,
+        ))
         .unwrap();
 
     assert_eq!(wt.branch.as_deref(), Some("renovate/x"));
@@ -1015,7 +1068,7 @@ fn a_hinted_branch_leaves_a_read_only_worktree_detached_at_its_head() {
     let wt = mgr
         .create(&hinted(
             &clone,
-            "pr-1",
+            &SourceTaskId("pr-1".into()),
             HintedStart::DetachedAt("renovate/x"),
             &env,
         ))
@@ -1056,7 +1109,9 @@ fn a_hinted_branch_missing_from_origin_is_an_error_not_a_fallback() {
         HintedStart::On("merged/and-deleted"),
         HintedStart::DetachedAt("merged/and-deleted"),
     ] {
-        let err = mgr.create(&hinted(&clone, "pr-1", hint, &env)).unwrap_err();
+        let err = mgr
+            .create(&hinted(&clone, &SourceTaskId("pr-1".into()), hint, &env))
+            .unwrap_err();
         assert!(
             matches!(&err, WorktreeError::HintedBranchMissing { branch } if branch == "merged/and-deleted"),
             "{hint:?}: {err}"
@@ -1065,7 +1120,12 @@ fn a_hinted_branch_missing_from_origin_is_an_error_not_a_fallback() {
     // The lenient path is untouched: a recorded branch that vanished still
     // yields a detached worktree.
     let wt = mgr
-        .create(&resume(&clone, "45", "merged/and-deleted", &env))
+        .create(&resume(
+            &clone,
+            &SourceTaskId("45".into()),
+            "merged/and-deleted",
+            &env,
+        ))
         .unwrap();
     assert_eq!(wt.branch, None);
 
@@ -1093,7 +1153,7 @@ fn a_local_copy_of_the_hinted_branch_is_reconciled_without_losing_anything() {
     let wt = mgr
         .create(&hinted(
             &clone,
-            "behind",
+            &SourceTaskId("behind".into()),
             HintedStart::On("pr/behind"),
             &env,
         ))
@@ -1111,7 +1171,12 @@ fn a_local_copy_of_the_hinted_branch_is_reconciled_without_losing_anything() {
     let unpushed = git(&clone, &["rev-parse", "HEAD"]);
     git(&clone, &["switch", "main"]);
     let wt = mgr
-        .create(&hinted(&clone, "ahead", HintedStart::On("pr/ahead"), &env))
+        .create(&hinted(
+            &clone,
+            &SourceTaskId("ahead".into()),
+            HintedStart::On("pr/ahead"),
+            &env,
+        ))
         .unwrap();
     assert_eq!(git(&wt.path, &["rev-parse", "HEAD"]), unpushed, "kept");
 
@@ -1135,7 +1200,7 @@ fn a_local_copy_of_the_hinted_branch_is_reconciled_without_losing_anything() {
     let err = mgr
         .create(&hinted(
             &clone,
-            "diverged",
+            &SourceTaskId("diverged".into()),
             HintedStart::On("pr/diverged"),
             &env,
         ))
@@ -1165,10 +1230,20 @@ fn a_hinted_branch_held_by_another_worktree_is_an_error_naming_it() {
     someone_pushes(&base, "feat/x", "v1", false);
 
     let first = mgr
-        .create(&hinted(&clone, "issue-10", HintedStart::On("feat/x"), &env))
+        .create(&hinted(
+            &clone,
+            &SourceTaskId("issue-10".into()),
+            HintedStart::On("feat/x"),
+            &env,
+        ))
         .unwrap();
     let err = mgr
-        .create(&hinted(&clone, "pr-12", HintedStart::On("feat/x"), &env))
+        .create(&hinted(
+            &clone,
+            &SourceTaskId("pr-12".into()),
+            HintedStart::On("feat/x"),
+            &env,
+        ))
         .unwrap_err();
     match &err {
         WorktreeError::HintedBranchHeld { branch, holder } => {
@@ -1183,7 +1258,7 @@ fn a_hinted_branch_held_by_another_worktree_is_an_error_naming_it() {
     // A read-only stage takes no branch, so it is not in anyone's way.
     mgr.create(&hinted(
         &clone,
-        "pr-12",
+        &SourceTaskId("pr-12".into()),
         HintedStart::DetachedAt("feat/x"),
         &env,
     ))
@@ -1198,7 +1273,12 @@ fn a_hinted_branch_held_by_another_worktree_is_an_error_naming_it() {
         &["switch", "--no-track", "-c", "feat/y", "origin/feat/y"],
     );
     let err = mgr
-        .create(&hinted(&clone, "pr-13", HintedStart::On("feat/y"), &env))
+        .create(&hinted(
+            &clone,
+            &SourceTaskId("pr-13".into()),
+            HintedStart::On("feat/y"),
+            &env,
+        ))
         .unwrap_err();
     assert!(
         matches!(&err, WorktreeError::HintedBranchHeld { holder, .. }
@@ -1225,7 +1305,7 @@ fn sync_moves_a_surviving_worktree_to_its_hinted_start() {
     let wt = mgr
         .create(&hinted(
             &clone,
-            "pr-1",
+            &SourceTaskId("pr-1".into()),
             HintedStart::DetachedAt("renovate/x"),
             &env,
         ))
@@ -1278,7 +1358,7 @@ fn sync_refuses_to_overwrite_uncommitted_changes() {
     let wt = mgr
         .create(&hinted(
             &clone,
-            "pr-1",
+            &SourceTaskId("pr-1".into()),
             HintedStart::DetachedAt("renovate/x"),
             &env,
         ))
@@ -1329,7 +1409,9 @@ fn a_hinted_branch_deleted_on_origin_after_being_fetched_is_missing() {
         HintedStart::On("renovate/x"),
         HintedStart::DetachedAt("renovate/x"),
     ] {
-        let err = mgr.create(&hinted(&clone, "pr-1", hint, &env)).unwrap_err();
+        let err = mgr
+            .create(&hinted(&clone, &SourceTaskId("pr-1".into()), hint, &env))
+            .unwrap_err();
         assert!(
             matches!(&err, WorktreeError::HintedBranchMissing { branch } if branch == "renovate/x"),
             "{hint:?}: {err}"
@@ -1383,7 +1465,7 @@ fn sync_refuses_to_leave_detached_commits_behind() {
     let wt = mgr
         .create(&hinted(
             &clone,
-            "pr-1",
+            &SourceTaskId("pr-1".into()),
             HintedStart::DetachedAt("renovate/x"),
             &env,
         ))
@@ -1425,7 +1507,7 @@ fn sync_follows_a_force_push_away_from_a_stale_detached_base() {
     let wt = mgr
         .create(&hinted(
             &clone,
-            "pr-1",
+            &SourceTaskId("pr-1".into()),
             HintedStart::DetachedAt("renovate/x"),
             &env,
         ))
