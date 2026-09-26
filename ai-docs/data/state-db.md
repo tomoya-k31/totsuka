@@ -4,7 +4,7 @@ title: 状態DB（SQLite state.db）スキーマ
 description: タスク実行状態を永続化する SQLite DB（$XDG_STATE_HOME/totsuka/state.db）の tasks/sessions/events/hook_events/task_messages/schema_migrations スキーマと設計判断。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/adapters/state_db.rs
 tags: [sqlite, state, schema, statemachine, hooks]
-generated: { by: claude-code/opus-5.5, at: 2026-09-26T16:14:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-09-26T16:15:00+09:00 }
 verified:
   - { by: claude-code/opus-5, at: 2026-08-19T02:36:00Z }
 status: stable
