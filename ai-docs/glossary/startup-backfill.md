@@ -1,7 +1,7 @@
 ---
 type: Term
 title: 起動時バックフィル（startup backfill）
-description: "チャンネル監視ソースが起動時に、監視チャンネルの直近 N 件かつ年齢上限以内を無条件に再送してプラグイン停止中の取りこぼしを回収する仕組み。台帳が重複を Duplicate として無害化するため永続カーソルを持たず、取りすぎ側に倒してある。"
+description: "チャンネル監視ソースが起動時に、監視チャンネルの直近 N 件かつ年齢上限以内を読み直して再送し、プラグイン停止中の取りこぼしを回収する仕組み。台帳が重複を Duplicate として無害化するため永続カーソルを持たず、取りすぎ側に倒してある（Discord は task/lookup で既知の投稿の再送を省く）。"
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/plugin-sdk/src/watch.rs
 tags: [glossary, channel-watch, backfill, idempotency, slack, discord]
 generated: { by: claude-code/opus-5, at: 2026-09-26T22:30:00+09:00 }
@@ -38,7 +38,7 @@ Orchestrator の ingest は `(source, id, message_key)` で冪等で、既知の
 
 - ライブ経路と backfill は**同じ関数**（`WatchTriggers::admit`）でフィルタする。[ADR-0068](/decisions/adr-0068-channel-watch-trigger.md) が要求する起動者ゲートを回復経路で飛ばすと、再起動のたびに境界が開く
 - 重複排除はプラグイン内の processed セットも共有するので、backfill が拾った投稿を直後に Socket Mode が再配送しても二重にならない
-- **Discord は submit の前に `task/lookup` で既知かを聞き、既知なら submit しない**（座標だけ登録し直す）。1 投稿 = 1 タスクなので既知 = その投稿は取り込み済みで、再起動のたびに完了済みの投稿が `Duplicate` ack として並ぶのを避ける。lookup が答えないときは submit に倒すので、「取りすぎは無害」の性質は変わらない。Slack は従来どおり submit して `Duplicate` で止める
+- **Discord は submit の前に `task/lookup` で既知かを聞き、既知なら submit しない**（座標だけ登録し直す）。1 投稿 = 1 タスクなので既知 = その投稿は取り込み済みで、再起動のたびに完了済みの投稿が `Duplicate` ack として並ぶのを避ける。lookup が答えないときは submit に倒し、そのパスの残りは聞かずに submit する（Gateway 接続前に走るので、混んだ engine ループの待ちを投稿ごとに積まない）ため、「取りすぎは無害」の性質は変わらない。Slack は従来どおり submit して `Duplicate` で止める
 - チャンネル単位の失敗は warn してスキップする。backfill は回復であって、これで起動を落とすとライブイベントまで失う
 - 送信はソース自身の submit 経路を通る（SDK は「パスの方針」だけを持つ）。ソースは submit と同時に結果投稿先の座標を記録しており、そこを迂回すると **backfill 由来のタスクだけ結果を返せない**という非対称が生まれる
 

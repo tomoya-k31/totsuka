@@ -124,6 +124,7 @@ pub async fn backfill<T: DiscordTransport, S: Submitter>(
     lookup: &LookupClient,
     state: &SharedState,
 ) {
+    let mut lookup = Some(lookup);
     let cutoff = limits
         .cutoff(SystemTime::now())
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -154,7 +155,7 @@ pub async fn backfill<T: DiscordTransport, S: Submitter>(
             .filter(|m| crate::discord_api::is_at_or_after(&m.id, &oldest))
         {
             if let Some(task_id) =
-                recover_message(config, triggers, submitter, lookup, state, message).await
+                recover_message(config, triggers, submitter, &mut lookup, state, message).await
             {
                 tracing::info!(
                     task_id,
@@ -189,23 +190,40 @@ pub async fn submit_message<S: Submitter>(
 /// running across a plugin restart needs them for its `result/publish`.
 ///
 /// An unanswered lookup falls back to the submit, whose `duplicate` ack is
-/// just as safe — only slower to read in the log.
+/// just as safe — only slower to read in the log. It also clears `lookup` for
+/// the rest of the pass: the backfill runs before the Gateway connects, and a
+/// busy engine loop would otherwise add a lookup timeout to every post's
+/// submit wait.
 pub async fn recover_message<S: Submitter>(
     config: &DiscordConfig,
     triggers: &WatchTriggers,
     submitter: &S,
-    lookup: &LookupClient,
+    lookup: &mut Option<&LookupClient>,
     state: &SharedState,
     message: &DiscordMessage,
 ) -> Option<String> {
     let (watched, task) = triggers.admit(message)?;
-    if let Lookup::Known { .. } = lookup.lookup(&config.source_name, &task.id).await {
-        tracing::debug!(
-            task_id = %task.id,
-            "backfill: the orchestrator already has this post; not re-submitting"
-        );
-        state.insert_pending(task.id, PendingPost::of(message));
-        return None;
+    // Before the lookup, not after: a running task can `result/publish`
+    // between the answer and this task resuming.
+    state.insert_pending(task.id.clone(), PendingPost::of(message));
+    if let Some(client) = *lookup {
+        match client.lookup(&config.source_name, &task.id).await {
+            Lookup::Known { .. } => {
+                tracing::debug!(
+                    task_id = %task.id,
+                    "backfill: the orchestrator already has this post; not re-submitting"
+                );
+                return None;
+            }
+            Lookup::Unknown { reason } => {
+                tracing::info!(
+                    "backfill: task/lookup unanswered ({reason}); submitting the rest of this \
+                     pass without asking"
+                );
+                *lookup = None;
+            }
+            Lookup::New => {}
+        }
     }
     submit_admitted(config, watched, task, submitter, state, message).await
 }
@@ -227,7 +245,8 @@ async fn submit_admitted<S: Submitter>(
     state.insert_pending(task_id.clone(), PendingPost::of(message));
     match submitter.submit(task, &workflow).await {
         SubmitOutcome::Accepted => Some(task_id),
-        // The steady state for a backfilled post the ledger already has.
+        // A backfilled post the ledger already has, reached only when
+        // `task/lookup` could not answer (see `recover_message`).
         //
         // **The pending entry stays.** `duplicate` means the task exists —
         // very possibly still running — and taking its coordinates here would
@@ -534,7 +553,7 @@ mod tests {
             &config,
             &triggers,
             &submitter,
-            &lookup_knowing(&["C1:M1"]),
+            &mut Some(&lookup_knowing(&["C1:M1"])),
             &state,
             &message,
         )
@@ -558,13 +577,38 @@ mod tests {
             &config,
             &triggers,
             &submitter,
-            &lookup_knowing(&[]),
+            &mut Some(&lookup_knowing(&[])),
             &state,
             &message,
         )
         .await;
         assert_eq!(raised.as_deref(), Some("C1:M1"));
         assert_eq!(submitter.calls.into_inner(), 1);
+    }
+
+    /// One unanswered lookup stops the asking for the rest of the pass, so a
+    /// busy engine loop costs one timeout per backfill, not one per post.
+    #[tokio::test]
+    async fn an_unanswered_lookup_submits_and_stops_asking() {
+        let (config, triggers, message) = fixture();
+        let submitter = Recording::default();
+        let state = SharedState::default();
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        drop(rx); // the host is gone: the lookup answers `Unknown` at once
+        let client = LookupClient::new(plugin_sdk::Writer::from_channel(tx));
+        let mut lookup = Some(&client);
+
+        let raised = recover_message(
+            &config,
+            &triggers,
+            &submitter,
+            &mut lookup,
+            &state,
+            &message,
+        )
+        .await;
+        assert_eq!(raised.as_deref(), Some("C1:M1"), "falls back to the submit");
+        assert!(lookup.is_none(), "the rest of the pass does not ask");
     }
 
     #[test]
