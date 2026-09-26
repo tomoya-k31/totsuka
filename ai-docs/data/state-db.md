@@ -2,7 +2,7 @@
 type: Data Model
 title: 状態DB（SQLite state.db）スキーマ
 description: タスク実行状態を永続化する SQLite DB（$XDG_STATE_HOME/totsuka/state.db）の tasks/sessions/events/hook_events/task_messages/schema_migrations スキーマと設計判断。
-resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/adapters/state_db.rs
+resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/orchestrator-core/src/adapters/state_db
 tags: [sqlite, state, schema, statemachine, hooks]
 generated: { by: claude-code/opus-5.5, at: 2026-09-27T02:00:00+09:00 }
 verified:

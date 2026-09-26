@@ -18,7 +18,7 @@ sources:
     resource: /decisions/adr-0025-reaction-task-trigger.md
     title: "リアクションは本人が付けたときだけ — ADR-0025"
   - id: state-db-identity
-    resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/adapters/state_db.rs
+    resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/orchestrator-core/src/adapters/state_db
     title: "tasks の識別子が UNIQUE (source, source_task_id) である一次情報"
 ---
 
