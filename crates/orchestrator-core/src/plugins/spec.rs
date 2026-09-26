@@ -328,8 +328,8 @@ pub fn plugin_init_config(
 /// `answer` has no prefix on purpose: it *is* the conversation, and taking the
 /// plain id is what makes a follow-up mention continue it rather than open a
 /// second one.
-fn task_id_prefix(profile: crate::config::Profile) -> Option<&'static str> {
-    use crate::config::Profile;
+fn task_id_prefix(profile: crate::domain::Profile) -> Option<&'static str> {
+    use crate::domain::Profile;
     match profile {
         Profile::Implement => Some("impl"),
         // `books:` is #324's existing design for the Slack triage flow; this
@@ -348,8 +348,8 @@ fn task_id_prefix(profile: crate::config::Profile) -> Option<&'static str> {
 /// publish path, so the plugin already knows what to say and has always said
 /// it. Sending a kind it has no text for would be a key that reads as
 /// configured and does nothing.
-fn instructions_kind(profile: crate::config::Profile) -> Option<&'static str> {
-    use crate::config::Profile;
+fn instructions_kind(profile: crate::domain::Profile) -> Option<&'static str> {
+    use crate::domain::Profile;
     match profile {
         Profile::Triage => Some("triage"),
         Profile::Design => Some("design"),

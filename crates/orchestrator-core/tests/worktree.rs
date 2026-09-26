@@ -5,9 +5,10 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use orchestrator_core::adapters::git::SystemGitRunner;
+use orchestrator_core::domain::CleanupPolicy;
 use orchestrator_core::paths::Paths;
 use orchestrator_core::worktree::{
-    CleanupDecision, CleanupOutcome, CleanupPolicy, CleanupRequest, CreateRequest, WorktreeManager,
+    CleanupDecision, CleanupOutcome, CleanupRequest, CreateRequest, WorktreeManager,
     default_location_template,
 };
 

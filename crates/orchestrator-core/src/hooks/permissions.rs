@@ -150,7 +150,7 @@
 //!
 //! This says nothing about codex or opencode. Only Claude reads `--settings`.
 
-use crate::config::Profile;
+use crate::domain::Profile;
 
 /// The permission mode a profile's pane starts in (#420).
 ///

@@ -36,7 +36,8 @@ use std::sync::LazyLock;
 
 use serde::Deserialize;
 
-use crate::config::{Profile, RootConfig, WorkflowConfig};
+use crate::config::{RootConfig, WorkflowConfig};
+use crate::domain::Profile;
 use crate::domain::signal::{MARKER_COMPLETED, MARKER_FAILED, MARKER_NEEDS_INPUT};
 use crate::template;
 

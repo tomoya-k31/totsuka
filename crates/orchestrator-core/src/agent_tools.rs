@@ -54,7 +54,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use crate::config::Profile;
+use crate::domain::Profile;
 
 /// How long an availability answer is reused.
 ///

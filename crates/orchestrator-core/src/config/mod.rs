@@ -30,9 +30,9 @@ pub use resolve::{
 pub use schema::{
     CURRENT_SCHEMA_VERSION, CleanupPolicyConfig, CleanupPolicyName, ConfigError,
     DEFAULT_BLOCK_RETRY_LIMIT, DEFAULT_GLOBAL_CONCURRENCY, DEFAULT_WORKFLOW_TIMEOUT_SECS,
-    HooksConfig, LlmApi, LlmConfig, LogSettings, OutputPolicy, PluginConfig, PluginKind, Profile,
-    ProjectConfig, RepositoryConfig, RootConfig, ToolConfig, VerificationMode, WorkflowConfig,
-    WorkflowMode, WorktreeConfig, is_reserved_top_level_key,
+    HooksConfig, LlmApi, LlmConfig, LogSettings, PluginConfig, PluginKind, ProjectConfig,
+    RepositoryConfig, RootConfig, ToolConfig, WorkflowConfig, WorktreeConfig,
+    is_reserved_top_level_key,
 };
 pub use validate::{
     Finding, FindingSeverity, ValidationError, has_errors, validate, validate_static,

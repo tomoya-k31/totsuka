@@ -18,6 +18,7 @@ use orchestrator_core::adapters::plugin_host::{Plugin, PluginSpec};
 use orchestrator_core::adapters::state_db::{HookEventInsert, TaskMessageInsert};
 use orchestrator_core::adapters::{NewTask, StateDb};
 use orchestrator_core::config::RootConfig;
+use orchestrator_core::domain::CleanupPolicy;
 use orchestrator_core::domain::signal::{
     AgentSignal, JobId, SignalEvent, SignalSource, StopStatus,
 };
@@ -27,7 +28,6 @@ use orchestrator_core::ports::{Clock, SecretString};
 use orchestrator_core::repo_select::SelectConfig;
 use orchestrator_core::run::{Engine, EngineSettings, HookRuntime, PluginSet, RepoSettings};
 use orchestrator_core::scheduler::Limits;
-use orchestrator_core::worktree::CleanupPolicy;
 use plugin_protocol::manifest::Manifest;
 use serde_json::json;
 use test_support::{bare_origin_and_clone as setup_repo, scratch};

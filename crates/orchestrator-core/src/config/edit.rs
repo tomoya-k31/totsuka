@@ -30,7 +30,7 @@
 
 use toml_edit::{ArrayOfTables, DocumentMut, InlineTable, Item, Table, Value};
 
-use super::schema::{OutputPolicy, Profile, VerificationMode, WorkflowMode};
+use crate::domain::{OutputPolicy, Profile, VerificationMode, WorkflowMode};
 
 /// Errors from editing `config.toml`.
 #[derive(Debug, thiserror::Error)]

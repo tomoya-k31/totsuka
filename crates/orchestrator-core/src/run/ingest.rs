@@ -545,11 +545,11 @@ mod tests {
             trigger: crate::domain::workflow::Trigger::new(toml::Table::new()),
             mode: WorkflowMode::Implement,
             agent: "mock_agent".to_string(),
-            output: crate::config::OutputPolicy::None,
+            output: crate::domain::OutputPolicy::None,
             on_start: None,
             on_success: None,
             on_failure: None,
-            verification: crate::config::VerificationMode::None,
+            verification: crate::domain::VerificationMode::None,
             timeout_secs: None,
             rubric: None,
             tool: None,
@@ -820,7 +820,7 @@ mod tests {
         let mut design = engine.settings.workflows[0].clone();
         design.name = "design".to_string();
         design.mode = WorkflowMode::Plan;
-        design.profile = Some(crate::config::Profile::Design);
+        design.profile = Some(crate::domain::Profile::Design);
         engine.settings.workflows.push(design);
 
         engine
@@ -902,7 +902,7 @@ mod tests {
         let mut design = engine.settings.workflows[0].clone();
         design.name = "design".to_string();
         design.mode = WorkflowMode::Plan;
-        design.profile = Some(crate::config::Profile::Design);
+        design.profile = Some(crate::domain::Profile::Design);
         engine.settings.workflows.push(design);
 
         engine
@@ -961,7 +961,7 @@ mod tests {
         let mut design = engine.settings.workflows[0].clone();
         design.name = "design".to_string();
         design.mode = WorkflowMode::Plan;
-        design.profile = Some(crate::config::Profile::Design);
+        design.profile = Some(crate::domain::Profile::Design);
         engine.settings.workflows.push(design);
 
         engine
@@ -1029,7 +1029,7 @@ mod tests {
         let mut engine = ingest_test_engine().await;
         let mut second = engine.settings.workflows[0].clone();
         second.name = "more-implement".to_string();
-        second.profile = Some(crate::config::Profile::Implement);
+        second.profile = Some(crate::domain::Profile::Implement);
         engine.settings.workflows.push(second);
 
         engine

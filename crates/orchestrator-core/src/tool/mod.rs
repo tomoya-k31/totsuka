@@ -27,7 +27,8 @@ use std::collections::BTreeMap;
 use plugin_protocol::methods::ToolLaunchSpec;
 use serde::Deserialize;
 
-use crate::config::{Profile, ToolConfig};
+use crate::config::ToolConfig;
+use crate::domain::Profile;
 
 /// The adapter family a `[tools.<name>]` entry belongs to. Determines argv
 /// assembly, capabilities, and (Phase 2/3) the completion-detection assets.

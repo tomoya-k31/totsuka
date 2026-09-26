@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use plugin_protocol::identifier::{Case, IdentifierCore, IdentifierPolicy};
 
 use crate::config::resolve::{ResolveError, expand_env};
-pub use crate::domain::CleanupPolicy;
+use crate::domain::CleanupPolicy;
 use crate::paths::Paths;
 use crate::ports::git::GitRunner;
 

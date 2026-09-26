@@ -10,7 +10,8 @@ use std::collections::HashSet;
 use plugin_protocol::manifest::OutputCapability;
 
 use super::resolve::expand_path;
-use super::schema::{CURRENT_SCHEMA_VERSION, PluginKind, RootConfig, VerificationMode};
+use super::schema::{CURRENT_SCHEMA_VERSION, PluginKind, RootConfig};
+use crate::domain::VerificationMode;
 use crate::domain::workflow::{self, Severity};
 use crate::template;
 use crate::tool::{ToolKind, ToolProfile};

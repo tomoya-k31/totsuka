@@ -13,7 +13,7 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 
-pub use crate::domain::{OutputPolicy, Profile, VerificationMode, WorkflowMode};
+use crate::domain::{OutputPolicy, Profile, VerificationMode, WorkflowMode};
 use crate::tool::ToolKind;
 
 /// The current supported config schema version (§10.2).

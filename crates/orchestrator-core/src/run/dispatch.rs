@@ -147,7 +147,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         // Cloned rather than borrowed: reporting a blocked task needs
         // `&mut self`, and holding a borrow of `self.settings` across the loop
         // would forbid it. Two small strings per workflow, once per cycle.
-        let wf_info: HashMap<String, (String, Option<crate::config::Profile>)> = self
+        let wf_info: HashMap<String, (String, Option<crate::domain::Profile>)> = self
             .settings
             .workflows
             .iter()
@@ -1528,7 +1528,7 @@ pub(super) struct DispatchTarget {
     pub agent_name: String,
     /// Copied out of the workflow: `wf` borrows `self.settings`, and the launch
     /// spec is assembled inside a closure that outlives that borrow.
-    pub profile: Option<crate::config::Profile>,
+    pub profile: Option<crate::domain::Profile>,
     /// Already trimmed to `None` when blank (#415).
     pub initial_prompt: Option<String>,
     /// The repository the task was routed to.
@@ -1674,11 +1674,11 @@ mod tests {
             trigger: Trigger::new(toml::Table::new()),
             mode: WorkflowMode::Implement,
             agent: agent.to_string(),
-            output: crate::config::OutputPolicy::None,
+            output: crate::domain::OutputPolicy::None,
             on_start: None,
             on_success: None,
             on_failure: None,
-            verification: crate::config::VerificationMode::None,
+            verification: crate::domain::VerificationMode::None,
             rubric: None,
             timeout_secs: Some(1800),
             tool: tool.map(str::to_string),
