@@ -11,6 +11,63 @@ Note: the plugin protocol is versioned independently of the application (see
 `crates/plugin-protocol`); a totsuka release does not imply a protocol-version
 change.
 
+## [0.10.0](https://github.com/tomoya-k31/totsuka/compare/v0.9.0...v0.10.0) (2026-09-26)
+
+
+### ⚠ BREAKING CHANGES
+
+* **core:** [hooks].auth_token_ref と TOTSUKA_HOOKS_AUTH_TOKEN_REF を廃止した。 書いてあれば「この行を消す」専用のエラーになる（run は exit 4）。
+
+### Features
+
+* **cli:** doctor と config validate も --secrets-stdin を受け付ける ([#787](https://github.com/tomoya-k31/totsuka/issues/787)) ([fbaf396](https://github.com/tomoya-k31/totsuka/commit/fbaf39607b232870589b41d04a6044c7ede1e28a)), closes [#754](https://github.com/tomoya-k31/totsuka/issues/754)
+* **core:** hook トークンを run が生成して 0600 のファイルに保存し、[hooks].auth_token_ref を廃止する ([#789](https://github.com/tomoya-k31/totsuka/issues/789)) ([4e1e1aa](https://github.com/tomoya-k31/totsuka/commit/4e1e1aad3849861d8ce6659084f9fb46c543882e))
+* **core:** run が親プロセスから解決済みの機密情報を stdin で受け取れるようにする（secret: スキーム） ([#786](https://github.com/tomoya-k31/totsuka/issues/786)) ([24eab6a](https://github.com/tomoya-k31/totsuka/commit/24eab6abf5e74fec112d9ab1097d0ff0794cfee9)), closes [#754](https://github.com/tomoya-k31/totsuka/issues/754)
+
+
+### Bug Fixes
+
+* **core:** 作業の兆候を示す hook で dispatched のタスクを running に進める ([#791](https://github.com/tomoya-k31/totsuka/issues/791)) ([6d96fff](https://github.com/tomoya-k31/totsuka/commit/6d96fffad701027fdadb2379be6ed9ef2e9e0512))
+* **core:** 外部で状態が動いたタスクの競合で run 全体が止まらないようにする ([#781](https://github.com/tomoya-k31/totsuka/issues/781)) ([e52d07f](https://github.com/tomoya-k31/totsuka/commit/e52d07f9ae1cb9becf19dc61177ca3595ead6529)), closes [#763](https://github.com/tomoya-k31/totsuka/issues/763)
+* **worktree:** 手で消された worktree のブランチもスイープで削除する ([#792](https://github.com/tomoya-k31/totsuka/issues/792)) ([fa7080c](https://github.com/tomoya-k31/totsuka/commit/fa7080c96889579c95e0698c5d17608a5a27eada))
+
+
+### Refactors
+
+* **core:** agent_tools を agent_prereqs に改名し、lib.rs の構成説明を実体に合わせる ([#803](https://github.com/tomoya-k31/totsuka/issues/803)) ([3258ecd](https://github.com/tomoya-k31/totsuka/commit/3258ecd72b0c4b0663d18f3d57a44f40981b853d))
+* **core:** dispatch_one の起動の判定を純粋関数に分ける ([#809](https://github.com/tomoya-k31/totsuka/issues/809)) ([55f574e](https://github.com/tomoya-k31/totsuka/commit/55f574eeaddb8a050a871962d12c0635474e6891))
+* **core:** dispatch_one の起動前の判定を純粋関数に分ける ([#808](https://github.com/tomoya-k31/totsuka/issues/808)) ([6010727](https://github.com/tomoya-k31/totsuka/commit/6010727117cfbed1e7bbd858b5684de871b287a5))
+* **core:** domain を config から切り離し、層の向きを arch-lint で検査する ([#802](https://github.com/tomoya-k31/totsuka/issues/802)) ([6848518](https://github.com/tomoya-k31/totsuka/commit/6848518e94f173210c28d973a6cbdf8cd2f8722b))
+* **core:** events.detail の書き手を全部 EventDetail に移し、書き込み API を型で受ける ([#812](https://github.com/tomoya-k31/totsuka/issues/812)) ([e4d5cee](https://github.com/tomoya-k31/totsuka/commit/e4d5cee6d565d5720f922490012ca1953765d4bd))
+* **core:** events.detail の語彙を EventDetail 型に閉じ、保存バイト列をゴールデンテストで固定する ([#811](https://github.com/tomoya-k31/totsuka/issues/811)) ([67907f6](https://github.com/tomoya-k31/totsuka/commit/67907f6ebdd5883780791a02963ba16bf1e35125))
+* **core:** events.detail を読み戻す 2 箇所を EventDetail 経由にする ([#813](https://github.com/tomoya-k31/totsuka/issues/813)) ([ae0aabd](https://github.com/tomoya-k31/totsuka/commit/ae0aabd0018fd6d9bae70b5b6c66e64699d163a2))
+* **core:** LLM の classifier・health・プローブを LlmMonitor にまとめる ([#806](https://github.com/tomoya-k31/totsuka/issues/806)) ([ead3dfe](https://github.com/tomoya-k31/totsuka/commit/ead3dfe5878f6d24bb91452e038ecbbf356fd0a8))
+* **core:** state_db の sessions と hook_events を子モジュールへ移す ([#761](https://github.com/tomoya-k31/totsuka/issues/761)) ([#826](https://github.com/tomoya-k31/totsuka/issues/826)) ([a6a4c20](https://github.com/tomoya-k31/totsuka/commit/a6a4c20e726dc849834bfbcbd28ab023c51398e5))
+* **core:** state_db の task_messages を子モジュールへ移す ([#761](https://github.com/tomoya-k31/totsuka/issues/761)) ([#827](https://github.com/tomoya-k31/totsuka/issues/827)) ([6a1d601](https://github.com/tomoya-k31/totsuka/commit/6a1d6015e4a61ff3e0811f06ab94b8cfb24cb506))
+* **core:** state_db の tasks と events を子モジュールへ移す ([#761](https://github.com/tomoya-k31/totsuka/issues/761)) ([#825](https://github.com/tomoya-k31/totsuka/issues/825)) ([0e75ddb](https://github.com/tomoya-k31/totsuka/commit/0e75ddb4b3d3b1d8f9dc9d620990c8113a071466))
+* **core:** state_db のマイグレーションと open 系を migrations へ移す ([#761](https://github.com/tomoya-k31/totsuka/issues/761)) ([#824](https://github.com/tomoya-k31/totsuka/issues/824)) ([bee3e90](https://github.com/tomoya-k31/totsuka/commit/bee3e9053b1609ba0951af1ab20d5dc33c77574f))
+* **core:** state_db をディレクトリモジュールにする ([#761](https://github.com/tomoya-k31/totsuka/issues/761)) ([#823](https://github.com/tomoya-k31/totsuka/issues/823)) ([9474a54](https://github.com/tomoya-k31/totsuka/commit/9474a540b90780797aa65b583c25034d0cbc28b9))
+* **core:** Task.mode を WorkflowMode にし、未知の mode を読み出しエラーにする ([#818](https://github.com/tomoya-k31/totsuka/issues/818)) ([1a4a4ee](https://github.com/tomoya-k31/totsuka/commit/1a4a4ee46936e5fc0fc62b28bd0f1cd016a4fbfc))
+* **core:** スロットの持ち主を SlotManager に吸収し、解放をタスク ID で行う ([#805](https://github.com/tomoya-k31/totsuka/issues/805)) ([e7e7663](https://github.com/tomoya-k31/totsuka/commit/e7e766339ea7a00e79147980a777801e66beb9c3))
+* **core:** ソース側の task id を domain::SourceTaskId にする ([#816](https://github.com/tomoya-k31/totsuka/issues/816)) ([7dafcef](https://github.com/tomoya-k31/totsuka/commit/7dafcef7b0c68926711733983c16c3fab091f424))
+* **core:** タスクの状態遷移を行バージョンによる楽観的並行制御にする ([#780](https://github.com/tomoya-k31/totsuka/issues/780)) ([3499d8d](https://github.com/tomoya-k31/totsuka/commit/3499d8d6fff148cb0c95f63e955c6d9e34fbcb37)), closes [#763](https://github.com/tomoya-k31/totsuka/issues/763)
+* **core:** タスクの行 id を domain::TaskId にし、core 全体で受け渡す ([#815](https://github.com/tomoya-k31/totsuka/issues/815)) ([5778303](https://github.com/tomoya-k31/totsuka/commit/57783037c59db934792cf1c12654b538273661ea))
+* **core:** タスクを domain::Task にし、時刻を OffsetDateTime で持つ ([#817](https://github.com/tomoya-k31/totsuka/issues/817)) ([57a3e0c](https://github.com/tomoya-k31/totsuka/commit/57a3e0c92dc933318816e1a84f0d6478b99acc11))
+* **core:** プラグイン呼び出しを型付きメソッド記述子に寄せ、メソッドと params / result 型の対応を 1 箇所に閉じる ([#793](https://github.com/tomoya-k31/totsuka/issues/793)) ([fe61370](https://github.com/tomoya-k31/totsuka/commit/fe61370f1485861d62075bcf7896d0606fb5a10d)), closes [#757](https://github.com/tomoya-k31/totsuka/issues/757)
+* **core:** プラグイン監督の帳簿を SupervisionLedger にまとめる ([#807](https://github.com/tomoya-k31/totsuka/issues/807)) ([3a482de](https://github.com/tomoya-k31/totsuka/commit/3a482de38355bbdae822b2d9c4176ca646921180))
+* **discord:** server を plugin-sdk の TaskSourceHandler に載せる ([#797](https://github.com/tomoya-k31/totsuka/issues/797)) ([254e490](https://github.com/tomoya-k31/totsuka/commit/254e490bd421dbb37fa6cc36916fd01ffb4b9df2))
+* **github:** server を plugin-sdk の TaskSourceHandler に載せる ([#795](https://github.com/tomoya-k31/totsuka/issues/795)) ([af31e17](https://github.com/tomoya-k31/totsuka/commit/af31e17934de5d77db6d3aa16118d04746d60057))
+* **herdr:** server を plugin-sdk の AgentIdeHandler に、main を SDK ランタイムに載せる ([#800](https://github.com/tomoya-k31/totsuka/issues/800)) ([604731d](https://github.com/tomoya-k31/totsuka/commit/604731d94d96dae24bf4577471d2d5e6b613bc21))
+* **notion:** server を plugin-sdk の TaskSourceHandler に載せる ([#796](https://github.com/tomoya-k31/totsuka/issues/796)) ([e1210fa](https://github.com/tomoya-k31/totsuka/commit/e1210fa7cf6a5a165b1fd33e89c6aa262c69b753))
+* **orca:** server を plugin-sdk の AgentIdeHandler に、main を SDK ランタイムに載せる ([#799](https://github.com/tomoya-k31/totsuka/issues/799)) ([3350f74](https://github.com/tomoya-k31/totsuka/commit/3350f7438a988756475ab112b04e19ba9d8d1bfc))
+* **sdk:** agent_ide 向けハンドラと template / compose_prompt を plugin-sdk に足す ([#794](https://github.com/tomoya-k31/totsuka/issues/794)) ([b8bd48c](https://github.com/tomoya-k31/totsuka/commit/b8bd48cda3dd4a311a26ea3ff82bd5cac94dce30))
+* **slack:** server を plugin-sdk の TaskSourceHandler に載せる ([#798](https://github.com/tomoya-k31/totsuka/issues/798)) ([052f031](https://github.com/tomoya-k31/totsuka/commit/052f031ea78adefea81cca0b95c8ce1986c24005))
+
+
+### Documentation
+
+* **dev-flow:** 1 つの設計を複数 PR に分けるときは gh stack で stacked PR にする ([#783](https://github.com/tomoya-k31/totsuka/issues/783)) ([6269f77](https://github.com/tomoya-k31/totsuka/commit/6269f7743f341788c9a1762b2d71eac934888909))
+
 ## [0.9.0](https://github.com/tomoya-k31/totsuka/compare/v0.8.5...v0.9.0) (2026-09-23)
 
 
