@@ -22,7 +22,8 @@
 //! is the direction wiring goes, not a leak:
 //!
 //! - [`run`] (the main loop), [`scheduler`], [`recovery`], [`worktree`],
-//!   [`repo_select`] and [`plugins`] drive tasks through adapters.
+//!   [`repo_select`], [`plugins`] and [`task_control`] (the cancel / retry
+//!   rules shared by the engine and the CLI) drive tasks through adapters.
 //! - [`tool`] (the AI tool CLI an agent *is*), [`agent_prereqs`] (what that
 //!   agent needs installed beside it), [`hooks`] and [`prompts`] shape what
 //!   runs in the pane.

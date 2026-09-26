@@ -20,7 +20,7 @@ totsuka のビジネスロジックの中核。外部 I/O を持たず、ports �
 | 区分 | モジュール | 向き |
 |---|---|---|
 | ヘキサゴナルの中心 | `domain` / `ports` / `adapters`（OS 依存の実装は `platform`） | `domain` と `ports` は `config` と `adapters` を参照しない（`arch-lint` の `core-layer`）。config の値は `config::interpret` が解釈してから domain に渡す |
-| アプリケーション層 | `run` / `scheduler` / `recovery` / `worktree` / `repo_select` / `plugins` / `tool` / `agent_prereqs` / `hooks` / `prompts` | 中心を組み立てて使う側。adapters を直接使ってよい（`recovery` → state DB、`plugins::spec` → `PluginSpec`）。検査はしない |
+| アプリケーション層 | `run` / `scheduler` / `recovery` / `worktree` / `repo_select` / `plugins` / `task_control` / `tool` / `agent_prereqs` / `hooks` / `prompts` | 中心を組み立てて使う側。adapters を直接使ってよい（`recovery` と `task_control` → state DB、`plugins::spec` → `PluginSpec`）。検査はしない |
 | 基盤 | `config` / `paths` / `logging` / `template` / `terminal` | 中心より上のどこからでも使う |
 
 モジュールをディレクトリごと層へ移すことはしない。`orchestrator-cli` まで含めたパスの書き換えになるわりに、振る舞いも検査も良くならないため。
