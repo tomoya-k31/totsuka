@@ -337,11 +337,10 @@ pub struct Engine<G: GitRunner, L: RepoClassifier + 'static> {
     /// [`run`](Self::run); `cycle()` alone leaves it `NotConfigured`, which is
     /// correct for a caller that never started a receiver.
     hook_receiver: HookReceiver,
+    /// Slot usage **and** which task holds each slot (#758): releases name a
+    /// task, so one that never acquired (e.g. an over-cap resume) can never
+    /// release another task's slot.
     slots: SlotManager,
-    /// Per-task slot ledger: task id → the exact `(repo, agent)` pair it holds
-    /// a slot under. Releases go through this so a task that never acquired
-    /// (e.g. an over-cap resume) can never release another task's slot.
-    slot_holders: HashMap<i64, (String, String)>,
     /// `(agent plugin, session_id)` → task id, for routing notifications.
     sessions: HashMap<(String, String), i64>,
     /// Availability answers for the external tools a profile needs (#399),
@@ -527,7 +526,6 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             restarts: HashMap::new(),
             retired_stats: HashMap::new(),
             plugin_events: HashMap::new(),
-            slot_holders: HashMap::new(),
             sessions: HashMap::new(),
             events: rx,
             events_tx: tx,
@@ -566,12 +564,6 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             let Some(record) = self.db.get_task(outcome.task_id)? else {
                 continue;
             };
-            // Mirror the rebuilt slot usage into the per-task ledger.
-            if counts_toward_slot(record.state)
-                && let (Some(repo), Some(plugin)) = (record.repo.clone(), outcome.plugin.clone())
-            {
-                self.slot_holders.insert(outcome.task_id, (repo, plugin));
-            }
             match record.state {
                 // The agent finished while we were down. Re-subscribing does
                 // not replay a terminal state (plugins only stream *future*

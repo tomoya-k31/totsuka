@@ -1010,10 +1010,7 @@ mod tests {
             .db
             .apply_event(engine.db.task_ref(id).unwrap(), TaskEvent::Dispatch, None)
             .unwrap();
-        assert!(engine.slots.acquire("web", "mock"));
-        engine
-            .slot_holders
-            .insert(id, ("web".to_string(), "mock".to_string()));
+        assert!(engine.slots.acquire(id, "web", "mock"));
         engine
             .sessions
             .insert(("mock".to_string(), "s-1".to_string()), id);
@@ -1029,7 +1026,7 @@ mod tests {
             engine.slots.can_dispatch("web", "mock"),
             "the only slot must be free again"
         );
-        assert!(engine.slot_holders.is_empty());
+        assert!(!engine.slots.holds(id));
         assert!(engine.sessions.is_empty());
         assert!(
             engine.awaiting_approval.is_empty() && engine.blocked_on_prereqs.is_empty(),

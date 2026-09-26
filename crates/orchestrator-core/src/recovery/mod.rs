@@ -275,8 +275,10 @@ pub fn retry_plan(task: &TaskRecord, latest_session: Option<&SessionRecord>) -> 
     }
 }
 
-/// The `(repo, agent)` slot claims to feed [`SlotManager::rebuild`] after a
-/// restart (#55), derived from a [`recover`] pass.
+/// The `(task_id, repo, agent)` slot claims to feed [`SlotManager::rebuild`]
+/// after a restart (#55), derived from a [`recover`] pass. The task id rides
+/// along so the rebuilt usage and the holder ledger come from this one list
+/// (#758).
 ///
 /// Only tasks that actually **resumed** into a slot-counting state hold a slot:
 /// a task awaiting human confirmation (`session/attach` failed, §5.3) is paused,
@@ -289,7 +291,7 @@ pub fn retry_plan(task: &TaskRecord, latest_session: Option<&SessionRecord>) -> 
 pub fn active_slot_claims(
     db: &StateDb,
     report: &RecoveryReport,
-) -> Result<Vec<(String, String)>, StateError> {
+) -> Result<Vec<(i64, String, String)>, StateError> {
     let mut claims = Vec::new();
     for recovery in report.resumed() {
         let RecoveryResult::Resumed { state } = recovery.result else {
@@ -309,7 +311,7 @@ pub fn active_slot_claims(
         let Some(repo) = task.repo else {
             continue;
         };
-        claims.push((repo, agent));
+        claims.push((recovery.task_id, repo, agent));
     }
     Ok(claims)
 }
@@ -709,16 +711,18 @@ mod tests {
         claims.sort();
 
         // All four hold a slot — WaitingInput too (F-45).
-        assert_eq!(
-            claims,
-            vec![("totsuka".to_string(), "herdr".to_string()); 4]
+        assert_eq!(claims.len(), 4);
+        assert!(
+            claims
+                .iter()
+                .all(|(_, repo, agent)| repo == "totsuka" && agent == "herdr")
         );
     }
 
     #[tokio::test]
     async fn active_slot_claims_skips_tasks_needing_confirmation() {
         let db = StateDb::open_in_memory().unwrap();
-        task_in(&db, "1", TaskState::Running, Some("sess-1")); // resumes -> holds a slot
+        let held = task_in(&db, "1", TaskState::Running, Some("sess-1")); // resumes -> holds a slot
         task_in(&db, "2", TaskState::Running, Some("sess-gone")); // lost -> paused
         task_in(&db, "3", TaskState::Running, None); // no session -> paused
         let attacher = FakeAttacher::new(&[
@@ -731,6 +735,9 @@ mod tests {
 
         // Only the resumed task holds a slot; paused tasks awaiting a human do
         // not, and never contribute an empty-agent claim.
-        assert_eq!(claims, vec![("totsuka".to_string(), "herdr".to_string())]);
+        assert_eq!(
+            claims,
+            vec![(held, "totsuka".to_string(), "herdr".to_string())]
+        );
     }
 }

@@ -2,6 +2,9 @@
 
 ## 2026-09-26
 
+* **Creation**: [ADR-0103](/decisions/adr-0103-engine-state-types.md) — Engine の状態は不変条件を持つものだけを型へ取り出し、その型はプラグイン・DB・git を呼ばない（#758）
+* **Update**: [orchestrator-core](/components/orchestrator-core.md) — `SlotManager` がスロットの持ち主（タスク ID）も持ち、`Engine.slot_holders` を吸収した。`active_slot_claims` はタスク ID つきの `(task_id, repo, plugin)` を返すようにした
+* **Update**: [state.db スキーマ](/data/state-db.md) — 再起動時のスロット再取得の説明を、`active_slot_claims` が返す `(task_id, repo, plugin)` に合わせた（#758）
 * **Update**: [agent-ide-herdr](/components/agent-ide-herdr.md) — server を plugin-sdk の `AgentIdeHandler` に、`main` を SDK の stdio ランタイムに載せ替えた（#759）
 * **Update**: [plugin-sdk クレート](/components/plugin-sdk.md) — 公式の task_source 4 本・agent_ide 2 本がすべて SDK のハンドラに載ったことと、載せ替えで合わなかった点を記録
 * **Update**: [agent-ide-orca](/components/agent-ide-orca.md) — server を plugin-sdk の `AgentIdeHandler` に、`main` を SDK の stdio ランタイムに載せ替えた（#759）
