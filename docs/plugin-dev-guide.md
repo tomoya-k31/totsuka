@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](plugin-dev-guide.ja.md)
 
-<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:045b8669cb2dc03086bfa72d4ba75ef6d891fe35c559860b7e9caee695bfcdc8 -->
+<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:2dc6a357d9a7ae259c164297c8a4652307c96402c0648a7cde43058524cde352 -->
 
 # Plugin development guide
 
@@ -244,6 +244,7 @@ The `plugin-conformance` crate checks whether your plugin follows the protocol's
 ```toml
 [dev-dependencies]
 plugin-conformance = { git = "https://github.com/tomoya-k31/totsuka" }
+serde_json = "1"  # the example below builds its params with it
 ```
 
 ```rust

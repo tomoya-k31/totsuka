@@ -4,7 +4,7 @@ title: テスト戦略（自動結合テスト / E2E / モックプラグイン�
 description: totsuka のテスト層（ユニット・実プロセス結合・バイナリE2E）とモックプラグインによるシナリオ注入、フレーク対策、CI 品質ゲートの定義。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates
 tags: [testing, e2e, integration, mock, ci, quality, slack]
-generated: { by: claude-code/opus-5.5, at: 2026-09-26T17:30:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-09-26T19:30:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
