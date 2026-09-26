@@ -13,6 +13,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use plugin_protocol::jsonrpc::Response;
+use plugin_sdk::LineHandler;
 use task_source_notion::error::NotionError;
 use task_source_notion::server::{Server, TransportFactory};
 use task_source_notion::transport::{HttpMethod, NotionTransport, TransportSettings};

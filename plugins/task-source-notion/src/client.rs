@@ -480,7 +480,10 @@ impl<T: NotionTransport> NotionClient<T> {
             .as_deref()
             .and_then(|kind| self.config.prompts.for_kind(kind))
             .map(|template| {
-                crate::template::render(
+                // Single pass (the SDK's `render`): `{title}` is Notion
+                // content, written by whoever created the page — a page
+                // titled `{page_url}` must come through as that literal text.
+                plugin_sdk::template::render(
                     template,
                     &[
                         ("page_url", page["url"].as_str().unwrap_or_default()),
