@@ -128,11 +128,12 @@ pub struct RootConfig {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HooksConfig {
-    /// Secret reference (`${ENV}` or `keychain:`) to the Bearer token that
-    /// authenticates hook POSTs (E-03). Operationally required whenever a
-    /// hook-capable agent is used (validation warns, `doctor` fails).
-    #[serde(default)]
-    pub auth_token_ref: Option<String>,
+    /// Removed (#785): `totsuka run` generates the Bearer token itself
+    /// ([`hooks::token`](crate::hooks::token)). Kept only so a leftover line
+    /// fails with [`REMOVED_AUTH_TOKEN_REF`] instead of serde's generic
+    /// "unknown field".
+    #[serde(default, deserialize_with = "removed_auth_token_ref")]
+    pub auth_token_ref: (),
     /// Unix domain socket path the hook receiver listens on. `None` uses the
     /// built-in default path.
     #[serde(default)]
@@ -145,6 +146,14 @@ pub struct HooksConfig {
     /// Defaults to [`DEFAULT_BLOCK_RETRY_LIMIT`].
     #[serde(default)]
     pub block_retry_limit: Option<u32>,
+}
+
+/// Why `[hooks].auth_token_ref` is now an error, and the one-line fix.
+pub const REMOVED_AUTH_TOKEN_REF: &str = "[hooks].auth_token_ref was removed → delete this line; \
+     `totsuka run` generates the hook token itself ($XDG_STATE_HOME/totsuka/hook-token)";
+
+fn removed_auth_token_ref<'de, D: serde::Deserializer<'de>>(_: D) -> Result<(), D::Error> {
+    Err(serde::de::Error::custom(REMOVED_AUTH_TOKEN_REF))
 }
 
 fn default_version() -> u32 {
@@ -1260,7 +1269,6 @@ repos = ["dotfiles"]
         let cfg = RootConfig::from_toml_str(
             r#"
 [hooks]
-auth_token_ref = "keychain:totsuka/hook-token"
 socket_path = "${XDG_RUNTIME_DIR}/totsuka/agent-events.sock"
 spool_dir = "${XDG_STATE_HOME}/totsuka/hooks/spool"
 block_retry_limit = 3
@@ -1281,10 +1289,6 @@ rubric = "回答は対象リポジトリの実調査に基づくこと"
 "#,
         )
         .unwrap();
-        assert_eq!(
-            cfg.hooks.auth_token_ref.as_deref(),
-            Some("keychain:totsuka/hook-token")
-        );
         assert_eq!(
             cfg.hooks.socket_path.as_deref(),
             Some("${XDG_RUNTIME_DIR}/totsuka/agent-events.sock")
@@ -1308,7 +1312,6 @@ rubric = "回答は対象リポジトリの実調査に基づくこと"
     fn hooks_and_verification_default_when_omitted() {
         // The pre-#135 spec example omits every new key -> all defaults.
         let cfg = RootConfig::from_toml_str(SPEC_EXAMPLE).unwrap();
-        assert!(cfg.hooks.auth_token_ref.is_none());
         assert!(cfg.hooks.socket_path.is_none());
         assert!(cfg.hooks.spool_dir.is_none());
         assert!(cfg.hooks.block_retry_limit.is_none());
@@ -1320,9 +1323,18 @@ rubric = "回答は対象リポジトリの実調査に基づくこと"
         }
     }
 
+    /// #785: a leftover `auth_token_ref` names the fix, not "unknown field".
+    #[test]
+    fn removed_auth_token_ref_says_to_delete_the_line() {
+        let err = RootConfig::from_toml_str("[hooks]\nauth_token_ref = \"keychain:x\"\n")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains(REMOVED_AUTH_TOKEN_REF), "{err}");
+    }
+
     #[test]
     fn unknown_hooks_key_is_rejected() {
-        // Typo inside [hooks] (auth_token vs auth_token_ref) must not be
+        // A typo inside [hooks] (auth_token) must not be
         // silently ignored.
         let err = RootConfig::from_toml_str("[hooks]\nauth_token = \"x\"").unwrap_err();
         assert!(matches!(err, ConfigError::Parse(_)));

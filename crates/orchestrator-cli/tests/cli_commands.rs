@@ -973,8 +973,7 @@ fn env_override_reaches_a_downstream_consumer() {
 }
 
 /// A socket file that outlives its listener must not be reported as a live
-/// receiver. `is_socket` only reads the file *type*, and the `op://` token gate
-/// returns before the authenticated probe would have found out — so without a
+/// receiver. `is_socket` only reads the file *type* — so without a
 /// connect-only probe, `doctor` announced "a receiver is live" on a socket that
 /// `lsof` showed no holder for.
 #[test]
@@ -987,15 +986,8 @@ fn stale_hook_socket_is_not_reported_as_a_live_receiver() {
     drop(listener);
     assert!(sock.exists(), "the socket file must outlive its listener");
 
-    seed_empty_config(
-        &base,
-        &format!("[hooks]\nsocket_path = {sock:?}\nauth_token_ref = \"op://Dev/T/hook\"\n"),
-    );
-    // Not signed in, so the op:// gate engages — the path that used to skip
-    // straight past the only code that measured liveness.
-    let (bin, _) = fake_op(&base, false);
-
-    let out = run_env(&base, &["doctor", "--json"], &[("PATH", &path_with(&bin))]);
+    seed_empty_config(&base, &format!("[hooks]\nsocket_path = {sock:?}\n"));
+    let out = run(&base, &["doctor", "--json"]);
     let doc: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("doctor --json parses");
     let detail = doc
         .as_array()
@@ -1063,7 +1055,7 @@ fn config_show_lists_active_env_overrides() {
         &["config", "show", "--redacted"],
         &[
             ("TOTSUKA_MAX_CONCURRENCY", "9"),
-            ("TOTSUKA_HOOKS_AUTH_TOKEN_REF", "keychain:totsuka/hook"),
+            ("TOTSUKA_HOOKS_BLOCK_RETRY_LIMIT", "5"),
             // Reserved injection var: a different mechanism, not an override.
             ("TOTSUKA_JOB_ID", "job-1-2"),
             // Empty = unset, so it is not in effect and must not be listed.
@@ -1377,8 +1369,7 @@ fn seed_broken_manifest(base: &Path, name: &str) {
     std::fs::write(dir.join("plugin.toml"), "this is not valid toml {{{\n").unwrap();
 }
 
-/// A config whose single workflow drives `agent`, with `[hooks]` left without
-/// an `auth_token_ref`.
+/// A config whose single workflow drives `agent`.
 fn hook_config(agent: &str) -> String {
     format!(
         "[plugins.src]\nenabled = true\nkind = \"task_source\"\n\n\
@@ -1389,77 +1380,67 @@ fn hook_config(agent: &str) -> String {
     )
 }
 
-/// #209: an unset `[hooks].auth_token_ref` used to pass silently — the
-/// validate warning was unreachable (`|_| None`) and doctor only warned. With
-/// a hook-capable agent in play it must now fail doctor outright.
+/// #785: before the first `run` there is no token file, and that is normal —
+/// not a warning, whatever agent the workflows use.
 #[test]
-fn unset_hook_token_fails_doctor_when_an_agent_is_hook_capable() {
-    let base = scratch("hook-token-fail");
+fn a_missing_hook_token_file_is_not_a_problem() {
+    let base = scratch("hook-token-missing");
     seed_empty_config(&base, &hook_config("herdr"));
     seed_manifest(&base, "herdr", "hook_completion = true");
 
     let out = run(&base, &["doctor", "--json"]);
-    assert_eq!(out.status.code(), Some(3), "problems found exit 3 (#177)");
-    let doc: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("doctor --json parses");
-    let check = doc
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|c| c["name"] == "hook-token")
-        .expect("hook-token check present")
-        .clone();
-    assert_eq!(check["ok"], false, "{check}");
-    let detail = check["detail"].as_str().unwrap();
-    assert!(
-        detail.contains("`wf`") && detail.contains("`herdr`"),
-        "detail names the offending workflow and agent: {detail}"
-    );
-    assert!(check["action"].as_str().unwrap().contains("auth_token_ref"));
-    let _ = std::fs::remove_dir_all(&base);
-}
-
-/// The same omission stays advisory when no workflow uses a hook-capable
-/// agent: that config never needs the token, and the 0600 socket still guards
-/// the receiver.
-#[test]
-fn unset_hook_token_stays_advisory_without_a_hook_capable_agent() {
-    let base = scratch("hook-token-warn");
-    seed_empty_config(&base, &hook_config("orca"));
-    // orca declares neither 0.1.3 flag.
-    seed_manifest(&base, "orca", "plan_mode = true");
-
-    let out = run(&base, &["doctor", "--json"]);
-    let doc: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("doctor --json parses");
-    let check = doc
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|c| c["name"] == "hook-token")
-        .expect("hook-token check present")
-        .clone();
+    let check = doctor_check(&out, "hook-token").expect("hook-token check present");
     assert_eq!(check["ok"], true, "{check}");
-    assert_eq!(check["warning"], true, "{check}");
+    assert_ne!(check["warning"], true, "{check}");
+    assert!(
+        check["detail"].as_str().unwrap().contains("totsuka run"),
+        "{check}"
+    );
     let _ = std::fs::remove_dir_all(&base);
 }
 
-/// `config validate` keeps exiting 0, but the warning that #209 found
-/// unreachable now actually prints.
+/// #785: a token file other users can read is a leaked token.
 #[test]
-fn unset_hook_token_warns_in_config_validate() {
-    let base = scratch("hook-token-validate");
-    seed_empty_config(&base, &hook_config("herdr"));
-    seed_manifest(&base, "herdr", "hook_completion = true");
+fn a_hook_token_file_readable_by_others_fails_doctor() {
+    let base = scratch("hook-token-mode");
+    seed_empty_config(&base, "");
+    let token = base.join("state/totsuka/hook-token");
+    std::fs::create_dir_all(token.parent().unwrap()).unwrap();
+    std::fs::write(&token, "abc").unwrap();
+    std::fs::set_permissions(&token, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+    let out = run(&base, &["doctor", "--json"]);
+    let check = doctor_check(&out, "hook-token").expect("hook-token check present");
+    assert_eq!(check["ok"], false, "{check}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// #785: a leftover `[hooks].auth_token_ref` is a config error that says to
+/// delete the line — exit 4 from `run` (#775), and the same words from
+/// `config validate` and `doctor`.
+#[test]
+fn a_leftover_auth_token_ref_says_to_delete_the_line() {
+    let base = scratch("hook-token-removed");
+    seed_empty_config(
+        &base,
+        "[hooks]\nauth_token_ref = \"keychain:totsuka/hook-token\"\n",
+    );
+    let says_so = |out: &Output| {
+        let text = format!("{}{}", stdout(out), stderr(out));
+        text.contains("auth_token_ref was removed") && text.contains("delete this line")
+    };
+
+    let out = run(&base, &["run"]);
+    assert_eq!(out.status.code(), Some(4), "{}", stderr(&out));
+    assert!(says_so(&out), "{}", stderr(&out));
 
     let out = run(&base, &["config", "validate", "--offline"]);
-    assert!(out.status.success(), "stderr: {}", stderr(&out));
-    let text = stdout(&out);
-    assert!(
-        text.contains("warning:")
-            && text.contains("auth_token_ref")
-            && text.contains("`wf`")
-            && text.contains("`herdr`"),
-        "the hook-token warning must fire: {text}"
-    );
+    assert!(!out.status.success());
+    assert!(says_so(&out), "{}", stderr(&out));
+
+    let out = run(&base, &["doctor", "--json"]);
+    assert!(!out.status.success());
+    assert!(says_so(&out), "{}", stdout(&out));
     let _ = std::fs::remove_dir_all(&base);
 }
 
@@ -1483,43 +1464,6 @@ fn broken_manifest_fails_config_validate_offline() {
     assert!(
         text.contains("error:") && text.contains("`herdr`") && text.contains("plugin.toml"),
         "the error names the plugin and the manifest: {text}"
-    );
-    let _ = std::fs::remove_dir_all(&base);
-}
-
-/// #214 (doctor side): when an agent's manifest cannot be parsed, its hook
-/// capability is *unknown*, not "no" — the `hook-token` advisory must say so
-/// instead of silently downgrading what would be a failure with a readable
-/// manifest.
-#[test]
-fn broken_manifest_marks_hook_capability_unknown_in_doctor() {
-    let base = scratch("broken-manifest-doctor");
-    seed_empty_config(&base, &hook_config("herdr"));
-    seed_broken_manifest(&base, "herdr");
-
-    let out = run(&base, &["doctor", "--json"]);
-    assert_eq!(
-        out.status.code(),
-        Some(3),
-        "the broken manifest fails doctor"
-    );
-    let doc: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("doctor --json parses");
-    let check = doc
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|c| c["name"] == "hook-token")
-        .expect("hook-token check present")
-        .clone();
-    assert_eq!(
-        check["ok"], true,
-        "still advisory, not a hard fail: {check}"
-    );
-    assert_eq!(check["warning"], true, "{check}");
-    let detail = check["detail"].as_str().unwrap();
-    assert!(
-        detail.contains("unknown") && detail.contains("`wf`") && detail.contains("`herdr`"),
-        "the warn names the workflow whose agent capability is unknown: {detail}"
     );
     let _ = std::fs::remove_dir_all(&base);
 }

@@ -229,24 +229,13 @@ impl Cx {
                 ),
             })
             .collect();
-        findings.extend(config::validate(
-            cfg,
-            &env_fn,
-            |name| {
-                store
-                    .manifest_of(name)
-                    .ok()
-                    .flatten()
-                    .map(|m| m.capabilities.outputs)
-            },
-            |name| {
-                store
-                    .manifest_of(name)
-                    .ok()
-                    .flatten()
-                    .map(|m| m.capabilities.hook_completion)
-            },
-        ));
+        findings.extend(config::validate(cfg, &env_fn, |name| {
+            store
+                .manifest_of(name)
+                .ok()
+                .flatten()
+                .map(|m| m.capabilities.outputs)
+        }));
         findings
     }
 }

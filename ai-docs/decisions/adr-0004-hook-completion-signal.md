@@ -64,7 +64,7 @@ Accepted — 2026-07-18（エピック [#131](https://github.com/tomoya-k31/tots
 
 # Consequences
 
-- 受信は `[hooks]` 未設定でも既定パス（`${XDG_RUNTIME_DIR}/totsuka/claude-events.sock`）で常時起動する。socket 0600 が第一の認証層、Bearer（keychain 参照）が第二層で、いずれも core が握る（[hook-security](/security/hook-security.md)）。
+- 受信は `[hooks]` 未設定でも既定パス（`${XDG_RUNTIME_DIR}/totsuka/claude-events.sock`）で常時起動する。socket 0600 が第一の認証層、Bearer が第二層で、いずれも core が握る（[hook-security](/security/hook-security.md)）。Bearer は当初 keychain 参照（`[hooks].auth_token_ref`）だったが、`run` が生成して 0600 のファイルに保存する方式に変わった（[ADR-0099](/decisions/adr-0099-generated-hook-token.md)）。
 - フック POST は at-least-once（失敗時スプール）であり、冪等 UNIQUE 制約で重複を吸収する。冪等の正本が DB にあるため、スプール再投入（`replay_spool`）や curl リトライは無害に再送できる（[hook-troubleshooting](/operations/hook-troubleshooting.md)）。
 - 旧 Orchestrator（0.1.3 未満）+ 新プラグインの組合せは `^0.1` 互換上は成立するが、env・`--settings` が付かず**完了を検知しなくなる**ため、プラグインは `protocol_version` 0.1.3 未満で警告ログを出す。
 - 完了検知のフック移行に伴い、herdr の状態ストリームは `pane.exited` デッドマン専用へ縮退した（F-106）。エンドツーエンドの流れは [フックシグナルフロー](/architecture/hook-signal-flow.md) を参照。

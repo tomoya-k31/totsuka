@@ -19,6 +19,7 @@
 pub mod codex;
 pub mod opencode;
 pub mod permissions;
+pub mod token;
 
 use std::io;
 use std::path::{Path, PathBuf};

@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](click-to-focus-setup.ja.md)
 
-<!-- generated-from: ai-docs/operations/click-to-focus-setup.md sha256:6605ee8853b108567de3b15c2264ae6fc07ac326fab77a9e72b1ae6fd328e74f -->
+<!-- generated-from: ai-docs/operations/click-to-focus-setup.md sha256:d0dd01461c45091382b4379225c74c0deb063b2cea434cd1a9434f5bdc256c56 -->
 
 # Click a notification to open the task's pane
 
@@ -80,7 +80,7 @@ With `totsuka run` going, clicking a real notification should both raise the ter
 | The click runs but the app does not come forward | `activate_bundle_id` unset or wrong | Recheck it with step 2 |
 | `config validate` reports a terminal-notifier error | Not installed, not on `PATH`, or `terminal_notifier_bin` is wrong | Install it, or give an absolute path. To go without it, set `backend = "osascript"` — notifications still arrive, clicks do nothing |
 | Notifications arrive but clicks never worked, and the log warns about terminal-notifier | Not installed; each send falls back to `osascript` | Notifications are unaffected. Install terminal-notifier if you want click-to-focus |
-| `totsuka focus` prints a 401 | The running event receiver and the configured auth token disagree | Align the token and restart `totsuka run` |
+| `totsuka focus` prints a 401 | The token file `$XDG_STATE_HOME/totsuka/hook-token` was deleted or recreated after `totsuka run` started | Restart `totsuka run` |
 
 ## Choosing which events notify you
 

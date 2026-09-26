@@ -4,7 +4,7 @@ title: POST /agent-events（UDS フック受信）
 description: エージェント CLI（Claude Code / Codex / OpenCode）のフック/プラグインが完了/通知/セッションイベントを orchestrator-core へ通知する UDS 上の HTTP エンドポイント。Bearer 認証・即 200・AgentSignal 正規化。制御エンドポイント POST /focus（click-to-focus、F-94）と POST /task/cancel・/task/retry（#760）も同一ソケットに同居。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/adapters/hook_uds.rs
 tags: [api, uds, hook, claude-code, codex, opencode, signal, ingress]
-generated: { by: claude-code/opus-5.5, at: 2026-09-23T12:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-09-26T12:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -25,9 +25,9 @@ driving adapter [`adapters::hook_uds`](/components/orchestrator-core.md) が実�
 
 # 認証（E-03）
 
-- `Authorization: Bearer <token>`。`token` は起動時に `[hooks].auth_token_ref`（keychain 参照等）を解決した値で、herdr の env 注入経由でフックへ供給される。
+- `Authorization: Bearer <token>`。`token` は `totsuka run` が初回起動時に生成して `$XDG_STATE_HOME/totsuka/hook-token`（0600）に保存し、以後の起動で使い回す値（#785、[ADR-0099](/decisions/adr-0099-generated-hook-token.md)）。env `TOTSUKA_HOOK_TOKEN` として agent IDE プラグイン経由でフックへ供給される。`totsuka focus` / `totsuka doctor` は同じファイルを読む。
 - 比較は定数時間。不一致・欠落は **401 + 警告ログ**のみで listener は落とさない。
-- `[hooks].auth_token_ref` 未設定時は認証チェックを行わず（0600 ソケットのみで保護）、CLI が警告を出す。
+- `run` は常にトークンを持って起動する（#785 以前の「`[hooks].auth_token_ref` 未設定なら認証チェックなし」は廃止）。
 
 # リクエスト（body JSON）
 

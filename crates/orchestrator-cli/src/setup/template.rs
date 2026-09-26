@@ -317,7 +317,7 @@ mod tests {
     fn secret_accounts_follow_the_selection() {
         assert_eq!(
             secret_accounts(&selected(&["github"])),
-            vec!["llm-api-key", "hook-token", "github-token"]
+            vec!["llm-api-key", "github-token"]
         );
         assert!(
             secret_accounts(&selected(&[]))

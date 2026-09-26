@@ -4,7 +4,7 @@ title: live-e2e-orca スキル
 description: 実 Slack / 実 GitHub / 実 orca + 実 Claude Code に対して totsuka を通しで動かす実機検証の手順と、orca 側の準備・観測スクリプト（orca 版）。GitHub / Slack の駆動・$E2E_HOME・サンドボックスは live-e2e-herdr のものを共用し、orca 固有の前提（repo 登録・external worktree 表示・プラグインの入れ直し・agent の切り替え）とシナリオ O1〜O6・症状表だけを持つ。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/.claude/skills/live-e2e-orca
 tags: [testing, e2e, skill, tooling, orca, agent-ide]
-generated: { by: claude-code/opus-5, at: 2026-09-19T05:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-09-26T12:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -38,7 +38,7 @@ external worktree の見え方）に依存する不具合はここでしか捕�
   — 登録は人間の Orca に見えるプロジェクトを増やすので**承認を取ってから**行う
 - インストール済みの orca プラグインがソースより新しい（`tt run` が起動するのはインストール済みのコピー）
 - E2E 設定で `[plugins.orca]` が有効かつワークフローの `agent = "orca"`（`use orca` が隔離環境の設定だけを書き換える）、
-  `[orca]` に廃止キーが無い、`[hooks].auth_token_ref` がある
+  `[orca]` に廃止キーが無い、廃止した `[hooks].auth_token_ref` が無い（#785。hook トークンは `run` が生成する）
 
 # 検証状況
 

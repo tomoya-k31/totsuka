@@ -33,7 +33,7 @@ stable（[#760](https://github.com/tomoya-k31/totsuka/issues/760)）。2 段で�
 # Decision
 
 1. **制御ルートは既存の hook UDS に同居させる。** 新しいソケットは作らない。完全一致の `/task/cancel` と `/task/retry` を足し、それ以外のパスは従来どおりシグナル受信（E-08）。ソケットは `[hooks]` が無くても立つので、独立させる理由が無い
-2. **認証は `/focus` と同じ。** Bearer（`[hooks].auth_token_ref`）と 0600。トークン未設定なら Bearer なしで受け付ける振る舞いも同じ
+2. **認証は `/focus` と同じ。** Bearer（`[hooks].auth_token_ref`）と 0600。トークン未設定なら Bearer なしで受け付ける振る舞いも同じ（後に [ADR-0099](/decisions/adr-0099-generated-hook-token.md) で置き換えた: トークンは `run` が生成する `$XDG_STATE_HOME/totsuka/hook-token` になり、`run` は常にトークンを持つので「未設定なら Bearer なし」の振る舞いは無くなった）
 3. **応答の規約は `/focus` に揃える。** 受け付けたら `200` + `{"ok": true, "from", "state", "requeued"?}`。受け付けない要求（未知の id、終わったタスクの cancel、retry できない状態）は `200` + `{"ok": false, "reason"}`。HTTP ステータスは認証・形式・サイズ・Engine の応答不能（503）だけに使う。これで、新しい Engine が 400 を返すのは body が壊れているときだけになり、古い `run`（制御パスを知らずシグナルとして解釈し、`job_id` が無いので 400 を返す）の判別に使える
 4. **規則は 1 か所に置く（`task_control`）。** 何を断り、どう案内するかは、Engine と CLI の直接書き込みで同じでなければならない。遷移そのものは `domain::state::transition`、SQL は `adapters::state_db` のまま
 5. **Engine は run ループの中で適用する**（`PluginEvent::TaskControl`）。dispatch やシグナル処理と直列なので競合しない。適用した cancel では、スロット・セッション経路・出力バッファをその場で解放する。直後の `dispatch_ready` で次のタスクが起動できる。retry は再キューだけで、前回の pane の解放は dispatch 側の防御（#481）に任せる
@@ -61,5 +61,5 @@ stable（[#760](https://github.com/tomoya-k31/totsuka/issues/760)）。2 段で�
 - 制御パスは 3 本になった（`/focus`・`/task/cancel`・`/task/retry`）。フックスクリプトが送るパスは変わらない
 - PR 1 の時点では CLI の振る舞いは変わらない（規則を `task_control` へ移しただけ）。ソケット経由になるのは PR 2 から
 - `task verify` はまだ DB を直接書く。同じルートの形（`/task/<op>` + `{"task_id"}`）に載せられるが、移すのは別の課題
-- #754（`secret:` スキーム）が入ると、CLI 単体で `[hooks].auth_token_ref` を解決できなくなる可能性がある。`totsuka focus` と同じ問題なので、そちらで一緒に決める
+- #754（`secret:` スキーム）が入ると、CLI 単体で `[hooks].auth_token_ref` を解決できなくなる可能性がある。`totsuka focus` と同じ問題なので、そちらで一緒に決める → #785 に切り出し、[ADR-0099](/decisions/adr-0099-generated-hook-token.md) で決着した。CLI は `run` が生成した `$XDG_STATE_HOME/totsuka/hook-token` を読む
 - 検証: `run::hooks` の `a_control_cancel_frees_the_slot_and_session_routes_at_once`（Engine 内の解放を外すと落ちる）、`hook_uds` の `task_routes_*` / `a_refused_task_request_is_still_200_with_its_reason` / `non_control_paths_stay_signal_ingestion`、`task_control` の単体テスト

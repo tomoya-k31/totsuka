@@ -4,7 +4,7 @@ title: click-to-focus セットアップ（terminal-notifier / bundle id / 切�
 description: 通知クリックで対象タスクの herdr pane を開く F-94 の導入手順。terminal-notifier の導入、config.toml の `[macos]` テーブルでの backend / activate_bundle_id / click_command 設定、bundle id の調べ方、動作確認、クリックが効かない・通知が出ないときの切り分け表。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/notifier-macos
 tags: [operations, playbook, notifier, terminal-notifier, click-to-focus, macos]
-generated: { by: claude-code/opus-5, at: 2026-08-22T13:30:00Z }
+generated: { by: claude-code/opus-5.5, at: 2026-09-26T12:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -88,7 +88,7 @@ done = true
 | クリックでコマンドは走るがアプリが前面化しない | `activate_bundle_id` 未設定 or bundle id が誤り | 手順 2 で正しい id を確認して設定 |
 | `config validate` が terminal-notifier のエラーを出す | 未導入 / PATH 外 / `terminal_notifier_bin` が誤り | `brew install terminal-notifier` するか絶対パスを設定。導入せず使う場合は `backend = "osascript"` に戻す（通知は出るがクリック不可） |
 | terminal-notifier 未導入のまま run している | 送信単位で osascript へ自動フォールバック（警告ログあり） | 通知自体は届く。click-to-focus が要るなら導入する |
-| 401 が返る（`totsuka focus` の出力） | 実行中 receiver と `[hooks].auth_token_ref` の不一致 | トークンを揃えて `totsuka run` を再起動（[hook-troubleshooting](/operations/hook-troubleshooting.md) 参照） |
+| 401 が返る（`totsuka focus` の出力） | `totsuka run` の起動後にトークンファイル `$XDG_STATE_HOME/totsuka/hook-token` が消された・作り直された | `totsuka run` を再起動（[hook-troubleshooting](/operations/hook-troubleshooting.md) 参照） |
 
 # 関連
 

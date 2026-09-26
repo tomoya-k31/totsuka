@@ -513,7 +513,7 @@ pub fn run(cx: &Cx, args: DoctorArgs) -> Result<(), CliError> {
         };
         check_worktree_location(cfg, &env, &mut checks);
         check_tool_env_files(cfg, &env, &mut checks);
-        check_hooks(cx, cfg, config_ok, &env, secrets, args, &mut checks);
+        check_hooks(cx, cfg, config_ok, &env, args, &mut checks);
         check_plugins(cx, cfg, &env, secrets, &mut checks);
         check_llm_key(cfg, &env, args, secrets, &mut checks);
         check_orphans(cfg, &env, db.as_ref(), args, &mut checks)?;
@@ -1095,9 +1095,8 @@ fn plugin_secret_skip(
 ///
 /// Checked against **both** the file on disk and the effective config, because
 /// they are not the same document: `Cx::load_config` applies the `TOTSUKA_*`
-/// env overrides *after* parsing, and two of them
-/// (`TOTSUKA_HOOKS_AUTH_TOKEN_REF`, `TOTSUKA_LLM_API_KEY_REF`) carry secret
-/// references.
+/// env overrides *after* parsing, and one of them (`TOTSUKA_LLM_API_KEY_REF`)
+/// carries a secret reference.
 ///
 /// Scanning only the file reports `NotUsed` for an `op://` supplied that way,
 /// which opens the gate and lets `check_hook_socket` / `check_plugins` resolve
@@ -1107,20 +1106,17 @@ fn scheme_in_use(cx: &Cx, cfg: &RootConfig, scheme: SecretScheme) -> bool {
     config_mentions_scheme(cx, scheme) || override_mentions_scheme(cfg, scheme)
 }
 
-/// The effective-config half of [`scheme_in_use`]: the two typed fields an env
+/// The effective-config half of [`scheme_in_use`]: the typed field an env
 /// override can replace after the file has been parsed.
 ///
 /// Deliberately not a walk of the whole `RootConfig`: the file scan already
 /// covers everything written in the document, and the override table is the
 /// only way a reference can reach `doctor` without appearing there.
 fn override_mentions_scheme(cfg: &RootConfig, scheme: SecretScheme) -> bool {
-    [
-        cfg.hooks.auth_token_ref.as_deref(),
-        cfg.llm.as_ref().and_then(|llm| llm.api_key_ref.as_deref()),
-    ]
-    .into_iter()
-    .flatten()
-    .any(|reference| SecretScheme::of(reference) == scheme)
+    cfg.llm
+        .as_ref()
+        .and_then(|llm| llm.api_key_ref.as_deref())
+        .is_some_and(|reference| SecretScheme::of(reference) == scheme)
 }
 
 /// Whether `config.toml` holds a reference of `scheme` in an **actual string
@@ -1163,7 +1159,6 @@ fn check_hooks(
     cfg: &RootConfig,
     config_ok: bool,
     env: &HashMap<String, String>,
-    secrets: SecretReadiness,
     args: DoctorArgs,
     checks: &mut Vec<Check>,
 ) {
@@ -1172,35 +1167,9 @@ fn check_hooks(
     check_opencode_assets(cfg, config_ok, env, args, checks);
     check_hook_deps(env, checks);
     check_agent_tools(cfg, checks);
-    // Which workflows actually need the Bearer token, decided from the static
-    // manifests alone (plugin enablement / reference integrity belong to
-    // `config validate` and the `plugin:*` checks, not here). An unparsable
-    // manifest (`Err`) leaves the capability *unknown*, which must not read as
-    // "not hook-capable" — those workflows are surfaced separately so the
-    // check cannot be silenced by breaking a manifest (#214).
-    let store = cx.store();
-    let mut hook_workflows: Vec<(&str, &str)> = Vec::new();
-    let mut unknown_workflows: Vec<(&str, &str)> = Vec::new();
-    for wf in &cfg.workflows {
-        match store.manifest_of(&wf.agent) {
-            Ok(Some(m)) if m.capabilities.hook_completion => {
-                hook_workflows.push((wf.name.as_str(), wf.agent.as_str()));
-            }
-            // Not installed (`plugin:*` reports that) or not hook-capable.
-            Ok(_) => {}
-            Err(_) => unknown_workflows.push((wf.name.as_str(), wf.agent.as_str())),
-        }
-    }
-    check_hook_token(
-        cfg,
-        env,
-        &hook_workflows,
-        &unknown_workflows,
-        secrets,
-        checks,
-    );
+    check_hook_token(cx, checks);
     check_spool(cx, cfg, env, args, checks);
-    check_hook_socket(cx, cfg, env, secrets, checks);
+    check_hook_socket(cx, cfg, env, checks);
 }
 
 /// Refresh the static hook scripts + per-workflow settings (idempotent, same
@@ -1503,81 +1472,47 @@ fn check_hook_deps(env: &HashMap<String, String>, checks: &mut Vec<Check>) {
     }
 }
 
-/// The Bearer token that authenticates hook POSTs (E-03) must resolve. Unlike
-/// every other check, the severity of an *unset* `auth_token_ref` depends on
-/// the config: it is a hard failure once some workflow uses a hook-capable
-/// agent (that config would accept unauthenticated POSTs in production), and
-/// merely advisory otherwise, since such a config never needs the token and
-/// the 0600 socket is still a barrier.
-///
-/// `hook_workflows` is the `(workflow, agent)` list of workflows whose agent
-/// declares `Capabilities::hook_completion`; `unknown_workflows` holds those
-/// whose agent's capability could not be determined (unparsable manifest), so
-/// the advisory can say *why* it might be under-reporting instead of silently
-/// treating them as not hook-capable (#214).
-fn check_hook_token(
-    cfg: &RootConfig,
-    env: &HashMap<String, String>,
-    hook_workflows: &[(&str, &str)],
-    unknown_workflows: &[(&str, &str)],
-    secrets: SecretReadiness,
-    checks: &mut Vec<Check>,
-) {
-    match &cfg.hooks.auth_token_ref {
-        None if !hook_workflows.is_empty() => {
-            let users = hook_workflows
-                .iter()
-                .map(|(wf, agent)| format!("`{wf}` uses hook-capable agent `{agent}`"))
-                .collect::<Vec<_>>()
-                .join("; ");
+/// The Bearer token that authenticates hook POSTs (E-03) is generated by
+/// `totsuka run` into a 0600 file (#785). Not created yet is normal before
+/// the first `run`; a file other users could read is a leaked token.
+fn check_hook_token(cx: &Cx, checks: &mut Vec<Check>) {
+    let path = orchestrator_core::hooks::token::path(&cx.paths);
+    match orchestrator_core::hooks::token::read(&path) {
+        Ok(None) => checks.push(Check::ok(
+            "hook-token",
+            format!(
+                "{} not created yet → `totsuka run` generates it on first start",
+                path.display()
+            ),
+        )),
+        Ok(Some(_)) if file_mode(&path).is_some_and(|m| m & 0o077 != 0) => {
             checks.push(Check::fail(
                 "hook-token",
-                format!(
-                    "[hooks].auth_token_ref is unset but {users} → hook POSTs would be accepted without a Bearer token (E-03)"
-                ),
-                "set [hooks].auth_token_ref (e.g. keychain:totsuka/hook-token)",
+                format!("{} is readable by other users", path.display()),
+                "delete it and restart `totsuka run` (it generates a new 0600 token)",
             ))
         }
-        None => {
-            let mut detail = "[hooks].auth_token_ref is unset → hook POSTs are accepted on the \
-                 0600 socket without a Bearer token"
-                .to_string();
-            if !unknown_workflows.is_empty() {
-                let unknown = unknown_workflows
-                    .iter()
-                    .map(|(wf, agent)| format!("`{wf}` uses `{agent}`"))
-                    .collect::<Vec<_>>()
-                    .join("; ");
-                detail.push_str(&format!(
-                    "; hook capability is unknown for {unknown} (invalid plugin.toml, see the \
-                     `plugin:*` checks), so this could actually be a failure (E-03)"
-                ));
-            }
-            checks.push(Check::warn(
-                "hook-token",
-                detail,
-                "set [hooks].auth_token_ref (e.g. keychain:totsuka/hook-token) before using a hook-capable agent",
-            ))
-        }
-        // A gated scheme is deliberately not resolved here: a real `op read`
-        // can prompt for biometrics / hang unattended, and a `cmd:` reference
-        // would execute a command (ADR-0006, #444). The 1password probes check
-        // presence + session without prompting.
-        //
-        // This reads like a reporting site but it is a gate: anything
-        // `deferred_note` declines falls through to the real `resolve` below.
-        Some(reference) => match secrets.deferred_note(reference, "[hooks].auth_token_ref") {
-            Some(note) => checks.push(Check::ok("hook-token", note)),
-            None => match secret_resolver(env).resolve(reference) {
-                Ok(_) => checks.push(Check::ok("hook-token", "[hooks].auth_token_ref resolves")),
-                Err(e) => checks.push(Check::fail(
-                    "hook-token",
-                    format!("[hooks].auth_token_ref does not resolve: {e}"),
-                    "export the referenced env var, store the token in the Keychain, or use an op:// reference",
-                )),
-            },
-        },
+        Ok(Some(_)) => checks.push(Check::ok(
+            "hook-token",
+            format!("{} (generated by `totsuka run`)", path.display()),
+        )),
+        Err(e) => checks.push(Check::fail(
+            "hook-token",
+            format!("cannot read {}: {e}", path.display()),
+            "fix its permissions, or delete it and restart `totsuka run`",
+        )),
     }
+}
+
+#[cfg(unix)]
+fn file_mode(path: &Path) -> Option<u32> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path).ok().map(|m| m.permissions().mode())
+}
+
+#[cfg(not(unix))]
+fn file_mode(_path: &Path) -> Option<u32> {
+    None
 }
 
 /// The spool directory (E-07 at-least-once fallback) must be writable, and a
@@ -1798,7 +1733,6 @@ fn check_hook_socket(
     cx: &Cx,
     cfg: &RootConfig,
     env: &HashMap<String, String>,
-    secrets: SecretReadiness,
     checks: &mut Vec<Check>,
 ) {
     let socket_path = match crate::common::hook_socket_path(cx, cfg, env) {
@@ -1840,48 +1774,24 @@ fn check_hook_socket(
         ));
         return;
     }
-    // A receiver is live: prove connectivity + auth with a self-POST.
-    //
-    // This resolves `auth_token_ref` for real — the second `op://` door in
-    // doctor, and one the `hook-token` check's "not resolved here" message
-    // does not cover (#289). Probing without the token would be worse than
-    // not probing: the receiver would answer 401 and the check would report a
-    // token mismatch that does not exist.
-    let token_ref = cfg.hooks.auth_token_ref.as_deref();
-    if let Some(skip) = token_ref.and_then(|reference| secrets.skip_for(reference)) {
-        checks.push(Check::skip(
-            "hook-socket",
-            format!(
-                "a receiver is live at {} but {}",
-                socket_path.display(),
-                skip.detail
-            ),
-            skip.action("the receiver"),
-        ));
-        return;
-    }
-    // Resolution failures used to be swallowed by `.ok()`, which then probed
-    // with no token at all: the receiver answered 401 and the check reported a
-    // *token mismatch* that did not exist. A reference that cannot resolve is
-    // its own finding, and saying so is strictly more informative than a 401
-    // that says nothing about the receiver (Copilot review, #699).
-    let token = match token_ref {
-        None => None,
-        Some(reference) => match secret_resolver(env).resolve(reference) {
-            Ok(token) => Some(token),
-            Err(e) => {
-                checks.push(Check::fail(
-                    "hook-socket",
-                    format!(
-                        "a receiver is live at {} but [hooks].auth_token_ref does not resolve: {e}",
-                        socket_path.display()
-                    ),
-                    "fix the reference — probing without the token would report a 401 that \
-                     says nothing about the receiver",
-                ));
-                return;
-            }
-        },
+    // A receiver is live: prove connectivity + auth with a self-POST, with
+    // the token `run` wrote. Probing without it would report a 401 that says
+    // nothing about the receiver.
+    let token = match orchestrator_core::hooks::token::read(&orchestrator_core::hooks::token::path(
+        &cx.paths,
+    )) {
+        Ok(token) => token,
+        Err(e) => {
+            checks.push(Check::fail(
+                "hook-socket",
+                format!(
+                    "a receiver is live at {} but the hook token cannot be read: {e}",
+                    socket_path.display()
+                ),
+                "see the `hook-token` check",
+            ));
+            return;
+        }
     };
     match self_post(&socket_path, token.as_ref().map(|t| t.expose())) {
         Ok(200) => checks.push(Check::ok(
@@ -1894,14 +1804,11 @@ fn check_hook_socket(
                 "receiver at {} rejected the probe (401)",
                 socket_path.display()
             ),
-            "the running receiver's Bearer token differs from [hooks].auth_token_ref → restart `totsuka run` after aligning the token",
+            "the hook token file changed after `totsuka run` started → restart `totsuka run`",
         )),
         Ok(status) => checks.push(Check::fail(
             "hook-socket",
-            format!(
-                "receiver at {} answered {status}",
-                socket_path.display()
-            ),
+            format!("receiver at {} answered {status}", socket_path.display()),
             "check the `totsuka run` logs for the hook receiver",
         )),
         // The connect above already passed, so reaching here means the
@@ -3309,10 +3216,10 @@ location = "${MY_ROOT}/wt/{worktree_name}"
         assert!(note.contains("doctor stays non-interactive"), "{note}");
 
         let note = ready
-            .deferred_note("cmd:gh auth token", "[hooks].auth_token_ref")
+            .deferred_note("cmd:gh auth token", "[llm].api_key_ref")
             .expect("a note");
         assert!(
-            note.starts_with("[hooks].auth_token_ref is a cmd: reference"),
+            note.starts_with("[llm].api_key_ref is a cmd: reference"),
             "{note}"
         );
 
@@ -3420,23 +3327,13 @@ location = "${MY_ROOT}/wt/{worktree_name}"
 
     /// A reference can reach doctor without ever appearing in `config.toml`:
     /// `Cx::load_config` applies the `TOTSUKA_*` env overrides **after**
-    /// parsing, and two of them carry secret references.
+    /// parsing, and one of them carries a secret reference.
     ///
     /// Measuring readiness from the file alone reported `NotUsed`, which opens
-    /// the gate — and `check_hook_socket` / `check_plugins` then resolve for
-    /// real, which is the unattended prompt the gate exists to prevent.
+    /// the gate — and `check_plugins` then resolves for real, which is the
+    /// unattended prompt the gate exists to prevent.
     #[test]
     fn an_override_supplied_reference_counts_as_in_use() {
-        let cfg = RootConfig::from_toml_str(
-            r#"
-[hooks]
-auth_token_ref = "op://Dev/totsuka/hook-token"
-"#,
-        )
-        .unwrap();
-        assert!(override_mentions_scheme(&cfg, SecretScheme::OnePassword));
-        assert!(!override_mentions_scheme(&cfg, SecretScheme::Command));
-
         let cfg = RootConfig::from_toml_str(
             r#"
 [llm]
@@ -3449,19 +3346,8 @@ api_key_ref = "cmd:gh auth token"
         assert!(override_mentions_scheme(&cfg, SecretScheme::Command));
         assert!(!override_mentions_scheme(&cfg, SecretScheme::OnePassword));
 
-        // A config with neither field set must not switch any probe on.
+        // A config with the field unset must not switch any probe on.
         let cfg = RootConfig::from_toml_str("").unwrap();
-        assert!(!override_mentions_scheme(&cfg, SecretScheme::OnePassword));
-        assert!(!override_mentions_scheme(&cfg, SecretScheme::Command));
-
-        // Silent schemes never gate anything, wherever they came from.
-        let cfg = RootConfig::from_toml_str(
-            r#"
-[hooks]
-auth_token_ref = "keychain:totsuka/hook-token"
-"#,
-        )
-        .unwrap();
         assert!(!override_mentions_scheme(&cfg, SecretScheme::OnePassword));
         assert!(!override_mentions_scheme(&cfg, SecretScheme::Command));
     }

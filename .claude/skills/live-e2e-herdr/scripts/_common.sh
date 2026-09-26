@@ -22,7 +22,6 @@
 tt() {
   env E2E_HOME="$E2E_HOME" \
       E2E_GH_TOKEN="${E2E_GH_TOKEN:-}" \
-      E2E_HOOK_TOKEN="${E2E_HOOK_TOKEN:-}" \
       GH_CONFIG_DIR="${GH_CONFIG_DIR:-$HOME/.config/gh}" \
       XDG_CONFIG_HOME="$E2E_HOME/cfg" \
       XDG_DATA_HOME="$E2E_HOME/data" \

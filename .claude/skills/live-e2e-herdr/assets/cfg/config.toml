@@ -59,10 +59,8 @@ kind = "agent_ide"
 enabled = false
 kind = "agent_ide"
 
-# 完了検知（フック）の受信設定。auth_token_ref を省略すると、フック対応 agent を使う
-# 構成では doctor が fail する。
-[hooks]
-auth_token_ref = "${E2E_HOOK_TOKEN}"
+# 完了検知（フック）の Bearer トークンは `totsuka run` が
+# $XDG_STATE_HOME/totsuka/hook-token に自動生成する（#785）ので、[hooks] は書かない。
 
 # repo_hint を持たないタスクのリポジトリ選択（F-11）に使う。task_source プラグインへも
 # initialize で分類用 default として供給される（#119）ので、これがあると slack.toml 側で

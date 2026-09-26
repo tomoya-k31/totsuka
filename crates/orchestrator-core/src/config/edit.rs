@@ -288,13 +288,6 @@ pub fn set_default_tool(config_toml: &str, name: &str) -> Result<String, EditErr
     Ok(doc.to_string())
 }
 
-/// Set `[hooks] auth_token_ref`.
-pub fn set_hooks_auth_token_ref(config_toml: &str, reference: &str) -> Result<String, EditError> {
-    let mut doc: DocumentMut = config_toml.parse()?;
-    set_value(table_at(&mut doc, "hooks")?, "auth_token_ref", reference);
-    Ok(doc.to_string())
-}
-
 /// Assign `key = new`, keeping whatever decoration the line already had.
 ///
 /// Plain `table[key] = value(x)` replaces the whole `Item`, and the trailing
@@ -586,8 +579,7 @@ max_concurrency = 3
         )
         .unwrap();
         let out = set_tool(&out, "claude-plan", "claude", Some("claude")).unwrap();
-        let out = set_default_tool(&out, "claude").unwrap();
-        set_hooks_auth_token_ref(&out, "keychain:totsuka/hook-token").unwrap()
+        set_default_tool(&out, "claude").unwrap()
     }
 
     #[test]
@@ -623,11 +615,7 @@ max_concurrency = 3
             "anthropic/claude-haiku-4-5"
         );
         assert_eq!(cfg.default_tool.as_deref(), Some("claude"));
-        assert_eq!(
-            cfg.hooks.auth_token_ref.as_deref(),
-            Some("keychain:totsuka/hook-token")
-        );
-        // The user's own comments survived all eight edits.
+        // The user's own comments survived all seven edits.
         assert!(out.contains("# totsuka configuration"), "{out}");
         assert!(out.contains("# max_concurrency = 4"), "{out}");
     }
