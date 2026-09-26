@@ -1,11 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<<<<<<< HEAD
-<!-- generated-from: ai-docs/development/config-reference.md sha256:dd4215706488969269d3735b703549a1bea01ef123fd059eda99228f203bdfaf -->
-=======
-<!-- generated-from: ai-docs/development/config-reference.md sha256:a8b078525afec7d7ae295d711a577a02a7f55ff39e2998f1ba59ad9d746b5094 -->
->>>>>>> 3fb8cc1 (fix(cli): config validate は未インストールのプラグインを飛ばさず、task_source の [llm] の secret: も見る)
+<!-- generated-from: ai-docs/development/config-reference.md sha256:cef956e015d45abd4c36bb4ab32adc8f62a17818c5f02d8f9da20346479668b3 -->
 
 # 設定リファレンス
 
