@@ -60,7 +60,7 @@ pub enum SignalEvent {
     },
     /// The agent opened an interactive question dialog (claude
     /// `AskUserQuestion` via the PreToolUse hook, opencode `question` via the
-    /// plugin's `tool.execute.before`) and is blocked on the human (#487).
+    /// plugin's question `form.created`) and is blocked on the human (#487).
     ///
     /// Unlike [`Notification`](Self::Notification) — which keeps the task
     /// running and holding its slot (R-08) — this parks the task in

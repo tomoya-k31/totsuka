@@ -369,6 +369,11 @@ impl ToolProfile {
                 }
             }
             ToolKind::Opencode => {
+                // Not part of mode_args/plan_args: without it, opencode v2 runs
+                // the session in its shared background server, which never saw
+                // this pane's TOTSUKA_* env, so the completion plugin stays
+                // silent and the task never finishes.
+                args.push("--standalone".to_string());
                 if inp.plan {
                     match &self.plan_args {
                         Some(extra) => args.extend(extra.iter().cloned()),
@@ -690,6 +695,7 @@ mod tests {
         assert_eq!(
             argv(&ToolProfile::builtin("opencode").unwrap(), &inp).1,
             vec![
+                "--standalone".to_string(),
                 "--agent".to_string(),
                 "totsuka-plan".to_string(),
                 "--auto".to_string(),
@@ -805,13 +811,16 @@ mod tests {
     }
 
     // OpenCode argv contract (#196 Phase 3) — flags verified on the real CLI
-    // (opencode 1.14.39 spike, 2026-07-24).
+    // (opencode 1.14.39 spike, 2026-07-24; `--standalone` on v2.0.18).
 
     #[test]
     fn opencode_plan_uses_totsuka_plan_agent_and_resume_is_a_flag() {
         assert_eq!(
             argv(&opencode(), &inputs(false, None, None)),
-            ("opencode".to_string(), vec!["--auto".to_string()]),
+            (
+                "opencode".to_string(),
+                vec!["--standalone".to_string(), "--auto".to_string()]
+            ),
             "implement mode launches the plain TUI, unattended (#420)"
         );
         assert_eq!(
@@ -819,6 +828,7 @@ mod tests {
             (
                 "opencode".to_string(),
                 vec![
+                    "--standalone".to_string(),
                     "--agent".to_string(),
                     "totsuka-plan".to_string(),
                     "--auto".to_string(),
@@ -830,6 +840,7 @@ mod tests {
             (
                 "opencode".to_string(),
                 vec![
+                    "--standalone".to_string(),
                     "--agent".to_string(),
                     "totsuka-plan".to_string(),
                     "--auto".to_string(),
@@ -861,6 +872,7 @@ mod tests {
                 "opencode".to_string(),
                 vec![
                     "--mini".to_string(),
+                    "--standalone".to_string(),
                     "--auto".to_string(),
                     "-s".to_string(),
                     "ses_1".to_string()

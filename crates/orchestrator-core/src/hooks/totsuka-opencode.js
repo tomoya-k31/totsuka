@@ -7,15 +7,23 @@
 // uppercase status parsed from the LAST <<STATUS:...>> marker in the final
 // assistant message.
 //
+// Targets the opencode **v2** plugin API: a default export `{ id, setup }`
+// that reads `ctx.event.subscribe()`. v2 refuses the v1 shape (named export
+// returning an `event` hook) with "Plugin must export a default definition",
+// which is how every opencode task silently stopped reporting completion.
+// The event names below were taken from a real v2.0.18 event stream.
+//
 // Global installation means this runs for the user's personal sessions too —
 // TOTSUKA_HOOK_ENDPOINT (set only in orchestrator panes via ToolLaunchSpec
-// env) gates everything: without it the plugin registers no hooks at all.
+// env) gates everything: without it the plugin subscribes to nothing. The
+// plugin runs inside the opencode *server*, so the env only reaches it when
+// the pane runs its own server — hence totsuka launches `--standalone`
+// (the shared background service was started without it).
 //
-// Fail-open (D-09): no throw may escape a hook; a failed POST is spooled as
-// one NDJSON line under TOTSUKA_HOOK_SPOOL_DIR (E-07), tool errors are
-// swallowed. OpenCode cannot block a stop (marker_block = false), so a
-// missing marker posts UNKNOWN and escalation is handled by the engine's
-// UNKNOWN streak (D-02).
+// Fail-open (D-09): no throw may escape the subscription; a failed POST is
+// spooled as one NDJSON line under TOTSUKA_HOOK_SPOOL_DIR (E-07). OpenCode
+// cannot block a stop (marker_block = false), so a missing marker posts
+// UNKNOWN and escalation is handled by the engine's UNKNOWN streak (D-02).
 
 import { appendFileSync, mkdirSync } from "node:fs"
 import { join } from "node:path"
@@ -69,151 +77,127 @@ function parseMarker(text) {
   return { status, reason: reasonMatch ? reasonMatch[1] : "" }
 }
 
-// Best-effort text summary of a `question` tool call's args, for the
-// waiting_input notification body the operator reads. The args shape is
-// unverified on real machines (#487 live-verify item), so probe the likely
-// spots and fall back to a fixed label.
-function summarizeQuestion(args) {
+// Text summary of a question form, for the waiting_input notification body
+// the operator reads. v2 renders a `question` tool call as a form whose
+// fields carry the question text.
+function summarizeQuestion(form) {
   try {
-    const qs = args?.questions ?? args?.question ?? args
-    if (typeof qs === "string") return qs.slice(0, 500)
-    if (Array.isArray(qs)) {
-      const text = qs
-        .map((q) => (typeof q === "string" ? q : (q?.question ?? q?.text ?? "")))
-        .filter(Boolean)
-        .join(" / ")
-      if (text) return text.slice(0, 500)
-    }
-    if (typeof qs?.question === "string") return qs.question.slice(0, 500)
-    if (typeof qs?.text === "string") return qs.text.slice(0, 500)
+    const text = (form?.fields ?? [])
+      .map((f) => f?.description || f?.title || "")
+      .filter(Boolean)
+      .join(" / ")
+    if (text) return text.slice(0, 500)
   } catch {}
   return "agent asked a question (question tool)"
 }
 
-export const TotsukaOpencode = async ({ client }) => {
-  // Personal session (no orchestrator env): register nothing.
-  if (!ENDPOINT || !JOB_ID) return {}
+export default {
+  id: "totsuka-opencode",
+  setup(ctx) {
+    // Personal session (no orchestrator env): subscribe to nothing.
+    if (!ENDPOINT || !JOB_ID) return
 
-  // Sessions with a `question` dialog currently open (#487). While a question
-  // is pending the turn has not ended, so an idle event arriving then must
-  // NOT be judged for a marker — that would post a spurious UNKNOWN and feed
-  // the D-02 escalation streak.
-  const pendingQuestions = new Set()
+    // sessionID -> { messageID, texts[] }: the text parts of the latest
+    // assistant message, filled from `session.text.ended` (one per ordinal).
+    const lastText = new Map()
+    const started = new Set()
 
-  // The stop decision needs the final assistant message; session.status(idle)
-  // and the deprecated session.idle both signal turn end (they may both fire —
-  // the receiver's idempotency key makes the duplicate harmless).
-  async function onIdle(sessionID) {
-    if (pendingQuestions.has(sessionID)) return
-    let last = null
-    let lastAny = null
-    try {
-      const res = await client.session.messages({ path: { id: sessionID } })
-      const data = res?.data ?? res
-      if (Array.isArray(data)) {
-        last = [...data].reverse().find((m) => (m.info?.role ?? m.role) === "assistant") ?? null
-        lastAny = data.length > 0 ? data[data.length - 1] : null
-      }
-    } catch {}
-    const text = last
-      ? (last.parts ?? [])
-          .filter((p) => p.type === "text")
-          .map((p) => p.text)
-          .join("")
-      : ""
-    // Idempotency-key element: prefer the assistant message id; fall back to
-    // any message id so distinct stops rarely share an empty prompt_id (an
-    // empty one would collapse same-status stops into one DB row).
-    const promptId =
-      last?.info?.id ?? last?.id ?? lastAny?.info?.id ?? lastAny?.id ?? ""
-    const marker = parseMarker(text)
-    await postEvent({
-      job_id: JOB_ID,
-      session_id: sessionID,
-      prompt_id: promptId,
-      hook_event_name: "Stop",
-      ts: isoNow(),
-      // Uppercase mirrors on-stop.sh (the receiver compares case-insensitively
-      // either way).
-      status: marker ? marker.status.toUpperCase() : "UNKNOWN",
-      reason: marker ? marker.reason : "",
-      last_assistant_message: text,
-      background_tasks: [],
-    })
-  }
+    async function onTurnEnd(sessionID) {
+      const last = lastText.get(sessionID)
+      const text = last ? last.texts.join("") : ""
+      const marker = parseMarker(text)
+      await postEvent({
+        job_id: JOB_ID,
+        session_id: sessionID,
+        // Idempotency-key element: the assistant message id; a per-occurrence
+        // fallback keeps distinct text-less stops from collapsing into one row.
+        prompt_id: last?.messageID ?? `stop-${Date.now()}`,
+        hook_event_name: "Stop",
+        ts: isoNow(),
+        // Uppercase mirrors on-stop.sh (the receiver compares
+        // case-insensitively either way).
+        status: marker ? marker.status.toUpperCase() : "UNKNOWN",
+        reason: marker ? marker.reason : "",
+        last_assistant_message: text,
+        background_tasks: [],
+      })
+    }
 
-  return {
-    // The `question` tool blocks the turn on the human (#487): no idle — and
-    // so no marker — can arrive while it waits. Post QuestionPending so the
-    // engine parks the task (waiting_input, slot kept, operator notified),
-    // exactly like claude's AskUserQuestion PreToolUse relay. `callID` is the
-    // per-question idempotency key: a second question must not be dropped as
-    // a duplicate of the first.
-    "tool.execute.before": async (input, output) => {
-      try {
-        if (input?.tool !== "question") return
-        const sessionID = input.sessionID ?? ""
-        if (sessionID) pendingQuestions.add(sessionID)
-        await postEvent({
-          job_id: JOB_ID,
-          session_id: sessionID,
-          // Idempotency key: must be DISTINCT per question (a session-constant
-          // fallback would silently drop the session's second question as a
-          // Duplicate). The fallback is baked into this payload before the
-          // POST, so a spool re-send retries the same key — retry-stable.
-          prompt_id: input.callID ?? `q-${sessionID}-${Date.now()}`,
-          hook_event_name: "QuestionPending",
-          ts: isoNow(),
-          message: summarizeQuestion(output?.args),
-        })
-      } catch {}
-    },
-    "tool.execute.after": async (input) => {
-      try {
-        if (input?.tool === "question") pendingQuestions.delete(input.sessionID)
-      } catch {}
-    },
-    event: async ({ event }) => {
-      try {
-        const t = event?.type ?? ""
-        const props = event?.properties ?? {}
-        if (t === "session.created") {
-          const sessionID = props.info?.id ?? props.sessionID ?? ""
-          if (sessionID) {
-            await postEvent({
-              job_id: JOB_ID,
-              session_id: sessionID,
-              hook_event_name: "SessionStart",
-              ts: isoNow(),
-              source: "startup",
-            })
-          }
-        } else if (t === "session.status") {
-          if (props.status?.type === "idle" && props.sessionID) {
-            await onIdle(props.sessionID)
-          }
-        } else if (t === "session.idle") {
-          if (props.sessionID) await onIdle(props.sessionID)
-        } else if (t === "session.error") {
-          const sessionID = props.sessionID ?? props.info?.id ?? ""
-          // Fail-open: an errored session must not stay marked as
-          // question-pending, or its later idles would be suppressed forever.
-          pendingQuestions.delete(sessionID)
+    async function onEvent(event) {
+      const t = event?.type ?? ""
+      const data = event?.data ?? {}
+      const sessionID = data.sessionID ?? ""
+      if (t === "session.execution.started") {
+        // v2 has no session-created event on the stream; the first execution
+        // of a session stands in for it.
+        if (sessionID && !started.has(sessionID)) {
+          started.add(sessionID)
           await postEvent({
             job_id: JOB_ID,
             session_id: sessionID,
-            // No message context here; a per-occurrence id keeps repeated
-            // errors from collapsing into one row via the idempotency key.
-            prompt_id: `error-${Date.now()}`,
-            hook_event_name: "Stop",
+            hook_event_name: "SessionStart",
             ts: isoNow(),
-            status: "FAILED",
-            reason: String(props.error?.name ?? props.error ?? "session.error"),
-            last_assistant_message: "",
-            background_tasks: [],
+            source: "startup",
           })
         }
+      } else if (t === "session.text.ended") {
+        let cur = lastText.get(sessionID)
+        if (!cur || cur.messageID !== data.assistantMessageID) {
+          cur = { messageID: data.assistantMessageID, texts: [] }
+          lastText.set(sessionID, cur)
+        }
+        cur.texts[data.ordinal ?? cur.texts.length] = data.text ?? ""
+      } else if (t === "session.execution.succeeded") {
+        await onTurnEnd(sessionID)
+      } else if (t === "session.execution.interrupted") {
+        // "shutdown" is opencode exiting (the pane closing), not a turn the
+        // agent ended; anything else (an operator abort) is judged like a stop.
+        if (data.reason !== "shutdown") await onTurnEnd(sessionID)
+      } else if (t === "session.execution.failed") {
+        await postEvent({
+          job_id: JOB_ID,
+          session_id: sessionID,
+          // No message context here; a per-occurrence id keeps repeated
+          // errors from collapsing into one row via the idempotency key.
+          prompt_id: `error-${Date.now()}`,
+          hook_event_name: "Stop",
+          ts: isoNow(),
+          status: "FAILED",
+          reason: String(data.error?.message ?? data.error?.type ?? data.error ?? t),
+          last_assistant_message: "",
+          background_tasks: [],
+        })
+      } else if (t === "form.created") {
+        // The `question` tool blocks the turn on the human (#487), and v2
+        // surfaces it as a form. Post QuestionPending so the engine parks the
+        // task (waiting_input, slot kept, operator notified), exactly like
+        // claude's AskUserQuestion PreToolUse relay. No turn-end event arrives
+        // while the form is open, so nothing needs suppressing meanwhile.
+        const form = data.form ?? {}
+        if (form.metadata?.kind !== "question") return
+        await postEvent({
+          job_id: JOB_ID,
+          session_id: form.sessionID ?? "",
+          // Idempotency key: the form id is distinct per question, so a second
+          // question is not dropped as a duplicate of the first.
+          prompt_id: form.id ?? `q-${Date.now()}`,
+          hook_event_name: "QuestionPending",
+          ts: isoNow(),
+          message: summarizeQuestion(form),
+        })
+      }
+    }
+
+    const controller = new AbortController()
+    void (async () => {
+      try {
+        for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
+          try {
+            await onEvent(event)
+          } catch {}
+        }
       } catch {}
-    },
-  }
+    })()
+    return () => controller.abort()
+  },
 }

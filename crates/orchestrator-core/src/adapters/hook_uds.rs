@@ -737,7 +737,7 @@ mod tests {
     }
 
     /// The shape `on-ask-user-question.sh` (claude PreToolUse) and
-    /// `totsuka-opencode.js` (`tool.execute.before`) emit for an open question
+    /// `totsuka-opencode.js` (a question `form.created`) emit for an open question
     /// dialog (#487). The per-question `prompt_id` must survive — it is the
     /// idempotency-key component that keeps a second question from being
     /// dropped as a duplicate of the first.

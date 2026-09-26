@@ -309,7 +309,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
 
     /// `QuestionPending` (#487): the agent opened an interactive question
     /// dialog — claude `AskUserQuestion` via the PreToolUse hook, opencode
-    /// `question` via `tool.execute.before` — and is blocked on the human.
+    /// `question` via its `form.created` event — and is blocked on the human.
     /// The turn has not ended, so no `Stop{NeedsInput}` will arrive from this
     /// path (ADR-0038 D6); this signal is what parks the task instead.
     async fn on_question_pending(
