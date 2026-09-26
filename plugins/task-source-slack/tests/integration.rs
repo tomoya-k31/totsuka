@@ -4,6 +4,7 @@
 
 mod common;
 
+use plugin_sdk::LineHandler;
 use serde_json::{Value, json};
 
 use common::{Canned, FakeFactory, LookupHarness, Shared, SubmitHarness, scratch_state_dir};

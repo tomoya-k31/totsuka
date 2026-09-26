@@ -1,4 +1,5 @@
-//! JSON-RPC dispatch for the stdio server (F-51). Generic over a
+//! The stdio server (F-51): a [`TaskSourceHandler`] whose wire protocol is
+//! the SDK's (`plugin_sdk::dispatch::handle_line`, #759). Generic over a
 //! [`TransportFactory`] so the whole request/response surface — including
 //! `initialize`'s TokenGuard — is driven in tests with a recorded transport,
 //! no network involved.
@@ -9,14 +10,16 @@
 //! only `task/update_status` remains a deliberate no-op (Slack has no status
 //! column to move). `tasks/fetch` no longer exists as of protocol 0.2.0.
 
-use plugin_protocol::jsonrpc::{Error, Response, error_code};
+use plugin_protocol::jsonrpc::{Error, error_code};
 use plugin_protocol::methods::{
     ConfigValidateParams, ConfigValidateResult, InitializeParams, InitializeResult,
     ResultPublishParams, TaskUpdateStatusParams,
 };
-use plugin_protocol::{Capabilities, OutputCapability, RequestId, method};
-use plugin_sdk::{LineHandler, LookupClient, Reply, SubmitClient, unknown_trigger_keys};
-use serde::de::DeserializeOwned;
+use plugin_protocol::{Capabilities, OutputCapability};
+use plugin_sdk::{
+    LineHandler, LookupClient, Reply, SubmitClient, TaskSourceHandler, not_initialized,
+    unknown_trigger_keys,
+};
 use serde_json::Value;
 
 use std::sync::Arc;
@@ -605,50 +608,14 @@ where
         self.start_runtime = false;
         self
     }
+}
 
-    /// Parse one NDJSON line, dispatch it, and produce a reply. A non-JSON line
-    /// yields a `PARSE_ERROR` response with a null id; blank lines and
-    /// notifications (no `id`) produce no response.
-    pub async fn handle_line(&mut self, line: &str) -> Reply {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            return Reply::none();
-        }
-        let Ok(value) = serde_json::from_str::<Value>(trimmed) else {
-            return Reply::respond(Response::error_without_id(Error::new(
-                error_code::PARSE_ERROR,
-                "request was not valid JSON",
-            )));
-        };
-        // A message without an `id` is a notification: never answered.
-        let Some(id) = value.get("id").map(request_id) else {
-            return Reply::none();
-        };
-        let method = value.get("method").and_then(Value::as_str).unwrap_or("");
-        let params = value.get("params").cloned().unwrap_or(Value::Null);
-        self.dispatch(id, method, params).await
-    }
-
-    async fn dispatch(&mut self, id: RequestId, method: &str, params: Value) -> Reply {
-        match method {
-            method::INITIALIZE => self.initialize(id, params).await,
-            method::CONFIG_VALIDATE => self.config_validate(id, params),
-            method::SHUTDOWN => Reply {
-                line: plugin_protocol::jsonrpc::to_line(&Response::result(id, Value::Null)).ok(),
-                shutdown: true,
-            },
-            method::TASK_UPDATE_STATUS => self.update_status(id, params),
-            method::RESULT_PUBLISH => self.result_publish(id, params).await,
-            other => Reply::respond(Response::error(
-                id,
-                Error::new(
-                    error_code::METHOD_NOT_FOUND,
-                    format!("unknown method: {other}"),
-                ),
-            )),
-        }
-    }
-
+impl<F> TaskSourceHandler for Server<F>
+where
+    F: TransportFactory + Send,
+    F::Transport: Send + Sync + 'static,
+    F::Chat: Send + Sync + 'static,
+{
     /// `initialize`: deserialize the config, adopt the orchestrator-supplied
     /// repositories when `[[repos]]` is omitted (#109) and the orchestrator's
     /// `[llm]` when the plugin's own is omitted (#119), validate the merged
@@ -658,33 +625,23 @@ where
     /// the bot token via a bot-authenticated `auth.test` (#305) — before
     /// accepting the session. A bad token fails startup here, with recovery
     /// guidance, instead of failing later mid-flow.
-    async fn initialize(&mut self, id: RequestId, params: Value) -> Reply {
-        let init: InitializeParams = match parse_params(&params) {
-            Ok(v) => v,
-            Err(reply) => return reply.with_id(id),
-        };
+    async fn initialize(&mut self, init: InitializeParams) -> Result<InitializeResult, Error> {
         // Report a removed key by name before serde gets to it: `unknown field
         // 'trigger_reactions'` is true but does not say the key was removed or
         // what replaced it. Same shape as the herdr plugin (#411).
         let removed = crate::config::removed_keys_in(&init.config);
         if !removed.is_empty() {
-            return Reply::respond(Response::error(
-                id,
-                Error::new(
-                    error_code::CONFIG_INVALID,
-                    format!("invalid slack plugin config: {}", removed.join(" ")),
-                ),
+            return Err(Error::new(
+                error_code::CONFIG_INVALID,
+                format!("invalid slack plugin config: {}", removed.join(" ")),
             ));
         }
         let mut config: SlackConfig = match serde_json::from_value(init.config) {
             Ok(c) => c,
             Err(e) => {
-                return Reply::respond(Response::error(
-                    id,
-                    Error::new(
-                        error_code::CONFIG_INVALID,
-                        format!("invalid slack plugin config: {e}"),
-                    ),
+                return Err(Error::new(
+                    error_code::CONFIG_INVALID,
+                    format!("invalid slack plugin config: {e}"),
                 ));
             }
         };
@@ -833,10 +790,7 @@ where
             crate::workflow_options::WorkflowOptions::resolve(&init.workflows);
         errors.append(&mut option_errors);
         if !errors.is_empty() {
-            return Reply::respond(Response::error(
-                id,
-                Error::new(error_code::CONFIG_INVALID, errors.join("; ")),
-            ));
+            return Err(Error::new(error_code::CONFIG_INVALID, errors.join("; ")));
         }
         let api = Arc::new(SlackApi::new(self.factory.build(settings(&config))));
         if let Err(e) = token_guard(&api, &config, &reaction_triggers).await {
@@ -847,7 +801,7 @@ where
             } else {
                 error_code::INTERNAL_ERROR
             };
-            return Reply::respond(Response::error(id, Error::new(code, e.to_string())));
+            return Err(Error::new(code, e.to_string()));
         }
 
         // `to_group` membership, which only a live `usergroups.list` can
@@ -876,23 +830,20 @@ where
                         .filter(|g| !groups.iter().any(|mine| mine == g))
                         .collect();
                     if !missing.is_empty() {
-                        return Reply::respond(Response::error(
-                            id,
-                            Error::new(
-                                error_code::CONFIG_INVALID,
-                                format!(
-                                    "`trigger.to_group` names user group(s) {} that `{}` does not belong to \
+                        return Err(Error::new(
+                            error_code::CONFIG_INVALID,
+                            format!(
+                                "`trigger.to_group` names user group(s) {} that `{}` does not belong to \
                                      → a mention of a group you are not in never reaches \
                                      this plugin, so the workflow could never run. Your \
                                      groups: {}",
-                                    missing.join(", "),
-                                    config.target_user_id,
-                                    if groups.is_empty() {
-                                        "(none)".to_string()
-                                    } else {
-                                        groups.join(", ")
-                                    }
-                                ),
+                                missing.join(", "),
+                                config.target_user_id,
+                                if groups.is_empty() {
+                                    "(none)".to_string()
+                                } else {
+                                    groups.join(", ")
+                                }
                             ),
                         ));
                     }
@@ -920,12 +871,10 @@ where
                     } else {
                         error_code::CONFIG_INVALID
                     };
-                    return Reply::respond(Response::error(
-                        id,
-                        Error::new(
-                            code,
-                            format!(
-                                "a workflow uses `trigger.to_group`, but the operator's user groups \
+                    return Err(Error::new(
+                        code,
+                        format!(
+                            "a workflow uses `trigger.to_group`, but the operator's user groups \
                                  could not be resolved ({e}) → `to_group` is checked \
                                  against your live membership, and group mentions \
                                  cannot be routed without it. The usual cause is a \
@@ -933,7 +882,6 @@ where
                                  update the app with the current manifest, Reinstall \
                                  to Workspace, then store the NEW `xoxp-` and `xoxb-` \
                                  tokens — a reinstall reissues both"
-                            ),
                         ),
                     ));
                 }
@@ -993,10 +941,7 @@ where
                     // would otherwise leave `doctor` green on a plugin that
                     // can never receive an event.
                     if let Err(e) = gateway::probe(pubsub.as_ref(), &gateway).await {
-                        return Reply::respond(Response::error(
-                            id,
-                            Error::new(error_code::CONFIG_INVALID, e.to_string()),
-                        ));
+                        return Err(Error::new(error_code::CONFIG_INVALID, e.to_string()));
                     }
                     let (events, drain) = gateway::spawn(
                         Arc::clone(&api),
@@ -1033,27 +978,29 @@ where
             state,
             runtime,
         });
-        Reply::respond(Response::result(id, claims))
+        Ok(claims)
     }
 
     /// `config/validate`: schema + static consistency checks only (F-59/F-63).
     /// Deliberately offline — live token verification is `initialize`'s
     /// TokenGuard — so `config validate` / `doctor` probes need no network.
-    fn config_validate(&mut self, id: RequestId, params: Value) -> Reply {
-        let parsed: ConfigValidateParams = match parse_params(&params) {
-            Ok(v) => v,
-            Err(reply) => return reply.with_id(id),
-        };
+    async fn config_validate(
+        &mut self,
+        parsed: ConfigValidateParams,
+    ) -> Result<ConfigValidateResult, Error> {
         // Removed keys by name — `config does not parse` below is true but
         // useless for the one config change #396 forces.
         let removed = crate::config::removed_keys_in(&parsed.config);
         if !removed.is_empty() {
-            return ok_validate(id, removed, Vec::new());
+            return Ok(validate_result(removed, Vec::new()));
         }
         let config: SlackConfig = match serde_json::from_value(parsed.config) {
             Ok(c) => c,
             Err(e) => {
-                return ok_validate(id, vec![format!("config does not parse: {e}")], Vec::new());
+                return Ok(validate_result(
+                    vec![format!("config does not parse: {e}")],
+                    Vec::new(),
+                ));
             }
         };
         // Offline, like everything else here: it reads one local file the
@@ -1068,26 +1015,22 @@ where
         let mut errors = static_config_errors(&config);
         let (_, trigger_errors) = resolve_trigger_shape(&parsed.workflows);
         errors.extend(trigger_errors);
-        ok_validate(id, errors, warnings)
+        Ok(validate_result(errors, warnings))
     }
 
     /// `task/update_status`: accepted and ignored — Slack has no status
     /// column to move; the draft lifecycle is driven by the approve/reject
     /// buttons instead.
-    fn update_status(&mut self, id: RequestId, params: Value) -> Reply {
+    async fn update_status(&mut self, parsed: TaskUpdateStatusParams) -> Result<Value, Error> {
         if self.session.is_none() {
-            return not_initialized(id);
+            return Err(not_initialized());
         }
-        let parsed: TaskUpdateStatusParams = match parse_params(&params) {
-            Ok(v) => v,
-            Err(reply) => return reply.with_id(id),
-        };
         tracing::debug!(
             task_id = parsed.task_id,
             status = parsed.status,
             "task/update_status stub: accepted, no source-side status to move"
         );
-        Reply::respond(Response::result(id, Value::Null))
+        Ok(Value::Null)
     }
 
     /// `result/publish`: the agent's reply arrives here. By default — and for
@@ -1108,14 +1051,8 @@ where
     /// Fails only when nothing can be presented at all (unknown task after a
     /// restart, empty content, a direct post the API refused); draft
     /// presentation failures are logged and tolerated.
-    async fn result_publish(&mut self, id: RequestId, params: Value) -> Reply {
-        let Some(session) = self.session.as_ref() else {
-            return not_initialized(id);
-        };
-        let parsed: ResultPublishParams = match parse_params(&params) {
-            Ok(v) => v,
-            Err(reply) => return reply.with_id(id),
-        };
+    async fn result_publish(&mut self, parsed: ResultPublishParams) -> Result<Value, Error> {
+        let session = self.session.as_ref().ok_or_else(not_initialized)?;
         // Which mode this task's workflow asked for (#554). The workflow is
         // the one the pipeline submitted under; a task whose entry is gone —
         // a restart, or a workflow renamed out of config since — falls back to
@@ -1144,13 +1081,7 @@ where
                 &session.config.target_user_id,
             )
             .await;
-            return match result {
-                Ok(()) => Reply::respond(Response::result(id, Value::Null)),
-                Err(message) => Reply::respond(Response::error(
-                    id,
-                    Error::new(error_code::INTERNAL_ERROR, message),
-                )),
-            };
+            return published(result);
         }
         let result = match delivery {
             crate::workflow_options::Delivery::Direct => {
@@ -1177,13 +1108,7 @@ where
                 .await
             }
         };
-        match result {
-            Ok(()) => Reply::respond(Response::result(id, Value::Null)),
-            Err(message) => Reply::respond(Response::error(
-                id,
-                Error::new(error_code::INTERNAL_ERROR, message),
-            )),
-        }
+        published(result)
     }
 }
 
@@ -1196,7 +1121,7 @@ where
     F::Chat: Send + Sync + 'static,
 {
     async fn handle_line(&mut self, line: &str) -> Reply {
-        Server::handle_line(self, line).await
+        plugin_sdk::dispatch::handle_line(self, line).await
     }
 }
 
@@ -1386,8 +1311,8 @@ fn scope_warnings(
 /// that is no longer declared. Since `tasks/fetch` was removed at protocol
 /// 0.2.0 every task source is push-only, so the `task_submit` flag could only
 /// ever be `true`; it was removed in 0.5.0 (#496).
-fn capabilities_result(workflows: &[plugin_protocol::methods::WorkflowInfo]) -> Value {
-    let result = InitializeResult {
+fn capabilities_result(workflows: &[plugin_protocol::methods::WorkflowInfo]) -> InitializeResult {
+    InitializeResult {
         // The `[[workflows]]` keys this plugin consumes (#554).
         claimed_options: crate::workflow_options::claims(workflows),
         plugin_version: plugin_version(),
@@ -1396,8 +1321,7 @@ fn capabilities_result(workflows: &[plugin_protocol::methods::WorkflowInfo]) -> 
             outputs: vec![OutputCapability::Source],
             ..Capabilities::default()
         },
-    };
-    serde_json::to_value(result).unwrap_or(Value::Null)
+    }
 }
 
 /// This plugin's version, from Cargo. Falls back to `0.0.0` if unparseable.
@@ -1405,64 +1329,25 @@ fn plugin_version() -> semver::Version {
     semver::Version::parse(env!("CARGO_PKG_VERSION")).unwrap_or(semver::Version::new(0, 0, 0))
 }
 
-/// A carrier used before an id is available (params-parse failures).
-struct DeferredError {
-    error: Error,
-}
-
-impl DeferredError {
-    fn with_id(self, id: RequestId) -> Reply {
-        Reply::respond(Response::error(id, self.error))
-    }
-}
-
-/// Deserialize params, returning a deferred INVALID_PARAMS error on failure.
-fn parse_params<T: DeserializeOwned>(params: &Value) -> Result<T, DeferredError> {
-    serde_json::from_value(params.clone()).map_err(|e| DeferredError {
-        error: Error::new(error_code::INVALID_PARAMS, format!("invalid params: {e}")),
-    })
-}
-
-/// A `config/validate` success reply (the RPC itself succeeds; validity is in
-/// the payload).
-fn ok_validate(id: RequestId, errors: Vec<String>, warnings: Vec<String>) -> Reply {
-    let result = ConfigValidateResult {
+/// A `config/validate` answer (the RPC itself succeeds; validity is in the
+/// payload).
+fn validate_result(errors: Vec<String>, warnings: Vec<String>) -> ConfigValidateResult {
+    ConfigValidateResult {
         // **Warnings do not make a config invalid.** Valid-with-warnings is
         // the case this channel exists for; folding them into `valid` would
         // turn "you may want to know" into "I refuse to run".
         valid: errors.is_empty(),
         errors,
         warnings,
-    };
-    Reply::respond(Response::result(
-        id,
-        serde_json::to_value(result).unwrap_or(Value::Null),
-    ))
-}
-
-/// The error for a task_source method invoked before `initialize`.
-fn not_initialized(id: RequestId) -> Reply {
-    Reply::respond(Response::error(
-        id,
-        Error::new(
-            error_code::INVALID_REQUEST,
-            "plugin not initialized → send `initialize` first",
-        ),
-    ))
-}
-
-/// Convert a JSON id value into a [`RequestId`]. The host uses numeric ids; a
-/// string id round-trips as-is, and any other JSON scalar is preserved via its
-/// textual form rather than collapsing to an empty string, so the caller can
-/// still correlate the reply.
-fn request_id(id: &Value) -> RequestId {
-    if let Some(n) = id.as_i64() {
-        RequestId::Number(n)
-    } else if let Some(s) = id.as_str() {
-        RequestId::Str(s.to_string())
-    } else {
-        RequestId::Str(id.to_string())
     }
+}
+
+/// `result/publish`'s answer: a message from a publish that could not present
+/// anything is the caller's error to report.
+fn published(result: Result<(), String>) -> Result<Value, Error> {
+    result
+        .map(|()| Value::Null)
+        .map_err(|message| Error::new(error_code::INTERNAL_ERROR, message))
 }
 
 #[cfg(test)]

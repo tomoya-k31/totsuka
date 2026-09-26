@@ -29,8 +29,8 @@ use crate::reaction::{ReactionTriggers, reaction_target, to_mention};
 use crate::repo_resolver::{Resolution, resolve};
 use crate::slack_api::{PostEphemeral, SlackApi, SlackFile};
 use crate::socket_mode::SocketEvent;
-use crate::template;
 use crate::transport::SlackTransport;
+use plugin_sdk::template;
 use repo_classifier::HttpTransport;
 
 /// Slack coordinates a task needs again at `result/publish` time (where the

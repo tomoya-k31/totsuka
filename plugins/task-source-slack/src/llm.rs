@@ -15,7 +15,7 @@ use repo_classifier::{
 };
 
 use crate::config::{LlmBackend, LlmConfig, RepoInfo, SlackPrompts};
-use crate::template;
+use plugin_sdk::template;
 
 /// How much of a candidate's README is offered to the classifier.
 const README_HEAD_LINES: usize = 30;
