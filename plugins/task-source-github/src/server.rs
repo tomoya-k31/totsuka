@@ -91,6 +91,13 @@ where
     F: TransportFactory + Send,
     F::Transport: Send + Sync + 'static,
 {
+    /// Read by the SDK only for params that do not parse: before
+    /// `initialize` they are answered "initialize first", as this server did
+    /// when it checked the session before reading params.
+    fn initialized(&self) -> bool {
+        self.session.is_some()
+    }
+
     /// `initialize`: deserialize the config, build the client, then start the
     /// resident [`poll_loop`] over the supplied triggers — each tick fetches
     /// every trigger and pushes the matching tasks via `task/submit` (0.1.6).
