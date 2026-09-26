@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:e4c1bb85b213c4681fd813ed7f2a6fe208fb2b650dc2c8c7fe03d8cf30e97e9a -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:8537fe16d96fbac565fe705946bcee4882d660ea1f634ff4cc7fc86c59e262db -->
 
 # 設定リファレンス
 
@@ -575,7 +575,7 @@ pane 内で起動する AI ツール CLI の定義。組み込みとして `clau
 
 `kind = "codex"` はツール側での一回きりの信頼設定が要る。`kind = "opencode"` は信頼設定こそ不要だが、縮退する箇所が多い。
 
-アダプタは、再開の仕方とフック設定の受け取り方が異なる。claude は設定ファイルを受け取りフラグで再開し、codex はフックをグローバルに登録してサブコマンドで再開し、opencode もグローバル配置でフラグで再開する。opencode は不可視の注入ができないため、タスクの指示とマーカー規約は pane から見える形で渡る。
+アダプタは、再開の仕方とフック設定の受け取り方が異なる。claude は設定ファイルを受け取りフラグで再開し、codex はフックをグローバルに登録してサブコマンドで再開し、opencode もグローバル配置でフラグで再開する。opencode でも、タスクの指示とマーカー規約はプラグインがシステムプロンプトへ足すので、pane には表示されない。
 
 ### モデルと推論強度の指定
 

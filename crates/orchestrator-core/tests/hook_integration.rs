@@ -1855,11 +1855,11 @@ async fn dispatch_with_codex_tool_builds_codex_argv() {
 }
 
 /// #196 Phase 3: a repo pinned to the built-in `opencode` tool dispatches the
-/// plain opencode TUI argv, and — because opencode has no invisible-injection
-/// channel — the task instructions + marker convention ride the **visible**
-/// extra_context instead of `TOTSUKA_PROMPT_CONTEXT`.
+/// plain opencode TUI argv, and the task instructions + marker convention ride
+/// `TOTSUKA_PROMPT_CONTEXT`, which the v2 plugin's `context` hook appends to
+/// the system prompt — not the visible extra_context it used before that.
 #[tokio::test]
-async fn dispatch_with_opencode_tool_routes_context_visibly() {
+async fn dispatch_with_opencode_tool_routes_context_invisibly() {
     let base = scratch("opencode_dispatch");
     let repo = setup_repo(&base);
     let dispatch_log = base.join("dispatch.ndjson");
@@ -1928,18 +1928,15 @@ async fn dispatch_with_opencode_tool_routes_context_visibly() {
         json!(["--standalone", "--auto"]),
         "implement mode launches the plain TUI, unattended (#420), on its own server"
     );
-    // Visible routing: instructions + marker convention in extra_context …
-    let ctx = params["extra_context"]
+    // Invisible routing: instructions + marker convention in the env …
+    let ctx = tool["env"]["TOTSUKA_PROMPT_CONTEXT"]
         .as_str()
-        .expect("visible extra_context for a non-injecting tool");
+        .expect("TOTSUKA_PROMPT_CONTEXT for an injecting tool");
     assert!(ctx.contains("回答は日本語で作成してください。"), "{ctx}");
     assert!(ctx.contains("<<STATUS:COMPLETED>>"), "{ctx}");
-    // … and no invisible channel; the rest of the hook env still rides.
-    assert!(
-        tool["env"].get("TOTSUKA_PROMPT_CONTEXT").is_none(),
-        "no invisible channel for opencode: {}",
-        tool["env"]
-    );
+    // … and not duplicated into the visible prompt.
+    let visible = params["extra_context"].as_str().unwrap_or("");
+    assert!(!visible.contains("<<STATUS:COMPLETED>>"), "{visible}");
     assert!(tool["env"].get("TOTSUKA_JOB_ID").is_some());
     let _ = std::fs::remove_dir_all(&base);
 }
@@ -2448,90 +2445,6 @@ async fn an_initial_prompt_returns_when_a_resume_turns_out_to_be_impossible() {
     assert_eq!(
         attempts[1]["params"]["extra_context"], INITIAL_PROMPT,
         "the agent this actually starts remembers nothing, so it is told again"
-    );
-    let _ = std::fs::remove_dir_all(&base);
-}
-
-/// #415 on a tool with no invisible channel: the preamble leads and everything
-/// that used to be the whole visible context — the task's instructions and the
-/// marker convention — follows it, in that order.
-#[tokio::test]
-async fn an_initial_prompt_precedes_the_visible_marker_convention() {
-    let base = scratch("initial_prompt_opencode");
-    let repo = setup_repo(&base);
-    let dispatch_log = base.join("dispatch.ndjson");
-
-    let mut plugins = PluginSet::default();
-    plugins.sources.insert(
-        "mock_src".to_string(),
-        launch(
-            "task_source",
-            "mock_src",
-            json!({ "task_submit": true, "submit_workflow": "wf", "submit_tasks": [{ "id": "1", "source": "github", "title": "t",
-                                "instructions": "回答は日本語で作成してください。" }] }),
-        )
-        .await,
-    );
-    plugins.agents.insert(
-        "mock_agent".to_string(),
-        launch(
-            "agent_ide",
-            "mock_agent",
-            json!({ "resume_session": true, "stream_states": ["running"], "dispatch_log": dispatch_log }),
-        )
-        .await,
-    );
-
-    let hook = HookRuntime {
-        socket_path: base.join("agent-events.sock"),
-        auth_token: None,
-        spool_dir: None,
-        settings_paths: HashMap::from([("wf".to_string(), base.join("orchestrator-wf.json"))]),
-        block_retry_limit: 3,
-    };
-    let mut settings = engine_settings(workflows("none", "none"), Some(hook));
-    for wf in &mut settings.workflows {
-        wf.initial_prompt = Some(INITIAL_PROMPT.to_string());
-    }
-    settings.repos = vec![RepoSettings {
-        name: "clone".to_string(),
-        path: repo.clone(),
-        summary: None,
-        worktree_location: None,
-        tool: Some("opencode".to_string()),
-    }];
-    settings.location_template = "{repo}/../wt/{worktree_name}".to_string();
-
-    let mut engine = Engine::new(
-        StateDb::open(&base.join("state.db")).unwrap(),
-        settings,
-        plugins,
-        SystemGitRunner::default(),
-        no_llm(),
-    )
-    .await;
-
-    let dispatch_probe = dispatch_log.clone();
-    run_until(&mut engine, move || !read_log(&dispatch_probe).is_empty()).await;
-    engine.shutdown(GRACE).await;
-
-    let ctx = last_dispatch_params(&dispatch_log)["extra_context"]
-        .as_str()
-        .expect("visible extra_context for a non-injecting tool")
-        .to_string();
-    assert!(
-        ctx.starts_with(INITIAL_PROMPT),
-        "the preamble leads: {ctx:?}"
-    );
-    let instructions = ctx
-        .find("回答は日本語で作成してください。")
-        .expect("instructions still delivered");
-    let marker = ctx
-        .find("<<STATUS:COMPLETED>>")
-        .expect("marker convention still delivered");
-    assert!(
-        INITIAL_PROMPT.len() < instructions && INITIAL_PROMPT.len() < marker,
-        "nothing the completion contract depends on was displaced: {ctx:?}"
     );
     let _ = std::fs::remove_dir_all(&base);
 }

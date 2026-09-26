@@ -215,14 +215,15 @@ impl ToolProfile {
             // Confirmed by the Phase 3 real-machine spike (2026-07-24,
             // opencode 1.14.39): `-s <id>` resume with retained context,
             // `session.created` id capture, last-message fetch via the SDK.
-            // No invisible injection (instructions ride the visible
-            // extra_context), no stop block (UNKNOWN streak escalation
-            // instead), no prompt-type hooks, no heartbeat. `plan_mode` is
-            // the `--agent totsuka-plan` full-deny agent (a partial
-            // permission deny leaks via subagent delegation — spike finding).
+            // No prompt-type hooks, no heartbeat. `plan_mode` is the
+            // `--agent totsuka-plan` full-deny agent (a partial permission
+            // deny leaks via subagent delegation — spike finding). Injection
+            // (a `context` session hook appending to the system prompt) and
+            // the stop block (a one-shot `session.prompt` re-ask) arrived
+            // with the v2 plugin API, confirmed on opencode 2.0.18.
             ToolKind::Opencode => ToolCapabilities {
-                invisible_injection: false,
-                marker_block: false,
+                invisible_injection: true,
+                marker_block: true,
                 prompt_verification: false,
                 resume: true,
                 plan_mode: true,

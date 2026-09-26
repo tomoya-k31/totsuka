@@ -1,10 +1,10 @@
 ---
 type: Runbook
 title: OpenCode ツールのセットアップと運用
-description: リポジトリ/ワークフローを OpenCode で動かすためのセットアップ（インストール確認・config 設定・アセット自動配置）と、Codex/Claude と異なる縮退（block 不可・指示が可視・llm 検収不可）の運用上の注意。
+description: リポジトリ/ワークフローを OpenCode で動かすためのセットアップ（インストール確認・config 設定・アセット自動配置）と、Codex/Claude と異なる縮退（llm 検収不可・heartbeat 無し・triage/design で gh を使えない）の運用上の注意。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/orchestrator-core/src/hooks
 tags: [operations, runbook, opencode, tool, plugin, doctor]
-generated: { by: claude-code/opus-5.5, at: 2026-09-26T13:30:00Z }
+generated: { by: claude-code/opus-5.5, at: 2026-09-26T15:30:00Z }
 status: stable
 owner: tomoya-k31
 ---
@@ -59,11 +59,16 @@ Codex と違い **trust 手順は不要**（opencode は plugins/ 配下を無�
 
 # 既知の縮退と運用上の注意（ToolCapabilities）
 
-- **marker_block なし**: マーカー無し停止をその場でブロック・再依頼できない。
-  UNKNOWN が連続すると engine の streak（既定 3）でエスカレーションする。
-  マーカー規約は可視の指示文として毎回渡るため、通常は初回から付く。
-- **invisible_injection なし**: タスク指示 + マーカー規約は**可視の
-  extra_context** として pane に表示される（Claude/Codex の不可視注入と異なる）。
+- **マーカー欠落時は 1 回だけ再依頼する**（claude の Stop block 相当、
+  [ADR-0107](/decisions/adr-0107-opencode-hook-parity.md)）。UNKNOWN を送った後に
+  プラグインが「応答の最終行に <<STATUS:…>> を付けてください」を pane に送る。
+  再依頼が pane に user 入力として見えるのは claude と異なる。
+- **タスク指示 + マーカー規約は不可視で届く**。プラグインの `context` フックが
+  システムプロンプトへ足す（claude の UserPromptSubmit 注入相当）。
+- **サブエージェント（タスクツール）のセッションは報告しない**。子のターン終了は
+  タスクの完了ではないので、Stop / SessionStart を送らず、マーカー規約も注入しない。
+- **triage / design は `gh` を使えない**: `totsuka-plan` が bash を全 deny するため、
+  成果物（issue コメント等）をエージェント自身が書けない。claude の deny 同等化は未対応。
 - **prompt 型検収なし**: `verification = "llm"` は不可（validate が警告）。
   human か none を使う。
 - **heartbeat なし**: 長時間タスクは workflow `timeout_secs` を長めに。
