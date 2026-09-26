@@ -14,6 +14,8 @@ fn the_binary_conforms_to_the_protocol() {
             "user_token": "xoxp-user-test",
             "target_user_id": "U_ME"
         },
+        // One candidate: with none, initialize refuses for that reason alone.
+        "repositories": [{ "name": "web-app" }],
         "workflows": [{ "workflow": "slack-reply", "trigger": { "mention": true } }]
     }))
     .expect("valid initialize params");

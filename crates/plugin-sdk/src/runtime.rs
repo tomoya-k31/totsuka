@@ -124,16 +124,21 @@ pub fn stdio() -> Stdio {
     tokio::spawn(async move {
         let mut stdout = tokio::io::stdout();
         loop {
-            // `biased`: lines first, so a flush is only answered once the
-            // lines queued before it are out. It drains with `try_recv` for
-            // the same reason — both queues filled from one task, in order.
+            // A flush answers once every line queued *before* it is out. Those
+            // are exactly the `rx.len()` lines waiting when it is picked —
+            // draining only those, and not biasing the select towards lines,
+            // keeps a producer that never stops (a state stream) from holding
+            // the flush, and with it the process exit, forever.
             let written = tokio::select! {
-                biased;
                 Some(line) = rx.recv() => write_line(&mut stdout, &line).await,
                 Some(ack) = flushes.recv() => {
                     let mut written = true;
-                    while written && let Ok(line) = rx.try_recv() {
+                    for _ in 0..rx.len() {
+                        let Ok(line) = rx.try_recv() else { break };
                         written = write_line(&mut stdout, &line).await;
+                        if !written {
+                            break;
+                        }
                     }
                     let _ = ack.send(());
                     written
