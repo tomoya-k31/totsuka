@@ -111,4 +111,5 @@
 * [ADR-0103 Engine の状態は、不変条件を持つものだけを型へ取り出す](adr-0103-engine-state-types.md) - run::Engine の 28 フィールドを責務ごとの型へ分けるとき、取り出すのは自分で守る不変条件を持つものだけにし、その型はプラグイン・DB・git を呼ばないと決めた。不変条件の無い集合（待ち状態のメモ、セッションの宛先表）は Engine のフィールドのまま残す。
 * [ADR-0104 プラグインの約束事を、実バイナリを黒箱で検査する適合キット plugin-conformance に 1 か所化する](adr-0104-plugin-conformance-kit.md) - 各プラグインの tests/ に揃わない形で複製されていたプロトコル適合テストを、プラグインのバイナリを起動して stdio で検査する新クレート plugin-conformance に集約した決定。in-process 検査・plugin-sdk / test-support への同居は却下し、kind ごとのリクエスト一覧は plugin-protocol の HOST_REQUESTS に置いてメソッド定数の網羅をテストで保証する。
 * [ADR-0105 opencode の完了検知を v2 のプラグイン API に移し、opencode を必ず --standalone で起動する](adr-0105-opencode-v2-plugin.md) - opencode v2 で totsuka-opencode.js が読み込まれず、共有バックグラウンドサーバーに pane の env も届かないため、opencode タスクの完了が一切検知されなくなった。プラグインを v2 の既定エクスポート + ctx.event.subscribe に書き直し、argv の先頭に --standalone を固定した決定。v1 互換は捨てる。
+* [ADR-0106 ホスト別の config ファイル（hosts/<host>.toml）を自動で選ぶ](adr-0106-per-host-config-file.md) - dotfiles で ~/.config を全マシン共有すると、ほぼ全体がホスト依存の config.toml を 1 本しか置けない。--config が無いとき hosts/<host>.toml があればそれを、無ければ config.toml を読む方式にした決定。include/merge・TOTSUKA_HOST・macOS の LocalHostName は採らなかった。
 <!-- okf:index:end -->

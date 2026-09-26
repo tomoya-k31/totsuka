@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:ddb8c07ecfc475fb0c3578f7731ce32e054d608758d0af71e5dfc82915b78f55 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:e4c1bb85b213c4681fd813ed7f2a6fe208fb2b650dc2c8c7fe03d8cf30e97e9a -->
 
 # Configuration reference
 
@@ -8,12 +8,36 @@ Every key in `config.toml` — totsuka's own and each plugin's — with its type
 
 ## Where the file lives
 
-**There is one configuration file:** `$XDG_CONFIG_HOME/totsuka/config.toml` (by default `~/.config/totsuka/config.toml`).
+**Each run reads one configuration file.** The default is `$XDG_CONFIG_HOME/totsuka/config.toml` (`~/.config/totsuka/config.toml`); `--config` or a `hosts/<host>.toml` file takes its place when present.
 
 - `--config <path>` overrides its location
+- Each machine can have its own file (see "Which file is read" below)
 - A plugin's own settings are a top-level `[<name>]` table in the same file. totsuka keeps it uninterpreted and passes it to the plugin once secrets are resolved
 
 The separate `plugins/{name}.toml` files are gone. If you still have them they are not read, and they do not produce an error either — delete them when you move your settings across.
+
+### Which file is read
+
+**Each run reads exactly one file — the first of these that applies.** Files are never merged or included.
+
+1. the `--config <path>` you passed
+2. `$XDG_CONFIG_HOME/totsuka/hosts/<host>.toml`, if it exists
+3. `$XDG_CONFIG_HOME/totsuka/config.toml`
+
+`<host>` is the machine's hostname up to the first `.`, lowercased: `M2.local` → `hosts/m2.toml`. If the hostname cannot be read, is empty, or contains `/`, step 2 is skipped.
+
+```text
+~/.config/totsuka/          # safe to share across machines via dotfiles
+├── hosts/
+│   ├── macbook.toml
+│   └── mac-mini.toml
+└── config.toml             # used on machines with no matching hosts/ file
+```
+
+- **`totsuka doctor` shows which file was chosen** on its `config-file` line, with the host key. If `hosts/` exists but nothing in it matches and `config.toml` is used instead, the line is a warning that lists what `hosts/` does contain — a macOS hostname can change with the network, and this keeps a fallback from going unnoticed
+- `totsuka run` logs `config: <path> (host=<key>)` at startup
+- `setup` and `plugin install|uninstall|enable|disable` write to the chosen file. They never create a file under `hosts/`; with no file at all they create `config.toml` as before
+- Nothing but configuration lives in this directory, so you can symlink `~/.config/totsuka/` as a whole (GNU Stow and the like). `setup` writes through a temporary file renamed inside the real directory, so the symlink stays intact
 
 `totsuka setup` writes a template. **Every key this page documents is in that template, commented out**, with a one-line summary — so the fastest way to find a setting is usually to open the file rather than this page. `totsuka config validate` checks it; `totsuka config show [--redacted]` prints it.
 

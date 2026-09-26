@@ -72,6 +72,33 @@ impl std::fmt::Display for ExitWith {
 
 impl std::error::Error for ExitWith {}
 
+/// The `hosts/<key>.toml` key for a raw hostname: the part before the first
+/// `.`, ASCII-lowercased (`M2.local` → `m2`). `None` for a name that cannot
+/// be a file name, which makes resolution skip straight to `config.toml`.
+pub fn host_config_key(raw: &str) -> Option<String> {
+    if raw.contains(['/', '\\', '\0']) {
+        return None;
+    }
+    let key = raw.split('.').next()?.to_ascii_lowercase();
+    (!key.is_empty()).then_some(key)
+}
+
+/// The config file for this invocation (#832): `--config`, else
+/// `<config_dir>/hosts/<host>.toml` when it exists, else
+/// `<config_dir>/config.toml`.
+fn select_config_path(
+    config_dir: &Path,
+    config_override: Option<&Path>,
+    host: Option<&str>,
+) -> PathBuf {
+    if let Some(path) = config_override {
+        return path.to_path_buf();
+    }
+    host.map(|h| config_dir.join("hosts").join(format!("{h}.toml")))
+        .filter(|p| p.is_file())
+        .unwrap_or_else(|| config_dir.join("config.toml"))
+}
+
 /// Read `--secrets-stdin`'s JSON line and make it the only source this
 /// process resolves secret references from (#754).
 ///
@@ -123,19 +150,55 @@ pub struct JsonFlag {
 pub struct Cx {
     /// XDG-resolved application directories.
     pub paths: Paths,
-    /// Path of `config.toml` (possibly overridden by `--config`).
+    /// Path of the config file: `--config`, else `hosts/<host>.toml` when it
+    /// exists, else `config.toml` (#832).
     pub config_path: PathBuf,
+    /// This machine's `hosts/` key ([`host_config_key`]), `None` when the
+    /// hostname is unusable.
+    pub host: Option<String>,
+    /// Whether `--config` chose [`Cx::config_path`] — then no host fallback
+    /// happened, even when it names `config.toml`.
+    pub config_overridden: bool,
 }
 
 impl Cx {
     /// Resolve paths, honoring a `--config <path>` override.
     pub fn resolve(config_override: Option<&Path>) -> Result<Self, CliError> {
         let paths = Paths::from_system()?;
-        let config_path = match config_override {
-            Some(path) => path.to_path_buf(),
-            None => paths.config_dir().join("config.toml"),
+        let host = orchestrator_core::platform::unix::hostname()
+            .as_deref()
+            .and_then(host_config_key);
+        let config_path = select_config_path(paths.config_dir(), config_override, host.as_deref());
+        Ok(Self {
+            paths,
+            config_path,
+            host,
+            config_overridden: config_override.is_some(),
+        })
+    }
+
+    /// When a `hosts/` directory exists but this machine fell back to
+    /// `config.toml`, a one-line explanation naming the files it does hold —
+    /// a hostname that changed with the network would otherwise go unnoticed.
+    pub fn host_fallback_warning(&self) -> Option<String> {
+        let dir = self.paths.config_dir();
+        if self.config_overridden || self.config_path != dir.join("config.toml") {
+            return None;
+        }
+        let mut names: Vec<String> = std::fs::read_dir(dir.join("hosts"))
+            .ok()?
+            .filter_map(|e| e.ok()?.file_name().into_string().ok())
+            .filter(|n| n.ends_with(".toml"))
+            .collect();
+        names.sort();
+        let wanted = match &self.host {
+            Some(host) => format!("hosts/{host}.toml does not exist"),
+            None => "the hostname is unusable".to_owned(),
         };
-        Ok(Self { paths, config_path })
+        Some(format!(
+            "{wanted}, so config.toml is used. hosts/: {}",
+            names.join(", ")
+        ))
     }
 
     /// Load and parse `config.toml` and apply the `TOTSUKA_*` overrides
@@ -432,6 +495,92 @@ pub fn git_version() -> Option<String> {
 mod tests {
     use super::*;
     use orchestrator_core::ports::{SecretRef, SecretStore};
+
+    #[test]
+    fn host_config_key_takes_the_first_label_lowercased() {
+        assert_eq!(host_config_key("M2.local").as_deref(), Some("m2"));
+        assert_eq!(host_config_key("mac-mini").as_deref(), Some("mac-mini"));
+        for bad in ["", ".local", "a/b", "a.b/c"] {
+            assert_eq!(host_config_key(bad), None, "{bad:?}");
+        }
+    }
+
+    /// A `Cx` over a scratch `$HOME`, with `hosts/` holding `hosts`.
+    fn host_cx(name: &str, hosts: Option<&[&str]>, host: Option<&str>, over: Option<&Path>) -> Cx {
+        let home = test_support::scratch(name);
+        let paths = Paths::from_env(|k| (k == "HOME").then(|| home.display().to_string())).unwrap();
+        if let Some(hosts) = hosts {
+            let dir = paths.config_dir().join("hosts");
+            std::fs::create_dir_all(&dir).unwrap();
+            for h in hosts {
+                std::fs::write(dir.join(h), "").unwrap();
+            }
+        }
+        let config_path = select_config_path(paths.config_dir(), over, host);
+        Cx {
+            paths,
+            config_path,
+            host: host.map(str::to_owned),
+            config_overridden: over.is_some(),
+        }
+    }
+
+    #[test]
+    fn config_override_beats_a_matching_hosts_file() {
+        let cx = host_cx(
+            "host-override",
+            Some(&["m2.toml"]),
+            Some("m2"),
+            Some(Path::new("/x.toml")),
+        );
+        assert_eq!(cx.config_path, Path::new("/x.toml"));
+        assert_eq!(cx.host_fallback_warning(), None);
+    }
+
+    #[test]
+    fn an_explicit_config_toml_is_not_a_fallback() {
+        let home = test_support::scratch("host-explicit-default");
+        let default = home.join(".config/totsuka/config.toml");
+        let cx = host_cx(
+            "host-explicit-default",
+            Some(&["macbook.toml"]),
+            Some("m2"),
+            Some(&default),
+        );
+        assert_eq!(cx.config_path, default);
+        assert_eq!(cx.host_fallback_warning(), None);
+    }
+
+    #[test]
+    fn a_matching_hosts_file_is_selected() {
+        let cx = host_cx("host-match", Some(&["m2.toml"]), Some("m2"), None);
+        assert_eq!(cx.config_path, cx.paths.config_dir().join("hosts/m2.toml"));
+        assert_eq!(cx.host_fallback_warning(), None);
+    }
+
+    #[test]
+    fn a_hosts_dir_without_a_match_falls_back_with_a_warning() {
+        let cx = host_cx(
+            "host-miss",
+            Some(&["macbook.toml", "mac-mini.toml"]),
+            Some("m2"),
+            None,
+        );
+        assert_eq!(cx.config_path, cx.paths.config_dir().join("config.toml"));
+        assert_eq!(
+            cx.host_fallback_warning().as_deref(),
+            Some(
+                "hosts/m2.toml does not exist, so config.toml is used. hosts/: mac-mini.toml, macbook.toml"
+            )
+        );
+    }
+
+    #[test]
+    fn no_hosts_dir_means_config_toml_and_no_warning() {
+        let cx = host_cx("host-none", None, Some("m2"), None);
+        assert_eq!(cx.config_path, cx.paths.config_dir().join("config.toml"));
+        assert_eq!(cx.host_fallback_warning(), None);
+    }
 
     fn read(input: &str, is_terminal: bool) -> Result<SuppliedSecrets, String> {
         read_supplied_secrets(&mut io::Cursor::new(input.as_bytes()), is_terminal)

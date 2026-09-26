@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:ddb8c07ecfc475fb0c3578f7731ce32e054d608758d0af71e5dfc82915b78f55 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:e4c1bb85b213c4681fd813ed7f2a6fe208fb2b650dc2c8c7fe03d8cf30e97e9a -->
 
 # 設定リファレンス
 
@@ -9,12 +9,36 @@
 
 ## ファイルの場所
 
-**設定ファイルは 1 本だけ**である: `$XDG_CONFIG_HOME/totsuka/config.toml`（既定は `~/.config/totsuka/config.toml`）。
+**1 回の起動で読む設定ファイルは 1 本だけ**である。既定は `$XDG_CONFIG_HOME/totsuka/config.toml`（`~/.config/totsuka/config.toml`）で、`--config` や `hosts/<host>.toml` があればそちらが代わりに読まれる。
 
 - `--config <path>` で場所を上書きできる
+- マシンごとに別ファイルを置ける（下の「どのファイルが読まれるか」）
 - プラグイン個別設定は同じファイルのトップレベル `[<name>]` テーブル。totsuka は中身を解釈せずに保持し、シークレットを解決してからプラグインへ渡す
 
 `plugins/{name}.toml` への分離は無くなった。残っていても読まれず、エラーにもならないので、設定を移したら消すこと。
+
+### どのファイルが読まれるか
+
+**1 回の起動で読むのは、次のうち最初に当てはまった 1 本だけ**である。マージや include はしない。
+
+1. `--config <path>` の指定
+2. `$XDG_CONFIG_HOME/totsuka/hosts/<host>.toml` が存在すれば、それ
+3. `$XDG_CONFIG_HOME/totsuka/config.toml`
+
+`<host>` はホスト名の最初の `.` より前を小文字にしたもの。例: `M2.local` → `hosts/m2.toml`。ホスト名が取れない・空・`/` を含むときは 2 を飛ばす。
+
+```text
+~/.config/totsuka/          # dotfiles で全マシン共有してよい
+├── hosts/
+│   ├── macbook.toml
+│   └── mac-mini.toml
+└── config.toml             # 一致する hosts/ ファイルが無いマシンの既定
+```
+
+- **どれが選ばれたかは `totsuka doctor` の `config-file` 行**に host キーとともに出る。`hosts/` があるのに一致するファイルが無く `config.toml` に落ちたときは warn になり、`hosts/` の中身を列挙する。macOS のホスト名はネットワークで変わりうるので、気付かないまま別の設定で動くのを防ぐため
+- `totsuka run` も起動時に `config: <path> (host=<key>)` をログに出す
+- `setup` / `plugin install|uninstall|enable|disable` は選ばれたファイルへ書く。`hosts/` のファイルを新規作成することはない（どれも無ければ従来どおり `config.toml` を作る）
+- このディレクトリには設定以外のファイルを置かないので、`~/.config/totsuka/` をディレクトリごと symlink（GNU Stow 等）してよい。`setup` の書き込みは実体ディレクトリ内の一時ファイルの rename で完結し、symlink を壊さない
 
 `totsuka setup` が雛形を書き出す。**このページが記述するキーはすべてその雛形にコメント付きで入っている**（1 キー 1 行の要約つき）ので、設定を探すときはこのページより先にファイルを開くほうが早いことが多い。`totsuka config validate` で検証し、`totsuka config show [--redacted]` で表示する。
 

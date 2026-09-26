@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](setup-playbook.ja.md)
 
-<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:25c97712dde109d70d1d6f431b5f8e6c07f7f2baf4bb389ac60d3dd8e6422883 -->
+<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:41e005da8a030b44df992c395c130fe2089438b8597bcf2fe04b19ca3a6532ba -->
 
 # Setup playbook
 
@@ -196,6 +196,16 @@ cp ~/dotfiles/totsuka-config.toml ~/.config/totsuka/config.toml
 ```
 
 Registering the secrets themselves is still done by a human on each machine. Fix up `[[repositories]].path` if your clones live somewhere else there.
+
+**If the contents differ per machine, split them into `hosts/<host>.toml`.** When `~/.config/totsuka/hosts/<host>.toml` exists, that machine reads it instead of `config.toml`, so one dotfiles repository can hold every machine's file. `<host>` is the hostname up to the first `.`, lowercased (`M2.local` → `m2`):
+
+```bash
+mkdir -p ~/.config/totsuka/hosts
+mv ~/.config/totsuka/config.toml ~/.config/totsuka/hosts/"$(hostname -s | tr '[:upper:]' '[:lower:]')".toml
+totsuka doctor    # the config-file line should point at hosts/<host>.toml
+```
+
+The selection order and caveats are in the [configuration reference](config-reference.md) under "Which file is read".
 
 ### doctor is still red
 

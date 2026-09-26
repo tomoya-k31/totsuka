@@ -3,6 +3,8 @@
 //! `kill` with signal `0` performs error checking without sending a signal:
 //! it returns `0` when the process exists, and fails with `EPERM` when the
 //! process exists but we lack permission to signal it. Both mean "alive".
+//!
+//! Also home to [`hostname`], which picks the per-host config file (#832).
 
 use crate::ports::ProcessProbe;
 
@@ -30,9 +32,28 @@ impl ProcessProbe for UnixProcessProbe {
     }
 }
 
+/// This machine's hostname from `gethostname(2)`, or `None` when the call
+/// fails or the name is not UTF-8.
+pub fn hostname() -> Option<String> {
+    let mut buf = [0u8; 256];
+    // SAFETY: `buf` is valid for `buf.len()` bytes; the last byte is never
+    // written, so the result stays NUL-terminated even on truncation.
+    let ret = unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len() - 1) };
+    if ret != 0 {
+        return None;
+    }
+    let end = buf.iter().position(|&b| b == 0)?;
+    String::from_utf8(buf[..end].to_vec()).ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hostname_is_available() {
+        assert!(hostname().is_some_and(|h| !h.is_empty()));
+    }
 
     #[test]
     fn current_process_is_alive() {

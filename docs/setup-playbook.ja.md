@@ -1,7 +1,7 @@
 > 🌐 [English](setup-playbook.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:25c97712dde109d70d1d6f431b5f8e6c07f7f2baf4bb389ac60d3dd8e6422883 -->
+<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:41e005da8a030b44df992c395c130fe2089438b8597bcf2fe04b19ca3a6532ba -->
 
 # セットアップ Playbook
 
@@ -194,6 +194,16 @@ cp ~/dotfiles/totsuka-config.toml ~/.config/totsuka/config.toml
 ```
 
 シークレットの登録だけは各マシンで人間が行う。クローンの置き場所が違うなら `[[repositories]].path` を直すこと。
+
+**マシンごとに中身が違うなら `hosts/<host>.toml` に分ける。** `~/.config/totsuka/hosts/<host>.toml` があれば、そのマシンでは `config.toml` の代わりにそれが読まれるので、全マシンぶんを 1 つの dotfiles で管理できる。`<host>` はホスト名の最初の `.` より前の小文字（`M2.local` → `m2`）:
+
+```bash
+mkdir -p ~/.config/totsuka/hosts
+mv ~/.config/totsuka/config.toml ~/.config/totsuka/hosts/"$(hostname -s | tr '[:upper:]' '[:lower:]')".toml
+totsuka doctor    # config-file 行が hosts/<host>.toml を指していること
+```
+
+選択順と注意点は[設定リファレンス](config-reference.ja.md)の「どのファイルが読まれるか」を参照。
 
 ### `doctor` が赤いまま
 

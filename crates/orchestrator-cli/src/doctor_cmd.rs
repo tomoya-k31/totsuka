@@ -462,6 +462,21 @@ pub fn run(cx: &Cx, args: DoctorArgs) -> Result<(), CliError> {
         ),
     });
 
+    // Which config file was picked (#832): a hostname that changed with the
+    // network silently falls back to config.toml, so say so.
+    let host = cx.host.as_deref().unwrap_or("-");
+    checks.push(match cx.host_fallback_warning() {
+        Some(why) => Check::warn(
+            "config-file",
+            format!("{} (host={host}): {why}", cx.config_path.display()),
+            "add hosts/<host>.toml for this machine, or pass --config",
+        ),
+        None => Check::ok(
+            "config-file",
+            format!("{} (host={host})", cx.config_path.display()),
+        ),
+    });
+
     // Config presence + full offline validation. `config_ok` gates the checks
     // with side effects outside totsuka's own dirs (codex hooks.json sync) —
     // a config that validation rejects must not cause writes `run` would
