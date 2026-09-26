@@ -78,7 +78,7 @@ graph BT
 | `orchestrator-core/src/ports/**` | 同上 |
 
 - **数えないもの**: コメント（ports の doc は実装へのリンクを持つが、rustdoc のリンクは依存ではない）と、各ファイルの `#[cfg(test)]` 以降（domain のテストは TOML から `Workflow` を組み立てるために config を使う）。
-- `crate::config` だけでなくパスの途中の `config::` / `adapters::` も拾うので、`use crate::{config::X}` や `use super::super::config::X` も違反になる。既知の穴は、複数行の `use crate::{ config, }` に `as` で別名を付けて `config::` と一度も書かない形だけ。
+- 各行のパス（`crate::config` とパスの途中の `config::` / `adapters::`）に加えて、`use` 文を `;` まで 1 つにまとめて読み、区切りに `config` / `adapters` という名前が現れたら違反にする。`use super::super::config::X` も、`use crate::{config};` や複数行のグループに `as` で別名を付けた形も捕まる。外部クレートの `…::config` を use すると誤検知になるが、今の domain / ports にその形は無い。
 - 対象ファイルが 0 件なら検査の失敗（exit 2）にする。ディレクトリを動かしたときに黙って素通りしないため。
 - **3 層の外のモジュール**（`run`・`scheduler`・`recovery`・`worktree`・`plugins` などのアプリケーション層、`platform`・`logging`・`paths` などの基盤）は検査しない。アプリケーション層が adapters を組み立てて使うのは正当な向きである（`recovery` → state DB、`plugins::spec` → `PluginSpec`）。
 

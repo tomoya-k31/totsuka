@@ -25,7 +25,7 @@ Accepted（2026-09-26、#762）
 2. **serde の `Deserialize` は付けたまま移す。** serde は設定ファイルではなく汎用のシリアライズ層で、外から見える形は変種名だけである。config 側に写しを持つと変種を 2 か所に書くことになり、変種を足したときにずれる。この 4 つは中身の無い変種だけの enum なので、`config-template-lint` の入力（`ident:` の行）にも影響しない。
 3. **`CleanupPolicyConfig` は config に残す。** `untagged` と `keep_7d` / `keep_28d` の糖衣は TOML の書き方そのものである。また struct 変種 `{ retention_days }` が雛形のキーとして数えられているので、動かすと template-lint の入力が変わる。変換は `From<CleanupPolicyConfig> for CleanupPolicy` にし、`keep_*` の展開を解釈時の 1 回にした（#210 の「`keep_*` を知っているのは config の解釈だけ」を 1 か所に保つ）。
 4. **変換は `config::interpret` に置く。** `Workflow::from_config(s)` を `RootConfig::domain_workflows` に置き換え、`OutcomeAction::from_table` と `OUTCOME_ACTION_KEYS` も同じモジュールへ移した。「profile を解決する唯一の場所」（#394、[ADR-0033](/decisions/adr-0033-workflow-profile.md)）・「source を導出する唯一の場所」（#626、[ADR-0069](/decisions/adr-0069-workflow-projects.md)）・「`initial_prompt` を正規化する唯一の場所」（#415、[ADR-0038](/decisions/adr-0038-workflow-initial-prompt.md)）・「`status` キーを読む唯一の場所」（#574/#626）は、置き場所が変わっただけで 1 か所のままである。
-5. **`arch-lint` に `core-layer` を足す。** `domain/**` と `ports/**` が `config` / `adapters` を参照しないことをテキストで検査する。コメント行と `#[cfg(test)]` 以降は数えない。
+5. **`arch-lint` に `core-layer` を足す。** `domain/**` と `ports/**` が `config` / `adapters` を参照しないことをテキストで検査する。各行のパスと、`;` までまとめた `use` 文の両方を読む。コメント行と `#[cfg(test)]` 以降は数えない。
 6. **3 層の外のモジュールは動かさない。** doc のほうを実際の構成（3 層・アプリケーション層・基盤）に合わせる。
 
 # Alternatives considered
@@ -41,5 +41,5 @@ Accepted（2026-09-26、#762）
 
 - config のキーを足したり直したりしても、domain のコードとテストは変わらない。変更は `config::schema` と `config::interpret` で止まる。
 - `core-layer` は移行前の `main` に対して走らせると `domain/workflow.rs` の `use crate::config::{…}` で exit 1 になり、移行後は 0 error になることを確認した。
-- 既知の穴: 複数行の `use crate::{ config, }` に `as` で別名を付け、`config::` と一度も書かない形はテキスト検査を通り抜ける。今の domain / ports にこの形は無い。
+- `use` 文は複数行にわたっても `;` まで 1 つにまとめて読むので、`use crate::{config};` や、グループに `as` で別名を付けて `config::` と一度も書かない形も捕まる（#802 のレビューで補強）。代わりに、外部クレートの `…::config` を use すると誤検知になる。今の domain / ports にその形は無い。
 - アプリケーション層（`run` など）どうしの向きや、アプリケーション層 → adapters の依存は検査しない。後者は正当な向きである（`recovery` → state DB、`plugins::spec` → `PluginSpec`）。

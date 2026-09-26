@@ -250,11 +250,15 @@ done <<<"$PLUGIN_BINS"
 #   組み立てるために config を使う。読みやすさのための依存で、本番コードの
 #   向きではない（config-template-lint と同じ区切り方）
 #
-# `crate::config` だけでなく、パスの途中の `config::` / `adapters::` も拾う。
-# `use crate::{config::X}` や `use super::super::config::X` をこれで捕まえる。
-# 捕まえられない既知の穴: 複数行の `use crate::{\n    config,\n};` の後で
-# `config::` を一度も書かずに `use … as` で別名を付けたもの。今の domain /
-# ports にこの形は無い。
+# 2 通りに読む:
+# - 各行のパス: `crate::config` だけでなく途中の `config::` / `adapters::` も拾う。
+#   `use super::super::config::X` やコード中の `config::X` をこれで捕まえる
+# - `use` 文は `;` まで（複数行にわたっても）1 つにまとめて読み、パスの区切りに
+#   `config` / `adapters` という名前が現れたら違反にする。`use crate::{config};`
+#   や `use crate::{\n    config as c,\n};` のように `config::` と書かない
+#   グループ形式を捕まえるため（#802 のレビュー）
+# 外部クレートの `…::config` を use すると誤検知になるが、今の domain / ports に
+# その形は無い。現れたら別名で逃がさず、この検査のほうを直すこと。
 CORE_LAYER_DIRS="$ROOT/crates/orchestrator-core/src/domain $ROOT/crates/orchestrator-core/src/ports"
 # shellcheck disable=SC2086 # 2 つのディレクトリを別々の引数として渡す
 CORE_LAYER_FILES="$(find $CORE_LAYER_DIRS -name '*.rs' | sort)" || {
@@ -270,7 +274,7 @@ CORE_LAYER_FILES="$(find $CORE_LAYER_DIRS -name '*.rs' | sort)" || {
 CORE_LAYER_HITS="$(
   # shellcheck disable=SC2086
   awk '
-    FNR == 1 { in_test = 0 }
+    FNR == 1 { in_test = 0; in_use = 0 }
     in_test { next }
     /^#\[cfg\(test\)\]/ { in_test = 1; next }
     {
@@ -279,7 +283,18 @@ CORE_LAYER_HITS="$(
       if (line ~ /(^|[^A-Za-z0-9_])(config|adapters)::/ ||
           line ~ /crate::(config|adapters)([^A-Za-z0-9_]|$)/)
         print FILENAME ":" FNR ": " $0
-    }' $CORE_LAYER_FILES
+      if (!in_use && line ~ /^[[:space:]]*(pub(\([^)]*\))?[[:space:]]+)?use[[:space:]]/) {
+        in_use = 1; stmt = ""; start = FNR; first = $0
+      }
+      if (in_use) {
+        stmt = stmt " " line
+        if (line ~ /;/) {
+          in_use = 0
+          if (stmt ~ /[{,:[:space:]](config|adapters)([^A-Za-z0-9_]|$)/)
+            print FILENAME ":" start ": " first
+        }
+      }
+    }' $CORE_LAYER_FILES | sort -u
 )" || {
   echo "arch-lint: core-layer の解析（awk）に失敗" >&2
   exit 2
