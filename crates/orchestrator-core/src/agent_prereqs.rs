@@ -1,6 +1,12 @@
 //! Which external tools a profile's agent needs, and whether they are usable
 //! (#399, [#393](https://github.com/tomoya-k31/totsuka/issues/393) D9).
 //!
+//! Named *prerequisites* rather than tools (#762): [`crate::tool`] is the AI
+//! tool CLI the agent **is** (claude / codex / opencode, `ToolKind`); this is
+//! what that agent needs **installed beside it** (`gh`). Stored and printed
+//! strings still say `agent_tools` (`BLOCKED_NOTE`), because rows already in
+//! the state DB carry that value.
+//!
 //! Since [#398](https://github.com/tomoya-k31/totsuka/issues/398) the agent
 //! writes its own deliverable, so a task can now fail for a reason that has
 //! nothing to do with the task: the tool it needs is not authenticated. The
@@ -67,27 +73,27 @@ const CACHE_TTL: Duration = Duration::from_secs(300);
 
 /// An external tool the agent needs in its own environment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum AgentTool {
+pub enum AgentPrereq {
     /// The GitHub CLI, authenticated.
     Gh,
 }
 
-impl AgentTool {
+impl AgentPrereq {
     /// The name shown to an operator.
     pub fn as_str(self) -> &'static str {
         match self {
-            AgentTool::Gh => "gh",
+            AgentPrereq::Gh => "gh",
         }
     }
 
-    /// The tool a name written by [`AgentTool::as_str`] refers to.
+    /// The tool a name written by [`AgentPrereq::as_str`] refers to.
     ///
     /// Needed because the wait reason is *recorded* as names (#407) and
     /// rendered later, possibly by a build that knows more tools than the one
     /// that wrote the note — hence `Option` rather than a panic.
     pub fn parse(name: &str) -> Option<Self> {
         match name {
-            "gh" => Some(AgentTool::Gh),
+            "gh" => Some(AgentPrereq::Gh),
             _ => None,
         }
     }
@@ -95,14 +101,14 @@ impl AgentTool {
     /// What to do about it being missing.
     pub fn remedy(self) -> &'static str {
         match self {
-            AgentTool::Gh => "install the GitHub CLI and run `gh auth login`",
+            AgentPrereq::Gh => "install the GitHub CLI and run `gh auth login`",
         }
     }
 }
 
 /// The [`NOTE_KEY`](crate::adapters::state_db::NOTE_KEY) value for "this task
 /// cannot start because a tool it needs is unusable in this environment"
-/// (#407). The note also carries `missing`, a list of [`AgentTool::as_str`]
+/// (#407). The note also carries `missing`, a list of [`AgentPrereq::as_str`]
 /// names.
 pub const BLOCKED_NOTE: &str = "blocked_agent_tools";
 
@@ -119,8 +125,8 @@ pub const BLOCKED_NOTE: &str = "blocked_agent_tools";
 pub fn blocked_reason(missing: &[&str]) -> String {
     let remedies: Vec<&str> = missing
         .iter()
-        .filter_map(|n| AgentTool::parse(n))
-        .map(AgentTool::remedy)
+        .filter_map(|n| AgentPrereq::parse(n))
+        .map(AgentPrereq::remedy)
         .collect();
     let remedy = if remedies.is_empty() {
         String::new()
@@ -141,10 +147,10 @@ pub fn blocked_reason(missing: &[&str]) -> String {
 ///
 /// Empty for everything except `implement` — see the module docs for why
 /// `triage` and `design` are deliberately unchecked rather than guessed at.
-pub fn required(profile: Option<Profile>) -> &'static [AgentTool] {
+pub fn required(profile: Option<Profile>) -> &'static [AgentPrereq] {
     match profile {
         // The deliverable is a pull request, whatever the source.
-        Some(Profile::Implement) => &[AgentTool::Gh],
+        Some(Profile::Implement) => &[AgentPrereq::Gh],
         Some(Profile::Triage | Profile::Design | Profile::Answer) | None => &[],
     }
 }
@@ -152,17 +158,17 @@ pub fn required(profile: Option<Profile>) -> &'static [AgentTool] {
 /// Caches [`available`] answers so the dispatch loop does not re-stat every
 /// tick.
 #[derive(Debug, Default)]
-pub struct ToolCache {
-    entries: HashMap<AgentTool, (Instant, bool)>,
+pub struct PrereqCache {
+    entries: HashMap<AgentPrereq, (Instant, bool)>,
 }
 
-impl ToolCache {
+impl PrereqCache {
     /// Whether `tool` looks usable, answering from cache within
     /// `CACHE_TTL` (5 minutes).
     ///
     /// `now` is passed in rather than read here so the expiry is testable
     /// without sleeping (the same reason the engine takes a `Clock`).
-    pub fn available(&mut self, tool: AgentTool, now: Instant) -> bool {
+    pub fn available(&mut self, tool: AgentPrereq, now: Instant) -> bool {
         if let Some((checked, answer)) = self.entries.get(&tool)
             && now.duration_since(*checked) < CACHE_TTL
         {
@@ -174,7 +180,7 @@ impl ToolCache {
     }
 
     /// The tools of `required` that are not usable, in declaration order.
-    pub fn missing(&mut self, profile: Option<Profile>, now: Instant) -> Vec<AgentTool> {
+    pub fn missing(&mut self, profile: Option<Profile>, now: Instant) -> Vec<AgentPrereq> {
         required(profile)
             .iter()
             .copied()
@@ -187,9 +193,9 @@ impl ToolCache {
 ///
 /// Local checks only (see the module docs): a binary on `PATH` and the file the
 /// tool writes when it authenticates.
-pub fn available(tool: AgentTool) -> bool {
+pub fn available(tool: AgentPrereq) -> bool {
     match tool {
-        AgentTool::Gh => on_path("gh") && gh_hosts_file().is_some(),
+        AgentPrereq::Gh => on_path("gh") && gh_hosts_file().is_some(),
     }
 }
 
@@ -220,7 +226,7 @@ mod tests {
 
     #[test]
     fn only_implement_requires_a_tool() {
-        assert_eq!(required(Some(Profile::Implement)), &[AgentTool::Gh]);
+        assert_eq!(required(Some(Profile::Implement)), &[AgentPrereq::Gh]);
         // Not an oversight — see the module docs. `triage`/`design` write
         // externally too, but where depends on a source the Orchestrator
         // cannot identify, and a gate that guesses wrong blocks work that
@@ -235,19 +241,19 @@ mod tests {
 
     #[test]
     fn an_answer_is_cached_until_the_ttl_expires() {
-        let mut cache = ToolCache::default();
+        let mut cache = PrereqCache::default();
         let start = Instant::now();
-        let first = cache.available(AgentTool::Gh, start);
+        let first = cache.available(AgentPrereq::Gh, start);
 
         // Poison the entry: a cached read must not consult the filesystem.
-        cache.entries.insert(AgentTool::Gh, (start, !first));
+        cache.entries.insert(AgentPrereq::Gh, (start, !first));
         assert_eq!(
-            cache.available(AgentTool::Gh, start + CACHE_TTL / 2),
+            cache.available(AgentPrereq::Gh, start + CACHE_TTL / 2),
             !first,
             "within the TTL the cached answer is used"
         );
         assert_eq!(
-            cache.available(AgentTool::Gh, start + CACHE_TTL + Duration::from_secs(1)),
+            cache.available(AgentPrereq::Gh, start + CACHE_TTL + Duration::from_secs(1)),
             first,
             "past the TTL the check runs again — this is how a task resumes \
              after the operator authenticates"
@@ -258,14 +264,14 @@ mod tests {
     /// compiler catches a new variant there; `parse` matches on `&str` and
     /// cannot, so this list is what keeps it honest — extend it with the
     /// variant.
-    const ALL: &[AgentTool] = &[AgentTool::Gh];
+    const ALL: &[AgentPrereq] = &[AgentPrereq::Gh];
 
     #[test]
     fn every_tool_name_round_trips() {
         // `blocked_reason` reads names back out of a recorded note (#407), so
         // a tool whose name does not parse would lose its remedy.
         for tool in ALL {
-            assert_eq!(AgentTool::parse(tool.as_str()), Some(*tool));
+            assert_eq!(AgentPrereq::parse(tool.as_str()), Some(*tool));
         }
     }
 
@@ -286,7 +292,7 @@ mod tests {
 
     #[test]
     fn a_profile_needing_nothing_reports_nothing_missing() {
-        let mut cache = ToolCache::default();
+        let mut cache = PrereqCache::default();
         assert!(
             cache
                 .missing(Some(Profile::Answer), Instant::now())

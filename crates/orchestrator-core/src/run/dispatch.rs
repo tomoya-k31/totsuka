@@ -94,10 +94,10 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// symptom would be **notifications quietly stopping** — worse than a
     /// slightly generic event name. A dedicated variant belongs with the
     /// `#[serde(other)]` fallback in protocol 0.3.
-    async fn report_blocked_on_agent_tools(
+    async fn report_blocked_on_agent_prereqs(
         &mut self,
         record: &TaskRecord,
-        missing: &[crate::agent_tools::AgentTool],
+        missing: &[crate::agent_prereqs::AgentPrereq],
     ) {
         let names: Vec<&str> = missing.iter().map(|t| t.as_str()).collect();
         // Persisted so `totsuka status` can still answer "why is this task not
@@ -115,7 +115,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         // *changed* `missing` set supersedes the recorded one instead of
         // leaving a note that no longer describes the situation.
         let note = serde_json::json!({
-            crate::adapters::state_db::NOTE_KEY: crate::agent_tools::BLOCKED_NOTE,
+            crate::adapters::state_db::NOTE_KEY: crate::agent_prereqs::BLOCKED_NOTE,
             "missing": names,
         });
         if let Err(e) = self.db.note_task(record.id, &note) {
@@ -131,7 +131,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             );
             return;
         }
-        let reason = format!("waiting: {}", crate::agent_tools::blocked_reason(&names));
+        let reason = format!("waiting: {}", crate::agent_prereqs::blocked_reason(&names));
         tracing::warn!(task_id = record.id, missing = ?names, "{reason}");
         notify_all(
             &self.plugins.notifiers,
@@ -185,9 +185,11 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             // `gh` reachable only there reads as missing. Leaving the task
             // `Queued` makes a false negative a delay instead of a loss: it
             // dispatches on its own once the check passes.
-            let missing = self.agent_tools.missing(profile, std::time::Instant::now());
+            let missing = self
+                .agent_prereqs
+                .missing(profile, std::time::Instant::now());
             if !missing.is_empty() {
-                self.report_blocked_on_agent_tools(record, &missing).await;
+                self.report_blocked_on_agent_prereqs(record, &missing).await;
                 continue;
             }
             // The wait ended, so the "already told you" memory has to end with

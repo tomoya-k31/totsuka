@@ -2234,8 +2234,8 @@ async fn a_triage_dispatch_for_an_unclaimed_repository_says_nothing_extra() {
 /// profile-less workflow adds nothing" instead.
 ///
 /// `implement` is the one profile that cannot be used here: it is the only
-/// profile with a required tool (`agent_tools::required` → `Gh`), and
-/// `agent_tools::available(Gh)` wants `gh` on `PATH` **and** a `hosts.yml`
+/// profile with a required tool (`agent_prereqs::required` → `Gh`), and
+/// `agent_prereqs::available(Gh)` wants `gh` on `PATH` **and** a `hosts.yml`
 /// — i.e. an authenticated `gh`. A CI runner ships `gh` but nobody has run
 /// `gh auth login`, so the task parks on the tool gate and never dispatches:
 /// green on a developer's machine, a 30-second timeout in CI. (Measured: this

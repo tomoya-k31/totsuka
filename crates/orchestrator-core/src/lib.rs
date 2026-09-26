@@ -1,19 +1,40 @@
 //! totsuka orchestrator core.
 //!
-//! Hexagonal architecture. The core of the split is three layers:
+//! The crate has a hexagonal centre and the application that drives it
+//! (#762). Only the centre is layered, and only its direction is enforced.
 //!
-//! - [`domain`]: pure domain types and the task state machine.
-//! - [`ports`]: trait boundaries that adapters implement — agent-session
-//!   re-attach, clock, git, repository classification, secrets, signal/control
-//!   ingress and process probing. Plugins are **not** behind a port: the run
-//!   loop holds them directly and calls them through
-//!   [`Plugin::request`](adapters::plugin_host::Plugin::request), whose
-//!   method/params/result pairing lives in [`plugin_protocol::rpc`] (#757).
+//! # The hexagonal centre
+//!
+//! - [`domain`]: pure domain types and the task state machine. It knows
+//!   neither `config.toml` nor any concrete implementation: config values
+//!   reach it already interpreted, through [`config::interpret`].
+//! - [`ports`]: trait boundaries (`AgentSession`, `Clock`, `GitRunner`,
+//!   `SecretStore`, ...) that adapters implement.
 //! - [`adapters`]: concrete implementations (JSON-RPC plugin host, SQLite,
-//!   Keychain, ...).
+//!   git, the hook socket, ...). [`platform`] holds the OS-dependent ones.
+//!
+//! `domain` and `ports` must not refer to `config` or `adapters`;
+//! `scripts/arch-lint.sh` checks that (`core-layer`, ADR-0102).
+//!
+//! # The application
+//!
+//! Everything else assembles the centre and may use adapters directly — that
+//! is the direction wiring goes, not a leak:
+//!
+//! - [`run`] (the main loop), [`scheduler`], [`recovery`], [`worktree`],
+//!   [`repo_select`] and [`plugins`] drive tasks through adapters.
+//! - [`tool`] (the AI tool CLI an agent *is*), [`agent_prereqs`] (what that
+//!   agent needs installed beside it), [`hooks`] and [`prompts`] shape what
+//!   runs in the pane.
+//!
+//! # Foundations
+//!
+//! [`config`] (loading, validation, and the interpretation into domain
+//! values), [`paths`], [`logging`], [`template`] and [`terminal`] are used
+//! from every layer above the centre.
 
 pub mod adapters;
-pub mod agent_tools;
+pub mod agent_prereqs;
 pub mod config;
 pub mod domain;
 pub mod hooks;

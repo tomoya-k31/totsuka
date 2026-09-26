@@ -346,7 +346,7 @@ pub struct Engine<G: GitRunner, L: RepoClassifier + 'static> {
     sessions: HashMap<(String, String), i64>,
     /// Availability answers for the external tools a profile needs (#399),
     /// cached so the 200 ms dispatch loop does not re-stat every tick.
-    agent_tools: crate::agent_tools::ToolCache,
+    agent_prereqs: crate::agent_prereqs::PrereqCache,
     /// Tasks already reported as blocked on a missing tool, so the operator is
     /// told once rather than every cycle.
     ///
@@ -510,7 +510,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         let llm = llm.map(|l| Arc::new(crate::adapters::llm::MonitoredClassifier::new(l)));
         let llm_health = llm.as_ref().map(|l| l.health());
         Self {
-            agent_tools: crate::agent_tools::ToolCache::default(),
+            agent_prereqs: crate::agent_prereqs::PrereqCache::default(),
             blocked_on_tools: std::collections::HashSet::new(),
             blocked_on_agent: std::collections::HashSet::new(),
             abandoned_plugins: std::collections::HashSet::new(),
