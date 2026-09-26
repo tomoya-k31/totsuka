@@ -20,7 +20,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     }
 
     /// Select the repository of one queued task, or park / fail it.
-    async fn select_repo(&mut self, record: &TaskRecord) -> Result<(), EngineError> {
+    async fn select_repo(&mut self, record: &domain::Task) -> Result<(), EngineError> {
         let task = task_from_record(record);
         let decision = self.decide_repo(&task).await;
         match decision {
@@ -106,7 +106,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// `#[serde(other)]` fallback in protocol 0.3.
     async fn report_blocked_on_agent_prereqs(
         &mut self,
-        record: &TaskRecord,
+        record: &domain::Task,
         missing: &[crate::agent_prereqs::AgentPrereq],
     ) {
         let names: Vec<&str> = missing.iter().map(|t| t.as_str()).collect();
@@ -266,7 +266,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// on, so they keep going through the same path as before.
     async fn acquire_worktree(
         &mut self,
-        record: &TaskRecord,
+        record: &domain::Task,
         repo: &RepoSettings,
     ) -> Result<Option<PathBuf>, EngineError> {
         // The source's branch hint (0.7.5, #734), read back from the payload
@@ -405,7 +405,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     #[allow(clippy::type_complexity)]
     async fn wire_hooks(
         &mut self,
-        record: &TaskRecord,
+        record: &domain::Task,
         agent_name: &str,
         tool_profile: &crate::tool::ToolProfile,
         task: &Task,
@@ -539,7 +539,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// and `state/subscribe` last (F-38).
     async fn record_dispatch_and_subscribe(
         &mut self,
-        record: &TaskRecord,
+        record: &domain::Task,
         agent_name: &str,
         dispatched: &plugin_protocol::methods::TaskDispatchResult,
         reserved_row: Option<i64>,
@@ -1023,7 +1023,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     ///   next cycle retries; nothing is recorded. The plugin reports "the
     ///   adjudication cannot be decided yet" this way too, so a temporarily
     ///   invisible timeline event costs a delay, never a wrong answer.
-    async fn claim_task(&mut self, record: &TaskRecord) -> Result<bool, EngineError> {
+    async fn claim_task(&mut self, record: &domain::Task) -> Result<bool, EngineError> {
         let outcome = match self.plugins.sources.get(&record.source) {
             Some(source) if source.capabilities().task_claim => {
                 let params = TaskClaimParams {
@@ -1204,7 +1204,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// own unless a transition was already applied on the way here (#763).
     async fn fail_dispatch(
         &mut self,
-        record: &TaskRecord,
+        record: &domain::Task,
         task: TaskRef,
         reason: String,
     ) -> Result<(), EngineError> {
@@ -1444,7 +1444,7 @@ pub(super) struct DispatchTarget {
 /// terminal failure. The agent decision itself lives in [`agent_gate`], shared
 /// with `dispatch_ready` so the two cannot drift.
 pub(super) fn resolve_dispatch_target(
-    record: &TaskRecord,
+    record: &domain::Task,
     settings: &EngineSettings,
     agent_status: impl Fn(&str) -> Option<AgentStatus>,
     spent_retries: u32,
@@ -1541,7 +1541,7 @@ fn resume_session_id(
 /// Before #242 a follow-up was a different row with no worktree of its own,
 /// which is why this never bit. And only on the workflow's own agent plugin.
 fn reusable_session(
-    record: &TaskRecord,
+    record: &domain::Task,
     latest: Option<&crate::adapters::SessionRecord>,
     pending: &[TaskMessage],
     agent_name: &str,
@@ -1571,7 +1571,7 @@ fn reusable_session(
 /// wherever those already travel — invisibly through the hook's prompt
 /// context, or visibly for a tool with no invisible channel.
 fn dispatch_task(
-    record: &TaskRecord,
+    record: &domain::Task,
     pending: &[TaskMessage],
     destination_block: Option<String>,
 ) -> Task {
@@ -1801,8 +1801,8 @@ mod tests {
         }
     }
 
-    fn record(workflow: &str, repo: Option<&str>) -> TaskRecord {
-        TaskRecord {
+    fn record(workflow: &str, repo: Option<&str>) -> domain::Task {
+        domain::Task {
             id: TaskId(1),
             source: "github".to_string(),
             source_task_id: SourceTaskId("1".to_string()),
@@ -1818,8 +1818,8 @@ mod tests {
             url: None,
             source_payload: None,
             finished_at: None,
-            created_at: String::new(),
-            updated_at: String::new(),
+            created_at: time::OffsetDateTime::UNIX_EPOCH,
+            updated_at: time::OffsetDateTime::UNIX_EPOCH,
             last_signal_at: None,
             state_version: 0,
         }

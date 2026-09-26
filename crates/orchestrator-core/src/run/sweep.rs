@@ -195,7 +195,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// itself failing — answers "yes" and leaves behavior as it was: this
     /// guard exists to catch a directory git has never heard of, and a probe
     /// that could not run is not evidence of one.
-    fn worktree_still_registered(&self, record: &TaskRecord) -> bool {
+    fn worktree_still_registered(&self, record: &domain::Task) -> bool {
         let (Some(path), Some(repo_name)) = (&record.worktree_path, &record.repo) else {
             return true;
         };

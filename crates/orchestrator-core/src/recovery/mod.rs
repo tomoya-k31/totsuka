@@ -17,10 +17,10 @@
 
 use plugin_protocol::methods::AgentState;
 
-use crate::adapters::state_db::{SessionRecord, StateDb, StateError, TaskRecord};
+use crate::adapters::state_db::{SessionRecord, StateDb, StateError};
 use crate::domain::EventDetail;
-use crate::domain::TaskId;
 use crate::domain::state::{TaskEvent, TaskState};
+use crate::domain::{Task, TaskId};
 use crate::ports::agent_session::{AgentSession, AttachOutcome};
 use crate::scheduler::counts_toward_slot;
 
@@ -127,7 +127,7 @@ pub async fn recover<A: AgentSession>(
 async fn recover_task<A: AgentSession>(
     db: &StateDb,
     attacher: &A,
-    task: &TaskRecord,
+    task: &Task,
 ) -> Result<TaskRecovery, StateError> {
     let Some(session) = db.latest_session(task.id)? else {
         // Dispatched (or further) with no recorded session: nothing to attach
@@ -265,7 +265,7 @@ pub enum RetryPlan {
 /// the path; a worktree that is not on a branch is still perfectly reusable,
 /// and refusing to reuse it would re-dispatch onto a directory that already
 /// exists.
-pub fn retry_plan(task: &TaskRecord, latest_session: Option<&SessionRecord>) -> RetryPlan {
+pub fn retry_plan(task: &Task, latest_session: Option<&SessionRecord>) -> RetryPlan {
     match (task.worktree_path.as_ref(), latest_session) {
         (Some(worktree_path), Some(session)) => RetryPlan::ReuseSession {
             worktree_path: worktree_path.clone(),

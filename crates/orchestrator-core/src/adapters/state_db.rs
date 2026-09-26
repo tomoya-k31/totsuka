@@ -28,12 +28,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension, Row, params};
+use time::OffsetDateTime;
 
 use crate::adapters::clock::SystemClock;
 use crate::domain::EventDetail;
 use crate::domain::state::{InvalidTransition, TaskEvent, TaskState, UnknownState, transition};
-use crate::domain::task::{SourceTaskId, TaskId};
-use crate::ports::clock::Clock;
+use crate::domain::task::{SourceTaskId, Task, TaskId};
+use crate::ports::clock::{Clock, format_rfc3339, parse_rfc3339};
 
 /// Ordered, immutable schema migrations. Index + 1 is the version number.
 const MIGRATIONS: &[&str] = &[
@@ -438,57 +439,15 @@ pub struct NewTask {
     pub source_payload: Option<serde_json::Value>,
     /// Timestamp of the last hook signal (R-10 timeout anchor). `None` until the
     /// first signal arrives; normally left unset at ingest.
-    pub last_signal_at: Option<String>,
+    pub last_signal_at: Option<OffsetDateTime>,
 }
 
-/// A persisted task row.
-#[derive(Debug, Clone, PartialEq)]
-pub struct TaskRecord {
-    /// Row id.
-    pub id: TaskId,
-    /// Source plugin instance name.
-    pub source: String,
-    /// Source's own task id.
-    pub source_task_id: SourceTaskId,
-    /// Matched workflow name.
-    pub workflow: String,
-    /// Execution mode.
-    pub mode: String,
-    /// Selected repository name.
-    pub repo: Option<String>,
-    /// worktree path once created.
-    pub worktree_path: Option<String>,
-    /// Branch name once created.
-    pub branch: Option<String>,
-    /// The commit the worktree was branched from, once created (v8).
-    pub base_commit: Option<String>,
-    /// Current state.
-    pub state: TaskState,
-    /// Priority.
-    pub priority: i64,
-    /// Title.
-    pub title: String,
-    /// URL.
-    pub url: Option<String>,
-    /// Residual source fields.
-    pub source_payload: Option<serde_json::Value>,
-    /// Terminal-state timestamp (retention anchor).
-    pub finished_at: Option<String>,
-    /// Ingest timestamp (ISO 8601 UTC).
-    pub created_at: String,
-    /// Last-update timestamp (ISO 8601 UTC).
-    pub updated_at: String,
-    /// Timestamp of the last hook signal (R-10 timeout anchor; ISO 8601 UTC).
-    pub last_signal_at: Option<String>,
-    /// Bumped by every state transition (#763) — the version a
-    /// [`TaskRef`] carries.
-    pub state_version: i64,
-}
-
-impl TaskRecord {
-    /// The reference a state transition of this record must be applied
+// An inherent method on the domain type, defined here so `TaskRef` keeps
+// its fields private to the state DB (#763).
+impl Task {
+    /// The reference a state transition of this task must be applied
     /// through: it fails with [`StateError::Conflict`] if the task has moved
-    /// since this record was read.
+    /// since it was read.
     pub fn task_ref(&self) -> TaskRef {
         TaskRef {
             id: self.id,
@@ -1082,7 +1041,7 @@ impl StateDb {
                 task.url,
                 payload,
                 now,
-                task.last_signal_at,
+                task.last_signal_at.map(format_rfc3339),
             ],
         )?;
         let id: TaskId = tx.query_row(
@@ -1103,7 +1062,7 @@ impl StateDb {
     }
 
     /// Fetch a task by id.
-    pub fn get_task(&self, id: TaskId) -> Result<Option<TaskRecord>, StateError> {
+    pub fn get_task(&self, id: TaskId) -> Result<Option<Task>, StateError> {
         let sql = format!("SELECT {TASK_COLUMNS} FROM tasks WHERE id = ?1");
         let mut stmt = self.conn.prepare(&sql)?;
         let mut rows = stmt.query_map(params![id], row_to_task)?;
@@ -1115,7 +1074,7 @@ impl StateDb {
         &self,
         source: &str,
         source_task_id: &SourceTaskId,
-    ) -> Result<Option<TaskRecord>, StateError> {
+    ) -> Result<Option<Task>, StateError> {
         let sql =
             format!("SELECT {TASK_COLUMNS} FROM tasks WHERE source = ?1 AND source_task_id = ?2");
         let mut stmt = self.conn.prepare(&sql)?;
@@ -1124,7 +1083,7 @@ impl StateDb {
     }
 
     /// All tasks, newest first.
-    pub fn list_tasks(&self) -> Result<Vec<TaskRecord>, StateError> {
+    pub fn list_tasks(&self) -> Result<Vec<Task>, StateError> {
         let sql = format!("SELECT {TASK_COLUMNS} FROM tasks ORDER BY id DESC");
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map([], row_to_task)?;
@@ -1133,7 +1092,7 @@ impl StateDb {
     }
 
     /// Tasks currently in `state` (used by `status` and slot rebuild).
-    pub fn tasks_in_state(&self, state: TaskState) -> Result<Vec<TaskRecord>, StateError> {
+    pub fn tasks_in_state(&self, state: TaskState) -> Result<Vec<Task>, StateError> {
         let sql = format!("SELECT {TASK_COLUMNS} FROM tasks WHERE state = ?1 ORDER BY id");
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(params![state.as_str()], row_to_task)?;
@@ -2088,8 +2047,8 @@ impl StateDb {
     }
 }
 
-/// Map a `tasks` row (in [`TASK_COLUMNS`] order) to a [`TaskRecord`].
-fn row_to_task(row: &Row<'_>) -> rusqlite::Result<TaskRecord> {
+/// Map a `tasks` row (in [`TASK_COLUMNS`] order) to a [`Task`].
+fn row_to_task(row: &Row<'_>) -> rusqlite::Result<Task> {
     let state_str: String = row.get("state")?;
     let state = state_str
         .parse::<TaskState>()
@@ -2100,7 +2059,7 @@ fn row_to_task(row: &Row<'_>) -> rusqlite::Result<TaskRecord> {
         .transpose()
         .map_err(|e| conversion_error(Box::new(e)))?;
 
-    Ok(TaskRecord {
+    Ok(Task {
         id: row.get("id")?,
         source: row.get("source")?,
         source_task_id: row.get("source_task_id")?,
@@ -2115,11 +2074,53 @@ fn row_to_task(row: &Row<'_>) -> rusqlite::Result<TaskRecord> {
         title: row.get("title")?,
         url: row.get("url")?,
         source_payload,
-        finished_at: row.get("finished_at")?,
-        created_at: row.get("created_at")?,
-        updated_at: row.get("updated_at")?,
-        last_signal_at: row.get("last_signal_at")?,
+        finished_at: optional_timestamp(row, "finished_at")?,
+        created_at: timestamp(row, "created_at")?,
+        updated_at: timestamp(row, "updated_at")?,
+        last_signal_at: optional_timestamp(row, "last_signal_at")?,
         state_version: row.get("state_version")?,
+    })
+}
+
+/// A stored timestamp that [`parse_rfc3339`] does not accept (#765).
+///
+/// Every timestamp column is written by [`format_rfc3339`], so this is a row
+/// written by something else — a hand edit, another tool. Reading it is an
+/// error, like an unknown state, rather than a silent `None`: a task whose
+/// `finished_at` cannot be read must not have its worktree judged by a
+/// retention policy, and one whose `last_signal_at` cannot be read must not
+/// drop out of the timeout sweep.
+#[derive(Debug, thiserror::Error)]
+#[error("unreadable timestamp in `{column}`: {value:?} ({source})")]
+pub struct BadTimestamp {
+    /// The column it was read from.
+    pub column: &'static str,
+    /// The stored text.
+    pub value: String,
+    /// Why it did not parse.
+    pub source: time::error::Parse,
+}
+
+fn timestamp(row: &Row<'_>, column: &'static str) -> rusqlite::Result<OffsetDateTime> {
+    parse_timestamp(column, row.get(column)?)
+}
+
+fn optional_timestamp(
+    row: &Row<'_>,
+    column: &'static str,
+) -> rusqlite::Result<Option<OffsetDateTime>> {
+    row.get::<_, Option<String>>(column)?
+        .map(|value| parse_timestamp(column, value))
+        .transpose()
+}
+
+fn parse_timestamp(column: &'static str, value: String) -> rusqlite::Result<OffsetDateTime> {
+    parse_rfc3339(&value).map_err(|source| {
+        conversion_error(Box::new(BadTimestamp {
+            column,
+            value,
+            source,
+        }))
     })
 }
 
@@ -2802,11 +2803,11 @@ mod tests {
         let rec = db.get_task(id).unwrap().unwrap();
         assert_eq!(rec.state, TaskState::Done);
         assert_eq!(
-            rec.finished_at.as_deref(),
+            rec.finished_at.map(format_rfc3339).as_deref(),
             Some("2026-01-01T00:01:30Z"),
             "the terminal transition stamps finished_at from the clock"
         );
-        assert_eq!(rec.created_at, T0);
+        assert_eq!(format_rfc3339(rec.created_at), T0);
         // 1 ingest + 4 transitions.
         assert_eq!(db.event_count(id).unwrap(), 5);
     }
@@ -3128,6 +3129,66 @@ mod tests {
             rows[0].session_id, "sess-2",
             "history is newest-first by the same order"
         );
+    }
+
+    #[test]
+    fn a_task_timestamp_reads_back_as_the_bytes_it_was_stored_as() {
+        // #765: `Task` holds `OffsetDateTime` and `--json` formats it again on
+        // the way out, so parse → format must give back exactly what is in
+        // the column — for every subsecond width the formatter writes (#478).
+        let clock = manual_clock();
+        let db = StateDb::open_in_memory_with_clock(clock.clone()).unwrap();
+        for step_ms in [0, 500, 30, 7] {
+            clock.advance(time::Duration::milliseconds(step_ms));
+            let mut task = sample_task();
+            task.source_task_id = SourceTaskId(format!("ts-{step_ms}"));
+            task.last_signal_at = Some(clock.now_utc());
+            let id = db.upsert_task(&task).unwrap();
+            let stored: (String, String) = db
+                .conn
+                .query_row(
+                    "SELECT created_at, last_signal_at FROM tasks WHERE id = ?1",
+                    params![id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap();
+            let read = db.get_task(id).unwrap().unwrap();
+            assert_eq!(format_rfc3339(read.created_at), stored.0);
+            assert_eq!(read.last_signal_at.map(format_rfc3339), Some(stored.1));
+        }
+        // The widths above, spelled out: none, one, two and three digits.
+        for text in [
+            "2026-01-01T00:00:00Z",
+            "2026-01-01T00:00:00.5Z",
+            "2026-01-01T00:00:00.53Z",
+            "2026-01-01T00:00:00.537Z",
+        ] {
+            assert_eq!(format_rfc3339(parse_rfc3339(text).unwrap()), text);
+        }
+    }
+
+    #[test]
+    fn an_unreadable_task_timestamp_is_an_error_not_a_missing_one() {
+        // #765: before, a `last_signal_at` that would not parse dropped the
+        // task out of the timeout sweep, and a bad `finished_at` kept its
+        // worktree forever. Now the read fails, the way an unknown state does.
+        let db = StateDb::open_in_memory().unwrap();
+        let id = db.upsert_task(&sample_task()).unwrap();
+        db.conn
+            .execute(
+                "UPDATE tasks SET last_signal_at = 'yesterday' WHERE id = ?1",
+                params![id],
+            )
+            .unwrap();
+        let err = db.get_task(id).unwrap_err();
+        let StateError::Db(rusqlite::Error::FromSqlConversionFailure(_, _, source)) = &err else {
+            panic!("expected a conversion failure, got {err:?}");
+        };
+        let bad = source
+            .downcast_ref::<BadTimestamp>()
+            .expect("the source is a BadTimestamp");
+        assert_eq!(bad.column, "last_signal_at");
+        assert_eq!(bad.value, "yesterday");
     }
 
     #[test]
@@ -4520,7 +4581,12 @@ mod tests {
             .unwrap();
         db.touch_last_signal(id).unwrap();
         assert_eq!(
-            db.get_task(id).unwrap().unwrap().last_signal_at.as_deref(),
+            db.get_task(id)
+                .unwrap()
+                .unwrap()
+                .last_signal_at
+                .map(format_rfc3339)
+                .as_deref(),
             Some(T0)
         );
 
@@ -4532,7 +4598,12 @@ mod tests {
         // The retry itself does not clear it — the anchor belongs to the
         // execution, and re-queueing has not started one yet.
         assert_eq!(
-            db.get_task(id).unwrap().unwrap().last_signal_at.as_deref(),
+            db.get_task(id)
+                .unwrap()
+                .unwrap()
+                .last_signal_at
+                .map(format_rfc3339)
+                .as_deref(),
             Some(T0)
         );
 
@@ -4577,13 +4648,23 @@ mod tests {
         assert!(db.get_task(id).unwrap().unwrap().last_signal_at.is_none());
         db.touch_last_signal(id).unwrap();
         assert_eq!(
-            db.get_task(id).unwrap().unwrap().last_signal_at.as_deref(),
+            db.get_task(id)
+                .unwrap()
+                .unwrap()
+                .last_signal_at
+                .map(format_rfc3339)
+                .as_deref(),
             Some(T0)
         );
         clock.advance(time::Duration::seconds(60));
         db.touch_last_signal(id).unwrap();
         assert_eq!(
-            db.get_task(id).unwrap().unwrap().last_signal_at.as_deref(),
+            db.get_task(id)
+                .unwrap()
+                .unwrap()
+                .last_signal_at
+                .map(format_rfc3339)
+                .as_deref(),
             Some("2026-01-01T00:01:00Z")
         );
 

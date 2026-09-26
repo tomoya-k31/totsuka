@@ -20,4 +20,4 @@ pub use engine_signal_sink::EngineSignalSink;
 pub use plugin_host::{HostError, Plugin, PluginSpec};
 pub use run_health::{Degradation, RunHealth};
 pub use run_lock::{LockError, RunLock};
-pub use state_db::{EventRecord, NewTask, SessionRecord, StateDb, StateError, TaskRecord};
+pub use state_db::{EventRecord, NewTask, SessionRecord, StateDb, StateError};

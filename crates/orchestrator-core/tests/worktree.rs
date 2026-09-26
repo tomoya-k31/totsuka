@@ -9,10 +9,12 @@ use orchestrator_core::domain::CleanupPolicy;
 use orchestrator_core::domain::SourceTaskId;
 use orchestrator_core::domain::TaskId;
 use orchestrator_core::paths::Paths;
+use orchestrator_core::ports::clock::parse_rfc3339;
 use orchestrator_core::worktree::{
     CleanupDecision, CleanupOutcome, CleanupRequest, CreateRequest, WorktreeManager,
     default_location_template,
 };
+use time::OffsetDateTime;
 
 use test_support::{bare_origin_and_clone as setup, git, scratch};
 
@@ -22,6 +24,10 @@ use test_support::{bare_origin_and_clone as setup, git, scratch};
 /// exercising the expansion path.
 const ENV_LOCATION_TEMPLATE: &str =
     "${XDG_STATE_HOME}/totsuka/worktrees/{repo_name}/{worktree_name}";
+
+fn ts(s: &str) -> OffsetDateTime {
+    parse_rfc3339(s).unwrap()
+}
 
 fn env(state_dir: &Path) -> HashMap<String, String> {
     HashMap::from([(
@@ -184,7 +190,7 @@ fn create_cleanup_and_orphan_detection() {
             base_commit: Some(&wt.base_commit),
             policy: CleanupPolicy::Immediate,
             finished_at: None,
-            now: "2026-07-12T00:00:00Z",
+            now: ts("2026-07-12T00:00:00Z"),
         })
         .unwrap();
     assert_eq!(outcome, CleanupOutcome::Removed);
@@ -262,7 +268,7 @@ fn a_stray_directory_at_a_removed_worktree_path_is_gone_not_an_error() {
         base_commit: Some(&wt.base_commit),
         policy: CleanupPolicy::Immediate,
         finished_at: None,
-        now: "2026-07-12T00:00:00Z",
+        now: ts("2026-07-12T00:00:00Z"),
     };
     assert_eq!(
         mgr.decide_cleanup(
@@ -311,7 +317,7 @@ fn a_stray_directory_inside_the_repo_is_gone_too() {
             None,
             CleanupPolicy::Immediate,
             None,
-            "2026-07-12T00:00:00Z",
+            ts("2026-07-12T00:00:00Z"),
         )
         .unwrap(),
         CleanupDecision::Gone
@@ -351,7 +357,7 @@ fn a_stray_repository_at_a_removed_worktree_path_is_gone_too() {
             Some(&wt.base_commit),
             CleanupPolicy::Immediate,
             None,
-            "2026-07-12T00:00:00Z",
+            ts("2026-07-12T00:00:00Z"),
         )
         .unwrap(),
         CleanupDecision::Gone
@@ -534,7 +540,7 @@ fn dirty_worktree_is_not_removed() {
             base_commit: Some(&wt.base_commit),
             policy: CleanupPolicy::Immediate,
             finished_at: None,
-            now: "2026-07-12T00:00:00Z",
+            now: ts("2026-07-12T00:00:00Z"),
         })
         .unwrap();
     assert_eq!(outcome, CleanupOutcome::DirtySkipped);
@@ -563,8 +569,8 @@ fn retain_policies_do_not_remove() {
             branch: Some(&branch),
             base_commit: Some(&wt.base_commit),
             policy: CleanupPolicy::Manual,
-            finished_at: Some("2026-07-01T00:00:00Z"),
-            now: "2026-07-12T00:00:00Z",
+            finished_at: Some(ts("2026-07-01T00:00:00Z")),
+            now: ts("2026-07-12T00:00:00Z"),
         })
         .unwrap();
     assert_eq!(outcome, CleanupOutcome::Retained);
@@ -582,8 +588,8 @@ fn retain_policies_do_not_remove() {
             branch: Some(&branch2),
             base_commit: Some(&wt2.base_commit),
             policy: CleanupPolicy::RetentionDays(30),
-            finished_at: Some("2026-07-11T00:00:00Z"),
-            now: "2026-07-12T00:00:00Z",
+            finished_at: Some(ts("2026-07-11T00:00:00Z")),
+            now: ts("2026-07-12T00:00:00Z"),
         })
         .unwrap();
     assert_eq!(outcome, CleanupOutcome::Retained);
@@ -675,7 +681,7 @@ fn cleanup_deletes_the_branch_even_when_the_local_default_lags_origin() {
             base_commit: Some(&wt.base_commit),
             policy: CleanupPolicy::Immediate,
             finished_at: None,
-            now: "2026-07-12T00:00:00Z",
+            now: ts("2026-07-12T00:00:00Z"),
         })
         .unwrap(),
         CleanupOutcome::Removed
@@ -715,7 +721,7 @@ fn cleanup_keeps_a_branch_whose_commits_are_not_on_origin() {
             base_commit: Some(&wt.base_commit),
             policy: CleanupPolicy::Immediate,
             finished_at: None,
-            now: "2026-07-12T00:00:00Z",
+            now: ts("2026-07-12T00:00:00Z"),
         })
         .unwrap(),
         CleanupOutcome::Removed,
@@ -757,7 +763,7 @@ fn cleanup_deletes_a_pushed_branch_that_is_not_merged_into_the_default() {
             base_commit: Some(&wt.base_commit),
             policy: CleanupPolicy::Immediate,
             finished_at: None,
-            now: "2026-07-12T00:00:00Z",
+            now: ts("2026-07-12T00:00:00Z"),
         })
         .unwrap(),
         CleanupOutcome::Removed
@@ -814,7 +820,7 @@ fn cleanup_keeps_a_branch_that_does_not_descend_from_the_base_commit() {
             base_commit: Some(&wt.base_commit),
             policy: CleanupPolicy::Immediate,
             finished_at: None,
-            now: "2026-07-12T00:00:00Z",
+            now: ts("2026-07-12T00:00:00Z"),
         })
         .unwrap(),
         CleanupOutcome::Removed,
@@ -880,7 +886,7 @@ fn cleanup_keeps_a_branch_when_no_base_commit_was_recorded() {
             base_commit: None,
             policy: CleanupPolicy::Immediate,
             finished_at: None,
-            now: "2026-07-12T00:00:00Z",
+            now: ts("2026-07-12T00:00:00Z"),
         })
         .unwrap(),
         CleanupOutcome::Removed
@@ -926,7 +932,7 @@ fn a_detached_worktree_with_commits_is_kept() {
             Some(&wt.base_commit),
             CleanupPolicy::Immediate,
             None,
-            "2026-07-12T00:00:00Z",
+            ts("2026-07-12T00:00:00Z"),
         )
         .unwrap(),
         CleanupDecision::Dirty
@@ -939,7 +945,7 @@ fn a_detached_worktree_with_commits_is_kept() {
             base_commit: Some(&wt.base_commit),
             policy: CleanupPolicy::Immediate,
             finished_at: None,
-            now: "2026-07-12T00:00:00Z",
+            now: ts("2026-07-12T00:00:00Z"),
         })
         .unwrap(),
         CleanupOutcome::DirtySkipped
@@ -974,7 +980,7 @@ fn a_detached_worktree_with_no_commits_is_removed() {
             base_commit: Some(&wt.base_commit),
             policy: CleanupPolicy::Immediate,
             finished_at: None,
-            now: "2026-07-12T00:00:00Z",
+            now: ts("2026-07-12T00:00:00Z"),
         })
         .unwrap(),
         CleanupOutcome::Removed

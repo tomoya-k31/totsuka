@@ -2452,7 +2452,7 @@ struct OrphanPane {
 /// Classify one plugin's `session/list` result against the task DB (#211).
 ///
 /// The label carries the **source task id**: `totsuka {task.id}` where
-/// `task.id` is the protocol `Task.id` = `TaskRecord.source_task_id` — the
+/// `task.id` is the protocol `Task.id` = `domain::Task.source_task_id` — the
 /// source's own identifier (a Slack `"C1:1.0"`, a GitHub issue number), NOT
 /// the DB row id. Correlation is therefore a string match on
 /// `source_task_id`, which is only unique per source — so a pane is matched
@@ -2472,7 +2472,7 @@ struct OrphanPane {
 fn classify_orphan_panes(
     plugin: &str,
     sessions: Vec<plugin_protocol::methods::SessionInfo>,
-    tasks: &[orchestrator_core::adapters::TaskRecord],
+    tasks: &[orchestrator_core::domain::Task],
     worktree_exists: impl Fn(&str) -> bool,
 ) -> Vec<OrphanPane> {
     sessions
@@ -2730,10 +2730,11 @@ fn check_orphan_panes(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use orchestrator_core::adapters::TaskRecord;
     use orchestrator_core::domain::SourceTaskId;
+    use orchestrator_core::domain::Task;
     use orchestrator_core::domain::TaskId;
     use orchestrator_core::domain::state::TaskState;
+    use orchestrator_core::ports::clock::parse_rfc3339;
     use plugin_protocol::methods::SessionInfo;
 
     // --- `projects` (#542) -------------------------------------------------
@@ -3049,8 +3050,8 @@ location = "${MY_ROOT}/wt/{worktree_name}"
 
     /// A task whose **source task id** (what the pane label carries — e.g. a
     /// Slack thread key, never the DB row id) is `source_task_id`.
-    fn task(source_task_id: &str, state: TaskState, worktree_path: Option<&str>) -> TaskRecord {
-        TaskRecord {
+    fn task(source_task_id: &str, state: TaskState, worktree_path: Option<&str>) -> Task {
+        Task {
             id: TaskId(1000),
             source: "slack".into(),
             source_task_id: SourceTaskId(source_task_id.into()),
@@ -3066,8 +3067,8 @@ location = "${MY_ROOT}/wt/{worktree_name}"
             url: None,
             source_payload: None,
             finished_at: None,
-            created_at: "2026-07-23T00:00:00Z".into(),
-            updated_at: "2026-07-23T00:00:00Z".into(),
+            created_at: parse_rfc3339("2026-07-23T00:00:00Z").unwrap(),
+            updated_at: parse_rfc3339("2026-07-23T00:00:00Z").unwrap(),
             last_signal_at: None,
             state_version: 0,
         }

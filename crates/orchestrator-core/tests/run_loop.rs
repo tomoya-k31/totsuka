@@ -3358,11 +3358,7 @@ async fn run_hinted(
     mode: &str,
     hint: &str,
     push: bool,
-) -> (
-    orchestrator_core::adapters::state_db::TaskRecord,
-    Vec<String>,
-    Option<String>,
-) {
+) -> (orchestrator_core::domain::Task, Vec<String>, Option<String>) {
     let base = scratch(name);
     let repo = setup_repo(&base);
     let theirs = push.then(|| someone_pushes(&base, hint));

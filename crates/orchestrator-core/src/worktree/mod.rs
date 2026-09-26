@@ -10,6 +10,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use time::OffsetDateTime;
 
 use plugin_protocol::identifier::{Case, IdentifierCore, IdentifierPolicy};
 
@@ -409,26 +410,20 @@ pub fn render_location(
 
 /// Whether the policy allows removing a worktree given when the task finished.
 ///
-/// `finished_at` / `now` are RFC 3339 UTC. A `RetentionDays` policy with no
-/// `finished_at` (or an unparseable one) keeps the worktree (safe default).
-pub fn policy_allows_removal(policy: CleanupPolicy, finished_at: Option<&str>, now: &str) -> bool {
+/// A `RetentionDays` policy with no `finished_at` keeps the worktree (safe
+/// default).
+pub fn policy_allows_removal(
+    policy: CleanupPolicy,
+    finished_at: Option<OffsetDateTime>,
+    now: OffsetDateTime,
+) -> bool {
     match policy {
         CleanupPolicy::Immediate => true,
         CleanupPolicy::Manual => false,
         CleanupPolicy::RetentionDays(days) => {
-            let (Some(finished), Ok(now)) = (finished_at, parse_rfc3339(now)) else {
-                return false;
-            };
-            match parse_rfc3339(finished) {
-                Ok(finished) => finished + time::Duration::days(days as i64) <= now,
-                Err(_) => false,
-            }
+            finished_at.is_some_and(|finished| finished + time::Duration::days(days as i64) <= now)
         }
     }
-}
-
-fn parse_rfc3339(s: &str) -> Result<time::OffsetDateTime, time::error::Parse> {
-    time::OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339)
 }
 
 /// Manages worktree lifecycle over a [`GitRunner`].
@@ -495,10 +490,10 @@ pub struct CleanupRequest<'a> {
     pub base_commit: Option<&'a str>,
     /// Policy for this workflow mode (F-23, F-85).
     pub policy: CleanupPolicy,
-    /// When the task reached a terminal state (RFC 3339 UTC).
-    pub finished_at: Option<&'a str>,
-    /// Now (RFC 3339 UTC).
-    pub now: &'a str,
+    /// When the task reached a terminal state.
+    pub finished_at: Option<OffsetDateTime>,
+    /// Now.
+    pub now: OffsetDateTime,
 }
 
 impl<G: GitRunner> WorktreeManager<G> {
@@ -1163,8 +1158,8 @@ impl<G: GitRunner> WorktreeManager<G> {
         worktree_path: &Path,
         base_commit: Option<&str>,
         policy: CleanupPolicy,
-        finished_at: Option<&str>,
-        now: &str,
+        finished_at: Option<OffsetDateTime>,
+        now: OffsetDateTime,
     ) -> Result<CleanupDecision, WorktreeError> {
         if !self.is_worktree_of(repo_path, worktree_path)? {
             return Ok(CleanupDecision::Gone);
@@ -1655,6 +1650,10 @@ fn canonical(path: &Path) -> PathBuf {
 mod tests {
     use super::*;
 
+    fn ts(s: &str) -> OffsetDateTime {
+        crate::ports::clock::parse_rfc3339(s).unwrap()
+    }
+
     fn env(pairs: &[(&str, &str)]) -> HashMap<String, String> {
         pairs
             .iter()
@@ -2098,7 +2097,7 @@ mod tests {
 
     #[test]
     fn policy_immediate_and_manual() {
-        let now = "2026-07-12T00:00:00Z";
+        let now = ts("2026-07-12T00:00:00Z");
         assert!(policy_allows_removal(CleanupPolicy::Immediate, None, now));
         assert!(!policy_allows_removal(
             CleanupPolicy::Manual,
@@ -2109,24 +2108,24 @@ mod tests {
 
     #[test]
     fn policy_retention_days() {
-        let finished = "2026-07-01T00:00:00Z";
+        let finished = ts("2026-07-01T00:00:00Z");
         // 5 days retention, 3 days later -> keep.
         assert!(!policy_allows_removal(
             CleanupPolicy::RetentionDays(5),
             Some(finished),
-            "2026-07-04T00:00:00Z"
+            ts("2026-07-04T00:00:00Z")
         ));
         // 5 days retention, 6 days later -> remove.
         assert!(policy_allows_removal(
             CleanupPolicy::RetentionDays(5),
             Some(finished),
-            "2026-07-07T00:00:00Z"
+            ts("2026-07-07T00:00:00Z")
         ));
         // No finished_at -> keep (safe).
         assert!(!policy_allows_removal(
             CleanupPolicy::RetentionDays(1),
             None,
-            "2026-07-07T00:00:00Z"
+            ts("2026-07-07T00:00:00Z")
         ));
     }
 
@@ -2263,8 +2262,8 @@ mod tests {
 
     #[test]
     fn decide_cleanup_covers_the_policy_table() {
-        let now = "2026-07-12T00:00:00Z";
-        let finished = Some("2026-07-01T00:00:00Z");
+        let now = ts("2026-07-12T00:00:00Z");
+        let finished = Some(ts("2026-07-01T00:00:00Z"));
         // (clean?, policy, expected decision)
         let cases: &[(&'static str, CleanupPolicy, CleanupDecision)] = &[
             ("", CleanupPolicy::Immediate, CleanupDecision::Remove),
@@ -2318,7 +2317,7 @@ mod tests {
                 Some("base"),
                 CleanupPolicy::Immediate,
                 None,
-                "2026-07-12T00:00:00Z",
+                ts("2026-07-12T00:00:00Z"),
             )
             .unwrap(),
             CleanupDecision::Gone
@@ -2343,7 +2342,7 @@ mod tests {
                 Some("base"),
                 CleanupPolicy::Immediate,
                 None,
-                "2026-07-12T00:00:00Z"
+                ts("2026-07-12T00:00:00Z")
             )
             .unwrap(),
             CleanupDecision::Remove
@@ -2394,7 +2393,7 @@ mod tests {
                 Some("base"),
                 CleanupPolicy::Immediate,
                 None,
-                "2026-07-12T00:00:00Z"
+                ts("2026-07-12T00:00:00Z")
             )
             .unwrap(),
             CleanupDecision::Dirty
@@ -2416,7 +2415,7 @@ mod tests {
                 Some("base"),
                 CleanupPolicy::Immediate,
                 None,
-                "2026-07-12T00:00:00Z"
+                ts("2026-07-12T00:00:00Z")
             )
             .unwrap(),
             CleanupDecision::Remove
@@ -2438,7 +2437,7 @@ mod tests {
                 Some("base"),
                 CleanupPolicy::Immediate,
                 None,
-                "2026-07-12T00:00:00Z"
+                ts("2026-07-12T00:00:00Z")
             )
             .is_err()
         );

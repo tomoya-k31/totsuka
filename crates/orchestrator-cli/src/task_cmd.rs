@@ -13,6 +13,7 @@ use orchestrator_core::adapters::state_db::{EventExportFilter, StateError};
 use orchestrator_core::domain::TaskId;
 use orchestrator_core::domain::event_detail::{Cli, EventDetail};
 use orchestrator_core::domain::state::{TaskEvent, TaskState};
+use orchestrator_core::ports::clock::format_rfc3339;
 use orchestrator_core::task_control;
 use serde::Serialize;
 use serde_json::Value;
@@ -193,7 +194,7 @@ fn list(cx: &Cx, json: bool) -> Result<(), CliError> {
                 serde_json::json!({
                     "id": t.id, "state": t.state.to_string(), "source": t.source,
                     "source_task_id": t.source_task_id, "workflow": t.workflow,
-                    "repo": t.repo, "title": t.title, "updated_at": t.updated_at,
+                    "repo": t.repo, "title": t.title, "updated_at": format_rfc3339(t.updated_at),
                 })
             })
             .collect();
@@ -239,9 +240,9 @@ fn show(cx: &Cx, id: TaskId, json: bool) -> Result<(), CliError> {
         url: task.url,
         worktree_path: task.worktree_path,
         branch: task.branch,
-        finished_at: task.finished_at,
-        created_at: task.created_at,
-        updated_at: task.updated_at,
+        finished_at: task.finished_at.map(format_rfc3339),
+        created_at: format_rfc3339(task.created_at),
+        updated_at: format_rfc3339(task.updated_at),
         messages: db
             .list_task_messages(id)?
             .into_iter()

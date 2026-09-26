@@ -21,7 +21,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// read before the transitions that brought the task here (#763).
     pub(super) async fn finalize_success(
         &mut self,
-        record: &TaskRecord,
+        record: &domain::Task,
         task: TaskRef,
     ) -> Result<(), EngineError> {
         // Last chance to learn the branch before anything consumes it. The
@@ -137,7 +137,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// a publish failure — the output policy had not run at all (#410).
     pub(super) async fn fail_publish(
         &mut self,
-        record: &TaskRecord,
+        record: &domain::Task,
         task: TaskRef,
         detail: EventDetail,
         reason: String,
@@ -164,7 +164,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// failure.
     async fn execute_output_policy(
         &self,
-        record: &TaskRecord,
+        record: &domain::Task,
         policy: OutputPolicy,
     ) -> Result<Option<String>, String> {
         match policy {
@@ -205,7 +205,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
 
     /// `output = source` (F-07): hand the accumulated artifact to the task
     /// source plugin's `result/publish`.
-    async fn publish_to_source(&self, record: &TaskRecord) -> Result<(), String> {
+    async fn publish_to_source(&self, record: &domain::Task) -> Result<(), String> {
         let source = self
             .plugins
             .sources
@@ -246,7 +246,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// fatal: for the terminal moments the task outcome is already decided,
     /// and at start a missed write-back must not cost the dispatch itself —
     /// the status column is a mirror of the run, not a precondition for it.
-    pub(super) async fn write_back_status(&self, record: &TaskRecord, moment: StatusMoment) {
+    pub(super) async fn write_back_status(&self, record: &domain::Task, moment: StatusMoment) {
         let workflows = workflows_by_name(&self.settings.workflows);
         let Some(wf) = workflows.get(record.workflow.as_str()) else {
             return;
@@ -355,14 +355,13 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                 mode_default
             }
         };
-        let now = self.clock.now_rfc3339();
         let decision = match self.worktrees.decide_cleanup(
             &repo_path,
             Path::new(path),
             base_commit,
             policy,
-            record.finished_at.as_deref(),
-            &now,
+            record.finished_at,
+            self.clock.now_utc(),
         ) {
             Ok(decision) => decision,
             Err(e) => {
@@ -441,7 +440,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// Delete the branch a removed worktree left behind — once per task per
     /// process (`gone_worktree_branches`). Best-effort: a failure only logs,
     /// the same as a failed removal.
-    fn delete_branch_of_gone_worktree(&mut self, record: &TaskRecord, repo_path: Option<&Path>) {
+    fn delete_branch_of_gone_worktree(&mut self, record: &domain::Task, repo_path: Option<&Path>) {
         if !self.gone_worktree_branches.insert(record.id) {
             return;
         }
@@ -491,7 +490,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// [`ReleaseMode`].
     pub(super) async fn release_pane(
         &mut self,
-        record: &TaskRecord,
+        record: &domain::Task,
         mode: ReleaseMode,
     ) -> PaneRelease {
         let session = match self.db.latest_session(record.id) {
