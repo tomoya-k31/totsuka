@@ -11,6 +11,14 @@ Note: the plugin protocol is versioned independently of the application (see
 `crates/plugin-protocol`); a totsuka release does not imply a protocol-version
 change.
 
+## [0.10.1](https://github.com/tomoya-k31/totsuka/compare/v0.10.0...v0.10.1) (2026-09-26)
+
+
+### Bug Fixes
+
+* **core:** opencode v2 で完了検知が動くようプラグインを書き直し、--standalone で起動する ([#830](https://github.com/tomoya-k31/totsuka/issues/830)) ([3cc4ee9](https://github.com/tomoya-k31/totsuka/commit/3cc4ee91b9af28892d09c686571650b0556e8142))
+* **discord:** 起動時バックフィルで Orchestrator が既に持つ投稿を再 submit しない ([#829](https://github.com/tomoya-k31/totsuka/issues/829)) ([5004cd7](https://github.com/tomoya-k31/totsuka/commit/5004cd7c892ab8c8bfb67b3de89fac1d6db79883))
+
 ## [0.10.0](https://github.com/tomoya-k31/totsuka/compare/v0.9.0...v0.10.0) (2026-09-26)
 
 
