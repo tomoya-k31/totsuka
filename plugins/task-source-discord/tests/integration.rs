@@ -6,6 +6,7 @@ use std::collections::VecDeque;
 use std::sync::Mutex;
 
 use plugin_protocol::jsonrpc::{Response, error_code};
+use plugin_sdk::LineHandler;
 use serde_json::{Value, json};
 use task_source_discord::server::{Server, TransportFactory};
 use task_source_discord::transport::{DiscordTransport, HttpMethod, TransportSettings};

@@ -1,17 +1,19 @@
-//! JSON-RPC dispatch for the stdio server, generic over a
+//! The stdio server: a [`TaskSourceHandler`] whose wire protocol is the
+//! SDK's (`plugin_sdk::dispatch::handle_line`, #759). Generic over a
 //! [`TransportFactory`] so the whole request/response surface — including
 //! `initialize`'s token guard — is driven in tests with no network.
 
 use std::sync::Arc;
 
-use plugin_protocol::jsonrpc::{Error, Response, error_code};
+use plugin_protocol::jsonrpc::{Error, error_code};
 use plugin_protocol::methods::{
     ConfigValidateParams, ConfigValidateResult, InitializeParams, InitializeResult,
     ResultPublishParams, TaskUpdateStatusParams,
 };
-use plugin_protocol::{Capabilities, OutputCapability, RequestId, method};
-use plugin_sdk::{LineHandler, Reply, SubmitClient, request_id, unknown_trigger_keys};
-use serde::de::DeserializeOwned;
+use plugin_protocol::{Capabilities, OutputCapability};
+use plugin_sdk::{
+    LineHandler, Reply, SubmitClient, TaskSourceHandler, not_initialized, unknown_trigger_keys,
+};
 use serde_json::Value;
 
 use crate::config::{DiscordConfig, static_config_errors};
@@ -84,86 +86,27 @@ where
         self.start_runtime = false;
         self
     }
+}
 
-    /// Parse one NDJSON line, dispatch it, and produce a reply. A non-JSON line
-    /// yields a `PARSE_ERROR` response with a null id; blank lines and
-    /// notifications (no `id`) produce no response.
-    pub async fn handle_line(&mut self, line: &str) -> Reply {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            return Reply::none();
-        }
-        let Ok(request) = serde_json::from_str::<Value>(trimmed) else {
-            // A null id, not an empty string: the id is *unknown*, and saying
-            // `""` would claim a correlation key the caller never sent.
-            return Reply::respond(Response::error_without_id(Error::new(
-                error_code::PARSE_ERROR,
-                "request was not valid JSON",
-            )));
-        };
-        // A message without an `id` is a notification: never answered.
-        let Some(id) = request.get("id").map(request_id) else {
-            if request.get("method").and_then(Value::as_str) == Some(method::SHUTDOWN) {
-                self.session = None;
-            }
-            return Reply::none();
-        };
-        let Some(method_name) = request.get("method").and_then(Value::as_str) else {
-            return Reply::respond(Response::error(
-                id,
-                Error::new(error_code::INVALID_REQUEST, "missing `method`"),
-            ));
-        };
-        let params = request.get("params").cloned().unwrap_or(Value::Null);
-        self.dispatch(id, method_name, params).await
+impl<F> TaskSourceHandler for Server<F>
+where
+    F: TransportFactory + Send,
+    F::Transport: Send + Sync + 'static,
+{
+    /// Read by the SDK only for params that do not parse: before
+    /// `initialize` they are answered "initialize first", as this server did
+    /// when it checked the session before reading params.
+    fn initialized(&self) -> bool {
+        self.session.is_some()
     }
 
-    async fn dispatch(&mut self, id: RequestId, method_name: &str, params: Value) -> Reply {
-        match method_name {
-            method::INITIALIZE => self.initialize(id, params).await,
-            method::CONFIG_VALIDATE => self.config_validate(id, params),
-            method::TASK_UPDATE_STATUS => self.update_status(id, params),
-            method::RESULT_PUBLISH => self.result_publish(id, params).await,
-            method::SHUTDOWN => {
-                // `shutdown_ack`, not `respond`: the serve loop exits on the
-                // reply's `shutdown` flag, so a plain response acks the
-                // request and then keeps serving.
-                self.session = None;
-                Reply::shutdown_ack(id)
-            }
-            other => Reply::respond(Response::error(
-                id,
-                Error::new(
-                    error_code::METHOD_NOT_FOUND,
-                    format!("unknown method `{other}`"),
-                ),
-            )),
-        }
-    }
-
-    async fn initialize(&mut self, id: RequestId, params: Value) -> Reply {
-        let init: InitializeParams = match parse_params(&params) {
-            Ok(value) => value,
-            Err(message) => {
-                // `INVALID_PARAMS`, not `CONFIG_INVALID`: a request this
-                // plugin cannot deserialize is a protocol problem, and
-                // reporting it as a config one sends the operator to edit a
-                // file that is not the cause.
-                return Reply::respond(Response::error(
-                    id,
-                    Error::new(error_code::INVALID_PARAMS, message),
-                ));
-            }
-        };
+    async fn initialize(&mut self, init: InitializeParams) -> Result<InitializeResult, Error> {
         let config: DiscordConfig = match serde_json::from_value(init.config) {
             Ok(config) => config,
             Err(e) => {
-                return Reply::respond(Response::error(
-                    id,
-                    Error::new(
-                        error_code::CONFIG_INVALID,
-                        format!("invalid discord plugin config: {e}"),
-                    ),
+                return Err(Error::new(
+                    error_code::CONFIG_INVALID,
+                    format!("invalid discord plugin config: {e}"),
                 ));
             }
         };
@@ -221,10 +164,7 @@ where
             }
         };
         if !errors.is_empty() {
-            return Reply::respond(Response::error(
-                id,
-                Error::new(error_code::CONFIG_INVALID, errors.join("; ")),
-            ));
+            return Err(Error::new(error_code::CONFIG_INVALID, errors.join("; ")));
         }
 
         let api = Arc::new(DiscordApi::new(self.factory.build(TransportSettings {
@@ -236,14 +176,14 @@ where
         // with guidance, rather than surface later as a Gateway that will not
         // stay connected.
         let self_id = match api.current_user_id().await {
-            Ok(id) => id,
+            Ok(user) => user,
             Err(e) => {
                 let code = if e.is_credential() {
                     error_code::CONFIG_INVALID
                 } else {
                     error_code::INTERNAL_ERROR
                 };
-                return Reply::respond(Response::error(id, Error::new(code, e.to_string())));
+                return Err(Error::new(code, e.to_string()));
             }
         };
 
@@ -272,7 +212,7 @@ where
             state,
             runtime,
         });
-        let result = InitializeResult {
+        Ok(InitializeResult {
             plugin_version: plugin_version(),
             capabilities: Capabilities {
                 outputs: vec![OutputCapability::Source],
@@ -284,90 +224,43 @@ where
             // claims. Claiming a key it ignored would turn a typo into
             // silence, which is the failure the handshake exists to remove.
             claimed_options: Vec::new(),
-        };
-        Reply::respond(Response::result(
-            id,
-            serde_json::to_value(result).unwrap_or(Value::Null),
-        ))
+        })
     }
 
     /// Schema + static checks only. Deliberately offline: live token
     /// verification is `initialize`'s job, so `config validate` and `doctor`
     /// probes need no network.
-    fn config_validate(&mut self, id: RequestId, params: Value) -> Reply {
-        let parsed: ConfigValidateParams = match parse_params(&params) {
-            Ok(value) => value,
-            Err(message) => {
-                return Reply::respond(Response::result(
-                    id,
-                    serde_json::to_value(ConfigValidateResult {
-                        valid: false,
-                        errors: vec![message],
-                        warnings: Vec::new(),
-                    })
-                    .unwrap_or(Value::Null),
-                ));
-            }
-        };
+    async fn config_validate(
+        &mut self,
+        parsed: ConfigValidateParams,
+    ) -> Result<ConfigValidateResult, Error> {
         let errors = match serde_json::from_value::<DiscordConfig>(parsed.config) {
             Ok(config) => static_config_errors(&config),
             Err(e) => vec![format!("invalid discord plugin config: {e}")],
         };
-        Reply::respond(Response::result(
-            id,
-            serde_json::to_value(ConfigValidateResult {
-                valid: errors.is_empty(),
-                errors,
-                warnings: Vec::new(),
-            })
-            .unwrap_or(Value::Null),
-        ))
+        Ok(ConfigValidateResult {
+            valid: errors.is_empty(),
+            errors,
+            warnings: Vec::new(),
+        })
     }
 
     /// A deliberate no-op: a Discord post has no status column to move.
-    fn update_status(&mut self, id: RequestId, params: Value) -> Reply {
-        match parse_params::<TaskUpdateStatusParams>(&params) {
-            Ok(_) => Reply::respond(Response::result(id, Value::Null)),
-            Err(message) => Reply::respond(Response::error(
-                id,
-                Error::new(error_code::INVALID_PARAMS, message),
-            )),
-        }
+    async fn update_status(&mut self, _: TaskUpdateStatusParams) -> Result<Value, Error> {
+        Ok(Value::Null)
     }
 
-    async fn result_publish(&mut self, id: RequestId, params: Value) -> Reply {
-        let Some(session) = self.session.as_ref() else {
-            return Reply::respond(Response::error(
-                id,
-                Error::new(
-                    error_code::INVALID_REQUEST,
-                    "plugin not initialized → send `initialize` first",
-                ),
-            ));
-        };
-        let parsed: ResultPublishParams = match parse_params(&params) {
-            Ok(value) => value,
-            Err(message) => {
-                return Reply::respond(Response::error(
-                    id,
-                    Error::new(error_code::INVALID_PARAMS, message),
-                ));
-            }
-        };
-        match pipeline::publish_result(
+    async fn result_publish(&mut self, parsed: ResultPublishParams) -> Result<Value, Error> {
+        let session = self.session.as_ref().ok_or_else(not_initialized)?;
+        pipeline::publish_result(
             session.api.as_ref(),
             &session.state,
             &parsed.task_id,
             &parsed.content,
         )
         .await
-        {
-            Ok(()) => Reply::respond(Response::result(id, Value::Null)),
-            Err(message) => Reply::respond(Response::error(
-                id,
-                Error::new(error_code::INTERNAL_ERROR, message),
-            )),
-        }
+        .map(|()| Value::Null)
+        .map_err(|message| Error::new(error_code::INTERNAL_ERROR, message))
     }
 }
 
@@ -377,15 +270,11 @@ where
     F::Transport: Send + Sync + 'static,
 {
     async fn handle_line(&mut self, line: &str) -> Reply {
-        Server::handle_line(self, line).await
+        plugin_sdk::dispatch::handle_line(self, line).await
     }
 }
 
 /// This plugin's own version, from the crate metadata.
 fn plugin_version() -> semver::Version {
     semver::Version::parse(env!("CARGO_PKG_VERSION")).expect("crate version is valid semver")
-}
-
-fn parse_params<T: DeserializeOwned>(params: &Value) -> Result<T, String> {
-    serde_json::from_value(params.clone()).map_err(|e| format!("invalid params: {e}"))
 }
