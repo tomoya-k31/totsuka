@@ -9,7 +9,8 @@
 //! `bw` CLIs and therefore carry no `#[cfg]` gate at all — on non-macOS they
 //! are the working secret *stores* (the command-backed [`command`] resolver
 //! runs everywhere too, but it holds nothing itself: it re-fetches from
-//! whatever tool owns the credential). Process liveness is POSIX-generic and
+//! whatever tool owns the credential). Values a parent process hands over on
+//! stdin live in [`supplied`] (#754). Process liveness is POSIX-generic and
 //! lives in [`unix`].
 
 use crate::ports::{SecretError, SecretRef, SecretStore, SecretString};
@@ -26,6 +27,7 @@ pub mod fallback;
 pub mod bitwarden;
 pub mod command;
 pub mod onepassword;
+pub mod supplied;
 
 /// The `keychain:` backend for the current platform (Keychain on macOS,
 /// `Unsupported` elsewhere).
@@ -40,6 +42,11 @@ type KeychainBackend = fallback::UnsupportedSecretStore;
 /// 1Password CLI ([`onepassword::OnePasswordCli`], every platform),
 /// `cmd:` to `/bin/sh -c` ([`command::CommandSecretStore`], #444), and `bw:`
 /// to the Bitwarden CLI ([`bitwarden::BitwardenCli`], #699).
+///
+/// When the process was given its values on stdin ([`supplied::install`]),
+/// every reference goes to [`supplied::SuppliedSecrets`] instead, which
+/// refuses the store-backed schemes — no backend below is reached at all.
+/// Without them, `secret:` has nowhere to come from and is an error.
 #[derive(Clone, Default)]
 pub struct PlatformSecretStore {
     keychain: KeychainBackend,
@@ -50,11 +57,17 @@ pub struct PlatformSecretStore {
 
 impl SecretStore for PlatformSecretStore {
     fn get(&self, reference: &SecretRef) -> Result<SecretString, SecretError> {
+        if let Some(supplied) = supplied::installed() {
+            return supplied.get(reference);
+        }
         match reference {
             SecretRef::Keychain { .. } => self.keychain.get(reference),
             SecretRef::OnePassword { .. } => self.onepassword.get(reference),
             SecretRef::Command { .. } => self.command.get(reference),
             SecretRef::Bitwarden { .. } => self.bitwarden.get(reference),
+            SecretRef::Supplied { .. } => Err(SecretError::NotSupplied {
+                reference: reference.to_string(),
+            }),
         }
     }
 }

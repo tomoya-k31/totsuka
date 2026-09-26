@@ -21,6 +21,9 @@ const COMMAND_PREFIX: &str = "cmd:";
 /// Prefix identifying a Bitwarden secret reference (#699).
 const BITWARDEN_PREFIX: &str = "bw:";
 
+/// Prefix identifying a value the parent process supplies (#754).
+const SUPPLIED_PREFIX: &str = "secret:";
+
 /// A secret value that never exposes itself through `Debug`/`Display`.
 ///
 /// Wrapping secrets in this newtype prevents accidental leakage into logs or
@@ -64,7 +67,7 @@ impl fmt::Display for SecretString {
 
 /// A parsed reference to an externally-held secret.
 ///
-/// Four schemes exist:
+/// Five schemes exist:
 ///
 /// - `keychain:<service>/<account>` — the OS Keychain (macOS). The
 ///   `<service>` segment runs up to the first `/`; everything after it is the
@@ -86,6 +89,10 @@ impl fmt::Display for SecretString {
 ///   split is at the **last** `/` because an item name may contain `/`
 ///   (`github.com/myorg`) while the object vocabulary never does — the
 ///   opposite of `keychain:`, whose account is the part that may contain `/`.
+/// - `secret:<name>` — a value the parent process hands over on stdin
+///   (`--secrets-stdin`, #754). Unlike the other four it names no store: the
+///   launcher (the menu bar app) decides where each value comes from, and
+///   config carries only the name. `<name>` is `[A-Za-z0-9_.-]+`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SecretRef {
     /// An OS-Keychain item (`keychain:<service>/<account>`).
@@ -111,6 +118,11 @@ pub enum SecretRef {
         item: String,
         /// The `bw get` object name (`password`, `username`, `totp`, …).
         field: String,
+    },
+    /// A value supplied by the parent process (`secret:<name>`).
+    Supplied {
+        /// The key in the supplied map.
+        name: String,
     },
 }
 
@@ -142,10 +154,15 @@ impl SecretRef {
             field: field.into(),
         }
     }
+
+    /// Build a supplied-value reference from its name.
+    pub fn supplied(name: impl Into<String>) -> Self {
+        Self::Supplied { name: name.into() }
+    }
 }
 
 /// The textual form the reference was written in (`keychain:…` / `op://…` /
-/// `cmd:…` / `bw:…`). The reference names *where* a secret lives, never the secret
+/// `cmd:…` / `bw:…` / `secret:…`). The reference names *where* a secret lives, never the secret
 /// itself, so displaying it is safe (error messages, doctor output).
 ///
 /// For `cmd:` that safety is a rule, not a construction: the command string
@@ -164,6 +181,7 @@ impl fmt::Display for SecretRef {
             Self::Bitwarden { item, field } => {
                 write!(f, "{BITWARDEN_PREFIX}{item}/{field}")
             }
+            Self::Supplied { name } => write!(f, "{SUPPLIED_PREFIX}{name}"),
         }
     }
 }
@@ -242,6 +260,19 @@ fn parse_scheme(s: &str) -> Option<Result<SecretRef, SecretError>> {
         // the CLI's job", applied to the vocabulary).
         return Some(Ok(SecretRef::bitwarden(item, field)));
     }
+    if let Some(name) = s.strip_prefix(SUPPLIED_PREFIX) {
+        // The name is a key the launcher chooses, so the character set is
+        // ours to fix: narrow enough that it never needs quoting in an error
+        // message or a JSON key, wide enough for `github.token` / `slack-user`.
+        let valid = !name.is_empty()
+            && name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-'));
+        if !valid {
+            return Some(malformed());
+        }
+        return Some(Ok(SecretRef::supplied(name)));
+    }
     None
 }
 
@@ -258,7 +289,8 @@ pub fn is_secret_reference(value: &str) -> bool {
 #[derive(Debug, thiserror::Error)]
 pub enum SecretError {
     /// The reference string was not a well-formed `keychain:<service>/<account>`,
-    /// `op://<vault>/<item>/<field>`, `cmd:<command>`, or `bw:<item>/<field>`.
+    /// `op://<vault>/<item>/<field>`, `cmd:<command>`, `bw:<item>/<field>`, or
+    /// `secret:<name>`.
     #[error("invalid secret reference: {0}")]
     InvalidReference(String),
     /// No secret exists for the reference.
@@ -283,6 +315,23 @@ pub enum SecretError {
     /// This platform has no supported secret store.
     #[error("secret store is not supported on this platform")]
     Unsupported,
+    /// A `secret:` reference in a process that was given no values.
+    #[error(
+        "`{reference}` is supplied by a launcher, and this process was given no values → start it with `--secrets-stdin`, or use a `keychain:` / `op://` / `cmd:` / `bw:` reference"
+    )]
+    NotSupplied {
+        /// The reference as written (`secret:<name>`).
+        reference: String,
+    },
+    /// A store-backed reference in a process that was given its values on
+    /// stdin, which never touches a store (#754).
+    #[error(
+        "`{reference}` reads a secret store, which a `--secrets-stdin` process never does → write it as `secret:<name>` and supply the value"
+    )]
+    StoreRefused {
+        /// The reference as written.
+        reference: String,
+    },
 }
 
 /// Read-only access to OS-managed secrets (Keychain on macOS).
@@ -390,6 +439,31 @@ mod tests {
         assert!(is_secret_reference("bw://item/password"));
     }
 
+    #[test]
+    fn parses_supplied_reference() {
+        let r: SecretRef = "secret:github.token_2-a".parse().unwrap();
+        assert_eq!(r, SecretRef::supplied("github.token_2-a"));
+        assert_eq!(r.to_string(), "secret:github.token_2-a");
+    }
+
+    /// The name is a map key the launcher chooses; anything outside
+    /// `[A-Za-z0-9_.-]` is a typo or an attempt to smuggle syntax, and must
+    /// stay a *reference* so the resolver reports it instead of handing the
+    /// literal text to an API.
+    #[test]
+    fn supplied_name_is_restricted() {
+        for bad in [
+            "secret:",
+            "secret:a/b",
+            "secret:a b",
+            "secret:é",
+            "secret:a:b",
+        ] {
+            assert!(bad.parse::<SecretRef>().is_err(), "{bad}");
+            assert!(is_secret_reference(bad), "{bad}");
+        }
+    }
+
     /// `is_secret_reference` is derived from the parser, so the two cannot
     /// disagree about what carries a scheme — the resolver used to keep its
     /// own prefix list and would have missed `bw:` entirely (#699).
@@ -400,6 +474,7 @@ mod tests {
             "op://Dev/Item/field",
             "cmd:gh auth token",
             "bw:totsuka-slack/password",
+            "secret:github",
         ] {
             assert!(is_secret_reference(reference), "{reference}");
             assert!(reference.parse::<SecretRef>().is_ok(), "{reference}");
@@ -414,7 +489,13 @@ mod tests {
     /// literal text as a plain string and handing that to an API.
     #[test]
     fn a_malformed_reference_is_still_a_reference() {
-        for bad in ["op://only-vault", "bw:no-field", "keychain:noslash", "cmd:"] {
+        for bad in [
+            "op://only-vault",
+            "bw:no-field",
+            "keychain:noslash",
+            "cmd:",
+            "secret:",
+        ] {
             assert!(is_secret_reference(bad), "{bad}");
             assert!(bad.parse::<SecretRef>().is_err(), "{bad}");
         }

@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:16fcae12ec1cbad48b4b1dce6f7356259513a62317ff8eb45febde0d0db7d257 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:7641f60a6433644e7baf9ce068d92ee49acb39a5a9c4cff6282459e2858fee7f -->
 
 # Configuration reference
 
@@ -28,6 +28,7 @@ Never write a plain secret into your configuration. Any string value can instead
 | `cmd:<command>` | The standard output of a command | Credentials another tool owns and rotates, e.g. `cmd:gh auth token` |
 | A string containing `${ENV_VAR}` | Environment variables | A value you already export. `totsuka setup --secret-backend env` writes `TOTSUKA_SECRET_<ACCOUNT>` names, which are exempt from the unknown-override warning that every other unrecognised `TOTSUKA_*` gets |
 | `keychain:<service>/<account>` | The macOS Keychain | macOS only |
+| `secret:<name>` | A value the launcher hands to `totsuka run --secrets-stdin` | An app that holds the secrets itself starts `totsuka` |
 
 `~` and `${ENV}` are also expanded in paths.
 
@@ -46,6 +47,16 @@ cmd:bw get item totsuka-slack | jq -r '.fields[]|select(.name=="api_token").valu
 **`cmd:`** runs the command through `/bin/sh -c` and uses its standard output as the secret, with the trailing newline stripped. It is meant for credentials another tool already manages and rotates — `token = "cmd:gh auth token"` — because it fetches the current value every time rather than keeping a copy that can silently go stale. A non-zero exit or empty output is a startup error, quoting the first line of stderr; standard output is never quoted anywhere. The command runs only when `totsuka run` resolves secrets, never during parsing or `config show`.
 
 **Do not put a secret inside the command string.** Reference strings are part of your configuration and can be quoted in error messages. The rule against plaintext secrets applies here too — the point of this form is to make the command *fetch* the secret.
+
+**`secret:<name>`** names a value instead of a store. A launcher that already holds your secrets (a menu bar app, for example) starts `totsuka run --secrets-stdin` and writes one JSON object on one line to its standard input — `{"<name>": "<value>", …}`, followed by a newline. `totsuka` reads only that first line and does not wait for the end of input, so the launcher may keep the pipe open. `<name>` uses `A–Z`, `a–z`, `0–9`, `_`, `.` and `-`.
+
+- **A `--secrets-stdin` run never opens a secret store.** `keychain:`, `op://`, `cmd:` and `bw:` references are an error there (the command is not run and the CLI is not started), so a configuration for such a launcher is written with `secret:` throughout. `${ENV}` still works.
+- A name the line does not contain is an error; names the configuration does not use are ignored.
+- Without `--secrets-stdin`, a `secret:` reference fails with a message telling you to pass the values that way or use another form, and `totsuka run` exits with code 4.
+- A malformed line — standard input is a terminal, input ends before the newline, the line is not a JSON object, or a value is not a string — also exits with code 4. The error never quotes the line.
+- `--dry-run` reads the line too. It still starts the plugins, so the names their settings use must be present.
+- `totsuka doctor` does not resolve `secret:` references; it notes them and skips the checks that would need them.
+- `secret:` also works for values in a `[tools.<name>].env_file`.
 
 ## Top-level keys
 

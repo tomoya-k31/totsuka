@@ -33,6 +33,8 @@
 #   ${ENV_VAR}                    Expand from the environment.
 #   keychain:<service>/<account>  macOS Keychain. macOS ONLY — do not use in a
 #                                 config you carry to another platform.
+#   secret:<name>                 A value a launcher (the menu bar app) hands
+#                                 to `totsuka run --secrets-stdin`.
 #
 # `~` and `${ENV}` are expanded in path values too.
 

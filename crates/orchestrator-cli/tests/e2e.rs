@@ -13,9 +13,9 @@
 //! `health.json` (written by every cycle) instead of sleeping, and every wait
 //! is capped.
 
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::process::{Child, Command, Output};
+use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 use test_support::{plugin_section, scratch};
@@ -74,17 +74,34 @@ impl Env {
     /// Start `totsuka <args>` with XDG pointed at the scratch dirs, without
     /// waiting for it.
     fn spawn(&self, args: &[&str]) -> Child {
-        Command::new(totsuka())
+        self.command(args).spawn().unwrap()
+    }
+
+    /// `totsuka <args>` with `line` written to stdin, which is then **kept
+    /// open** until the child exits — the way a launcher holds the pipe
+    /// (#754). A child that waited for EOF would hang into the 60s guard.
+    fn run_with_stdin(&self, args: &[&str], line: &str) -> Output {
+        let mut child = self.command(args).stdin(Stdio::piped()).spawn().unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        // The child may exit (a rejected line) before reading everything.
+        let _ = stdin.write_all(line.as_bytes());
+        let out = self.wait(child, args);
+        drop(stdin);
+        out
+    }
+
+    fn command(&self, args: &[&str]) -> Command {
+        let mut command = Command::new(totsuka());
+        command
             .args(args)
             .env("XDG_CONFIG_HOME", self.base.join("cfg"))
             .env("XDG_DATA_HOME", self.base.join("data"))
             .env("XDG_STATE_HOME", self.base.join("state"))
             .env("XDG_CACHE_HOME", self.base.join("cache"))
             .env("NO_COLOR", "1")
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .unwrap()
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        command
     }
 
     /// Collect a [`spawn`](Self::spawn)ed child under the 60s wall-clock guard.
@@ -919,4 +936,141 @@ fn run_exits_4_when_a_plugin_speaks_an_incompatible_protocol() {
     std::fs::write(&manifest, text.replace(">=0.6.0, <0.8", ">=99.0.0")).unwrap();
     let err = run_expecting(&env, 4);
     assert!(err.contains("protocol-incompatible"), "{err}");
+}
+
+// ---------------------------------------------------------------------------
+// `run --secrets-stdin` (#754): a launcher hands over every value on stdin's
+// first line and config names them `secret:<name>`. The run must deliver them
+// to plugins and agents, and must never reach a secret store.
+// ---------------------------------------------------------------------------
+
+/// Point `mock_src`'s token and a tool's `env_file` at `secret:` names, and
+/// record what the plugins receive.
+fn setup_supplied(name: &str) -> (Env, PathBuf, PathBuf) {
+    let base = scratch(&format!("{name}-logs"));
+    let init_log = base.join("init.ndjson");
+    let dispatch_log = base.join("dispatch.ndjson");
+    let env = setup(
+        name,
+        &format!(
+            "stream_states = [\"running\", \"done\"]\ndispatch_log = \"{}\"\n",
+            dispatch_log.display()
+        ),
+        "none",
+        "plan",
+    );
+    let env_file = env.base.join("agent.env");
+    std::fs::write(&env_file, "AGENT_KEY=secret:agent-key\n").unwrap();
+    let config = env.cfg_dir().join("config.toml");
+    let text = std::fs::read_to_string(&config).unwrap().replace(
+        "[mock_src]\n",
+        &format!(
+            "[mock_src]\ntoken = \"secret:src-token\"\ninit_log = \"{}\"\n",
+            init_log.display()
+        ),
+    );
+    std::fs::write(
+        &config,
+        format!(
+            "default_tool = \"t\"\n{text}\n[tools.t]\nkind = \"claude\"\nenv_file = \"{}\"\n",
+            env_file.display()
+        ),
+    )
+    .unwrap();
+    (env, init_log, dispatch_log)
+}
+
+#[test]
+fn run_with_secrets_stdin_delivers_supplied_values_to_plugins_and_agents() {
+    let (env, init_log, dispatch_log) = setup_supplied("supplied-ok");
+    // A second line and an unused name: neither may matter.
+    let out = env.run_with_stdin(
+        &[&["run", "--secrets-stdin"], GRACE].concat(),
+        "{\"src-token\":\"tok-123\",\"agent-key\":\"key-456\",\"unused\":\"x\"}\n{\"later\":\"line\"}\n",
+    );
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let init = read_log(&init_log);
+    let token = init
+        .iter()
+        .find_map(|e| e["params"]["config"]["token"].as_str())
+        .expect("mock_src initialize recorded");
+    assert_eq!(token, "tok-123");
+
+    let dispatch = read_log(&dispatch_log);
+    let env_map = &dispatch
+        .iter()
+        .find(|e| e["method"] == "task/dispatch")
+        .expect("a dispatch")["params"]["tool_launch"]["env"];
+    assert_eq!(
+        env_map["AGENT_KEY"], "key-456",
+        "tool_launch.env: {env_map}"
+    );
+
+    let _ = std::fs::remove_dir_all(&env.base);
+}
+
+#[test]
+fn a_secret_reference_without_secrets_stdin_exits_4_and_says_how() {
+    let (env, ..) = setup_supplied("supplied-missing-flag");
+    let err = run_expecting(&env, 4);
+    assert!(err.contains("--secrets-stdin"), "{err}");
+}
+
+/// The strict half: under `--secrets-stdin` a store-backed reference is an
+/// error, and its backend is never reached. The `cmd:` would create `marker`
+/// if it ran — the file's absence is the proof, not the message.
+#[test]
+fn secrets_stdin_refuses_a_store_reference_without_running_it() {
+    let (env, ..) = setup_supplied("supplied-strict");
+    let marker = env.base.join("cmd-ran");
+    let config = env.cfg_dir().join("config.toml");
+    let text = std::fs::read_to_string(&config).unwrap().replace(
+        "token = \"secret:src-token\"",
+        &format!("token = \"cmd:touch {} && echo x\"", marker.display()),
+    );
+    std::fs::write(&config, text).unwrap();
+
+    let out = env.run_with_stdin(
+        &[&["run", "--secrets-stdin"], GRACE].concat(),
+        "{\"agent-key\":\"key-456\"}\n",
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(4), "stderr: {err}");
+    assert!(err.contains("secret:<name>"), "{err}");
+    assert!(
+        !marker.exists(),
+        "the cmd: backend ran under --secrets-stdin"
+    );
+}
+
+/// A dry run reads (and checks) the line too, so a launcher's write neither
+/// blocks nor hits EPIPE. It still launches the plugins — which resolve their
+/// tables from the line like a real run — and skips only `env_file`
+/// (ADR-0090), so `agent-key` may be absent here.
+#[test]
+fn a_dry_run_reads_and_checks_the_line() {
+    let (env, ..) = setup_supplied("supplied-dry-run");
+    let bad = env.run_with_stdin(
+        &["run", "--dry-run", "--secrets-stdin"],
+        "{\"src-token\": 42}\n",
+    );
+    let err = String::from_utf8_lossy(&bad.stderr);
+    assert_eq!(bad.status.code(), Some(4), "stderr: {err}");
+    assert!(err.contains("`src-token` is not a string"), "{err}");
+    assert!(!err.contains("42"), "{err}");
+
+    let ok = env.run_with_stdin(
+        &["run", "--dry-run", "--secrets-stdin"],
+        "{\"src-token\":\"tok-123\"}\n",
+    );
+    assert!(
+        ok.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&ok.stderr)
+    );
 }
