@@ -22,4 +22,5 @@
 * [live-e2e-orca スキル](live-e2e-orca.md) - 実 Slack / 実 GitHub / 実 orca + 実 Claude Code に対して totsuka を通しで動かす実機検証の手順と、orca 側の準備・観測スクリプト（orca 版）。GitHub / Slack の駆動・$E2E_HOME・サンドボックスは live-e2e-herdr のものを共用し、orca 固有の前提（repo 登録・external worktree 表示・プラグインの入れ直し・agent の切り替え）とシナリオ O1〜O6・症状表だけを持つ。
 * [task-source-discord プラグイン](task-source-discord.md) - Discord のチャンネル監視をタスクソースとして接続する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。Gateway WebSocket で MESSAGE_CREATE を受け、監視チャンネルへのトップレベル投稿を Task へ正規化し、結果を bot 名義でその投稿のスレッドへ返す。self-bot 禁止により本人名義投稿・承認フローは持たない薄い設計。
 * [slack-event-gateway](slack-event-gateway.md) - Slack の配信を HTTPS で受け、署名を検証し、本文を保存せずに座標へ射影して Pub/Sub へ publish する常駐しないサービス。event_source = "gateway" のときだけ経路に入る。同一リポジトリの workspace 外に置き、適合テストスイートだけを totsuka と共有する。公式イメージは ghcr.io にリリースごとに公開する。
+* [plugin-conformance](plugin-conformance.md) - プラグインのバイナリを起動して stdio の NDJSON で話し、全プラグイン共通のプロトコルの約束事（initialize 前の拒否・PARSE_ERROR・METHOD_NOT_FOUND・空行と通知への無応答・INVALID_PARAMS・config/validate の未知キー・shutdown と EOF での終了・task_source の未知トリガーキー）への違反を全部返す黒箱の適合キット。公式プラグインの tests/conformance.rs と、外部のプラグイン開発者が使う。
 <!-- okf:index:end -->
