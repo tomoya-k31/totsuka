@@ -4,7 +4,7 @@
 //! under 500 ms at the target scale).
 
 use orchestrator_core::adapters::state_db::TaskNote;
-use orchestrator_core::agent_tools;
+use orchestrator_core::agent_prereqs;
 use orchestrator_core::domain::state::TaskState;
 use serde::Serialize;
 
@@ -235,14 +235,14 @@ pub fn run(cx: &Cx, json: bool) -> Result<(), CliError> {
 /// byte-exact (#280). Defusing happens at the print site.
 fn wait_reason(note: TaskNote) -> WaitReason {
     let message = match note.kind.as_str() {
-        agent_tools::BLOCKED_NOTE => {
+        agent_prereqs::BLOCKED_NOTE => {
             let missing: Vec<&str> = note
                 .detail
                 .get("missing")
                 .and_then(|v| v.as_array())
                 .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
                 .unwrap_or_default();
-            agent_tools::blocked_reason(&missing)
+            agent_prereqs::blocked_reason(&missing)
         }
         other => format!("blocked: {other} — see `totsuka task show`"),
     };

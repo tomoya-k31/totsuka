@@ -946,14 +946,14 @@ const AGENT_TOOL_CAVEAT: &str = concat!(
 /// — and that is not something the Orchestrator can identify from a
 /// user-chosen plugin instance name. The line says so when such a workflow
 /// exists, rather than passing silently and reading as "checked".
-fn check_agent_tools(cfg: &RootConfig, checks: &mut Vec<Check>) {
-    use orchestrator_core::agent_tools::{self, AgentTool};
+fn check_agent_prereqs(cfg: &RootConfig, checks: &mut Vec<Check>) {
+    use orchestrator_core::agent_prereqs::{self, AgentPrereq};
     use orchestrator_core::domain::Profile;
 
-    let mut needed: Vec<AgentTool> = Vec::new();
+    let mut needed: Vec<AgentPrereq> = Vec::new();
     let mut unchecked: Vec<&str> = Vec::new();
     for wf in &cfg.workflows {
-        for tool in agent_tools::required(wf.profile) {
+        for tool in agent_prereqs::required(wf.profile) {
             if !needed.contains(tool) {
                 needed.push(*tool);
             }
@@ -969,7 +969,7 @@ fn check_agent_tools(cfg: &RootConfig, checks: &mut Vec<Check>) {
     let caveat = AGENT_TOOL_CAVEAT;
     for tool in needed {
         let name = format!("agent-tool:{}", tool.as_str());
-        if agent_tools::available(tool) {
+        if agent_prereqs::available(tool) {
             checks.push(Check::ok(
                 &name,
                 format!("{} is available and configured", tool.as_str()),
@@ -1008,7 +1008,7 @@ fn check_agent_tools(cfg: &RootConfig, checks: &mut Vec<Check>) {
 }
 
 #[cfg(test)]
-mod agent_tools_tests {
+mod agent_prereqs_tests {
     use super::*;
 
     fn cfg_with(profile: &str) -> RootConfig {
@@ -1037,8 +1037,8 @@ agent = "herdr"
     #[test]
     fn no_check_text_carries_collapsed_indentation() {
         let mut checks = Vec::new();
-        check_agent_tools(&cfg_with("implement"), &mut checks);
-        check_agent_tools(&cfg_with("design"), &mut checks);
+        check_agent_prereqs(&cfg_with("implement"), &mut checks);
+        check_agent_prereqs(&cfg_with("design"), &mut checks);
         assert!(!checks.is_empty(), "the fixtures must produce checks");
         // Unconditionally, because the failure branch that carries it only
         // runs on a machine without `gh` — scanning the rendered checks alone
@@ -1061,7 +1061,7 @@ agent = "herdr"
     #[test]
     fn an_answer_only_config_produces_no_agent_tool_line() {
         let mut checks = Vec::new();
-        check_agent_tools(&cfg_with("answer"), &mut checks);
+        check_agent_prereqs(&cfg_with("answer"), &mut checks);
         assert!(checks.is_empty(), "{checks:?}");
     }
 
@@ -1070,7 +1070,7 @@ agent = "herdr"
     #[test]
     fn design_reports_that_it_was_not_checked() {
         let mut checks = Vec::new();
-        check_agent_tools(&cfg_with("design"), &mut checks);
+        check_agent_prereqs(&cfg_with("design"), &mut checks);
         let skipped = checks
             .iter()
             .find(|c| c.name == "agent-tool:external-write")
@@ -1206,7 +1206,7 @@ fn check_hooks(
     check_codex_hooks(cx, cfg, config_ok, env, args, checks);
     check_opencode_assets(cfg, config_ok, env, args, checks);
     check_hook_deps(env, checks);
-    check_agent_tools(cfg, checks);
+    check_agent_prereqs(cfg, checks);
     check_hook_token(cx, checks);
     check_spool(cx, cfg, env, args, checks);
     check_hook_socket(cx, cfg, env, checks);

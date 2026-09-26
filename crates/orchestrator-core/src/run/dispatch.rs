@@ -94,10 +94,10 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// symptom would be **notifications quietly stopping** — worse than a
     /// slightly generic event name. A dedicated variant belongs with the
     /// `#[serde(other)]` fallback in protocol 0.3.
-    async fn report_blocked_on_agent_tools(
+    async fn report_blocked_on_agent_prereqs(
         &mut self,
         record: &TaskRecord,
-        missing: &[crate::agent_tools::AgentTool],
+        missing: &[crate::agent_prereqs::AgentPrereq],
     ) {
         let names: Vec<&str> = missing.iter().map(|t| t.as_str()).collect();
         // Persisted so `totsuka status` can still answer "why is this task not
@@ -115,7 +115,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         // *changed* `missing` set supersedes the recorded one instead of
         // leaving a note that no longer describes the situation.
         let note = serde_json::json!({
-            crate::adapters::state_db::NOTE_KEY: crate::agent_tools::BLOCKED_NOTE,
+            crate::adapters::state_db::NOTE_KEY: crate::agent_prereqs::BLOCKED_NOTE,
             "missing": names,
         });
         if let Err(e) = self.db.note_task(record.id, &note) {
@@ -123,7 +123,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         }
         // The set gates the *notification* only (#399): interrupting someone
         // every 200 ms is spam, whereas re-recording the same note is a no-op.
-        if !self.blocked_on_tools.insert(record.id) {
+        if !self.blocked_on_prereqs.insert(record.id) {
             tracing::debug!(
                 task_id = record.id,
                 missing = ?names,
@@ -131,7 +131,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             );
             return;
         }
-        let reason = format!("waiting: {}", crate::agent_tools::blocked_reason(&names));
+        let reason = format!("waiting: {}", crate::agent_prereqs::blocked_reason(&names));
         tracing::warn!(task_id = record.id, missing = ?names, "{reason}");
         notify_all(
             &self.plugins.notifiers,
@@ -185,9 +185,11 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             // `gh` reachable only there reads as missing. Leaving the task
             // `Queued` makes a false negative a delay instead of a loss: it
             // dispatches on its own once the check passes.
-            let missing = self.agent_tools.missing(profile, std::time::Instant::now());
+            let missing = self
+                .agent_prereqs
+                .missing(profile, std::time::Instant::now());
             if !missing.is_empty() {
-                self.report_blocked_on_agent_tools(record, &missing).await;
+                self.report_blocked_on_agent_prereqs(record, &missing).await;
                 continue;
             }
             // The wait ended, so the "already told you" memory has to end with
@@ -195,7 +197,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             // again is in a *new* condition the operator has not been told
             // about. Without this the set only ever grows and the second wait
             // is silent in both the notification and `status` (#407).
-            self.blocked_on_tools.remove(&record.id);
+            self.blocked_on_prereqs.remove(&record.id);
             // #499: a plugin between instances must not take a slot either.
             // Same reason as the tool gate above — deciding here rather than
             // in `dispatch_one` means no slot is acquired, so tasks for
@@ -214,7 +216,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             };
             if agent_gate(&agent, status.as_ref(), spent) == AgentGate::Park {
                 // Told once per task, not once per 200 ms tick — the same
-                // reason `blocked_on_tools` exists. The operator's actionable
+                // reason `blocked_on_prereqs` exists. The operator's actionable
                 // signal is the plugin's own escalation, which `supervise`
                 // sends when the restart budget runs out.
                 if self.blocked_on_agent.insert(record.id) {
@@ -675,7 +677,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             Err(DispatchRefusal::AgentDown) => {
                 self.release_slot(task_id);
                 // Told once per task, not once per 200 ms tick — the same
-                // reason `blocked_on_tools` exists. The operator's actionable
+                // reason `blocked_on_prereqs` exists. The operator's actionable
                 // signal is the plugin's own escalation, which `supervise`
                 // sends when the restart budget runs out.
                 if self.blocked_on_agent.insert(task_id) {
@@ -1253,7 +1255,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         self.drop_task_sessions(task_id);
         self.agent_output.remove(&task_id);
         self.awaiting_approval.remove(&task_id);
-        self.blocked_on_tools.remove(&task_id);
+        self.blocked_on_prereqs.remove(&task_id);
         self.blocked_on_agent.remove(&task_id);
     }
 
