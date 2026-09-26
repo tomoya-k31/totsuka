@@ -32,6 +32,12 @@
 //!   each with `deny_unknown_fields`, so a row matches exactly the shape whose
 //!   key set it has. The golden tests below pin every shape to the bytes the
 //!   old code produced.
+//! - **A kind with a single shape ignores keys it does not know.** The
+//!   strictness above exists only to tell a kind's shapes apart; applied to
+//!   `AutoRetry` it would make an older binary stop counting the retries a
+//!   newer one recorded with one more field, and quietly reset the budget.
+//!   Reading a row is not validating it — the golden tests pin what the
+//!   writers produce.
 //!
 //! A kind this build does not know deserializes as [`EventDetail::Unknown`],
 //! and a row that fits no shape fails to deserialize; readers treat both as
@@ -542,6 +548,22 @@ mod tests {
             let v: serde_json::Value = serde_json::from_str(stored).unwrap();
             assert_eq!(v["kind"], detail.kind(), "{stored}");
         }
+    }
+
+    /// Deliberately lenient (see the module docs): an extra key on a kind with
+    /// one shape is another version's addition, not a different row.
+    #[test]
+    fn a_single_shape_kind_ignores_a_key_it_does_not_know() {
+        let read: EventDetail =
+            serde_json::from_str(r#"{"kind":"auto_retry","attempt":2,"limit":3,"backoff_ms":500}"#)
+                .unwrap();
+        assert_eq!(
+            read,
+            EventDetail::AutoRetry {
+                attempt: 2,
+                limit: 3
+            }
+        );
     }
 
     #[test]
