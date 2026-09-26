@@ -1175,3 +1175,41 @@ fn doctor_with_secrets_stdin_fails_a_store_reference_without_running_it() {
         "the cmd: backend ran under --secrets-stdin"
     );
 }
+
+/// Deferring must not hide a plugin that is not installed at all: that error
+/// is what the operator needs, and a note would turn it into a pass (Copilot
+/// review on #787).
+#[test]
+fn config_validate_still_fails_a_missing_plugin_that_uses_a_secret_reference() {
+    let (env, ..) = setup_supplied("supplied-validate-missing");
+    std::fs::remove_dir_all(env.plugins_store().join("mock_src")).unwrap();
+    let out = env.run(&["config", "validate"]);
+    let all = format!("{}{}", stdout(&out), String::from_utf8_lossy(&out.stderr));
+    assert!(!out.status.success(), "{all}");
+    assert!(all.contains("not installed"), "{all}");
+}
+
+/// A task source is also handed `[llm]` (its key resolved), so a `secret:`
+/// key there defers it too, exactly as `doctor`'s plugin gate does.
+#[test]
+fn config_validate_defers_a_task_source_whose_llm_key_is_supplied() {
+    let (env, ..) = setup_supplied("supplied-validate-llm");
+    let config = env.cfg_dir().join("config.toml");
+    let text = std::fs::read_to_string(&config)
+        .unwrap()
+        .replace("token = \"secret:src-token\"", "token = \"plain\"");
+    std::fs::write(
+        &config,
+        format!(
+            "{text}\n[llm]\nbase_url = \"https://example.invalid/v1\"\nmodel = \"m\"\napi_key_ref = \"secret:llm\"\n"
+        ),
+    )
+    .unwrap();
+    let out = env.run(&["config", "validate"]);
+    let text = stdout(&out);
+    assert!(out.status.success(), "{text}");
+    assert!(
+        text.contains("plugin `mock_src` not validated online"),
+        "{text}"
+    );
+}

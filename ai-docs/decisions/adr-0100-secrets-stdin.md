@@ -4,7 +4,7 @@ title: ADR-0100 run が親プロセスから解決済みの機密情報を stdin
 description: "メニューバーアプリが run を子プロセスとして起動する構成のため、secret:<name> スキームと run --secrets-stdin を足した決定。値は stdin の 1 行目の JSON で受け取り、EOF は待たない。フラグを付けたプロセスは Keychain・op・bw・cmd: を backend を呼ばずに拒否する（プロセス全体で 1 か所の関門）。取得元はアプリが持ち、config には名前だけを書く。env・[secrets] テーブル・アプリへの問い合わせ窓口は却下した。"
 resource: https://github.com/tomoya-k31/totsuka/issues/754
 tags: [decision, config, secrets, macos, menubar, adr]
-generated: { by: claude-code/opus-5, at: 2026-09-26T11:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-26T13:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -38,7 +38,7 @@ stable（#754）。層 1 で `secret:` と `run --secrets-stdin`、層 2 で `do
 4. **フラグなしで `secret:` を解決しようとしたら `NotSupplied`**（「`--secrets-stdin` で渡すか、別のスキームを使う」）。`run` では exit 4
 5. **`doctor` と `config validate` も `--secrets-stdin` を受け付ける。** 値を持っているのはランチャーだけなので、ランチャーの利用者がプラグインを診断できる経路はこれしかない
    - 付けたときは `run` と同じくプロセス全体に値を置く。`doctor` の `SecretScheme::of` は**すべての参照**を `Silent` に分類する。`secret:` はメモリ上のマップを読むだけで、ストアを指す参照は backend を呼ばずに拒否されるので、どちらもプロンプトは出ない。したがって全チェックが実際の値で走り、残っている `op://` / `cmd:` は `run` と同じく失敗として報告される（「`totsuka run` が解決する」と注記して飛ばすと、exit 4 になる run と食い違う。#787 のレビューで指摘）
-   - 付けないときは解決しない。`doctor` は `SecretScheme::Supplied` として `cmd:` と同じく常にゲートし、`config validate` はテーブルに `secret:` を含むプラグインのオンライン検査を `note:` 付きで飛ばす。値はそのプロセスには無いので、解決させると正しい config を失敗として報告することになる
+   - 付けないときは解決しない。`doctor` は `SecretScheme::Supplied` として `cmd:` と同じく常にゲートし、`config validate` は `secret:` を解決することになるプラグイン（自分のテーブルに含むもの、task_source なら `[llm].api_key_ref` も）のオンライン検査を `note:` 付きで飛ばす。ただしインストールされていないプラグインは飛ばさない（「未インストール」のエラーを注記で隠さないため）。値はそのプロセスには無いので、解決させると正しい config を失敗として報告することになる
    - ADR-0065 は「`doctor` を定期実行すると `op://` を解決してしまう」ことを理由にポーリングを却下したが、フラグを付けた `doctor` はストアに触れないので、その理由は当てはまらない
 6. **取得元はアプリが持つ。** config には `secret:<name>` だけを書き、どの値をどこから取るかはアプリの設定と保管庫の話にする。既存の `op://` / `keychain:` / `cmd:` / `bw:` / `${ENV}` はターミナルから単独で使う人のために全部残す
 7. **`[tools.X].env_file` は変えない。** 値に `secret:<name>` を書けば共通の解決器で解決される

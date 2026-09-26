@@ -57,6 +57,32 @@ pub fn run(cx: &Cx, command: ConfigCommand) -> Result<(), CliError> {
     }
 }
 
+/// Whether validating plugin `name` online would resolve a `secret:`
+/// reference: its own table, or — for a task source — the `[llm]` key that
+/// `plugin_spec` hands it (the same two places `doctor`'s plugin gate looks).
+///
+/// Only for an installed plugin: a missing or broken one is left to
+/// `plugin_spec`, whose error is the report that matters (Copilot review on
+/// #787 — skipping it here turned "not installed" into a passing note).
+fn needs_supplied(cx: &Cx, cfg: &config::RootConfig, name: &str) -> bool {
+    let Ok(Some(manifest)) = cx.store().manifest_of(name) else {
+        return false;
+    };
+    if cfg.plugin_settings(name).is_some_and(uses_supplied) {
+        return true;
+    }
+    let task_source = manifest.kind == plugin_protocol::manifest::PluginKind::TaskSource
+        || cfg
+            .plugin(name)
+            .is_some_and(|p| p.kind == config::PluginKind::TaskSource);
+    task_source
+        && cfg
+            .llm
+            .as_ref()
+            .and_then(|llm| llm.api_key_ref.as_deref())
+            .is_some_and(|r| uses_supplied(&toml::Value::String(r.to_string())))
+}
+
 /// Whether any string leaf is a `secret:` reference.
 fn uses_supplied(value: &toml::Value) -> bool {
     match value {
@@ -90,9 +116,7 @@ fn validate(cx: &Cx, offline: bool) -> Result<(), CliError> {
             // resolving here would fail a correct config. Skipped plugins stay
             // out of the claim map, which reads as "no answer", not "claims
             // nothing".
-            if supplied::installed().is_none()
-                && cfg.plugin_settings(name).is_some_and(uses_supplied)
-            {
+            if supplied::installed().is_none() && needs_supplied(cx, &cfg, name) {
                 println!(
                     "note: plugin `{name}` not validated online: its settings use a secret: \
                      reference → rerun as `totsuka config validate --secrets-stdin` from \
