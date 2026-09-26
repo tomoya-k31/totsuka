@@ -1,6 +1,8 @@
 //! End-to-end plugin flow over a recorded Web API transport (no network):
 //! initialize with the TokenGuard (`auth.test` + identity check), the offline
-//! `config/validate`, the stubbed task_source methods, and shutdown.
+//! `config/validate` and the stubbed task_source methods. The rules every
+//! plugin keeps (refusals before `initialize`, parse errors, shutdown, …) are
+//! checked on the binary by `tests/conformance.rs` (#767).
 
 mod common;
 
@@ -887,46 +889,9 @@ async fn config_validate_reports_static_errors() {
     assert!(!all.contains("[llm]"), "{all}");
 }
 
-#[tokio::test]
-async fn config_validate_reports_unknown_keys() {
-    let shared = Shared::default();
-    let (mut srv, _harness) = server(&shared);
-
-    let mut config = init_config();
-    config["typo_field"] = json!(true);
-    let result = result_of(call(&mut srv, 1, "config/validate", json!({ "config": config })).await);
-    assert_eq!(result["valid"], json!(false));
-    assert!(
-        result["errors"][0].as_str().unwrap().contains("typo_field"),
-        "{result}"
-    );
-}
-
 // ---------------------------------------------------------------------------
 // task_source methods (runtime off: protocol behavior only)
 // ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn task_source_methods_require_initialize() {
-    let shared = Shared::default();
-    let (mut srv, _harness) = server(&shared);
-
-    for (method, params) in [
-        (
-            "task/update_status",
-            json!({ "task_id": "C1:1.2", "status": "done" }),
-        ),
-        (
-            "result/publish",
-            json!({ "task_id": "C1:1.2", "content": "draft" }),
-        ),
-    ] {
-        let response = call(&mut srv, 1, method, params).await;
-        let (code, message) = error_of(&response);
-        assert_eq!(code, error_code::INVALID_REQUEST, "{method}");
-        assert!(message.contains("initialize"), "{method}: {message}");
-    }
-}
 
 #[tokio::test]
 async fn task_source_methods_answer_after_initialize() {
@@ -961,45 +926,6 @@ async fn task_source_methods_answer_after_initialize() {
 
     // Nothing beyond the TokenGuard's two probes hit the transport.
     assert_eq!(shared.requests().len(), 2);
-}
-
-// ---------------------------------------------------------------------------
-// protocol plumbing
-// ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn shutdown_flags_exit() {
-    let shared = Shared::default();
-    let (mut srv, _harness) = server(&shared);
-    let line = json!({ "jsonrpc": "2.0", "id": 1, "method": "shutdown" });
-    let reply = srv.handle_line(&line.to_string()).await;
-    assert!(reply.shutdown);
-    assert!(reply.line.is_some());
-}
-
-#[tokio::test]
-async fn malformed_and_notification_lines() {
-    let shared = Shared::default();
-    let (mut srv, _harness) = server(&shared);
-
-    // Non-JSON → PARSE_ERROR with a response line.
-    let reply = srv.handle_line("not json").await;
-    let response: Response = serde_json::from_str(&reply.line.unwrap()).unwrap();
-    assert_eq!(error_of(&response).0, error_code::PARSE_ERROR);
-
-    // A notification (no id) and a blank line get no reply.
-    let notification = json!({ "jsonrpc": "2.0", "method": "task/update_status" });
-    assert!(
-        srv.handle_line(&notification.to_string())
-            .await
-            .line
-            .is_none()
-    );
-    assert!(srv.handle_line("   ").await.line.is_none());
-
-    // Unknown method → METHOD_NOT_FOUND.
-    let response = call(&mut srv, 9, "no/such", json!({})).await;
-    assert_eq!(error_of(&response).0, error_code::METHOD_NOT_FOUND);
 }
 
 // ---------------------------------------------------------------------------

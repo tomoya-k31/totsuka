@@ -15,7 +15,7 @@
 use semver::Version;
 use serde::{Deserialize, Serialize};
 
-use crate::manifest::Capabilities;
+use crate::manifest::{Capabilities, OutputCapability, PluginKind};
 use crate::task::Task;
 
 /// JSON-RPC method-name constants.
@@ -85,6 +85,87 @@ pub mod method {
     /// Deliver an event notification (O→P, notification, F-90).
     pub const NOTIFY: &str = "notify";
 }
+
+/// One kind-specific O→P request: which kind serves it, and whether the host
+/// sends it to a given plugin at all.
+///
+/// The common three (`initialize`, `config/validate`, `shutdown`) are not
+/// here — every kind serves them, and the first two are the ones a plugin
+/// answers *before* `initialize`.
+#[derive(Debug, Clone, Copy)]
+pub struct HostRequest {
+    /// The wire method name (one of the [`method`] constants).
+    pub method: &'static str,
+    /// The kind that serves it.
+    pub kind: PluginKind,
+    /// Whether the host sends this request to a plugin declaring `caps`: the
+    /// capability gate (F-33). `|_| true` for an ungated request.
+    pub sent_to: fn(&Capabilities) -> bool,
+}
+
+/// Every kind-specific O→P request (#767).
+///
+/// The single answer to "which requests must a plugin of this kind refuse
+/// before `initialize`", read by the conformance kit. A `tests/` check pins
+/// every [`method`] constant to this table or to an explicit exclusion, so a
+/// new method cannot be added without deciding which kind it belongs to.
+pub const HOST_REQUESTS: &[HostRequest] = &[
+    HostRequest {
+        method: method::TASK_UPDATE_STATUS,
+        kind: PluginKind::TaskSource,
+        sent_to: |_| true,
+    },
+    HostRequest {
+        method: method::TASK_CLAIM,
+        kind: PluginKind::TaskSource,
+        sent_to: |caps| caps.task_claim,
+    },
+    HostRequest {
+        method: method::RESULT_PUBLISH,
+        kind: PluginKind::TaskSource,
+        sent_to: |caps| caps.outputs.contains(&OutputCapability::Source),
+    },
+    HostRequest {
+        method: method::TASK_DISPATCH,
+        kind: PluginKind::AgentIde,
+        sent_to: |_| true,
+    },
+    HostRequest {
+        method: method::TASK_CANCEL,
+        kind: PluginKind::AgentIde,
+        sent_to: |_| true,
+    },
+    HostRequest {
+        method: method::SESSION_ATTACH,
+        kind: PluginKind::AgentIde,
+        sent_to: |_| true,
+    },
+    HostRequest {
+        method: method::STATE_SUBSCRIBE,
+        kind: PluginKind::AgentIde,
+        sent_to: |caps| caps.state_stream,
+    },
+    HostRequest {
+        method: method::DIAGNOSTICS_SNAPSHOT,
+        kind: PluginKind::AgentIde,
+        sent_to: |caps| caps.diagnostics_snapshot,
+    },
+    HostRequest {
+        method: method::SESSION_FOCUS,
+        kind: PluginKind::AgentIde,
+        sent_to: |caps| caps.pane_control,
+    },
+    HostRequest {
+        method: method::SESSION_RELEASE,
+        kind: PluginKind::AgentIde,
+        sent_to: |caps| caps.pane_control,
+    },
+    HostRequest {
+        method: method::SESSION_LIST,
+        kind: PluginKind::AgentIde,
+        sent_to: |caps| caps.pane_control,
+    },
+];
 
 // ---------------------------------------------------------------------------
 // Common

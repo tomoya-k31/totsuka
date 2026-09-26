@@ -5,6 +5,7 @@ members = [
     "crates/orchestrator-cli",
     "crates/plugin-protocol",
     "crates/plugin-sdk",
+    "crates/plugin-conformance",
     "crates/repo-classifier",
     "crates/test-support",
     "plugins/task-source-github",
@@ -65,6 +66,7 @@ semver = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "net", "sync", "time", "signal"] }
 plugin-protocol = { path = "crates/plugin-protocol" }
 plugin-sdk = { path = "crates/plugin-sdk" }
+plugin-conformance = { path = "crates/plugin-conformance" }
 repo-classifier = { path = "crates/repo-classifier" }
 test-support = { path = "crates/test-support" }
 # Dev-only, for orchestrator-cli: the setup wizard generates `plugins/<name>.toml`

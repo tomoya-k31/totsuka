@@ -27,6 +27,12 @@
 * **Creation**: [ADR-0102](/decisions/adr-0102-core-internal-layering.md) — orchestrator-core の domain を config から切り離した（#762）。値型（`Profile` / `WorkflowMode` / `OutputPolicy` / `VerificationMode` / `CleanupPolicy`）は domain に、`config.toml` からの変換は `config::interpret`（`RootConfig::domain_workflows`）に置き、domain / ports が config と adapters を参照しないことを `arch-lint` の `core-layer` で検査する
 * **Update**: [ワークスペース依存境界ルール](/architecture/workspace-dependency-rules.md) — `core-layer` を追記
 * **Update**: [orchestrator-core](/components/orchestrator-core.md) — domain と `config::interpret` の行
+* **Creation**: [ADR-0104](/decisions/adr-0104-plugin-conformance-kit.md) — プラグインの約束事を、実バイナリを黒箱で検査する適合キットに 1 か所化した（#767）。in-process 検査と plugin-sdk / test-support への同居は却下
+* **Creation**: [plugin-conformance](/components/plugin-conformance.md) — 9 項目の検査と `check` の使い方。slack が最初の利用者
+* **Update**: [plugin-protocol](/components/plugin-protocol.md) — kind ごとの O→P リクエスト一覧 `HOST_REQUESTS` と、メソッド定数の網羅テスト
+* **Update**: [plugin-sdk](/components/plugin-sdk.md) — `serve` が戻る前に `Stdio::flush()` で書き込みを出し切るようにした。キットが `shutdown` の応答が落ちているのを見つけた
+* **Update**: [ワークスペース依存境界ルール](/architecture/workspace-dependency-rules.md) — plugins の dev 許可に `plugin-conformance`、`conformance-deps` 検査を追加
+* **Update**: [テスト戦略](/quality/test-strategy.md) — プラグイン適合（黒箱）の層を追加
 * **Creation**: [ADR-0099](/decisions/adr-0099-generated-hook-token.md) — hook の Bearer トークンは `totsuka run` が生成して `$XDG_STATE_HOME/totsuka/hook-token`（0600）に保存し、以後は使い回す（#785）。`[hooks].auth_token_ref` と `TOTSUKA_HOOKS_AUTH_TOKEN_REF` は猶予なしで廃止し、書いてあれば「この行を消す」専用のエラーにする
 * **Update**: [hook-security](/security/hook-security.md) — §1 のトークンの供給と保管、ローテーション、`hook-token` / `hook-socket` チェックを生成ファイル方式に書き換えた
 * **Update**: [config-reference](/development/config-reference.md) — `[hooks]` から `auth_token_ref` を削除し、トークンの仕組みと移行手順（行の削除・Keychain 項目の消し方）を追記

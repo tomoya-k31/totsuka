@@ -1046,6 +1046,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
 
 [[package]]
+name = "plugin-conformance"
+version = "0.9.0"
+dependencies = [
+ "plugin-protocol",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "plugin-protocol"
 version = "0.9.0"
 dependencies = [
@@ -1548,6 +1557,7 @@ name = "task-source-slack"
 version = "0.9.0"
 dependencies = [
  "futures-util",
+ "plugin-conformance",
  "plugin-protocol",
  "plugin-sdk",
  "repo-classifier",

@@ -35,6 +35,9 @@
 //! | `agent_ide` | [`task/dispatch`](method::TASK_DISPATCH), [`task/cancel`](method::TASK_CANCEL), [`session/attach`](method::SESSION_ATTACH), [`state/subscribe`](method::STATE_SUBSCRIBE) → [`state/notification`](method::STATE_NOTIFICATION), [`diagnostics/snapshot`](method::DIAGNOSTICS_SNAPSHOT) |
 //! | `notifier` | [`notify`](method::NOTIFY) |
 //!
+//! The table is an overview; the authoritative per-kind list of O→P requests,
+//! with the capability gating each one, is [`HOST_REQUESTS`](methods::HOST_REQUESTS).
+//!
 //! ## Responsibility boundary (F-86)
 //!
 //! The worktree arrives on a **detached `HEAD`**. Creating the branch,

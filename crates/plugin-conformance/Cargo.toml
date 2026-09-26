@@ -1,0 +1,20 @@
+[package]
+name = "plugin-conformance"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Black-box conformance kit: checks a totsuka plugin binary against the protocol rules every plugin of its kind must keep."
+# Consumed as a git dev-dependency, like plugin-protocol; never published.
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+plugin-protocol.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+serde.workspace = true
