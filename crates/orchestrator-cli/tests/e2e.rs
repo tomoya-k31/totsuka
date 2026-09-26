@@ -1074,3 +1074,142 @@ fn a_dry_run_reads_and_checks_the_line() {
         String::from_utf8_lossy(&ok.stderr)
     );
 }
+
+/// The `plugin:<name>` check from `doctor --json`.
+fn doctor_plugin_check(out: &Output, name: &str) -> serde_json::Value {
+    let doc: serde_json::Value = serde_json::from_str(&stdout(out))
+        .unwrap_or_else(|e| panic!("doctor --json is not JSON ({e}): {}", stdout(out)));
+    doc.as_array()
+        .expect("doctor --json is an array of checks")
+        .iter()
+        .find(|c| c["name"] == format!("plugin:{name}"))
+        .unwrap_or_else(|| panic!("no plugin:{name} check in {doc}"))
+        .clone()
+}
+
+/// Without the values, doctor must neither fail a correct config nor launch
+/// the plugin; given them (#754), it probes exactly what the run would see.
+#[test]
+fn doctor_probes_a_secret_reference_only_when_given_the_values() {
+    let (env, init_log, _) = setup_supplied("supplied-doctor");
+
+    let out = env.run(&["doctor", "--json", "--no-repair"]);
+    let check = doctor_plugin_check(&out, "mock_src");
+    assert_eq!(check["skipped"], true, "{check}");
+    assert!(
+        check["action"]
+            .as_str()
+            .unwrap()
+            .contains("doctor --secrets-stdin"),
+        "{check}"
+    );
+    assert!(read_log(&init_log).is_empty(), "mock_src was launched");
+
+    let out = env.run_with_stdin(
+        &["doctor", "--json", "--no-repair", "--secrets-stdin"],
+        "{\"src-token\":\"tok-123\"}\n",
+    );
+    let check = doctor_plugin_check(&out, "mock_src");
+    assert_eq!(check["ok"], true, "{check}");
+    assert!(check.get("skipped").is_none(), "{check}");
+    let token = read_log(&init_log)
+        .iter()
+        .find_map(|e| e["params"]["config"]["token"].as_str().map(str::to_owned));
+    assert_eq!(token.as_deref(), Some("tok-123"));
+}
+
+#[test]
+fn config_validate_defers_a_secret_reference_without_the_values() {
+    let (env, ..) = setup_supplied("supplied-validate");
+
+    let out = env.run(&["config", "validate"]);
+    let text = stdout(&out);
+    assert!(
+        out.status.success(),
+        "stdout: {text}\nstderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        text.contains("plugin `mock_src` not validated online"),
+        "{text}"
+    );
+
+    let out = env.run_with_stdin(
+        &["config", "validate", "--secrets-stdin"],
+        "{\"src-token\":\"tok-123\"}\n",
+    );
+    let text = stdout(&out);
+    assert!(out.status.success(), "{text}");
+    assert!(
+        text.contains("ok: plugin `mock_src` accepted its config"),
+        "{text}"
+    );
+}
+
+/// Given the values, doctor must report a leftover store reference the way
+/// the run treats it — a failure — not skip it with "`totsuka run` will
+/// resolve it" (code review on #787). The `cmd:` must not run either.
+#[test]
+fn doctor_with_secrets_stdin_fails_a_store_reference_without_running_it() {
+    let (env, ..) = setup_supplied("supplied-doctor-strict");
+    let marker = env.base.join("cmd-ran");
+    let config = env.cfg_dir().join("config.toml");
+    let text = std::fs::read_to_string(&config).unwrap().replace(
+        "token = \"secret:src-token\"",
+        &format!("token = \"cmd:touch {} && echo x\"", marker.display()),
+    );
+    std::fs::write(&config, text).unwrap();
+
+    let out = env.run_with_stdin(
+        &["doctor", "--json", "--no-repair", "--secrets-stdin"],
+        "{}\n",
+    );
+    let check = doctor_plugin_check(&out, "mock_src");
+    assert_eq!(check["ok"], false, "{check}");
+    assert!(
+        check["detail"].as_str().unwrap().contains("secret:<name>"),
+        "{check}"
+    );
+    assert!(
+        !marker.exists(),
+        "the cmd: backend ran under --secrets-stdin"
+    );
+}
+
+/// Deferring must not hide a plugin that is not installed at all: that error
+/// is what the operator needs, and a note would turn it into a pass (Copilot
+/// review on #787).
+#[test]
+fn config_validate_still_fails_a_missing_plugin_that_uses_a_secret_reference() {
+    let (env, ..) = setup_supplied("supplied-validate-missing");
+    std::fs::remove_dir_all(env.plugins_store().join("mock_src")).unwrap();
+    let out = env.run(&["config", "validate"]);
+    let all = format!("{}{}", stdout(&out), String::from_utf8_lossy(&out.stderr));
+    assert!(!out.status.success(), "{all}");
+    assert!(all.contains("not installed"), "{all}");
+}
+
+/// A task source is also handed `[llm]` (its key resolved), so a `secret:`
+/// key there defers it too, exactly as `doctor`'s plugin gate does.
+#[test]
+fn config_validate_defers_a_task_source_whose_llm_key_is_supplied() {
+    let (env, ..) = setup_supplied("supplied-validate-llm");
+    let config = env.cfg_dir().join("config.toml");
+    let text = std::fs::read_to_string(&config)
+        .unwrap()
+        .replace("token = \"secret:src-token\"", "token = \"plain\"");
+    std::fs::write(
+        &config,
+        format!(
+            "{text}\n[llm]\nbase_url = \"https://example.invalid/v1\"\nmodel = \"m\"\napi_key_ref = \"secret:llm\"\n"
+        ),
+    )
+    .unwrap();
+    let out = env.run(&["config", "validate"]);
+    let text = stdout(&out);
+    assert!(out.status.success(), "{text}");
+    assert!(
+        text.contains("plugin `mock_src` not validated online"),
+        "{text}"
+    );
+}

@@ -11,6 +11,8 @@ use std::io;
 use clap::Subcommand;
 use orchestrator_core::adapters::plugin_host;
 use orchestrator_core::config::{self, FindingSeverity};
+use orchestrator_core::platform::supplied;
+use orchestrator_core::ports::SecretRef;
 
 use orchestrator_core::plugins::{check_workflow_options, plugin_spec};
 
@@ -24,6 +26,12 @@ pub enum ConfigCommand {
         /// Skip the online part (launching plugins for `config/validate`).
         #[arg(long)]
         offline: bool,
+        /// Read secret values from stdin, as `totsuka run --secrets-stdin`
+        /// does (one JSON object on one line; no secret store is opened).
+        /// Without it, a plugin whose settings use a `secret:` reference is
+        /// not validated online.
+        #[arg(long)]
+        secrets_stdin: bool,
     },
     /// Print the effective configuration files.
     Show {
@@ -36,8 +44,52 @@ pub enum ConfigCommand {
 /// Dispatch a config subcommand.
 pub fn run(cx: &Cx, command: ConfigCommand) -> Result<(), CliError> {
     match command {
-        ConfigCommand::Validate { offline } => validate(cx, offline),
+        ConfigCommand::Validate {
+            offline,
+            secrets_stdin,
+        } => {
+            if secrets_stdin {
+                crate::common::install_supplied_secrets()?;
+            }
+            validate(cx, offline)
+        }
         ConfigCommand::Show { redacted } => show(cx, redacted),
+    }
+}
+
+/// Whether validating plugin `name` online would resolve a `secret:`
+/// reference: its own table, or — for a task source — the `[llm]` key that
+/// `plugin_spec` hands it (the same two places `doctor`'s plugin gate looks).
+///
+/// Only for an installed plugin: a missing or broken one is left to
+/// `plugin_spec`, whose error is the report that matters (Copilot review on
+/// #787 — skipping it here turned "not installed" into a passing note).
+fn needs_supplied(cx: &Cx, cfg: &config::RootConfig, name: &str) -> bool {
+    let Ok(Some(manifest)) = cx.store().manifest_of(name) else {
+        return false;
+    };
+    if cfg.plugin_settings(name).is_some_and(uses_supplied) {
+        return true;
+    }
+    let task_source = manifest.kind == plugin_protocol::manifest::PluginKind::TaskSource
+        || cfg
+            .plugin(name)
+            .is_some_and(|p| p.kind == config::PluginKind::TaskSource);
+    task_source
+        && cfg
+            .llm
+            .as_ref()
+            .and_then(|llm| llm.api_key_ref.as_deref())
+            .is_some_and(|r| uses_supplied(&toml::Value::String(r.to_string())))
+}
+
+/// Whether any string leaf is a `secret:` reference.
+fn uses_supplied(value: &toml::Value) -> bool {
+    match value {
+        toml::Value::String(s) => matches!(s.parse(), Ok(SecretRef::Supplied { .. })),
+        toml::Value::Array(items) => items.iter().any(uses_supplied),
+        toml::Value::Table(table) => table.values().any(uses_supplied),
+        _ => false,
     }
 }
 
@@ -60,6 +112,18 @@ fn validate(cx: &Cx, offline: bool) -> Result<(), CliError> {
     if !offline && !errors {
         let mut specs = Vec::new();
         for (name, _) in cfg.plugins.iter().filter(|(_, p)| p.enabled) {
+            // Its values exist only where a launcher hands them over (#754):
+            // resolving here would fail a correct config. Skipped plugins stay
+            // out of the claim map, which reads as "no answer", not "claims
+            // nothing".
+            if supplied::installed().is_none() && needs_supplied(cx, &cfg, name) {
+                println!(
+                    "note: plugin `{name}` not validated online: its settings use a secret: \
+                     reference → rerun as `totsuka config validate --secrets-stdin` from \
+                     the launcher that holds the values"
+                );
+                continue;
+            }
             // `plugin_spec` already took and secret-resolved the plugin's
             // `[<name>]` table into `init_config`; reuse it rather than
             // resolving secrets twice
