@@ -77,6 +77,7 @@ use crate::worktree::{
 };
 
 mod dispatch;
+mod llm_monitor;
 /// Which of a workflow's status transitions to apply (#556): the moment the
 /// task starts running, or one of the two terminal outcomes (F-84).
 ///
@@ -297,8 +298,6 @@ impl RepoClassifier for NoClassifier {
     }
 }
 
-/// The run-loop engine. Owns the state DB, the launched plugins, and the slot
-/// accounting for one `run` invocation.
 /// Whether this run has a hook receiver, and whether it came up (F-110).
 ///
 /// The middle case is the one worth publishing: the process is alive and
@@ -313,6 +312,9 @@ enum HookReceiver {
     BindFailed,
 }
 
+/// The run-loop engine. Owns the state DB, the launched plugins, and the slot
+/// accounting for one `run` invocation.
+///
 /// `L: 'static` because the liveness probe (F-111) runs on a spawned task
 /// holding an `Arc` of the classifier, so the loop never blocks on a gateway
 /// that takes its whole timeout to not answer.
@@ -321,15 +323,9 @@ pub struct Engine<G: GitRunner, L: RepoClassifier + 'static> {
     settings: EngineSettings,
     plugins: PluginSet,
     worktrees: WorktreeManager<G>,
-    /// The repository classifier, wrapped so every call and probe updates
-    /// [`LlmHealth`] (F-110 / F-111). Shared, because the probe runs on a
-    /// spawned task.
-    llm: Option<Arc<crate::adapters::llm::MonitoredClassifier<L>>>,
-    /// The record that wrapper writes; `None` when no LLM is configured.
-    llm_health: Option<Arc<crate::adapters::llm::LlmHealth>>,
-    /// The liveness probe in flight, if any — at most one at a time, so an
-    /// unanswering gateway is asked once per interval, not once per tick.
-    llm_probe: Option<tokio::task::JoinHandle<()>>,
+    /// The repository classifier, its health record and the liveness probe
+    /// in flight (F-110 / F-111); `None` when no LLM is configured (#758).
+    llm: Option<llm_monitor::LlmMonitor<L>>,
     /// `(wall clock, process clock)` at the previous cycle, for resume
     /// detection (F-111). `None` until the first cycle has run.
     last_cycle_clock: Option<(time::OffsetDateTime, tokio::time::Instant)>,
@@ -506,8 +502,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         }
         let slots = SlotManager::new(settings.limits.clone());
         let readme_cache = settings.readme_cache_dir.clone().map(ReadmeCache::new);
-        let llm = llm.map(|l| Arc::new(crate::adapters::llm::MonitoredClassifier::new(l)));
-        let llm_health = llm.as_ref().map(|l| l.health());
+        let llm = llm.map(llm_monitor::LlmMonitor::new);
         Self {
             agent_prereqs: crate::agent_prereqs::PrereqCache::default(),
             blocked_on_prereqs: std::collections::HashSet::new(),
@@ -518,8 +513,6 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             plugins,
             worktrees: WorktreeManager::new(git),
             llm,
-            llm_health,
-            llm_probe: None,
             last_cycle_clock: None,
             hook_receiver: HookReceiver::NotConfigured,
             slots,
@@ -916,55 +909,23 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             gap_secs = gap.as_secs(),
             "the wall clock jumped ahead of the process clock → treating this as a resume from sleep"
         );
-        // A probe that left before the nap is stuck on the old pool until its
-        // timeout, and while it is unfinished no new one is spawned — so the
-        // "immediate" post-resume probe would wait on it. Abort it first.
-        if let Some(probe) = self.llm_probe.take() {
-            probe.abort();
-        }
-        if let Some(llm) = &self.llm {
-            llm.reset_connections();
-        }
-        if let Some(health) = &self.llm_health {
-            health.forget_contact();
+        if let Some(llm) = &mut self.llm {
+            llm.on_resume();
         }
     }
 
     /// Spend a liveness probe on the LLM gateway if nothing has heard from it
-    /// lately (F-111).
-    ///
-    /// "Lately" is [`EngineSettings::llm_probe_interval`] since the last
-    /// contact of any kind — real traffic is the best probe there is and
-    /// costs nothing extra — shrinking to
-    /// [`EngineSettings::llm_probe_interval_while_unreachable`] once the
-    /// gateway is latched down, so recovery is noticed within a minute. No
-    /// contact at all (startup, or a resume that forgot it) is due at once.
-    /// At most one probe is in flight; the classifier wrapper records the outcome, so
-    /// nothing here awaits it.
+    /// lately (F-111): [`EngineSettings::llm_probe_interval`] since the last
+    /// contact, or [`EngineSettings::llm_probe_interval_while_unreachable`]
+    /// once the gateway is latched down. The rules live in
+    /// `LlmMonitor::probe_if_due`.
     fn probe_llm_if_due(&mut self) {
-        let (Some(llm), Some(health)) = (&self.llm, &self.llm_health) else {
-            return;
-        };
-        if self.llm_probe.as_ref().is_some_and(|h| !h.is_finished()) {
-            return;
+        if let Some(llm) = &mut self.llm {
+            llm.probe_if_due(
+                self.settings.llm_probe_interval,
+                self.settings.llm_probe_interval_while_unreachable,
+            );
         }
-        let interval = if health.unreachable().is_some() {
-            self.settings.llm_probe_interval_while_unreachable
-        } else {
-            self.settings.llm_probe_interval
-        };
-        let due = health
-            .last_contact()
-            .is_none_or(|last| last.elapsed() >= interval);
-        if !due {
-            return;
-        }
-        let llm = Arc::clone(llm);
-        self.llm_probe = Some(tokio::spawn(async move {
-            // The outcome is recorded by the classifier wrapper; the `Result` itself has
-            // already been logged there on every state change.
-            let _ = llm.probe().await;
-        }));
     }
 
     /// Everything currently wrong, recomputed from scratch (F-110).
@@ -1040,7 +1001,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             }
         }
 
-        if let Some(health) = &self.llm_health {
+        if let Some(health) = self.llm.as_ref().map(llm_monitor::LlmMonitor::health) {
             if health.key_rejected() {
                 out.push(Degradation::LlmKeyRejected);
             }
@@ -1313,9 +1274,10 @@ mod health_tests {
     async fn a_rejected_llm_key_is_published_and_clears_when_it_starts_working() {
         let dir = test_support::scratch("health_llm");
         let mut engine = engine_with_health(&dir).await;
-        let health = Arc::new(crate::adapters::llm::LlmHealth::default());
+        let llm = llm_monitor::LlmMonitor::new(NoClassifier);
+        let health = llm.health();
         health.record::<()>(&Err(ClassifyError::status(401, "")));
-        engine.llm_health = Some(Arc::clone(&health));
+        engine.llm = Some(llm);
 
         engine.cycle().await.unwrap();
         assert_eq!(published(&dir).degraded, vec![Degradation::LlmKeyRejected]);
@@ -1332,9 +1294,10 @@ mod health_tests {
     async fn an_unreachable_gateway_is_published_with_its_reason() {
         let dir = test_support::scratch("health_llm_unreachable");
         let mut engine = engine_with_health(&dir).await;
-        let health = Arc::new(crate::adapters::llm::LlmHealth::default());
+        let llm = llm_monitor::LlmMonitor::new(NoClassifier);
+        let health = llm.health();
         health.record::<()>(&Err(ClassifyError::Timeout(30)));
-        engine.llm_health = Some(Arc::clone(&health));
+        engine.llm = Some(llm);
 
         engine.cycle().await.unwrap();
         assert_eq!(
@@ -1502,7 +1465,7 @@ mod liveness_tests {
         /// deterministic stand-in for "some later cycle sees the verdict".
         async fn cycle_and_settle(&mut self) {
             self.engine.cycle().await.unwrap();
-            if let Some(probe) = self.engine.llm_probe.take() {
+            if let Some(probe) = self.engine.llm.as_mut().and_then(|l| l.probe_mut().take()) {
                 probe.await.unwrap();
             }
         }
@@ -1529,7 +1492,7 @@ mod liveness_tests {
 
         rig.engine.cycle().await.unwrap();
         assert!(
-            rig.engine.llm_probe.is_some(),
+            rig.engine.llm.as_mut().unwrap().probe_mut().is_some(),
             "spawned, not awaited — the loop is not held hostage by the timeout"
         );
         assert!(
@@ -1579,9 +1542,10 @@ mod liveness_tests {
         assert_eq!(rig.probes(), 1);
         assert!(
             rig.engine
-                .llm_health
+                .llm
                 .as_ref()
                 .unwrap()
+                .health()
                 .unreachable()
                 .is_some()
         );
@@ -1630,7 +1594,14 @@ mod liveness_tests {
             1,
             "the startup probe went out and is now hanging"
         );
-        let stuck = rig.engine.llm_probe.as_ref().expect("still in flight");
+        let stuck = rig
+            .engine
+            .llm
+            .as_mut()
+            .unwrap()
+            .probe_mut()
+            .as_ref()
+            .expect("still in flight");
         assert!(!stuck.is_finished());
 
         rig.clock.advance(time::Duration::hours(2));
@@ -1649,7 +1620,7 @@ mod liveness_tests {
     async fn no_llm_means_no_probe() {
         let mut engine = test_engine(Duration::from_secs(3600)).await;
         engine.cycle().await.unwrap();
-        assert!(engine.llm_probe.is_none());
+        assert!(engine.llm.is_none(), "no monitor, so no probe can exist");
     }
 
     /// The resume detector itself: only a wall-clock advance the process
