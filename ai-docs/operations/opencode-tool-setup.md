@@ -60,7 +60,7 @@ Codex と違い **trust 手順は不要**（opencode は plugins/ 配下を無�
 # 既知の縮退と運用上の注意（ToolCapabilities）
 
 - **マーカー欠落時は 1 回だけ再依頼する**（claude の Stop block 相当、
-  [ADR-0106](/decisions/adr-0106-opencode-hook-parity.md)）。UNKNOWN を送った後に
+  [ADR-0107](/decisions/adr-0107-opencode-hook-parity.md)）。UNKNOWN を送った後に
   プラグインが「応答の最終行に <<STATUS:…>> を付けてください」を pane に送る。
   再依頼が pane に user 入力として見えるのは claude と異なる。
 - **タスク指示 + マーカー規約は不可視で届く**。プラグインの `context` フックが

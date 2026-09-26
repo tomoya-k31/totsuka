@@ -1,6 +1,6 @@
 ---
 type: Decision
-title: ADR-0106 claude の --settings フックの残りを opencode v2 プラグインで揃え、サブエージェントのセッションは報告しない
+title: ADR-0107 claude の --settings フックの残りを opencode v2 プラグインで揃え、サブエージェントのセッションは報告しない
 description: claude に差し込んでいるフックのうち opencode に無かった不可視注入・マーカー欠落時の再依頼・Notification・SessionEnd を、v2 プラグイン API（context フック・ctx.session.prompt・permission.asked・shutdown 中断）で実装し、invisible_injection と marker_block を true にした決定。タスクツールのサブエージェント（parentID 付きセッション）は報告も注入もしない。llm 検収と triage/design の deny 同等化は見送り。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/hooks/totsuka-opencode.js
 tags: [decision, opencode, tool, plugin, hooks, adr]
