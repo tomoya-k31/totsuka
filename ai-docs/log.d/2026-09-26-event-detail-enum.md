@@ -1,0 +1,1 @@
+* **Update**: [orchestrator-core](/components/orchestrator-core.md) — `domain::event_detail` を追記。`events.detail` の語彙を型 `EventDetail` に閉じ、旧 `json!` の保存バイト列と一致することを形ごとのゴールデンテストで固定した（#766、積み上げ PR の 1/3。書き手と読み手はまだ移していない）
