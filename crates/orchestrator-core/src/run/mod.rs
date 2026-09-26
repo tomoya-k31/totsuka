@@ -354,9 +354,9 @@ pub struct Engine<G: GitRunner, L: RepoClassifier + 'static> {
     /// right amount — the situation is still true and the previous message is
     /// gone from the operator's notification centre anyway. Persisting it would
     /// mean a schema change for a message.
-    blocked_on_tools: std::collections::HashSet<i64>,
+    blocked_on_prereqs: std::collections::HashSet<i64>,
     /// Tasks already reported as waiting for a downed agent plugin (#499), on
-    /// the same once-per-task contract as `blocked_on_tools`. Cleared when the
+    /// the same once-per-task contract as `blocked_on_prereqs`. Cleared when the
     /// task finally gets past the gate, so a second outage is reported again.
     blocked_on_agent: std::collections::HashSet<i64>,
     /// Plugins the supervisor has stopped trying to relaunch (#495/#499).
@@ -511,7 +511,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         let llm_health = llm.as_ref().map(|l| l.health());
         Self {
             agent_prereqs: crate::agent_prereqs::PrereqCache::default(),
-            blocked_on_tools: std::collections::HashSet::new(),
+            blocked_on_prereqs: std::collections::HashSet::new(),
             blocked_on_agent: std::collections::HashSet::new(),
             abandoned_plugins: std::collections::HashSet::new(),
             db,

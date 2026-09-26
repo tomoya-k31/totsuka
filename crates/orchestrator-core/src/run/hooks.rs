@@ -596,7 +596,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             self.forget_task(task_id);
         } else {
             self.awaiting_approval.remove(&task_id);
-            self.blocked_on_tools.remove(&task_id);
+            self.blocked_on_prereqs.remove(&task_id);
             self.blocked_on_agent.remove(&task_id);
         }
         Ok(outcome)
@@ -1018,7 +1018,7 @@ mod tests {
             .sessions
             .insert(("mock".to_string(), "s-1".to_string()), id);
         engine.awaiting_approval.insert(id);
-        engine.blocked_on_tools.insert(id);
+        engine.blocked_on_prereqs.insert(id);
 
         let outcome = engine.control_task(TaskOp::Cancel, id).unwrap();
         assert_eq!(
@@ -1032,7 +1032,7 @@ mod tests {
         assert!(engine.slot_holders.is_empty());
         assert!(engine.sessions.is_empty());
         assert!(
-            engine.awaiting_approval.is_empty() && engine.blocked_on_tools.is_empty(),
+            engine.awaiting_approval.is_empty() && engine.blocked_on_prereqs.is_empty(),
             "a retry must not inherit the cancelled run's memos"
         );
 

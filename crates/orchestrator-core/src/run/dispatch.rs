@@ -123,7 +123,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         }
         // The set gates the *notification* only (#399): interrupting someone
         // every 200 ms is spam, whereas re-recording the same note is a no-op.
-        if !self.blocked_on_tools.insert(record.id) {
+        if !self.blocked_on_prereqs.insert(record.id) {
             tracing::debug!(
                 task_id = record.id,
                 missing = ?names,
@@ -197,7 +197,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             // again is in a *new* condition the operator has not been told
             // about. Without this the set only ever grows and the second wait
             // is silent in both the notification and `status` (#407).
-            self.blocked_on_tools.remove(&record.id);
+            self.blocked_on_prereqs.remove(&record.id);
             // #499: a plugin between instances must not take a slot either.
             // Same reason as the tool gate above — deciding here rather than
             // in `dispatch_one` means no slot is acquired, so tasks for
@@ -216,7 +216,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             };
             if agent_gate(&agent, status.as_ref(), spent) == AgentGate::Park {
                 // Told once per task, not once per 200 ms tick — the same
-                // reason `blocked_on_tools` exists. The operator's actionable
+                // reason `blocked_on_prereqs` exists. The operator's actionable
                 // signal is the plugin's own escalation, which `supervise`
                 // sends when the restart budget runs out.
                 if self.blocked_on_agent.insert(record.id) {
@@ -677,7 +677,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             Err(DispatchRefusal::AgentDown) => {
                 self.release_slot(task_id);
                 // Told once per task, not once per 200 ms tick — the same
-                // reason `blocked_on_tools` exists. The operator's actionable
+                // reason `blocked_on_prereqs` exists. The operator's actionable
                 // signal is the plugin's own escalation, which `supervise`
                 // sends when the restart budget runs out.
                 if self.blocked_on_agent.insert(task_id) {
@@ -1255,7 +1255,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         self.drop_task_sessions(task_id);
         self.agent_output.remove(&task_id);
         self.awaiting_approval.remove(&task_id);
-        self.blocked_on_tools.remove(&task_id);
+        self.blocked_on_prereqs.remove(&task_id);
         self.blocked_on_agent.remove(&task_id);
     }
 
