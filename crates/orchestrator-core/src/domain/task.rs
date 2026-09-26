@@ -8,7 +8,7 @@ use std::fmt;
 /// id): that one is what a pane label and the plugin protocol carry. Both
 /// used to be bare integers/strings, so passing one where the other belonged
 /// compiled silently (#210, #765).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize)]
 #[serde(transparent)]
 pub struct TaskId(pub i64);
 

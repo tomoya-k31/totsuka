@@ -817,7 +817,7 @@ mod tests {
             >,
         > + Send {
             self.asked.lock().unwrap().push(task_id.0);
-            let outcome = if task_id > TaskId(0) {
+            let outcome = if task_id.0 > 0 {
                 crate::ports::signal_ingress::FocusOutcome::focused()
             } else {
                 crate::ports::signal_ingress::FocusOutcome::not("pane is gone")
@@ -834,7 +834,7 @@ mod tests {
         > + Send {
             use crate::domain::state::TaskState;
             self.tasks.lock().unwrap().push((op, task_id.0));
-            let outcome = match (op, task_id > TaskId(0)) {
+            let outcome = match (op, task_id.0 > 0) {
                 (TaskOp::Cancel, true) => {
                     TaskControlOutcome::applied(TaskState::Running, TaskState::Cancelled, None)
                 }
