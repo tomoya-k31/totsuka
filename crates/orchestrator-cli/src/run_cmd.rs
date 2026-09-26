@@ -99,6 +99,11 @@ async fn run_async(cx: &Cx, args: RunArgs) -> Result<(), CliError> {
         log_config.level = logging::parse_level("debug").expect("debug is a valid level");
     }
     let _log_guard = logging::init(&log_config)?;
+    tracing::info!(
+        "config: {} (host={})",
+        cx.config_path.display(),
+        cx.host.as_deref().unwrap_or("-")
+    );
 
     // Single-instance lock (F-74). Dry runs are read-only and skip it.
     let _lock = if dry_run {

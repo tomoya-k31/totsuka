@@ -4,7 +4,7 @@ title: セットアップ Playbook（新マシン / 開発機 / ローテーシ�
 description: "ゼロから totsuka が動くまでを通しで示す導入手順。新マシン（tarball 配置 → totsuka setup でプラグイン選択と config.toml 生成 → config.toml を編集 → シークレット登録 → doctor → run）、開発機（クローン → チェックアウトからのビルド）、トークンローテーション、中断・失敗時の復旧と別マシンでの再現を扱う。"
 resource: https://github.com/tomoya-k31/totsuka/issues/350
 tags: [setup, onboarding, runbook, playbook, secrets, doctor, rotation]
-generated: { by: claude-code/opus-5.5, at: 2026-09-26T12:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-09-27T10:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -238,6 +238,18 @@ cp ~/dotfiles/totsuka-config.toml ~/.config/totsuka/config.toml
 
 シークレットの登録だけは各マシンで人間がやる。リポジトリのパスがマシンごとに違うなら
 `[[repositories]].path` を直すこと。
+
+**マシンごとに中身が違うなら `hosts/<host>.toml` に分ける**（#832）。`~/.config/totsuka/hosts/<host>.toml`
+があればそのマシンでは `config.toml` の代わりにそれが読まれるので、全マシンぶんを 1 つの dotfiles で管理できる。
+`<host>` はホスト名の最初の `.` より前の小文字（`M2.local` → `m2`）:
+
+```bash
+mkdir -p ~/.config/totsuka/hosts
+mv ~/.config/totsuka/config.toml ~/.config/totsuka/hosts/"$(hostname -s | tr '[:upper:]' '[:lower:]')".toml
+totsuka doctor    # config-file 行が hosts/<host>.toml を指していること
+```
+
+選択順と注意点は [設定リファレンス](/development/config-reference.md) の「config ファイルの選択」。
 
 > 以前あった回答ファイル（`--save-answers` / `--answers`）は #705 で無くなった。運ぶべきものが
 > 「回答」から「設定ファイルそのもの」に変わり、中間形式が要らなくなったため。

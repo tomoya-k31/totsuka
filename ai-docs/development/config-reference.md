@@ -4,7 +4,7 @@ title: 設定リファレンス（config.toml）
 description: "config.toml の全キー・デフォルト値・意味の一覧。設定ファイルは 1 本で、プラグイン個別設定もトップレベルの [<name>] テーブルに入る。シークレット参照、設定スキーマのバージョニング方針、[[projects]] の domain 宣言とワークフローからの参照、プラグインが定義する追加プロパティ、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-github の [github]、task-source-notion の [notion]、task-source-slack の [slack]、agent-ide-herdr の [herdr] を含む。"
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
 tags: [config, reference, toml, secrets, workflow, worktree, github, notion, slack, hooks, versioning]
-generated: { by: claude-code/opus-5.5, at: 2026-09-26T22:30:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-09-27T10:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -20,11 +20,35 @@ owner: tomoya-k31
 **設定ファイルは 1 本だけ** `$XDG_CONFIG_HOME/totsuka/config.toml`（既定 `~/.config/totsuka/config.toml`）。
 
 - `--config <path>` で場所を上書き可能（最上位の優先レイヤ）
+- マシンごとに別ファイルを置ける（下の「config ファイルの選択」）
 - プラグイン個別設定は同じファイルのトップレベル `[<name>]` テーブル（Orchestrator は無解釈で保持し、シークレット解決後に `initialize` へ渡す）
 
 `[<name>]` は **#554 で廃止**した（[ADR-0058](/decisions/adr-0058-config-ownership-boundary.md)）。所有をファイル位置で表現していたため、`[[workflows]]` のような core の構造体の中には届かなかった。
 
 **残っていても読まれない。** `version` は上げず検出もしないと決めたので、旧ファイルはパースエラーにもならず、プラグインが空設定で起動する。移行時に消すこと。
+
+## config ファイルの選択
+
+**1 回の起動で読むのは次のうち最初に見つかった 1 本だけ**（#832、[ADR-0106](/decisions/adr-0106-per-host-config-file.md)）。マージや include はしない。
+
+1. `--config <path>` の指定
+2. `$XDG_CONFIG_HOME/totsuka/hosts/<host>.toml` が存在すれば、それ
+3. `$XDG_CONFIG_HOME/totsuka/config.toml`
+
+`<host>` はホスト名（`gethostname(2)`）の最初の `.` より前を ASCII 小文字にしたもの。例: `M2.local` → `hosts/m2.toml`。ホスト名が取れない・空・`/` を含むときは 2 を飛ばす（エラーにはしない）。
+
+```text
+~/.config/totsuka/          # dotfiles で全マシン共有してよい
+├── hosts/
+│   ├── macbook.toml
+│   └── mac-mini.toml
+└── config.toml             # 一致する hosts/ ファイルが無いマシンの既定
+```
+
+- **どれが選ばれたかは `totsuka doctor` の `config-file` 行**に出る（パスと host キー）。`hosts/` があるのに一致するファイルが無く `config.toml` に落ちたときは warn になり、`hosts/` の中身を列挙する。macOS のホスト名はネットワークで変わりうるので、黙って別の設定で動くのを防ぐため
+- `totsuka run` も起動時に `config: <path> (host=<key>)` をログに 1 行出す
+- `setup` / `plugin install|uninstall|enable|disable` は**選ばれたファイル**へ書く。`hosts/` のファイルを新規作成することはない（無ければ従来どおり `config.toml` を作る）
+- ディレクトリには config 以外の実行時ファイルを置かないので、`~/.config/totsuka/` をディレクトリごと symlink（GNU Stow 等）してよい。`setup` の書き込み（一時ファイル + rename）もその実体ディレクトリ内で完結し、symlink を壊さない
 
 `totsuka setup` が雛形を生成する。**本ドキュメントが記述するキーはすべてその雛形にコメント付きで入っており**、載っていることは `scripts/config-template-lint.sh` が機械検証する（[config.toml 雛形とその網羅性検査](/development/config-template.md)）。`totsuka config validate` で検証、`totsuka config show [--redacted]` で表示。
 

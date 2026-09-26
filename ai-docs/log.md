@@ -4,6 +4,10 @@
 
 * **Update**: [orchestrator-core](/components/orchestrator-core.md) — タスクを `domain::Task` にし、`TaskRecord` を削除した。時刻は `OffsetDateTime` で持ち、文字列化は `ports::clock` の 1 組に集めた（#765 の 3 層目）
 * **Update**: [state.db スキーマ](/data/state-db.md) — `tasks` の時刻列の読み書きの経路と、読めない時刻を読み出しエラーにする方針を追記
+* **Decision**: [ADR-0106 ホスト別の config ファイル](/decisions/adr-0106-per-host-config-file.md) — `--config` が無いとき `hosts/<host>.toml` → `config.toml` の順に選ぶ（#832）
+* **Update**: [設定リファレンス](/development/config-reference.md) — 「config ファイルの選択」の節を追加
+* **Update**: [セットアップ手順](/operations/setup-playbook.md) — マシンごとに `hosts/<host>.toml` へ分ける手順を追加
+* **Update**: [orchestrator-cli](/components/orchestrator-cli.md) — `Cx::resolve` の選択順と `doctor` の `config-file` 行
 * **Update**: [orchestrator-core](/components/orchestrator-core.md) — `Task.mode` を `WorkflowMode` にし、未知の mode を読み出しエラー（`UnknownMode`）にした（#765 の 4 層目）
 * **Update**: [state.db スキーマ](/data/state-db.md) — `tasks.mode` の Rust 側の型と、未知の値の扱いを追記
 
