@@ -1145,3 +1145,33 @@ fn config_validate_defers_a_secret_reference_without_the_values() {
         "{text}"
     );
 }
+
+/// Given the values, doctor must report a leftover store reference the way
+/// the run treats it — a failure — not skip it with "`totsuka run` will
+/// resolve it" (code review on #787). The `cmd:` must not run either.
+#[test]
+fn doctor_with_secrets_stdin_fails_a_store_reference_without_running_it() {
+    let (env, ..) = setup_supplied("supplied-doctor-strict");
+    let marker = env.base.join("cmd-ran");
+    let config = env.cfg_dir().join("config.toml");
+    let text = std::fs::read_to_string(&config).unwrap().replace(
+        "token = \"secret:src-token\"",
+        &format!("token = \"cmd:touch {} && echo x\"", marker.display()),
+    );
+    std::fs::write(&config, text).unwrap();
+
+    let out = env.run_with_stdin(
+        &["doctor", "--json", "--no-repair", "--secrets-stdin"],
+        "{}\n",
+    );
+    let check = doctor_plugin_check(&out, "mock_src");
+    assert_eq!(check["ok"], false, "{check}");
+    assert!(
+        check["detail"].as_str().unwrap().contains("secret:<name>"),
+        "{check}"
+    );
+    assert!(
+        !marker.exists(),
+        "the cmd: backend ran under --secrets-stdin"
+    );
+}

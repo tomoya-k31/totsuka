@@ -172,9 +172,8 @@ enum SecretScheme {
     Bitwarden,
     /// `secret:` without `--secrets-stdin` — the value exists only in a
     /// process a launcher hands it to (#754), so it is never resolved here.
-    /// A doctor that *was* given the values classifies `secret:` as
-    /// [`Silent`](Self::Silent) instead: reading an in-memory map cannot
-    /// prompt.
+    /// A doctor that *was* given the values classifies every reference as
+    /// [`Silent`](Self::Silent) instead (see [`SecretScheme::of`]).
     Supplied,
 }
 
@@ -186,13 +185,20 @@ impl SecretScheme {
     /// prompt. A malformed reference fails in the resolver with
     /// `InvalidReference` without ever spawning a CLI.
     fn of(reference: &str) -> Self {
+        // Given the values (#754), resolving never reaches a backend: `secret:`
+        // reads the in-memory map and every store scheme is refused on the
+        // spot. Nothing can prompt, so nothing is gated — and a leftover
+        // `op://` / `cmd:` then fails its check exactly as the run would
+        // (exit 4), instead of being noted as something `run` will resolve.
+        if supplied::installed().is_some() {
+            return Self::Silent;
+        }
         match reference.parse::<SecretRef>() {
             Err(_) => Self::Silent,
             Ok(SecretRef::Keychain { .. }) => Self::Silent,
             Ok(SecretRef::OnePassword { .. }) => Self::OnePassword,
             Ok(SecretRef::Command { .. }) => Self::Command,
             Ok(SecretRef::Bitwarden { .. }) => Self::Bitwarden,
-            Ok(SecretRef::Supplied { .. }) if supplied::installed().is_some() => Self::Silent,
             Ok(SecretRef::Supplied { .. }) => Self::Supplied,
         }
     }
