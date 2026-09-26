@@ -680,14 +680,6 @@ pub struct TaskMessageInsert {
     pub payload: String,
 }
 
-/// The `events.detail.kind` an automatic dispatch retry is recorded under
-/// (#492).
-///
-/// Shared so the writer (the engine, when it requeues a failed dispatch) and
-/// the reader ([`StateDb::auto_retry_streak`]) cannot drift apart: the whole
-/// counter is "how many trailing events carry this string".
-pub const AUTO_RETRY_KIND: &str = "auto_retry";
-
 /// A stored conversation message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskMessage {
@@ -1977,12 +1969,13 @@ impl StateDb {
             if to_state != TaskState::Queued.as_str() {
                 continue;
             }
+            // A row that does not read as an `EventDetail` — another
+            // version's kind, or a shape no writer produces — is not an
+            // automatic retry, and ends the run like any other requeue (#766).
             let is_auto = detail
                 .as_deref()
-                .and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok())
-                .is_some_and(|v| {
-                    v.get("kind").and_then(serde_json::Value::as_str) == Some(AUTO_RETRY_KIND)
-                });
+                .and_then(|d| serde_json::from_str::<EventDetail>(d).ok())
+                .is_some_and(|d| matches!(d, EventDetail::AutoRetry { .. }));
             if is_auto {
                 streak += 1;
             } else {
@@ -2287,7 +2280,7 @@ fn conversion_error(e: Box<dyn std::error::Error + Send + Sync>) -> rusqlite::Er
 mod tests {
     use super::*;
     use crate::adapters::clock::ManualClock;
-    use crate::domain::event_detail::{Dispatch, HookStart, Publish, Reopen};
+    use crate::domain::event_detail::{Cli, Dispatch, HookStart, Publish, Reopen};
 
     /// Append an `events` row whose `detail` is `detail`'s JSON, verbatim.
     ///
@@ -3287,6 +3280,61 @@ mod tests {
         // and would hide the real note without anyone noticing.
         assert!(db.open_notes().unwrap().contains_key(&id));
         assert_eq!(db.event_count(id).unwrap(), 2, "ingest + the one real note");
+    }
+
+    /// Fail `id` and requeue it the way the engine does after a failed
+    /// dispatch, recording `detail` on the requeue.
+    fn fail_and_requeue(db: &StateDb, id: i64, detail: EventDetail) {
+        db.apply_event(db.task_ref(id).unwrap(), TaskEvent::Fail, None)
+            .unwrap();
+        db.retry_task(db.task_ref(id).unwrap(), Some(detail))
+            .unwrap();
+    }
+
+    fn auto_retry(attempt: u32) -> EventDetail {
+        EventDetail::AutoRetry { attempt, limit: 3 }
+    }
+
+    #[test]
+    fn auto_retry_streak_counts_the_trailing_automatic_requeues() {
+        let db = StateDb::open_in_memory().unwrap();
+        let id = db.upsert_task(&sample_task()).unwrap();
+        // One before a successful dispatch, which ends the run.
+        fail_and_requeue(&db, id, auto_retry(1));
+        db.apply_event(db.task_ref(id).unwrap(), TaskEvent::Dispatch, None)
+            .unwrap();
+        fail_and_requeue(&db, id, auto_retry(1));
+        fail_and_requeue(&db, id, auto_retry(2));
+        assert_eq!(db.auto_retry_streak(id).unwrap(), 2);
+
+        // A human's retry resets the budget.
+        let cli = EventDetail::Cli(Cli::Plain {
+            command: "task retry".to_string(),
+        });
+        fail_and_requeue(&db, id, cli);
+        assert_eq!(db.auto_retry_streak(id).unwrap(), 0);
+        fail_and_requeue(&db, id, auto_retry(1));
+        assert_eq!(db.auto_retry_streak(id).unwrap(), 1);
+    }
+
+    /// A requeue whose detail does not read as an [`EventDetail`] — another
+    /// version's kind, an `auto_retry` missing its fields, not an object at
+    /// all — is not an automatic retry, and ends the run rather than failing
+    /// the read (#766).
+    #[test]
+    fn auto_retry_streak_does_not_count_rows_it_cannot_read() {
+        for row in [
+            serde_json::json!({"kind": "from_the_future"}),
+            serde_json::json!({"kind": "auto_retry"}),
+            serde_json::json!("auto_retry"),
+        ] {
+            let db = StateDb::open_in_memory().unwrap();
+            let id = db.upsert_task(&sample_task()).unwrap();
+            fail_and_requeue(&db, id, auto_retry(1));
+            assert_eq!(db.auto_retry_streak(id).unwrap(), 1);
+            insert_raw_event(&db, id, TaskState::Queued, &row);
+            assert_eq!(db.auto_retry_streak(id).unwrap(), 0, "{row}");
+        }
     }
 
     #[test]

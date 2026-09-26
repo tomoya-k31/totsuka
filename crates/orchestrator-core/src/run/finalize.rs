@@ -5,7 +5,8 @@
 //! keeps its worktree and commits, so `task retry` can resume from here.
 
 use super::*;
-use crate::domain::event_detail::{EventDetail, Publish};
+use crate::domain::event_detail::{AgentStateChange, EventDetail, Publish};
+use serde::Deserialize;
 
 impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// Terminal processing for a task whose agent finished: run the workflow's
@@ -174,19 +175,28 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// The agent artifact persisted on the most recent `BeginPublish`
     /// transition (the `publish_artifact` field of its event `detail`), if any.
     /// Used to recover the artifact across a restart.
+    ///
+    /// Three kinds carry one — `agent_state` (on `BeginPublish`),
+    /// `hook_complete` and `self_report` — and none other ever has. A row
+    /// whose artifact is `null` is passed over for an older one, and a row
+    /// that does not read as an [`EventDetail`] carries none (#766).
     pub(super) fn persisted_artifact(&self, task_id: i64) -> Result<Option<String>, EngineError> {
         Ok(self
             .db
             .list_events(task_id)?
             .into_iter()
             .rev()
-            .find_map(|e| {
-                e.detail
-                    .as_ref()
-                    .and_then(|d| d.get("publish_artifact"))
-                    .and_then(|v| v.as_str())
-                    .map(str::to_string)
-            }))
+            .find_map(
+                |e| match EventDetail::deserialize(e.detail.as_ref()?).ok()? {
+                    EventDetail::AgentState(AgentStateChange::WithArtifact {
+                        publish_artifact,
+                        ..
+                    })
+                    | EventDetail::HookComplete { publish_artifact }
+                    | EventDetail::SelfReport { publish_artifact } => publish_artifact,
+                    _ => None,
+                },
+            ))
     }
 
     /// `output = source` (F-07): hand the accumulated artifact to the task
@@ -607,4 +617,117 @@ pub(super) enum PaneRelease {
     NotApplicable,
     /// The attempt itself failed (session lookup or RPC).
     Failed,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::adapters::state_db::NewTask;
+
+    /// Drive a fresh task (`key` tells it apart) through `history`, one
+    /// `(event, detail)` at a time.
+    fn task_with_history(
+        engine: &Engine<crate::adapters::git::SystemGitRunner, NoClassifier>,
+        key: &str,
+        history: Vec<(TaskEvent, Option<EventDetail>)>,
+    ) -> i64 {
+        let id = engine
+            .db
+            .upsert_task(&NewTask {
+                source: "mock".to_string(),
+                source_task_id: key.to_string(),
+                workflow: "implement".to_string(),
+                mode: "implement".to_string(),
+                repo: None,
+                priority: 0,
+                title: "t".to_string(),
+                url: None,
+                source_payload: None,
+                last_signal_at: None,
+            })
+            .unwrap();
+        for (event, detail) in history {
+            engine
+                .db
+                .apply_event(engine.db.task_ref(id).unwrap(), event, detail)
+                .unwrap();
+        }
+        id
+    }
+
+    /// All three kinds that persist an artifact are read back, and the
+    /// newest one wins.
+    #[tokio::test]
+    async fn the_artifact_is_recovered_from_every_kind_that_persists_one() {
+        let engine = crate::run::test_engine(std::time::Duration::from_secs(3600)).await;
+        let started = || vec![(TaskEvent::Dispatch, None), (TaskEvent::Start, None)];
+        let begin_publish = EventDetail::AgentState(AgentStateChange::WithArtifact {
+            state: plugin_protocol::methods::AgentState::Done,
+            publish_artifact: Some("from agent_state".to_string()),
+        });
+        let hook_complete = EventDetail::HookComplete {
+            publish_artifact: Some("from hook_complete".to_string()),
+        };
+        let self_report = EventDetail::SelfReport {
+            publish_artifact: Some("from self_report".to_string()),
+        };
+        for (tail, expected) in [
+            (
+                vec![(TaskEvent::BeginPublish, Some(begin_publish))],
+                "from agent_state",
+            ),
+            (
+                vec![
+                    (TaskEvent::Escalate, None),
+                    (TaskEvent::BeginPublish, Some(hook_complete)),
+                ],
+                "from hook_complete",
+            ),
+            (
+                vec![(TaskEvent::SelfReportComplete, Some(self_report))],
+                "from self_report",
+            ),
+        ] {
+            let mut history = started();
+            history.extend(tail);
+            let id = task_with_history(&engine, expected, history);
+            assert_eq!(
+                engine.persisted_artifact(id).unwrap().as_deref(),
+                Some(expected)
+            );
+        }
+    }
+
+    /// A newer row that recorded no artifact (`null`) does not hide an older
+    /// one — the same answer the untyped reader gave before #766.
+    #[tokio::test]
+    async fn a_null_artifact_falls_back_to_an_older_one() {
+        let engine = crate::run::test_engine(std::time::Duration::from_secs(3600)).await;
+        let id = task_with_history(
+            &engine,
+            "1",
+            vec![
+                (TaskEvent::Dispatch, None),
+                (TaskEvent::Start, None),
+                (
+                    TaskEvent::SelfReportComplete,
+                    Some(EventDetail::SelfReport {
+                        publish_artifact: Some("older".to_string()),
+                    }),
+                ),
+                (TaskEvent::VerificationFailed, None),
+                (
+                    TaskEvent::BeginPublish,
+                    Some(EventDetail::AgentState(AgentStateChange::WithArtifact {
+                        state: plugin_protocol::methods::AgentState::Done,
+                        publish_artifact: None,
+                    })),
+                ),
+            ],
+        );
+        assert_eq!(
+            engine.persisted_artifact(id).unwrap().as_deref(),
+            Some("older")
+        );
+    }
 }

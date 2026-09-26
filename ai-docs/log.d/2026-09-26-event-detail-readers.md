@@ -1,0 +1,1 @@
+* **Update**: [state-db](/data/state-db.md) — `detail` を読み戻して制御に使う `auto_retry_streak` と `persisted_artifact` を `EventDetail` 経由にし、読めない行を「該当しない」とする扱いと、kind 一覧の参照先（`domain::EventDetail`）を追記した。`AUTO_RETRY_KIND` 定数は削除（#766、積み上げ PR の 3/3）

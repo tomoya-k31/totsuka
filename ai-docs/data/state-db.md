@@ -159,7 +159,7 @@ Claude Code フック（Stop / Notification / SessionStart / SessionEnd / heartb
 `idx_hook_events_task (task_id, id)`。追加ストア API:
 
 - `record_hook_event(&HookEventInsert) -> HookEventOutcome` — `INSERT ... ON CONFLICT DO NOTHING`。新規は `New`、冪等キー衝突は `Duplicate`（呼び出し側は黙って捨てる）。
-- `auto_retry_streak(task_id) -> u32` — `events` を id 降順に走査し、**直近の成功 dispatch 以降に自動で再試行した回数**を返す（#492 の再試行予算）。`to_state = dispatched` で打ち切り、`to_state = queued` は `detail.kind` が `auto_retry` なら数え、それ以外（人間の `cli` retry・初回 submit・reopen）なら打ち切る。**プロセス内カウンタにしない理由**は `unknown_stop_streak` と同じで、`run` の再起動をまたいで「あと何回」を保つため。副産物として**人間が `task retry` を打つと予算が自動でリセット**される。
+- `auto_retry_streak(task_id) -> u32` — `events` を id 降順に走査し、**直近の成功 dispatch 以降に自動で再試行した回数**を返す（#492 の再試行予算）。`to_state = dispatched` で打ち切り、`to_state = queued` は `detail` が `EventDetail::AutoRetry` として読めれば数え、それ以外（人間の `cli` retry・初回 submit・reopen、そして**読めない行** — 他バージョンの kind、フィールドの欠けた `auto_retry`、オブジェクトでない値）なら打ち切る（#766。読めない行でエラーにして engine を止めない）。**プロセス内カウンタにしない理由**は `unknown_stop_streak` と同じで、`run` の再起動をまたいで「あと何回」を保つため。副産物として**人間が `task retry` を打つと予算が自動でリセット**される。
 - `unknown_stop_streak(task_id) -> u32` — stop イベントを id 降順に走査し、最初の非 UNKNOWN stop までの UNKNOWN 連続数（D-02 のエスカレーション計数。**フック自己申告の block_count は信用せず DB から再計算**）。`idx_hook_events_task` + 早期 break で実質 O(streak)。
 
 ## task_messages（v5、#242/#257）
@@ -200,6 +200,8 @@ Claude Code フック（Stop / Notification / SessionStart / SessionEnd / heartb
 
 **遷移行の `detail` は型 `domain::EventDetail` でしか書けない（#766）。** `apply_event` / `retry_task` / `append_task_message_reopening` / `append_task_message_handing_off` は `Option<EventDetail>` を、`task_control::cancel` / `retry` は（detail を必ず記録するので）`EventDetail` を受け、取り込み時の `ingested` / `submitted` も同じ型から作る。列に入るのは `EventDetail::to_json` の出力で、`serde_json::Value` を経由するのでキーはソート済みになる — #766 以前の `json!` の書き手が保存したのと同じバイト列で、形ごとのゴールデンテストがそれを固定している。kind とフィールドの対応は `EventDetail` の定義が唯一の一覧。ノート行（下記）は別の語彙で、`note_task` が `serde_json::Value` のまま受ける。
 
+**`detail` を読み戻して制御に使うのは 2 箇所で、どちらも `EventDetail` へ deserialize して判定する。** `auto_retry_streak`（再試行予算、下記）と、再起動後に成果物を回収する `run::finalize` の `persisted_artifact`（`publish_artifact` を持つ `agent_state`（`BeginPublish`）・`hook_complete`・`self_report` のうち最新のもの。`null` の行は飛ばして古い行を見る）。未知の kind は `EventDetail::Unknown`、どの形にも合わない行は deserialize 失敗になり、どちらも「該当しない」として扱う — 別バージョンが書いた監査行で engine を止めないため。
+
 ### ノート行（#407、[ADR-0037](/decisions/adr-0037-task-notes-in-the-event-log.md)）
 
 **このテーブルには遷移でない行も入る。** 「タスクが動いていない理由」は `from_state == to_state` の行として書かれ、`detail` の **`note` キー**がその印になる（例: `{"note":"blocked_agent_tools","missing":["gh"]}`）。マイグレーションは不要（スキーマは変わっていない）。
@@ -214,7 +216,7 @@ Claude Code フック（Stop / Notification / SessionStart / SessionEnd / heartb
 
 - **`Vec` でも `impl Iterator` でもなくコールバックである理由**: `detail` は publish 系の遷移で `publish_artifact`（= エージェントの端末出力の蓄積全量）を運ぶので、1 行が MB 級になりうる。全件を `Vec` に集める実装は出力サイズに比例してメモリを食い、`impl Iterator` は prepared statement を借りるためメソッドより長生きできない。実測: 19.8MB を出力する export のピーク RSS は 8.96MB（`task show 1 --json` 単体の 9.36MB より小さい）
 - **`after_id` が完全なカーソルになる**のは追記専用かつ `id` が `INTEGER PRIMARY KEY` だから。差分エクスポートに他の状態は要らない
-- **`detail` は解釈し直さない**。`kind` の語彙は時期によって増えており（`repo_select` / `dispatch` / `reopen` / `agent_state` / `hook_start` / `hook_complete` / `self_report` / `hook` / `escalate`）、現在の読み方で過去の行を書き換えるのは、この取り出し口が防ごうとしている失敗そのものである
+- **`detail` は解釈し直さない**。`kind` の語彙は時期によって増えており（現在の一覧は `domain::EventDetail` の定義。#766）、現在の読み方で過去の行を書き換えるのは、この取り出し口が防ごうとしている失敗そのものである
 - **同梱するタスク側の列は不変フィールドだけ**（`source` / `source_task_id` / `workflow` / `title`）。`state` や `branch` を載せると「過去の一瞬」を語る event に「今」の値が並ぶことになる
 - **秘密の扱い**: `detail` は `logging/redact.rs`（tracing レイヤの実装）の対象外なので、原理的に秘密を含みうる。ただし `task show --json` が既に同じ `detail` を露出しているため、export が新しい露出クラスを作るわけではない。`--no-detail` は**サイズ削減のオプションであってリダクション機能ではない**
 - **「落とした」と「元から無い」を区別する**。`ExportedEvent.detail` は `Option<Option<Value>>` で、キー無し = `--no-detail` が落とした / `"detail": null` = その行に detail が無かった / 値あり = 記録どおり。潰すと、`--no-detail` で取ったアーカイブが「どの遷移が detail を持っていたか」に答えられなくなり、DB に戻るしかなくなる — この取り出し口が避けようとしている状況そのもの
