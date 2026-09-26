@@ -22,7 +22,9 @@ use plugin_protocol::methods::{
 use serde_json::Value;
 use tokio::sync::mpsc;
 
-use crate::dispatch::{Reply, Request, parse_params, parse_request, respond, unknown_method};
+use crate::dispatch::{
+    Reply, Request, params_error, parse_params, parse_request, respond, unknown_method,
+};
 use crate::runtime::{LineHandler, Writer};
 
 /// The typed surface an agent_ide plugin implements; [`AgentIdeServer`]
@@ -36,6 +38,12 @@ use crate::runtime::{LineHandler, Writer};
 /// handler that overrides one must declare the flag, and one that declares
 /// the flag must override it.
 pub trait AgentIdeHandler: Send {
+    /// Whether `initialize` has succeeded; the same gate as
+    /// [`TaskSourceHandler::initialized`](crate::TaskSourceHandler::initialized).
+    fn initialized(&self) -> bool {
+        true
+    }
+
     /// `initialize`: store config, answer version + capabilities.
     fn initialize(
         &mut self,
@@ -142,11 +150,12 @@ impl<H: AgentIdeHandler> LineHandler for AgentIdeServer<H> {
             Err(reply) => return reply,
         };
         let handler = &mut self.handler;
+        let initialized = handler.initialized();
         macro_rules! call {
             ($parse:ty, $call:ident) => {
                 match parse_params::<$parse>(&params) {
                     Ok(p) => respond(id, handler.$call(p).await),
-                    Err(error) => Reply::respond(Response::error(id, error)),
+                    Err(error) => params_error(id, &method, initialized, error),
                 }
             };
         }
@@ -163,7 +172,7 @@ impl<H: AgentIdeHandler> LineHandler for AgentIdeServer<H> {
             method::STATE_SUBSCRIBE => {
                 let parsed = match parse_params::<StateSubscribeParams>(&params) {
                     Ok(p) => p,
-                    Err(error) => return Reply::respond(Response::error(id, error)),
+                    Err(error) => return params_error(id, &method, initialized, error),
                 };
                 match handler.state_subscribe(parsed).await {
                     Ok(rx) => {

@@ -77,6 +77,19 @@ pub fn parse_params<T: DeserializeOwned>(params: &Value) -> Result<T, Error> {
 /// The typed surface a task_source plugin implements; [`TaskSourceServer`]
 /// turns it into a [`LineHandler`] covering the whole wire protocol.
 pub trait TaskSourceHandler: Send {
+    /// Whether `initialize` has succeeded. Read only when a request's params
+    /// do not parse: while `false`, such a request to any method but
+    /// `initialize` / `config/validate` is answered [`not_initialized`]
+    /// instead of `INVALID_PARAMS` — "initialize first" before "fix the
+    /// params", the order the hand-written plugin servers had (#759). A
+    /// request whose params do parse reaches the handler, which refuses it
+    /// itself when it must.
+    ///
+    /// Defaults to `true`: params errors are reported as such.
+    fn initialized(&self) -> bool {
+        true
+    }
+
     /// `initialize`: store config, answer version + capabilities.
     fn initialize(
         &mut self,
@@ -184,6 +197,19 @@ pub(crate) fn respond<T: Serialize>(id: RequestId, outcome: Result<T, Error>) ->
     })
 }
 
+/// The reply to params that did not parse: [`not_initialized`] when the
+/// handler is not initialized and `method` is not one of the two that need
+/// no `initialize`, `INVALID_PARAMS` otherwise.
+pub(crate) fn params_error(id: RequestId, method: &str, initialized: bool, error: Error) -> Reply {
+    let setup = matches!(method, method::INITIALIZE | method::CONFIG_VALIDATE);
+    let error = if initialized || setup {
+        error
+    } else {
+        not_initialized()
+    };
+    Reply::respond(Response::error(id, error))
+}
+
 /// `METHOD_NOT_FOUND` for a method this plugin kind does not serve.
 pub(crate) fn unknown_method(id: RequestId, method: &str) -> Reply {
     Reply::respond(Response::error(
@@ -204,11 +230,12 @@ pub async fn handle_line<H: TaskSourceHandler>(handler: &mut H, line: &str) -> R
         Ok(request) => request,
         Err(reply) => return reply,
     };
+    let initialized = handler.initialized();
     macro_rules! call {
         ($parse:ty, $call:ident) => {
             match parse_params::<$parse>(&params) {
                 Ok(p) => respond(id, handler.$call(p).await),
-                Err(error) => Reply::respond(Response::error(id, error)),
+                Err(error) => params_error(id, &method, initialized, error),
             }
         };
     }

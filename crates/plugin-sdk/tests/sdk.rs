@@ -661,3 +661,58 @@ mod agent_ide {
         assert!(reply.shutdown);
     }
 }
+
+// ---------------------------------------------------------------------------
+// the not-initialized gate
+// ---------------------------------------------------------------------------
+
+/// A handler that has not been initialized and says so.
+struct Uninitialized;
+
+impl TaskSourceHandler for Uninitialized {
+    fn initialized(&self) -> bool {
+        false
+    }
+    async fn initialize(&mut self, _: InitializeParams) -> Result<InitializeResult, Error> {
+        unreachable!("not exercised")
+    }
+    async fn config_validate(
+        &mut self,
+        _: ConfigValidateParams,
+    ) -> Result<ConfigValidateResult, Error> {
+        unreachable!("not exercised")
+    }
+    async fn update_status(&mut self, _: TaskUpdateStatusParams) -> Result<Value, Error> {
+        unreachable!("not exercised")
+    }
+    async fn result_publish(&mut self, _: ResultPublishParams) -> Result<Value, Error> {
+        unreachable!("not exercised")
+    }
+}
+
+/// Before `initialize`, a request whose params do not parse is told to
+/// initialize first — the code the hand-written servers answered, since they
+/// checked the session before reading params (#759). `initialize` and
+/// `config/validate` still report their params, and an unknown method is
+/// still unknown.
+#[tokio::test]
+async fn malformed_params_before_initialize_say_initialize_first() {
+    let mut server = TaskSourceServer(Uninitialized);
+    let mut code = async |method: &str| {
+        let reply = server
+            .handle_line(&line(json!({
+                "jsonrpc": "2.0", "id": 1, "method": method, "params": { "wrong": true }
+            })))
+            .await;
+        let response: Value = serde_json::from_str(&reply.line.unwrap()).unwrap();
+        response["error"]["code"].clone()
+    };
+    assert_eq!(
+        code("task/update_status").await,
+        error_code::INVALID_REQUEST
+    );
+    assert_eq!(code("result/publish").await, error_code::INVALID_REQUEST);
+    assert_eq!(code("initialize").await, error_code::INVALID_PARAMS);
+    assert_eq!(code("config/validate").await, error_code::INVALID_PARAMS);
+    assert_eq!(code("nope").await, error_code::METHOD_NOT_FOUND);
+}
