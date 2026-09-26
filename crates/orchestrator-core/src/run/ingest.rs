@@ -131,7 +131,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// per lane entry there is no way to tell a re-entry from a re-delivery.
     fn hand_off_workflow(
         &mut self,
-        existing: &TaskRecord,
+        existing: &domain::Task,
         wf: &Workflow,
         task: &Task,
     ) -> Result<(TaskId, IngestOutcome), EngineError> {
@@ -212,7 +212,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     ///
     /// Nothing is lost: the previous stage's branch ref still points at the
     /// same commit, and the files in the worktree do not move.
-    fn detach_for_read_only_stage(&mut self, existing: &TaskRecord, wf: &Workflow) {
+    fn detach_for_read_only_stage(&mut self, existing: &domain::Task, wf: &Workflow) {
         if !wf.profile.is_some_and(|p| p.is_read_only()) {
             return;
         }

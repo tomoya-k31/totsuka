@@ -4,7 +4,7 @@ title: 状態DB（SQLite state.db）スキーマ
 description: タスク実行状態を永続化する SQLite DB（$XDG_STATE_HOME/totsuka/state.db）の tasks/sessions/events/hook_events/task_messages/schema_migrations スキーマと設計判断。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/adapters/state_db.rs
 tags: [sqlite, state, schema, statemachine, hooks]
-generated: { by: claude-code/opus-5.5, at: 2026-09-26T16:15:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-09-27T01:00:00+09:00 }
 verified:
   - { by: claude-code/opus-5, at: 2026-08-19T02:36:00Z }
 status: stable
@@ -122,6 +122,8 @@ erDiagram
 | created_at / updated_at | TEXT | ISO 8601 (UTC) |
 | last_signal_at | TEXT NULL | 最終フックシグナル時刻（v2/#134、R-10 タイムアウト起点）。`touch_last_signal` が更新 |
 | state_version | INTEGER | 状態遷移ごとに 1 増える版数（v9/#763、[ADR-0098](/decisions/adr-0098-task-state-optimistic-concurrency.md)）。ノート行など遷移でない書き込みでは増えない。v9 以前の行は 0 から始まる |
+
+**`tasks` の時刻 4 列は Rust 側では `OffsetDateTime`（#765）。** 行は `domain::Task` として読み出され、書くときも読むときも `ports::clock` の `format_rfc3339` / `parse_rfc3339` の 1 組だけを通る。DB の文字列は formatter が書いたものだけなので、読んで書き直すとバイト単位で元に戻る（`--json` の値も変わらない。テストで固定）。parse できない値（手で書き換えた行など）は、未知の `state` と同じく**行の読み出しエラー**になる（`BadTimestamp`）。以前は `last_signal_at` が読めなければタイムアウトの掃除から黙って外れ、`finished_at` が読めなければ worktree を保持し続けていた。
 
 ## sessions（F-37、#57）
 
@@ -244,7 +246,7 @@ Claude Code フック（Stop / Notification / SessionStart / SessionEnd / heartb
 
 `domain::state` の純関数 `transition(from, event) -> Result<to>`。状態: `Queued / Pending / Dispatched / Running / WaitingInput / Verifying / Escalated / Publishing / Done / Failed / Cancelled`（`Verifying`=human 検収待ち・`Escalated`=人間対応待ちは #133 追加、どちらも非終端）。主要遷移: `queued→dispatched→running→publishing→done`、`running⇄waiting_input`、`queued⇄pending`（F-14）、非終端→`failed`/`cancelled`、`failed`/`cancelled`→`queued`（retry, F-44）。検収・エスカレーション遷移（#131/#133）: `running`/`waiting_input`/`escalated` →(SelfReportComplete)→ `verifying`（human 検収のみ。llm/none は既存 BeginPublish で `publishing` 直行 — `waiting_input`/`escalated` からの BeginPublish も可）、`verifying` →(ApproveVerification)→ `publishing` / →(VerificationFailed)→ `running`、全非終端 →(Escalate)→ `escalated`、`escalated` からは次シグナルで `verifying`/`publishing`/`waiting_input`/`running` へ復帰。`running`/`publishing` の実体はワークフロー（#54）が決め、ステートマシンはモード非依存。
 
-**遷移は読んだ版数に対してだけ書ける（v9/#763、[ADR-0098](/decisions/adr-0098-task-state-optimistic-concurrency.md)）。** `StateDb::apply_event` / `retry_task` は id ではなく `TaskRef`（id + `state_version`、`TaskRecord::task_ref()` で得る）を受け取り、トランザクション内で読み直した版数が違えば、遷移を判定する**前に** `StateError::Conflict` を返して何も書かない。書き込み元は Engine と `task cancel` / `retry` の DB 直接書き込み（フォールバック）の 2 つあり、Engine はタスクを読んでから数秒 await してから遷移を書くので、その間に状態が動きうる。状態の値の比較では cancel → retry → 再 dispatch で同じ状態に戻った場合（ABA）を見落とすため、版数で比べる。遷移のトランザクションは `BEGIN IMMEDIATE` で書き込みロックを先に取る（deferred だと、読んだ後に別の接続がコミットしたときの昇格が `SQLITE_BUSY_SNAPSHOT` になり、Conflict ではなく DB エラーとして表に出る）。成功すると更新済みの `TaskRef` が返り、同じタスクへ続けて書くときはそれを使う（`TaskRef` は `Clone` でないので、古い参照の使い回しはコンパイルが通らない）。取り込み時の reopen のように同じトランザクションの中で読んで書く内部経路だけは版数を持たない。
+**遷移は読んだ版数に対してだけ書ける（v9/#763、[ADR-0098](/decisions/adr-0098-task-state-optimistic-concurrency.md)）。** `StateDb::apply_event` / `retry_task` は id ではなく `TaskRef`（id + `state_version`、`Task::task_ref()` で得る）を受け取り、トランザクション内で読み直した版数が違えば、遷移を判定する**前に** `StateError::Conflict` を返して何も書かない。書き込み元は Engine と `task cancel` / `retry` の DB 直接書き込み（フォールバック）の 2 つあり、Engine はタスクを読んでから数秒 await してから遷移を書くので、その間に状態が動きうる。状態の値の比較では cancel → retry → 再 dispatch で同じ状態に戻った場合（ABA）を見落とすため、版数で比べる。遷移のトランザクションは `BEGIN IMMEDIATE` で書き込みロックを先に取る（deferred だと、読んだ後に別の接続がコミットしたときの昇格が `SQLITE_BUSY_SNAPSHOT` になり、Conflict ではなく DB エラーとして表に出る）。成功すると更新済みの `TaskRef` が返り、同じタスクへ続けて書くときはそれを使う（`TaskRef` は `Clone` でないので、古い参照の使い回しはコンパイルが通らない）。取り込み時の reopen のように同じトランザクションの中で読んで書く内部経路だけは版数を持たない。
 
 # 再起動回復（F-37 / §5.3、#57）
 

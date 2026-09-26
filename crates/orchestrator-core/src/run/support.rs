@@ -210,7 +210,7 @@ pub(super) fn conversation_prompt(pending: &[TaskMessage]) -> Option<String> {
 
 /// Reconstruct the normalized [`Task`] from a stored record: the full ingest
 /// payload when present, else a minimal task from the columns.
-pub(super) fn task_from_record(record: &TaskRecord) -> Task {
+pub(super) fn task_from_record(record: &domain::Task) -> Task {
     record
         .source_payload
         .clone()

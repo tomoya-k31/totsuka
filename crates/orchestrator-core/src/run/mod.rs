@@ -49,10 +49,11 @@ use crate::adapters::plugin_host::{HostError, IncomingRequest, Plugin};
 use crate::adapters::run_health::{self, Degradation, RunHealth};
 use crate::adapters::state_db::{
     HandoffOutcome, NewTask, StateDb, StateError, TaskMessage, TaskMessageInsert,
-    TaskMessageOutcome, TaskRecord, TaskRef, TransitionConflict,
+    TaskMessageOutcome, TaskRef, TransitionConflict,
 };
 use crate::adapters::{EngineSignalSink, hook_uds};
 use crate::config::{DEFAULT_GLOBAL_CONCURRENCY, PluginKind, RootConfig, resolve::ResolveError};
+use crate::domain;
 use crate::domain::CleanupPolicy;
 use crate::domain::TaskId;
 use crate::domain::signal::{AgentSignal, JobId};
@@ -1058,7 +1059,7 @@ fn suspended_for(
 fn notify_all(
     notifiers: &HashMap<String, Plugin>,
     event: NotifierEvent,
-    record: &TaskRecord,
+    record: &domain::Task,
     body: Option<String>,
 ) {
     let params = NotifyParams {

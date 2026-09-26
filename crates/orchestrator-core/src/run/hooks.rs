@@ -25,13 +25,13 @@ use plugin_protocol::rpc;
 
 use super::{Engine, EngineError, StatusMoment, notify_all, workflows_by_name};
 use crate::adapters::hook_uds;
-use crate::adapters::state_db::{HookEventInsert, HookEventOutcome, StateError, TaskRecord};
+use crate::adapters::state_db::{HookEventInsert, HookEventOutcome, StateError};
 use crate::config::{DEFAULT_BLOCK_RETRY_LIMIT, DEFAULT_WORKFLOW_TIMEOUT_SECS};
-use crate::domain::TaskId;
 use crate::domain::VerificationMode;
 use crate::domain::event_detail::{EventDetail, HookStart};
 use crate::domain::signal::{AgentSignal, SignalEvent, StopStatus};
 use crate::domain::state::{TaskEvent, TaskState};
+use crate::domain::{Task, TaskId};
 use crate::ports::git::GitRunner;
 use crate::ports::llm::RepoClassifier;
 use crate::ports::signal_ingress::{FocusOutcome, TaskControlOutcome, TaskOp};
@@ -208,7 +208,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// verification (`human`, D-01). Reuses the existing Done/publish path.
     async fn on_stop_completed(
         &mut self,
-        record: &TaskRecord,
+        record: &Task,
         agent_plugin: &str,
         last_assistant_message: Option<String>,
         _transcript_path: Option<String>,
@@ -289,7 +289,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// `Stop{NeedsInput}`: park the task in `WaitingInput` (D-07).
     async fn on_stop_needs_input(
         &mut self,
-        record: &TaskRecord,
+        record: &Task,
         agent_plugin: &str,
         reason: Option<String>,
     ) -> Result<(), EngineError> {
@@ -314,7 +314,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// path (ADR-0038 D6); this signal is what parks the task instead.
     async fn on_question_pending(
         &mut self,
-        record: &TaskRecord,
+        record: &Task,
         agent_plugin: &str,
         message: Option<String>,
     ) -> Result<(), EngineError> {
@@ -349,7 +349,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// only in what an arrival while already parked means.
     async fn park_waiting_input(
         &mut self,
-        record: &TaskRecord,
+        record: &Task,
         agent_plugin: &str,
         reason: Option<String>,
         detail: EventDetail,
@@ -381,7 +381,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// rather than via `apply_agent_state`, which hardcodes the failure detail.)
     async fn on_stop_failed(
         &mut self,
-        record: &TaskRecord,
+        record: &Task,
         reason: Option<String>,
     ) -> Result<(), EngineError> {
         if record.state.is_terminal() {
@@ -411,7 +411,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
 
     /// `Stop{Unknown}`: no transition; escalate once the consecutive-UNKNOWN
     /// streak reaches the block-retry limit (D-02, recomputed from the log).
-    async fn on_stop_unknown(&mut self, record: &TaskRecord) -> Result<(), EngineError> {
+    async fn on_stop_unknown(&mut self, record: &Task) -> Result<(), EngineError> {
         let streak = self.db.unknown_stop_streak(record.id)?;
         let limit = self.block_retry_limit();
         if streak >= limit {
@@ -436,7 +436,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// the id).
     fn on_session_start(
         &self,
-        record: &TaskRecord,
+        record: &Task,
         session_row: i64,
         tool_session_id: &str,
     ) -> Result<(), EngineError> {
@@ -474,7 +474,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// `SessionEnd`: record + warn, but never `Fail`. The `pane.exited` deadman
     /// and the timeout sweep own liveness; failing here would double-judge
     /// (D-10). The event is already persisted in `hook_events`.
-    fn on_session_end(&self, record: &TaskRecord, reason: Option<String>) {
+    fn on_session_end(&self, record: &Task, reason: Option<String>) {
         if record.state.is_terminal() {
             return;
         }
@@ -489,7 +489,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// audit detail (R-10) if the plugin supports it, transition to `Escalated`
     /// (keeping its slot), and notify. `Escalated` is non-terminal: the next
     /// signal resumes the task.
-    async fn escalate(&mut self, record: &TaskRecord, reason: String) -> Result<(), EngineError> {
+    async fn escalate(&mut self, record: &Task, reason: String) -> Result<(), EngineError> {
         if record.state.is_terminal() || record.state == TaskState::Escalated {
             return Ok(());
         }
@@ -618,7 +618,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// Capture a pane snapshot for escalation diagnostics (R-10), if the task's
     /// agent plugin declares the `diagnostics_snapshot` capability. Best effort:
     /// any failure yields `None`.
-    async fn diagnostics_snapshot(&self, record: &TaskRecord) -> Option<String> {
+    async fn diagnostics_snapshot(&self, record: &Task) -> Option<String> {
         let session = self.db.latest_session(record.id).ok().flatten()?;
         let agent = self.plugins.agents.get(&session.plugin)?;
         if !agent.capabilities().diagnostics_snapshot {
@@ -648,7 +648,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// pane, so silence is not evidence of anything.
     pub async fn sweep_signal_timeouts(&mut self) -> Result<(), EngineError> {
         let now = self.clock.now_utc();
-        let mut timed_out: Vec<TaskRecord> = Vec::new();
+        let mut timed_out: Vec<Task> = Vec::new();
         for state in [
             TaskState::Dispatched,
             TaskState::Running,
@@ -658,13 +658,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                 if self.awaiting_approval.contains(&record.id) {
                     continue;
                 }
-                let Some(last) = record.last_signal_at.as_deref() else {
-                    continue;
-                };
-                let Ok(last_at) = time::OffsetDateTime::parse(
-                    last,
-                    &time::format_description::well_known::Rfc3339,
-                ) else {
+                let Some(last_at) = record.last_signal_at else {
                     continue;
                 };
                 let timeout = self.workflow_timeout_secs(&record.workflow);
@@ -809,7 +803,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// mutated, so within one run this resolves exactly as `dispatch_one` did.
     /// Across a restart with an edited config, the *current* config is the
     /// right answer anyway.
-    fn verification_for(&self, record: &TaskRecord) -> VerificationMode {
+    fn verification_for(&self, record: &Task) -> VerificationMode {
         let workflows = workflows_by_name(&self.settings.workflows);
         let Some(wf) = workflows.get(record.workflow.as_str()).copied() else {
             return VerificationMode::default();

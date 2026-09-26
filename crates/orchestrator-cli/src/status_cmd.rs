@@ -7,6 +7,7 @@ use orchestrator_core::adapters::state_db::TaskNote;
 use orchestrator_core::agent_prereqs;
 use orchestrator_core::domain::TaskId;
 use orchestrator_core::domain::state::TaskState;
+use orchestrator_core::ports::clock::format_rfc3339;
 use serde::Serialize;
 
 use crate::common::{
@@ -113,7 +114,7 @@ pub fn run(cx: &Cx, json: bool) -> Result<(), CliError> {
             title: t.title,
             worktree_path: t.worktree_path,
             branch: t.branch,
-            updated_at: t.updated_at,
+            updated_at: format_rfc3339(t.updated_at),
             wait_reason: notes.remove(&t.id).map(wait_reason),
         })
         .collect();

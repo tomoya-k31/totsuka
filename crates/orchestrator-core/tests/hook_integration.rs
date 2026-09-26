@@ -26,6 +26,7 @@ use orchestrator_core::domain::signal::{
 };
 use orchestrator_core::domain::state::{TaskEvent, TaskState};
 use orchestrator_core::domain::workflow::Workflow;
+use orchestrator_core::ports::clock::parse_rfc3339;
 use orchestrator_core::ports::{Clock, SecretString};
 use orchestrator_core::repo_select::SelectConfig;
 use orchestrator_core::run::{Engine, EngineSettings, HookRuntime, PluginSet, RepoSettings};
@@ -204,7 +205,7 @@ fn new_task(source_task_id: &str, last_signal_at: Option<&str>) -> NewTask {
         title: "hook task".into(),
         url: None,
         source_payload: None,
-        last_signal_at: last_signal_at.map(str::to_string),
+        last_signal_at: last_signal_at.map(|s| parse_rfc3339(s).unwrap()),
     }
 }
 
@@ -2669,7 +2670,7 @@ async fn duplicate_heartbeat_refreshes_liveness_and_prevents_false_escalation() 
     let after = engine.db().get_task(id).unwrap().unwrap();
     assert_eq!(
         after.last_signal_at,
-        Some(clock.now_rfc3339()),
+        Some(clock.now_utc()),
         "duplicate heartbeat refreshed the timeout anchor"
     );
 
