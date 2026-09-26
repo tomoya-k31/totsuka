@@ -29,10 +29,198 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use plugin_protocol::manifest::OutputCapability;
 
-use crate::config::{
-    CleanupPolicyConfig, OutputPolicy, Profile, ProjectConfig, VerificationMode, WorkflowConfig,
-    WorkflowMode,
-};
+use serde::Deserialize;
+
+use crate::config::{CleanupPolicyConfig, ProjectConfig, WorkflowConfig};
+
+/// Execution mode of a workflow (F-80, F-82).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowMode {
+    /// Detailed design: worktree created, but no push/PR.
+    Plan,
+    /// Implementation.
+    Implement,
+}
+
+impl WorkflowMode {
+    /// The stable snake_case config string for this mode.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            WorkflowMode::Plan => "plan",
+            WorkflowMode::Implement => "implement",
+        }
+    }
+}
+
+/// Output policy of a workflow (F-83).
+///
+/// `pull_request` was a third variant until push and PR creation became the
+/// agent's responsibility. Removing it rather than accepting-and-ignoring it is
+/// deliberate: silently treating it as `source` would keep the run going while
+/// no PR was ever opened, and that is not a failure anyone notices.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OutputPolicy {
+    /// Write back to the task source (`result/publish`).
+    Source,
+    /// No output.
+    None,
+}
+
+impl OutputPolicy {
+    /// The stable snake_case config string for this policy.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            OutputPolicy::Source => "source",
+            OutputPolicy::None => "none",
+        }
+    }
+}
+
+/// How a workflow's completion self-report is verified (D-01).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VerificationMode {
+    /// In-session LLM verification via a prompt-type Stop hook (default).
+    #[default]
+    Llm,
+    /// A human verifies via `totsuka task verify`; the task waits in
+    /// `Verifying` until then.
+    Human,
+    /// No verification; a completion self-report is accepted as-is.
+    None,
+}
+
+impl VerificationMode {
+    /// The stable snake_case config string for this mode.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            VerificationMode::Llm => "llm",
+            VerificationMode::Human => "human",
+            VerificationMode::None => "none",
+        }
+    }
+}
+
+/// A workflow archetype ([#393](https://github.com/tomoya-k31/totsuka/issues/393)
+/// D5): one name that resolves `mode` / `output` / `verification` as a bundle.
+///
+/// The two-valued [`WorkflowMode`] cannot express "the worktree is read-only but
+/// the agent still writes outside it" — the shape both `triage` and `design`
+/// need. A profile decides that bundle in Rust rather than leaving the operator
+/// to assemble a combination by hand, which is where the mis-combinations were.
+///
+/// **As of this commit the four are not yet distinguishable by what they
+/// permit.** `triage` and `design` both resolve to [`WorkflowMode::Plan`], and
+/// plan does not structurally stop anything (#378), so nothing here yet does
+/// what `mode` alone could not. The distinction becomes real when
+/// [#395](https://github.com/tomoya-k31/totsuka/issues/395) gives each profile
+/// its own `permissions.deny` set and
+/// [#398](https://github.com/tomoya-k31/totsuka/issues/398) its own
+/// verification rubric. The bundle exists first so those have somewhere to
+/// attach; do not read the variant names as enforcement.
+///
+/// The resolution table is deliberately closed: adding a knob means adding a
+/// profile, not a config key. Same reasoning as the deny sets in
+/// [ADR-0023](https://github.com/tomoya-k31/totsuka/blob/main/ai-docs/decisions/adr-0023-configurable-prompt-surface.md)
+/// — a permission-bearing decision reachable through a config string is a
+/// privilege-escalation surface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Profile {
+    /// Answer a question. Worktree meant to stay read-only; the source plugin
+    /// publishes the reply behind its approval gate (WF 1, 2).
+    Answer,
+    /// File the request somewhere trackable. Worktree meant to stay read-only;
+    /// the agent creates the issue/page itself (WF 3).
+    Triage,
+    /// Produce a detailed design. Worktree meant to stay read-only; the agent
+    /// writes the design to the issue/page itself (WF 4, 6).
+    Design,
+    /// Implement and open a PR. The worktree is writable (WF 5, 7).
+    Implement,
+}
+
+impl Profile {
+    /// The stable snake_case config string for this profile.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Profile::Answer => "answer",
+            Profile::Triage => "triage",
+            Profile::Design => "design",
+            Profile::Implement => "implement",
+        }
+    }
+
+    /// Whether this profile is one of the read-only archetypes.
+    ///
+    /// **Written as a closed match on purpose.** Two call sites depend on this
+    /// (dropping claude's plan flag, and refusing to publish a task that ended
+    /// up on a branch), and when they each carried their own rule one was an
+    /// open `!= Implement` while the other enumerated. A profile added later
+    /// would have fallen to opposite defaults in the two places; here it fails
+    /// to compile until someone decides.
+    pub fn is_read_only(self) -> bool {
+        match self {
+            Profile::Answer | Profile::Triage | Profile::Design => true,
+            Profile::Implement => false,
+        }
+    }
+
+    /// Whether this profile's completion is judged by a human at the pane
+    /// (#440): the pane is attended, the agent asks the human for
+    /// confirmation, and COMPLETED means "the human approved".
+    ///
+    /// Two call sites depend on this — the confirm prompt selection
+    /// ([`prompts`](crate::prompts)) and the `AskUserQuestion` PreToolUse hook
+    /// wiring ([`hooks`](crate::hooks), #487) — so it lives here as a closed
+    /// match for the same reason as [`is_read_only`](Self::is_read_only): a
+    /// profile added later must fail to compile until someone decides.
+    pub fn confirms_with_a_human(self) -> bool {
+        match self {
+            Profile::Design | Profile::Implement => true,
+            Profile::Answer | Profile::Triage => false,
+        }
+    }
+
+    /// The execution mode this profile resolves to. Only `implement` gets a
+    /// writable worktree.
+    pub fn mode(self) -> WorkflowMode {
+        match self {
+            Profile::Implement => WorkflowMode::Implement,
+            Profile::Answer | Profile::Triage | Profile::Design => WorkflowMode::Plan,
+        }
+    }
+
+    /// The output policy this profile resolves to. `design` / `implement` write
+    /// their artifact directly and report status through `on_success`, so they
+    /// have nothing left to publish.
+    pub fn output(self) -> OutputPolicy {
+        match self {
+            Profile::Answer | Profile::Triage => OutputPolicy::Source,
+            Profile::Design | Profile::Implement => OutputPolicy::None,
+        }
+    }
+
+    /// The verification mode this profile resolves to. All four verify with the
+    /// llm judge; what differs is the rubric, which
+    /// [#398](https://github.com/tomoya-k31/totsuka/issues/398) specialises.
+    pub fn verification(self) -> VerificationMode {
+        VerificationMode::Llm
+    }
+}
+
+/// The worktree cleanup policy for a workflow mode (F-23, F-85).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CleanupPolicy {
+    /// Remove as soon as the task finishes (default for plan mode).
+    Immediate,
+    /// Keep for N days after the task finished, then remove.
+    RetentionDays(u32),
+    /// Never auto-remove; a human cleans up.
+    Manual,
+}
 
 /// A trigger condition: an opaque key-value set the plugin filters on.
 ///
