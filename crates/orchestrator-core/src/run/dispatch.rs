@@ -585,10 +585,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         let subscribe = plugin_protocol::methods::StateSubscribeParams {
             session_id: dispatched.session_id.clone(),
         };
-        let subscribe_error = match agent
-            .call::<_, Value>(method::STATE_SUBSCRIBE, &subscribe)
-            .await
-        {
+        let subscribe_error = match agent.request::<rpc::StateSubscribe>(&subscribe).await {
             Ok(_) => None,
             Err(e) => {
                 // No stream means the task could never progress (the loop
@@ -596,7 +593,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                 let cancel = plugin_protocol::methods::TaskCancelParams {
                     session_id: dispatched.session_id.clone(),
                 };
-                let _ = agent.call::<_, Value>(method::TASK_CANCEL, &cancel).await;
+                let _ = agent.request::<rpc::TaskCancel>(&cancel).await;
                 Some(e.to_string())
             }
         };
@@ -1005,7 +1002,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             repo_name: Some(repo.name.clone()),
         };
         let params = build_params(resume_session_id.clone());
-        let mut attempt = agent.call(method::TASK_DISPATCH, &params).await;
+        let mut attempt = agent.request::<rpc::TaskDispatch>(&params).await;
         // `SESSION_UNRESUMABLE` (0.2.4, #242): the session we asked to resume
         // is gone. Resuming is an optimization — the work itself does not
         // depend on it — so drop it and dispatch once more. The retry cannot
@@ -1020,7 +1017,9 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                 "session could not be resumed ({message}); dispatching fresh — \
                  the agent starts without the earlier conversation"
             );
-            attempt = agent.call(method::TASK_DISPATCH, &build_params(None)).await;
+            attempt = agent
+                .request::<rpc::TaskDispatch>(&build_params(None))
+                .await;
         }
         let dispatched: TaskDispatchResult = match attempt {
             Ok(result) => result,
@@ -1143,9 +1142,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                 let params = TaskClaimParams {
                     task_id: record.source_task_id.clone(),
                 };
-                source
-                    .call::<_, TaskClaimResult>(method::TASK_CLAIM, &params)
-                    .await
+                source.request::<rpc::TaskClaim>(&params).await
             }
             Some(_) => return Ok(true), // no capability → no exclusion (F-08)
             None => {

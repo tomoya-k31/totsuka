@@ -21,7 +21,9 @@
 //!    [`initialize`](methods::InitializeParams) with the resolved
 //!    plugin config and its [`PROTOCOL_VERSION`];
 //!    the plugin replies with its [`capabilities`](methods::InitializeResult).
-//! 2. The Orchestrator calls kind-specific methods (see [`method`]).
+//! 2. The Orchestrator calls kind-specific methods (see [`method`]; the
+//!    typed descriptors pairing each O→P request with its payload types are
+//!    in [`rpc`]).
 //! 3. On teardown the Orchestrator calls [`shutdown`](method::SHUTDOWN).
 //!
 //! ## Methods by kind (§11)
@@ -95,6 +97,7 @@ pub mod identifier;
 pub mod jsonrpc;
 pub mod manifest;
 pub mod methods;
+pub mod rpc;
 pub mod task;
 pub mod version;
 

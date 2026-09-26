@@ -18,11 +18,10 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use plugin_protocol::method;
 use plugin_protocol::methods::{
-    AgentState, DiagnosticsSnapshotParams, DiagnosticsSnapshotResult, NotifierEvent,
-    SessionFocusParams, SessionFocusResult,
+    AgentState, DiagnosticsSnapshotParams, NotifierEvent, SessionFocusParams,
 };
+use plugin_protocol::rpc;
 
 use super::{Engine, EngineError, StatusMoment, notify_all, workflows_by_name};
 use crate::adapters::hook_uds;
@@ -545,10 +544,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         let params = SessionFocusParams {
             session_id: session.session_id.clone(),
         };
-        match agent
-            .call::<_, SessionFocusResult>(method::SESSION_FOCUS, &params)
-            .await
-        {
+        match agent.request::<rpc::SessionFocus>(&params).await {
             Ok(result) if result.focused => FocusOutcome::focused(),
             Ok(_) => FocusOutcome::not("the pane is already closed"),
             Err(e) => FocusOutcome::not(format!("session/focus failed: {e}")),
@@ -617,10 +613,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         let params = DiagnosticsSnapshotParams {
             session_id: session.session_id.clone(),
         };
-        match agent
-            .call::<_, DiagnosticsSnapshotResult>(method::DIAGNOSTICS_SNAPSHOT, &params)
-            .await
-        {
+        match agent.request::<rpc::DiagnosticsSnapshot>(&params).await {
             Ok(result) => result.text,
             Err(e) => {
                 tracing::warn!(task_id = record.id, "diagnostics/snapshot failed: {e}");

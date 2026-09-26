@@ -8,8 +8,8 @@
 //!    stderr to the log, then sends [`initialize`](plugin_protocol::method::INITIALIZE)
 //!    (with the resolved config + secrets, F-65) and records the plugin's
 //!    declared capabilities (F-33).
-//! 2. [`Plugin::call`] issues requests, correlating responses by id with a
-//!    per-call timeout.
+//! 2. [`Plugin::request`] issues typed requests (#757), correlating responses
+//!    by id with a per-call timeout.
 //! 3. [`Plugin::shutdown`] sends `shutdown`, waits a grace period, then kills.
 //!
 //! # Crash isolation (§5.3)
@@ -50,7 +50,8 @@ use std::time::Duration;
 
 use plugin_protocol::jsonrpc::{self, Notification, Request};
 use plugin_protocol::manifest::Manifest;
-use plugin_protocol::methods::{ClaimedRepo, InitializeParams, InitializeResult, WorkflowOption};
+use plugin_protocol::methods::{ClaimedRepo, InitializeParams, WorkflowOption};
+use plugin_protocol::rpc::{self, Method};
 use plugin_protocol::{Capabilities, version};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -590,9 +591,7 @@ impl Plugin {
             llm: spec.llm,
             workflows: spec.workflows,
         };
-        let result: InitializeResult = plugin
-            .call(plugin_protocol::method::INITIALIZE, &init)
-            .await?;
+        let result = plugin.request::<rpc::Initialize>(&init).await?;
 
         Ok(Self {
             capabilities: result.capabilities,
@@ -663,8 +662,18 @@ impl Plugin {
         self.inner.liveness.subscribe()
     }
 
-    /// Call a method with typed params, deserializing the typed result.
-    pub async fn call<P, R>(&self, method: &str, params: &P) -> Result<R, HostError>
+    /// Call the method `M`, sending its params and decoding its result.
+    ///
+    /// The method name and both types come from the descriptor, so a call
+    /// cannot pair a name with the wrong payload (#757, ADR-0101).
+    pub async fn request<M: Method>(&self, params: &M::Params) -> Result<M::Result, HostError> {
+        self.call(M::NAME, params).await
+    }
+
+    /// Call a method by name with untyped params. Crate-private: outside
+    /// callers go through [`request`](Self::request), so the pairing of name
+    /// and types stays in [`plugin_protocol::rpc`] (#757).
+    pub(crate) async fn call<P, R>(&self, method: &str, params: &P) -> Result<R, HostError>
     where
         P: Serialize,
         R: DeserializeOwned,
@@ -673,15 +682,6 @@ impl Plugin {
             .inner
             .call_raw(method, Some(serde_json::to_value(params)?))
             .await?;
-        Ok(serde_json::from_value(value)?)
-    }
-
-    /// Call a method with no params, deserializing the typed result.
-    pub async fn call_no_params<R>(&self, method: &str) -> Result<R, HostError>
-    where
-        R: DeserializeOwned,
-    {
-        let value = self.inner.call_raw(method, None).await?;
         Ok(serde_json::from_value(value)?)
     }
 
@@ -724,8 +724,7 @@ impl Plugin {
             projects,
             repositories,
         };
-        self.call(plugin_protocol::method::CONFIG_VALIDATE, &params)
-            .await
+        self.request::<rpc::ConfigValidate>(&params).await
     }
 
     /// Gracefully shut down: send `shutdown`, wait `grace`, then kill.
