@@ -279,7 +279,16 @@ async fn result_publish_without_coordinates_reports_where_they_went() {
 #[tokio::test]
 async fn update_status_is_an_accepted_no_op() {
     let shared = std::sync::Arc::new(Shared::default());
+    shared.push_ok(json!({ "id": "999999999999999999", "username": "totsuka" }));
     let mut srv = server(&shared);
+    let resp = call(
+        &mut srv,
+        "initialize",
+        init_params(config(), watch_trigger()),
+    )
+    .await;
+    assert!(resp.error.is_none(), "{:?}", resp.error);
+    let guard_calls = shared.calls().len();
 
     let resp = call(
         &mut srv,
@@ -288,7 +297,7 @@ async fn update_status_is_an_accepted_no_op() {
     )
     .await;
     assert!(resp.error.is_none(), "{:?}", resp.error);
-    assert!(shared.calls().is_empty());
+    assert_eq!(shared.calls().len(), guard_calls, "no round trip");
 }
 
 /// A line that is not JSON has no id to correlate against, so the reply must
