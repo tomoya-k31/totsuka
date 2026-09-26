@@ -12,7 +12,7 @@
 
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::dispatch::Reply;
 use crate::lookup::LookupClient;
@@ -98,18 +98,49 @@ pub struct Stdio {
     pub submit: SubmitClient,
     /// The `task/lookup` client bound to this writer (0.2.4, #242).
     pub lookup: LookupClient,
+    /// Asks the writer task to confirm everything queued so far is on stdout.
+    flush: mpsc::UnboundedSender<oneshot::Sender<()>>,
+}
+
+impl Stdio {
+    /// Wait until every line queued before this call has been written.
+    ///
+    /// [`serve`] calls this before returning: `main` ends right after it, and
+    /// the runtime drops the writer task with whatever it had not written yet
+    /// — the `shutdown` reply included, which the conformance kit found lost
+    /// in most runs (#767).
+    pub async fn flush(&self) {
+        let (ack, done) = oneshot::channel();
+        if self.flush.send(ack).is_ok() {
+            let _ = done.await;
+        }
+    }
 }
 
 /// Spawn the stdout writer task and build the runtime handles.
 pub fn stdio() -> Stdio {
     let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+    let (flush, mut flushes) = mpsc::unbounded_channel::<oneshot::Sender<()>>();
     tokio::spawn(async move {
         let mut stdout = tokio::io::stdout();
-        while let Some(line) = rx.recv().await {
-            if stdout.write_all(line.as_bytes()).await.is_err()
-                || stdout.write_all(b"\n").await.is_err()
-                || stdout.flush().await.is_err()
-            {
+        loop {
+            // `biased`: lines first, so a flush is only answered once the
+            // lines queued before it are out. It drains with `try_recv` for
+            // the same reason — both queues filled from one task, in order.
+            let written = tokio::select! {
+                biased;
+                Some(line) = rx.recv() => write_line(&mut stdout, &line).await,
+                Some(ack) = flushes.recv() => {
+                    let mut written = true;
+                    while written && let Ok(line) = rx.try_recv() {
+                        written = write_line(&mut stdout, &line).await;
+                    }
+                    let _ = ack.send(());
+                    written
+                }
+                else => break,
+            };
+            if !written {
                 break; // stdout closed: the host is gone
             }
         }
@@ -121,7 +152,14 @@ pub fn stdio() -> Stdio {
         writer,
         submit,
         lookup,
+        flush,
     }
+}
+
+async fn write_line(stdout: &mut tokio::io::Stdout, line: &str) -> bool {
+    stdout.write_all(line.as_bytes()).await.is_ok()
+        && stdout.write_all(b"\n").await.is_ok()
+        && stdout.flush().await.is_ok()
 }
 
 /// One line of the host-driven protocol, answered with a [`Reply`].
@@ -171,4 +209,5 @@ pub async fn serve<H: LineHandler>(mut handler: H, stdio: &Stdio) {
             break;
         }
     }
+    stdio.flush().await;
 }
