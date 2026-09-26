@@ -607,12 +607,6 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         Ok(())
     }
 
-    /// Dispatch a single task: worktree (create or reuse), `task/dispatch` (or
-    /// `session/attach` on retry reuse, F-44), `state/subscribe`. The slot has
-    /// already been acquired; failure paths release it and fail the task.
-    ///
-    /// The decision is [`resolve_dispatch_target`]; what remains here is the
-    /// order the side effects have to happen in (#471).
     /// How many automatic dispatch retries a task has spent (#492).
     ///
     /// A read failure counts as "none spent", biasing toward waiting for a
@@ -644,6 +638,15 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         })
     }
 
+    /// Dispatch a single task: worktree (create or reuse), `task/dispatch` (or
+    /// `session/attach` on retry reuse, F-44), `state/subscribe`. The slot has
+    /// already been acquired; failure paths release it and fail the task.
+    ///
+    /// Every decision before the launch is a pure function —
+    /// [`resolve_dispatch_target`] (#471), then one per step (#758):
+    /// [`resume_session_id`], [`reusable_session`], [`dispatch_task`] and
+    /// [`pane_refusal`]. What remains here is the order the side effects have
+    /// to happen in.
     async fn dispatch_one(&mut self, task_id: i64) -> Result<(), EngineError> {
         let record = self
             .db
@@ -740,57 +743,14 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         // writes for a task this instance actually holds.
         self.write_back_status(&record, StatusMoment::Start).await;
 
-        // Conversation continuity (#242, superseding #140's D-10): a follow-up
-        // message reopens *this* task, so the session to resume is simply this
-        // task's own most recent one — no cross-task search. Read before
-        // `reserve_session` below, which would otherwise make the empty row it
-        // creates the "latest".
-        //
-        // Best-effort: a missing or empty id yields `None` and dispatches
-        // fresh, with no warning. Gated on the tool's capabilities (#196): a
-        // tool that cannot resume, or whose native session id is never
-        // captured, always dispatches fresh.
-        //
-        // E-09: the reply destination is always the task's own
-        // `source_task_id` (task_id-origin routing via `job_id`); nothing here
-        // — or anywhere — derives a destination from a tool session id.
+        // Read before `reserve_session` below, which would otherwise make the
+        // empty row it creates the "latest".
         let latest = self.db.latest_session(record.id)?;
-        let tool_caps = tool_profile.capabilities();
-        let resume_session_id = if tool_caps.resume && tool_caps.session_id_capture {
-            latest
-                .as_ref()
-                .and_then(|s| s.tool_session_id.clone())
-                .filter(|sid| !sid.is_empty())
-        } else {
-            None
-        };
-
-        // Message-driven prompt (#242): what the agent is asked to do is the
-        // messages nobody has sent it yet, concatenated oldest-first, so a
-        // burst of three replies produces one dispatch and one answer rather
-        // than three panes. A resumed session already holds everything before
-        // them, so only the new ones go.
-        //
-        // An empty ledger falls back to the record's own body — the shape
-        // pre-#242 tasks were stored in, and what v6's backfilled rows leave
-        // behind.
+        let resume_session_id = resume_session_id(&tool_profile.capabilities(), latest.as_ref());
         let pending = self.db.pending_task_messages(record.id)?;
 
-        // Retry reuse (F-44): a surviving worktree + session resumes the
-        // existing conversation instead of dispatching anew.
-        //
-        // Only when there is nothing new to say. Re-attaching hands the agent
-        // no prompt, and since #242 a reopened conversation *always* looks
-        // reusable (`retry_plan` reads worktree + branch + session, never the
-        // task's state), so without this guard a follow-up message would be
-        // swallowed: no dispatch, nothing marked processed, and the agent
-        // never told. Before #242 a follow-up was a different row with no
-        // worktree of its own, which is why this never bit.
-        if pending.is_empty()
-            && let RetryPlan::ReuseSession {
-                plugin, session_id, ..
-            } = recovery::retry_plan(&record, latest.as_ref())
-            && plugin == agent_name
+        if let Some((plugin, session_id)) =
+            reusable_session(&record, latest.as_ref(), &pending, &agent_name)
             && let Some(state) = self.try_reattach(&plugin, &session_id).await
         {
             self.db.apply_event(
@@ -831,53 +791,28 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         // `latest_session` is the new empty row and the live pane is
         // unreachable.
         if latest.is_some() {
+            let outcome = self.release_pane(&record, ReleaseMode::Always).await;
             // Logged here rather than left to `release_pane`'s own lines: this
             // is the one caller whose outcome has a *user-visible* consequence
             // (the dispatch below may be refused). `Untouched` stays quiet — it
             // is the ordinary case where the sweep already closed the pane.
-            match self.release_pane(&record, ReleaseMode::Always).await {
+            match outcome {
                 PaneRelease::Closed => tracing::info!(
                     task_id = record.id,
                     "closed the previous dispatch's pane before re-dispatching"
                 ),
-                // The plugin looked and found a pane of its own still sitting
-                // on this task's worktree (protocol 0.4.2, #485) — not at the
-                // id we recorded, which is why it would not close it, but
-                // there. Dispatching anyway is how #481 looked from the
-                // outside: an agent plugin that derives its agent name from
-                // the task id refuses the launch with an error of its own
-                // making, seconds later, in its own vocabulary. Stopping here
-                // costs the same dispatch and buys a reason the operator can
-                // act on.
-                //
-                // Only reachable against a plugin new enough to say why:
-                // before 0.4.2, and for any reason this build does not know,
-                // the answer is `Untouched` and this arm never runs.
-                PaneRelease::Refused => {
-                    return self
-                        .fail_dispatch(
-                            &record,
-                            record.task_ref(),
-                            concat!(
-                                "a pane is still open on this task's worktree — the ",
-                                "agent plugin found one of its own there, at a ",
-                                "different pane id than the one recorded, so it ",
-                                "declined to close it → close that pane yourself, ",
-                                "then `totsuka task retry` this task. `totsuka ",
-                                "doctor` will not list it: its worktree still ",
-                                "exists, so it is not an orphan"
-                            )
-                            .to_string(),
-                        )
-                        .await;
-                }
                 PaneRelease::Failed => tracing::warn!(
                     task_id = record.id,
                     "could not confirm the previous dispatch's pane is closed; if the agent \
                      plugin now refuses this dispatch because the session already exists, \
                      that pane is why"
                 ),
-                PaneRelease::Untouched | PaneRelease::NotApplicable => {}
+                PaneRelease::Refused | PaneRelease::Untouched | PaneRelease::NotApplicable => {}
+            }
+            if let Some(reason) = pane_refusal(outcome) {
+                return self
+                    .fail_dispatch(&record, record.task_ref(), reason.to_string())
+                    .await;
             }
         }
 
@@ -897,32 +832,25 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         // here to prevent. `HEAD` cannot be stale.
         let on_a_branch = self.worktrees.head_branch(&worktree_path).is_some();
 
-        let mut task = task_from_record(&record);
-        if let Some(body) = conversation_prompt(&pending) {
-            task.body = Some(body);
-        }
         // Where the deliverable goes, for a workflow whose deliverable is a
-        // *new project item* (#542). Appended to the task-source's own
-        // instructions rather than delivered on a channel of its own, so it
-        // travels wherever those already travel — invisibly through the hook's
-        // prompt context, or visibly for a tool with no invisible channel.
+        // *new project item* (#542).
         //
         // `triage` only: it is the one profile whose output is an item filed
         // somewhere else. An `implement` run works in the repository it was
         // given, and telling it about a board would be noise it might act on.
-        if wf_profile == Some(Profile::Triage)
+        let destination_block = if wf_profile == Some(Profile::Triage)
             && let Some(destination) = self.claim_registry().destination(&repo.name)
         {
-            let block = self
-                .settings
-                .prompts
-                .for_workflow(&record.workflow)
-                .project_destination(destination);
-            task.instructions = Some(match task.instructions.take() {
-                Some(existing) => format!("{existing}\n\n{block}"),
-                None => block,
-            });
-        }
+            Some(
+                self.settings
+                    .prompts
+                    .for_workflow(&record.workflow)
+                    .project_destination(destination),
+            )
+        } else {
+            None
+        };
+        let task = dispatch_task(&record, &pending, destination_block);
         let (job_id, hook_spec, reserved_row, visible_hook_context) = self
             .wire_hooks(
                 &record,
@@ -1610,6 +1538,116 @@ pub(super) fn resolve_dispatch_target(
     })
 }
 
+/// The tool session to resume, if any (#242, superseding #140's D-10).
+///
+/// Conversation continuity: a follow-up message reopens *this* task, so the
+/// session to resume is simply this task's own most recent one — no
+/// cross-task search.
+///
+/// Best-effort: a missing or empty id yields `None` and dispatches fresh, with
+/// no warning. Gated on the tool's capabilities (#196): a tool that cannot
+/// resume, or whose native session id is never captured, always dispatches
+/// fresh.
+///
+/// E-09: the reply destination is always the task's own `source_task_id`
+/// (task_id-origin routing via `job_id`); nothing here — or anywhere — derives
+/// a destination from a tool session id.
+fn resume_session_id(
+    caps: &crate::tool::ToolCapabilities,
+    latest: Option<&crate::adapters::SessionRecord>,
+) -> Option<String> {
+    if !(caps.resume && caps.session_id_capture) {
+        return None;
+    }
+    latest
+        .and_then(|s| s.tool_session_id.clone())
+        .filter(|sid| !sid.is_empty())
+}
+
+/// The `(plugin, session_id)` to re-attach to instead of dispatching anew, if
+/// any (retry reuse, F-44): a surviving worktree + session resumes the
+/// existing conversation.
+///
+/// Only when there is nothing new to say (`pending` is empty). Re-attaching
+/// hands the agent no prompt, and since #242 a reopened conversation *always*
+/// looks reusable (`retry_plan` reads worktree + branch + session, never the
+/// task's state), so without this guard a follow-up message would be
+/// swallowed: no dispatch, nothing marked processed, and the agent never told.
+/// Before #242 a follow-up was a different row with no worktree of its own,
+/// which is why this never bit. And only on the workflow's own agent plugin.
+fn reusable_session(
+    record: &TaskRecord,
+    latest: Option<&crate::adapters::SessionRecord>,
+    pending: &[TaskMessage],
+    agent_name: &str,
+) -> Option<(String, String)> {
+    if !pending.is_empty() {
+        return None;
+    }
+    match recovery::retry_plan(record, latest) {
+        RetryPlan::ReuseSession {
+            plugin, session_id, ..
+        } if plugin == agent_name => Some((plugin, session_id)),
+        _ => None,
+    }
+}
+
+/// The task as the agent receives it.
+///
+/// Message-driven prompt (#242): what the agent is asked to do is the
+/// messages nobody has sent it yet, concatenated oldest-first, so a burst of
+/// three replies produces one dispatch and one answer rather than three panes.
+/// A resumed session already holds everything before them, so only the new
+/// ones go. An empty ledger falls back to the record's own body — the shape
+/// pre-#242 tasks were stored in, and what v6's backfilled rows leave behind.
+///
+/// `destination_block` (#542) is appended to the task-source's own
+/// instructions rather than delivered on a channel of its own, so it travels
+/// wherever those already travel — invisibly through the hook's prompt
+/// context, or visibly for a tool with no invisible channel.
+fn dispatch_task(
+    record: &TaskRecord,
+    pending: &[TaskMessage],
+    destination_block: Option<String>,
+) -> Task {
+    let mut task = task_from_record(record);
+    if let Some(body) = conversation_prompt(pending) {
+        task.body = Some(body);
+    }
+    if let Some(block) = destination_block {
+        task.instructions = Some(match task.instructions.take() {
+            Some(existing) => format!("{existing}\n\n{block}"),
+            None => block,
+        });
+    }
+    task
+}
+
+/// Why the previous dispatch's pane stops this one, if it does.
+///
+/// Only [`PaneRelease::Refused`]: the plugin looked and found a pane of its
+/// own still sitting on this task's worktree (protocol 0.4.2, #485) — not at
+/// the id we recorded, which is why it would not close it, but there.
+/// Dispatching anyway is how #481 looked from the outside: an agent plugin
+/// that derives its agent name from the task id refuses the launch with an
+/// error of its own making, seconds later, in its own vocabulary. Stopping
+/// here costs the same dispatch and buys a reason the operator can act on.
+///
+/// Only reachable against a plugin new enough to say why: before 0.4.2, and
+/// for any reason this build does not know, the answer is `Untouched` and the
+/// dispatch goes ahead.
+fn pane_refusal(outcome: PaneRelease) -> Option<&'static str> {
+    (outcome == PaneRelease::Refused).then_some(concat!(
+        "a pane is still open on this task's worktree — the ",
+        "agent plugin found one of its own there, at a ",
+        "different pane id than the one recorded, so it ",
+        "declined to close it → close that pane yourself, ",
+        "then `totsuka task retry` this task. `totsuka ",
+        "doctor` will not list it: its worktree still ",
+        "exists, so it is not an orphan"
+    ))
+}
+
 /// The launch env: the hook runtime's `TOTSUKA_*` (when there is one) plus
 /// the tool's resolved `env_file` (#744) — the latter whether or not the
 /// dispatch is hook-wired, since it belongs to the tool. The two never share a
@@ -2025,5 +2063,122 @@ mod tests {
             crate::domain::state::transition(TaskState::Cancelled, TaskEvent::Fail).unwrap_err();
         let isolated = engine.isolate_task(7, Err(StateError::Transition(bug).into()));
         assert_eq!(isolated.is_err(), cfg!(debug_assertions), "{isolated:?}");
+    }
+
+    // ---- #758: the per-step decisions of `dispatch_one` ----
+
+    fn session(plugin: &str, tool_session_id: Option<&str>) -> crate::adapters::SessionRecord {
+        crate::adapters::SessionRecord {
+            id: 1,
+            task_id: 1,
+            plugin: plugin.to_string(),
+            session_id: "s-1".to_string(),
+            created_at: String::new(),
+            tool_session_id: tool_session_id.map(str::to_string),
+        }
+    }
+
+    fn message(body: &str) -> TaskMessage {
+        TaskMessage {
+            id: 1,
+            task_id: 1,
+            message_key: "m".to_string(),
+            author: None,
+            body: body.to_string(),
+            url: None,
+            payload: String::new(),
+            received_at: String::new(),
+            processed_at: None,
+        }
+    }
+
+    fn claude() -> ToolProfile {
+        crate::tool::builtin_registry()["claude"].clone()
+    }
+
+    #[test]
+    fn resume_needs_a_capable_tool_and_a_non_empty_id() {
+        let caps = claude().capabilities();
+        assert!(caps.resume && caps.session_id_capture, "premise");
+        let with = session("herdr", Some("tool-1"));
+        assert_eq!(
+            resume_session_id(&caps, Some(&with)).as_deref(),
+            Some("tool-1")
+        );
+        assert_eq!(
+            resume_session_id(&caps, Some(&session("herdr", Some("")))),
+            None
+        );
+        assert_eq!(
+            resume_session_id(&caps, Some(&session("herdr", None))),
+            None
+        );
+        assert_eq!(resume_session_id(&caps, None), None);
+        let cannot = crate::tool::ToolCapabilities {
+            resume: false,
+            ..caps
+        };
+        assert_eq!(resume_session_id(&cannot, Some(&with)), None);
+        let blind = crate::tool::ToolCapabilities {
+            session_id_capture: false,
+            ..caps
+        };
+        assert_eq!(resume_session_id(&blind, Some(&with)), None);
+    }
+
+    #[test]
+    fn a_session_is_reused_only_with_nothing_new_to_say_on_the_same_agent() {
+        let mut r = record("wf", Some("web"));
+        r.worktree_path = Some("/tmp/wt".to_string());
+        let latest = session("herdr", None);
+        assert_eq!(
+            reusable_session(&r, Some(&latest), &[], "herdr"),
+            Some(("herdr".to_string(), "s-1".to_string()))
+        );
+        assert_eq!(
+            reusable_session(&r, Some(&latest), &[message("more")], "herdr"),
+            None,
+            "a follow-up message must be dispatched, not swallowed (#242)"
+        );
+        assert_eq!(reusable_session(&r, Some(&latest), &[], "orca"), None);
+        assert_eq!(reusable_session(&r, None, &[], "herdr"), None);
+        r.worktree_path = None;
+        assert_eq!(reusable_session(&r, Some(&latest), &[], "herdr"), None);
+    }
+
+    #[test]
+    fn the_task_carries_the_unsent_messages_and_the_destination_block() {
+        let r = record("wf", Some("web"));
+        let pending = [message("first"), message("second")];
+        let plain = dispatch_task(&r, &pending, None);
+        assert_eq!(plain.body, conversation_prompt(&pending));
+        assert_eq!(plain.instructions, task_from_record(&r).instructions);
+
+        let empty = dispatch_task(&r, &[], None);
+        assert_eq!(
+            empty.body,
+            task_from_record(&r).body,
+            "falls back to the record"
+        );
+
+        let filed = dispatch_task(&r, &[], Some("file it on the board".to_string()));
+        let expected = match task_from_record(&r).instructions {
+            Some(existing) => format!("{existing}\n\nfile it on the board"),
+            None => "file it on the board".to_string(),
+        };
+        assert_eq!(filed.instructions.as_deref(), Some(expected.as_str()));
+    }
+
+    #[test]
+    fn only_a_refused_pane_stops_the_dispatch() {
+        for outcome in [
+            PaneRelease::Closed,
+            PaneRelease::Untouched,
+            PaneRelease::NotApplicable,
+            PaneRelease::Failed,
+        ] {
+            assert_eq!(pane_refusal(outcome), None, "{outcome:?}");
+        }
+        assert!(pane_refusal(PaneRelease::Refused).is_some_and(|r| r.contains("task retry")));
     }
 }
