@@ -45,7 +45,7 @@ driving adapter [`adapters::hook_uds`](/components/orchestrator-core.md) が実�
 | `message` | | `Notification` / `QuestionPending` 時のメッセージ（codex に Notification イベントは無く、`PermissionRequest` を `on-notification.sh` が `permission_prompt: <tool_name>` へ合成して同形で送出。`QuestionPending` では質問文の要約で、waiting_input 通知の本文になる） |
 | `background_tasks` | | `Stop` 時に非空なら中間 Stop＝`Heartbeat` として扱う（#131 D-12） |
 
-`QuestionPending`（#487, [ADR-0050](/decisions/adr-0050-question-tool-asking.md)）はエージェントが対話的な質問ツール（claude `AskUserQuestion` / opencode `question`）のダイアログを開いたことを表す。送出元は claude では PreToolUse フック `on-ask-user-question.sh`、opencode では `totsuka-opencode.js` の `tool.execute.before`。ダイアログ待機中はターンが終わらず `Stop{needs_input}` が届かないため、Engine はこのイベントで task を `waiting_input` へ park する（通知。スロットは保持する → [ADR-0093](/decisions/adr-0093-waiting-holds-slot.md)）。**`prompt_id` は質問ごとに distinct**（claude: `tool_use_id`、opencode: `callID`）でなければならない — 冪等キー `(job_id, tool_session_id, prompt_id, event, status)` の下で、空だと同一セッション 2 問目が Duplicate として黙って落ちる。
+`QuestionPending`（#487, [ADR-0050](/decisions/adr-0050-question-tool-asking.md)）はエージェントが対話的な質問ツール（claude `AskUserQuestion` / opencode `question`）のダイアログを開いたことを表す。送出元は claude では PreToolUse フック `on-ask-user-question.sh`、opencode では `totsuka-opencode.js` が受ける `question` の `form.created` イベント（opencode v2、[ADR-0105](/decisions/adr-0105-opencode-v2-plugin.md)）。ダイアログ待機中はターンが終わらず `Stop{needs_input}` が届かないため、Engine はこのイベントで task を `waiting_input` へ park する（通知。スロットは保持する → [ADR-0093](/decisions/adr-0093-waiting-holds-slot.md)）。**`prompt_id` は質問ごとに distinct**（claude: `tool_use_id`、opencode: フォームの id）でなければならない — 冪等キー `(job_id, tool_session_id, prompt_id, event, status)` の下で、空だと同一セッション 2 問目が Duplicate として黙って落ちる。
 
 # レスポンス
 

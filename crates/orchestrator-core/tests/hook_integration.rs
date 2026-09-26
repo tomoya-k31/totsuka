@@ -246,7 +246,7 @@ fn stop(
 
 /// A `QuestionPending` signal (#487): the agent opened an interactive question
 /// dialog. `prompt_id` is the per-question idempotency key (claude: the
-/// PreToolUse `tool_use_id`; opencode: the plugin's `callID`).
+/// PreToolUse `tool_use_id`; opencode: the question form's id).
 fn question(task_id: i64, row: i64, prompt_id: &str, msg: &str) -> AgentSignal {
     AgentSignal {
         source: SignalSource::AgentHook,
@@ -1925,8 +1925,8 @@ async fn dispatch_with_opencode_tool_routes_context_visibly() {
     assert_eq!(tool["program"], "opencode");
     assert_eq!(
         tool["args"],
-        json!(["--auto"]),
-        "implement mode launches the plain TUI, unattended (#420)"
+        json!(["--standalone", "--auto"]),
+        "implement mode launches the plain TUI, unattended (#420), on its own server"
     );
     // Visible routing: instructions + marker convention in extra_context …
     let ctx = params["extra_context"]

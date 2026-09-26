@@ -4,7 +4,7 @@ title: 設定リファレンス（config.toml）
 description: "config.toml の全キー・デフォルト値・意味の一覧。設定ファイルは 1 本で、プラグイン個別設定もトップレベルの [<name>] テーブルに入る。シークレット参照、設定スキーマのバージョニング方針、[[projects]] の domain 宣言とワークフローからの参照、プラグインが定義する追加プロパティ、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-github の [github]、task-source-notion の [notion]、task-source-slack の [slack]、agent-ide-herdr の [herdr] を含む。"
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
 tags: [config, reference, toml, secrets, workflow, worktree, github, notion, slack, hooks, versioning]
-generated: { by: claude-code/opus-5, at: 2026-09-26T13:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-09-26T22:30:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -471,7 +471,7 @@ llm 検収の rubric も「この完了申告より前の会話で人間が明�
 上の流れの「確認を求める」部分は、ツールに native の質問ツールがあればそれを使う（[ADR-0050](/decisions/adr-0050-question-tool-asking.md)）:
 
 - **claude**: `AskUserQuestion`（単一選択ピッカー。「Approve completion / Request changes」等）。ダイアログ待機中はターンが終わらず `NEEDS_INPUT` が届かないため、design / implement の `--settings` にだけ描画される PreToolUse フック（`on-ask-user-question.sh`）が `QuestionPending` イベントを送り、totsuka はそれで従来どおり `waiting_input` へ park する（通知本文は質問文の要約）
-- **opencode**: native の `question` ツール（同じ指示が visible extra_context で届く）。`totsuka-opencode.js` の `tool.execute.before` が同じ `QuestionPending` を送り、ダイアログ待機中の idle を UNKNOWN と誤判定しないようガードする
+- **opencode**: native の `question` ツール（同じ指示が visible extra_context で届く）。`totsuka-opencode.js` が質問のフォーム（`form.created`）を受けて同じ `QuestionPending` を送る。ダイアログ待機中はターン終了イベントが来ないので、UNKNOWN の誤判定も起きない（opencode v2、[ADR-0105](/decisions/adr-0105-opencode-v2-plugin.md)）
 - **codex**: 質問ツールが Default mode に無い（`request_user_input` は Plan Mode 限定）ため従来どおり `NEEDS_INPUT` で停止するが、選択肢を**番号付きリスト**で提示し、人間は番号 1 文字で回答できる
 
 質問ツールが使えない・失敗した場合のフォールバックは常に「番号付きリスト + `NEEDS_INPUT`」で、プロンプト自体に含まれている。park 中に**新しい**質問が来た場合、質問経路では再通知される（NEEDS_INPUT 経路の既知の制限を解消）。
@@ -602,7 +602,7 @@ pane 内で起動する AI ツール CLI の定義。`{name}` は `default_tool`
 | `kind` | enum | 必須 | アダプタ種別: `claude` / `codex` / `opencode`。argv 組立と完了検知方式を決める |
 | `command` | string? | kind 名 | 空白区切りのコマンドライン。先頭 = プログラム、残り = 基本引数（例 `"claude --model haiku"`） |
 | `mode_args` | string[]? | kind 既定 | implement モードで追加する引数（codex 既定: `["--sandbox", "workspace-write", "--ask-for-approval", "never"]`、opencode 既定: `["--auto"]`、claude 既定: なし） |
-| `plan_args` | string[]? | kind 既定 | plan モードで追加する引数（claude 既定: `["--permission-mode", "plan"]`、codex 既定: `["--sandbox", "read-only", "--ask-for-approval", "never"]` — plan permission mode 不在の縮退、opencode 既定: `["--agent", "totsuka-plan", "--auto"]` — 全 deny の plan エージェント） |
+| `plan_args` | string[]? | kind 既定 | plan モードで追加する引数（claude 既定: `["--permission-mode", "plan"]`、codex 既定: `["--sandbox", "read-only", "--ask-for-approval", "never"]` — plan permission mode 不在の縮退、opencode 既定: `["--agent", "totsuka-plan", "--auto"]` — 全 deny の plan エージェント）。opencode は `mode_args` / `plan_args` の値によらず（その前に）`--standalone` が必ず付く（v2 の共有サーバーには pane の env が届かず完了検知が止まるため、[ADR-0105](/decisions/adr-0105-opencode-v2-plugin.md)） |
 | `env_file` | string? | なし | `KEY=value` を並べたファイル。値はこの tool が起動するエージェントの環境変数に加わる（#744、下記）。`~` / `${VAR}` を展開した結果が絶対パスであること |
 
 kind ごとの argv 組立の差分: claude はフック設定を `--settings <path>` で受け、resume は `--resume <id>` フラグ。codex はフックがグローバル登録（`~/.codex/hooks.json`、`TOTSUKA_*` env でゲート）のため `--settings` 相当は付かず、resume は `resume <id>` **サブコマンド**（基本引数の直後・モード引数の前に挿入）。 opencode もグローバル配置の JS プラグイン（env ゲート）で完了検知するため `--settings` 相当は無く、resume は `-s <id>` フラグ。opencode は不可視注入が無いため、タスク指示 + マーカー規約は**可視の extra_context** として pane に渡る。

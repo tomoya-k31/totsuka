@@ -11,7 +11,7 @@
 //! built-in prose (#316, ADR-0023; the prose was configurable until #465).
 //!
 //! Safety mirrors the codex module: the plugin fires for every opencode
-//! session, so it registers no hooks unless `TOTSUKA_HOOK_ENDPOINT` /
+//! session, so it subscribes to nothing unless `TOTSUKA_HOOK_ENDPOINT` /
 //! `TOTSUKA_JOB_ID` are present (set only in orchestrator panes via
 //! `ToolLaunchSpec.env`), and nothing is written unless the config actually
 //! references an opencode-kind tool. Unlike codex there is no trust step —
@@ -328,31 +328,38 @@ design in prose.
     #[test]
     fn embedded_plugin_is_env_gated() {
         // The safety contract for a globally-loaded plugin: without the
-        // orchestrator env it must bail before registering any hook.
+        // orchestrator env it must bail before subscribing to anything.
         let js = include_str!("totsuka-opencode.js");
-        assert!(js.contains("if (!ENDPOINT || !JOB_ID) return {}"));
+        assert!(js.contains("if (!ENDPOINT || !JOB_ID) return\n"));
         assert!(js.contains("TOTSUKA_HOOK_ENDPOINT"));
     }
 
-    /// #487: the plugin relays an open `question` dialog as QuestionPending
-    /// (parking the task) and suppresses idle judgement while it waits — a
-    /// pending question keeps the turn open, so an idle then would post a
-    /// spurious UNKNOWN into the D-02 escalation streak. String pins, same
-    /// style as `embedded_plugin_is_env_gated`: the JS has no test harness of
-    /// its own, so the pins are what keeps a refactor from silently dropping
-    /// the mechanism.
+    /// opencode v2 refuses anything but a default `{ id, setup }` export
+    /// ("Plugin must export a default definition"), and v2 has no
+    /// `session.idle`: a v1-shaped plugin loads as nothing and every task
+    /// waits forever. String pins, since the JS has no test harness of its
+    /// own; the event names come from a real v2.0.18 event stream.
     #[test]
-    fn embedded_plugin_relays_question_and_guards_idle() {
+    fn embedded_plugin_uses_the_v2_plugin_api() {
         let js = include_str!("totsuka-opencode.js");
-        assert!(js.contains(r#""tool.execute.before""#));
-        assert!(js.contains(r#""tool.execute.after""#));
-        assert!(js.contains(r#"input?.tool !== "question""#));
+        assert!(js.contains("export default {"));
+        assert!(js.contains("setup(ctx) {"));
+        assert!(js.contains("ctx.event.subscribe("));
+        assert!(js.contains(r#"t === "session.execution.succeeded""#));
+        assert!(js.contains(r#"t === "session.execution.failed""#));
+        // The final assistant text the marker is parsed from.
+        assert!(js.contains(r#"t === "session.text.ended""#));
+    }
+
+    /// #487: the plugin relays an open `question` dialog as QuestionPending,
+    /// parking the task. v2 renders the question as a form; the form id is
+    /// the per-question idempotency key.
+    #[test]
+    fn embedded_plugin_relays_question() {
+        let js = include_str!("totsuka-opencode.js");
+        assert!(js.contains(r#"t === "form.created""#));
+        assert!(js.contains(r#"form.metadata?.kind !== "question""#));
         assert!(js.contains(r#"hook_event_name: "QuestionPending""#));
-        // The per-question idempotency key.
-        assert!(js.contains("input.callID"));
-        // The idle guard, at the top of onIdle.
-        assert!(js.contains("if (pendingQuestions.has(sessionID)) return"));
-        // Fail-open: an errored session is unmarked so later idles judge again.
-        assert!(js.contains("pendingQuestions.delete(sessionID)"));
+        assert!(js.contains("prompt_id: form.id"));
     }
 }

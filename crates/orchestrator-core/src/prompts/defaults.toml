@@ -241,7 +241,7 @@ above" / "already answered earlier").\
 # does NOT end while the question is pending — no Stop fires, so no
 # NEEDS_INPUT reaches the orchestrator from this path (ADR-0038 D6). What
 # parks the task instead is the PreToolUse hook (claude) / the
-# `tool.execute.before` plugin hook (opencode) posting `QuestionPending`
+# plugin's question `form.created` event (opencode) posting `QuestionPending`
 # (ADR-0050). The markers below are therefore NOT dead text: COMPLETED /
 # FAILED remain the only completion wire signal (ADR-0020), and NEEDS_INPUT
 # is the documented fallback for when the question tool is unavailable —

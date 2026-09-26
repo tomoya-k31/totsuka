@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:cef956e015d45abd4c36bb4ab32adc8f62a17818c5f02d8f9da20346479668b3 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:ddb8c07ecfc475fb0c3578f7731ce32e054d608758d0af71e5dfc82915b78f55 -->
 
 # Configuration reference
 
@@ -545,7 +545,7 @@ Defines the AI tool CLI launched inside the pane. `claude`, `codex`, and `openco
 | `kind` | enum | required | Adapter: `claude`, `codex`, or `opencode`. Decides how the command line is built and how completion is detected |
 | `command` | string? | the kind's name | Space-separated command line: the program plus base arguments, e.g. `"claude --model haiku"` |
 | `mode_args` | string[]? | per kind | Extra arguments in implement mode. codex: `["--sandbox", "workspace-write", "--ask-for-approval", "never"]`; opencode: `["--auto"]`; claude: none |
-| `plan_args` | string[]? | per kind | Extra arguments in plan mode. claude: `["--permission-mode", "plan"]`; codex: `["--sandbox", "read-only", "--ask-for-approval", "never"]`; opencode: `["--agent", "totsuka-plan", "--auto"]` |
+| `plan_args` | string[]? | per kind | Extra arguments in plan mode. claude: `["--permission-mode", "plan"]`; codex: `["--sandbox", "read-only", "--ask-for-approval", "never"]`; opencode: `["--agent", "totsuka-plan", "--auto"]`. For opencode, `--standalone` is always added (before these), whatever `mode_args` / `plan_args` say: without it the session runs in opencode's shared background server, which cannot see the task's environment, so completion is never reported. Requires opencode v2 |
 | `env_file` | string? | none | A file of `KEY=value` lines whose values are added to the environment of every agent this tool launches (see below). After `~` / `${VAR}` expansion it must be an absolute path |
 
 Using `kind = "codex"` needs a one-time trust setup in the tool itself. `kind = "opencode"` needs no trust step but degrades in more places.
