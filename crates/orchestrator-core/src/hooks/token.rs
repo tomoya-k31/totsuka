@@ -29,10 +29,14 @@ pub fn read(path: &Path) -> io::Result<Option<SecretString>> {
 }
 
 /// The stored token, generating and storing a fresh one when there is none.
-/// The mode is re-applied either way, so a loosened file is tightened back.
+/// The mode is re-applied first, so a loosened file is tightened back and an
+/// unreadable one (e.g. 000) becomes readable again.
 pub fn load_or_create(path: &Path) -> io::Result<SecretString> {
+    match super::set_mode(path, 0o600) {
+        Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
+        _ => {}
+    }
     if let Some(token) = read(path)? {
-        super::set_mode(path, 0o600)?;
         return Ok(token);
     }
     let mut bytes = [0u8; 32];
@@ -67,7 +71,7 @@ mod tests {
         let mode = std::fs::metadata(&path).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600);
 
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
         let second = load_or_create(&path).unwrap();
         assert_eq!(
             first.expose(),
@@ -75,7 +79,11 @@ mod tests {
             "a restart reuses the token"
         );
         let mode = std::fs::metadata(&path).unwrap().permissions().mode();
-        assert_eq!(mode & 0o777, 0o600, "a loosened file is tightened back");
+        assert_eq!(
+            mode & 0o777,
+            0o600,
+            "an unreadable file is restored to 0600"
+        );
         assert_eq!(read(&path).unwrap().unwrap().expose(), first.expose());
 
         std::fs::remove_file(&path).unwrap();
