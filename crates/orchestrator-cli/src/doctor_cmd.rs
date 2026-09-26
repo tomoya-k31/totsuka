@@ -2265,6 +2265,20 @@ fn check_llm_online(
     env: &HashMap<String, String>,
     checks: &mut Vec<Check>,
 ) {
+    // `--online` accepts a prompt, but a `secret:` key cannot prompt its way
+    // into existence: its value lives only in the launcher's process (#754,
+    // Copilot review on #786). Resolving would fail a correct config.
+    if let Some(reference) = &llm.api_key_ref
+        && SecretScheme::of(reference) == SecretScheme::Supplied
+    {
+        let skip = SecretSkip::SUPPLIED;
+        checks.push(Check::skip(
+            "llm-online",
+            skip.detail,
+            skip.action("the gateway"),
+        ));
+        return;
+    }
     let api_key = match &llm.api_key_ref {
         Some(reference) => match secret_resolver(env).resolve(reference) {
             Ok(key) => key,
@@ -3221,6 +3235,20 @@ location = "${MY_ROOT}/wt/{worktree_name}"
                 .expect("a note");
             assert!(note.contains("--secrets-stdin"), "{note}");
         }
+    }
+
+    /// `--online` resolves `op://` on purpose (the opt-in to a prompt), but
+    /// must not resolve a `secret:` key: no prompt can produce it here.
+    #[test]
+    fn online_llm_probe_skips_a_secret_key() {
+        let cfg = RootConfig::from_toml_str(
+            "[llm]\nbase_url = \"https://example.invalid/v1\"\nmodel = \"m\"\napi_key_ref = \"secret:llm\"\n",
+        )
+        .unwrap();
+        let mut checks = Vec::new();
+        check_llm_online(cfg.llm.as_ref().unwrap(), &HashMap::new(), &mut checks);
+        assert_eq!(checks.len(), 1, "{checks:?}");
+        assert!(checks[0].ok && checks[0].skipped, "{checks:?}");
     }
 
     /// The plugin gate walks **every string leaf**, because
