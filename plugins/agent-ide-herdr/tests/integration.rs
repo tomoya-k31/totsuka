@@ -33,6 +33,7 @@ use tokio::sync::mpsc;
 use agent_ide_herdr::error::HerdrError;
 use agent_ide_herdr::server::{Server, TransportFactory};
 use agent_ide_herdr::transport::SocketTransport;
+use plugin_sdk::{AgentIdeServer, LineHandler, Writer};
 
 /// The pane the agent runs in. Under protocol 17 that is the workspace's own
 /// root pane — `agent.start` no longer makes one — so this is what
@@ -766,7 +767,10 @@ impl TransportFactory for SocketFactory {
 
 /// A driver around a `Server` writing to an in-memory line channel.
 struct Driver {
-    server: Server<SocketFactory>,
+    server: AgentIdeServer<Server<SocketFactory>>,
+    /// Where replies go, the way `serve` writes them: through the same
+    /// channel the server streams notifications into.
+    replies: mpsc::UnboundedSender<String>,
     out: mpsc::UnboundedReceiver<String>,
     next_id: i64,
 }
@@ -775,7 +779,11 @@ impl Driver {
     fn new() -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
         Self {
-            server: Server::new(SocketFactory, tx),
+            server: AgentIdeServer::new(
+                Server::new(SocketFactory),
+                Writer::from_channel(tx.clone()),
+            ),
+            replies: tx,
             out: rx,
             next_id: 0,
         }
@@ -787,7 +795,11 @@ impl Driver {
         self.next_id += 1;
         let id = self.next_id;
         let line = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
-        assert!(self.server.handle_line(&line.to_string()).await);
+        let reply = self.server.handle_line(&line.to_string()).await;
+        assert!(!reply.shutdown);
+        if let Some(line) = reply.line {
+            self.replies.send(line).unwrap();
+        }
         let resp = self.recv().await.expect("a response line");
         assert_eq!(resp["id"], id, "response id must match request");
         resp

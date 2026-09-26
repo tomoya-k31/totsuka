@@ -11,7 +11,7 @@ owner: tomoya-k31
 
 # 責務
 
-サードパーティが task_source / agent_ide プラグインを実装する際の共通機構（[ADR-0008](/decisions/adr-0008-task-submit-push-ingestion.md)）。作者はソース固有ロジック（イベント受信 / API フェッチ / Task 変換）や IDE 固有ロジック（ペイン操作・状態の写像）だけを書けばよい。**範囲外**: HTTP クライアント・LLM ヘルパー・config スキーマ（ソース固有のまま）。
+サードパーティが task_source / agent_ide プラグインを実装する際の共通機構（[ADR-0008](/decisions/adr-0008-task-submit-push-ingestion.md)）。**公式の task_source 4 本（github / notion / slack / discord）と agent_ide 2 本（herdr / orca）はすべてこのハンドラの上で動いている**（#759）—— 外部に薦める道を自分たちも通ることで、抽象が実際の要件で検証される。作者はソース固有ロジック（イベント受信 / API フェッチ / Task 変換）や IDE 固有ロジック（ペイン操作・状態の写像）だけを書けばよい。**範囲外**: HTTP クライアント・LLM ヘルパー・config スキーマ（ソース固有のまま）。
 
 # モジュール構成
 
@@ -34,6 +34,16 @@ owner: tomoya-k31
 - **イベント駆動ソース（slack 型）**: `runtime::stdio()` → パイプラインに `SubmitClient` の clone を渡してイベント→`submit_task(task, workflow)`（**どの `[[workflows]]` に属するかはプラグインが決めて名前で渡す** — 0.6.0 / #554）、`serve(handler, &stdio)` で host リクエストに応答。 会話継続ソースは submit の前に `LookupClient` で既知判定し、既知なら新規会話向けの解決（LLM 呼び出し・リポジトリ選択 UI）を省く。`serve()` は全 response 行を `submit` / `lookup` 両クライアントへ渡し、各自が発行していない id を無視する（id 接頭辞 `submit-` / `lookup-` で分離）。
 - **agent_ide**: `stdio()` → `serve(AgentIdeServer::new(handler, stdio.writer.clone()), &stdio)`。handler は IDE 固有の処理だけを持ち、`state_subscribe` では状態変化を流す `mpsc` の受信側を返す。
 - **ポーリングソース（github/notion 型）**: `initialize` で受けた `workflows` と、自分の config の `poll_interval_secs`（0.6.0 / #554 で `[<name>]` のキーになり、`InitializeParams` からは消えた）を `poll_loop(workflows, interval, submit, fetch_fn)` に渡して spawn。`fetch_fn` は `WorkflowInfo` を受け取り、その `trigger` の解釈もワークフローの選択もプラグイン側で行う（core に予約語彙は無い、[ADR-0058](/decisions/adr-0058-config-ownership-boundary.md)）。
+
+# 公式プラグインを載せて合わなかった点（#759）
+
+載せ替えで SDK 側を直したもの、および仕様として受け入れた差。**直すのはプラグインではなく SDK の側**という方針で進めた。
+
+- **params の検査と未初期化の順序**: 手書き server は session を見てから params を読んでいたので、`initialize` 前に params の壊れた request は `INVALID_REQUEST` だった。SDK は params を先に読むので `INVALID_PARAMS` になり、orca の統合テストが落ちて発覚した。**`initialized()` を trait に足して SDK 側で埋めた**（params が解析できないときだけ参照する）。
+- **`state/subscribe` の ACK を `Reply` で返せない**: `serve` は `handle_line` が戻ってから応答を書くので、先に転送タスクを起こすと通知が ACK を追い越しうる。`AgentIdeServer` は ACK を writer へ自分で書く（上の `agent_ide` 行）。
+- **`session/list` は params を読まない**: 手書き server は params を無視していた。`SessionListParams` は空の struct で `null` を受けないため、型で読むと params 省略の request が壊れる。
+- **受け入れた差（エラーコードは不変、文言だけ）**: `INVALID_PARAMS` の文言に SDK の接尾辞 `→ fix the request shape` が付く。discord の未知メソッドの文言が他と揃う。discord の `method` 欠落は `METHOD_NOT_FOUND` に揃う。`config/validate` は params を型で読むので、`config` の無い params（ホストは送らない）は `INVALID_PARAMS` になる。
+- **SDK の `serve` は shutdown の ACK を書き切る前にプロセスが終わりうる**。ホストは ACK を読まずにプロセスの終了だけを待つので実害は無く、task_source 側では元からこの形だった。
 
 # 依存
 

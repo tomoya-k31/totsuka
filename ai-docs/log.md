@@ -2,6 +2,8 @@
 
 ## 2026-09-26
 
+* **Update**: [agent-ide-herdr](/components/agent-ide-herdr.md) — server を plugin-sdk の `AgentIdeHandler` に、`main` を SDK の stdio ランタイムに載せ替えた（#759）
+* **Update**: [plugin-sdk クレート](/components/plugin-sdk.md) — 公式の task_source 4 本・agent_ide 2 本がすべて SDK のハンドラに載ったことと、載せ替えで合わなかった点を記録
 * **Update**: [agent-ide-orca](/components/agent-ide-orca.md) — server を plugin-sdk の `AgentIdeHandler` に、`main` を SDK の stdio ランタイムに載せ替えた（#759）
 * **Update**: [plugin-sdk クレート](/components/plugin-sdk.md) — agent_ide 向けの `AgentIdeHandler` / `AgentIdeServer`（`state/subscribe` の ACK → 通知の順序を SDK が保証）、`template`（`{placeholder}` の単一パス置換）、`compose_prompt`、`not_initialized()`、task_source の `handle_line` を追加（#759）
 * **Update**: [プラグイン開発ガイド](/development/plugin-dev-guide.md) — 「SDK のハンドラで書く」節を追加
