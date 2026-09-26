@@ -489,16 +489,15 @@ async fn lookup_and_submit_clients_do_not_steal_each_other_s_answers() {
 mod agent_ide {
     use super::*;
     use plugin_protocol::methods::{
-        SessionAttachParams, SessionAttachResult, SessionReleaseParams, SessionReleaseResult,
-        StateNotification, StateSubscribeParams, TaskCancelParams, TaskDispatchParams,
-        TaskDispatchResult,
+        SessionAttachParams, SessionAttachResult, StateNotification, StateSubscribeParams,
+        TaskCancelParams, TaskDispatchParams, TaskDispatchResult,
     };
     use plugin_sdk::{AgentIdeHandler, AgentIdeServer};
 
     /// Overrides only the required methods; `state/subscribe` hands back a
     /// stream that already holds two notifications, so the forwarder could
     /// write them the instant it starts.
-    struct Agent;
+    pub(super) struct Agent;
 
     impl AgentIdeHandler for Agent {
         async fn initialize(&mut self, _: InitializeParams) -> Result<InitializeResult, Error> {
@@ -538,12 +537,6 @@ mod agent_ide {
                 tx.send(note).unwrap();
             }
             Ok(rx)
-        }
-        async fn session_release(
-            &mut self,
-            _: SessionReleaseParams,
-        ) -> Result<SessionReleaseResult, Error> {
-            unreachable!("not exercised")
         }
     }
 
@@ -597,6 +590,11 @@ mod agent_ide {
                 "pane_control",
             ),
             ("session/list", json!({}), "pane_control"),
+            (
+                "session/release",
+                json!({ "session_id": "s", "expect_cwd": "/wt" }),
+                "pane_control",
+            ),
             (
                 "diagnostics/snapshot",
                 json!({ "session_id": "s" }),
@@ -715,4 +713,21 @@ async fn malformed_params_before_initialize_say_initialize_first() {
     assert_eq!(code("initialize").await, error_code::INVALID_PARAMS);
     assert_eq!(code("config/validate").await, error_code::INVALID_PARAMS);
     assert_eq!(code("nope").await, error_code::METHOD_NOT_FOUND);
+}
+
+/// A `state/subscribe` whose ACK cannot be written — the writer, and so the
+/// host, is gone — stops the server instead of starting a stream nobody reads.
+#[tokio::test]
+async fn state_subscribe_with_the_writer_gone_stops_serving() {
+    let (tx, rx) = mpsc::unbounded_channel();
+    drop(rx);
+    let mut server = plugin_sdk::AgentIdeServer::new(agent_ide::Agent, Writer::from_channel(tx));
+    let reply = server
+        .handle_line(&line(json!({
+            "jsonrpc": "2.0", "id": 7, "method": "state/subscribe",
+            "params": { "session_id": "s1" }
+        })))
+        .await;
+    assert!(reply.shutdown);
+    assert!(reply.line.is_none());
 }

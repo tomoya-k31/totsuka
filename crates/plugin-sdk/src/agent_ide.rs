@@ -30,9 +30,10 @@ use crate::runtime::{LineHandler, Writer};
 /// The typed surface an agent_ide plugin implements; [`AgentIdeServer`]
 /// turns it into a [`LineHandler`].
 ///
-/// Methods the host calls unconditionally are required. The three gated on a
-/// capability — `session/focus` and `session/list` on `pane_control`,
-/// `diagnostics/snapshot` on `diagnostics_snapshot` — default to a
+/// Methods the host calls unconditionally are required. The four gated on a
+/// capability — `session/focus`, `session/release` and `session/list` on
+/// `pane_control`, `diagnostics/snapshot` on `diagnostics_snapshot` — default
+/// to a
 /// `METHOD_NOT_FOUND` refusal, the same rule as
 /// [`TaskSourceHandler::task_claim`](crate::TaskSourceHandler::task_claim): a
 /// handler that overrides one must declare the flag, and one that declares
@@ -82,12 +83,6 @@ pub trait AgentIdeHandler: Send {
         params: StateSubscribeParams,
     ) -> impl Future<Output = Result<mpsc::UnboundedReceiver<StateNotification>, Error>> + Send;
 
-    /// `session/release` (0.2.2).
-    fn session_release(
-        &mut self,
-        params: SessionReleaseParams,
-    ) -> impl Future<Output = Result<SessionReleaseResult, Error>> + Send;
-
     /// `session/focus` — gated on the `pane_control` capability.
     fn session_focus(
         &mut self,
@@ -95,6 +90,15 @@ pub trait AgentIdeHandler: Send {
     ) -> impl Future<Output = Result<SessionFocusResult, Error>> + Send {
         let _ = params;
         async { Err(unsupported("session/focus", "pane_control")) }
+    }
+
+    /// `session/release` (0.2.1) — gated on the `pane_control` capability.
+    fn session_release(
+        &mut self,
+        params: SessionReleaseParams,
+    ) -> impl Future<Output = Result<SessionReleaseResult, Error>> + Send {
+        let _ = params;
+        async { Err(unsupported("session/release", "pane_control")) }
     }
 
     /// `session/list` — gated on the `pane_control` capability. Takes no
@@ -180,8 +184,16 @@ impl<H: AgentIdeHandler> LineHandler for AgentIdeServer<H> {
                         // this call's `Reply`: `serve` writes the reply only
                         // after we return, by which time the forwarder below
                         // could already have written a notification.
-                        if let Ok(ack) = to_line(&Response::result(id, Value::Null)) {
-                            self.writer.send_line(ack);
+                        let acked = to_line(&Response::result(id, Value::Null))
+                            .is_ok_and(|ack| self.writer.send_line(ack));
+                        if !acked {
+                            // The writer is gone, so the host is: stop
+                            // serving, as `serve` does when a reply cannot be
+                            // written.
+                            return Reply {
+                                line: None,
+                                shutdown: true,
+                            };
                         }
                         tokio::spawn(forward(rx, self.writer.clone()));
                         Reply::none()
