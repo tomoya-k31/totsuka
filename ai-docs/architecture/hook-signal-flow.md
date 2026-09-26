@@ -4,7 +4,7 @@ title: フックシグナルフロー（Slack メンション → 完了検知 �
 description: Claude Code フック完了判定のエンドツーエンド経路。Slack メンションの dispatch から herdr pane 起動・env 注入・claude --settings、Stop フックのマーカー抽出・UDS POST、hook_uds の Bearer/冪等検証、SignalPort→Engine::on_signal の検収分岐（llm/human/none）と Publishing/Verifying/Escalated、スプールフォールバックと pane.exited デッドマン、通知クリック → pane フォーカス（click-to-focus、F-94）までを図示する。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/orchestrator-core
 tags: [architecture, diagram, hook, claude-code, uds, signal, verification, deadman, spool, click-to-focus, epic-131]
-generated: { by: claude-code/opus-5, at: 2026-09-21T13:30:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-09-26T11:05:36+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -150,6 +150,7 @@ sequenceDiagram
 - **受信はコア側**（`ports::SignalPort` + `adapters::hook_uds`）。プラグインは env 注入と `--settings`/`--resume` 起動だけを不透明に配線する（[ADR-0004](/decisions/adr-0004-hook-completion-signal.md)）。
 - **冪等の正本は DB**（`hook_events` UNIQUE, D-05）。多重発火・スプール再送・curl リトライは同一冪等キーで無害化される。
 - **生存アンカー**（`touch_last_signal`）は冪等判定より前に更新する。中間 Stop=heartbeat が同一冪等キーに潰れても、`sweep_signal_timeouts` の誤エスカレーションを防ぐ。
+- **作業開始の反映**：`dispatched` のタスクに `SessionStart` / `Heartbeat` / `Notification` が新規に届くと、`TaskEvent::Start`（detail `hook_start`）で `running` へ進める（#790）。herdr は状態ストリームが先に `running` にするので no-op、状態ストリームが死活しか送らない orca ではこれが唯一の経路。`waiting_input` / `escalated` は動かさない（開いた質問の park を heartbeat で外さないため）。
 - **中間イベント**（WaitingInput / Escalated / VerificationPending / Failed）は notifier のみへ配送し、ソーススレッドへは返さない（R-08/D-07）。
 - 会話継続（F-105）は #242 以降**同一タスク**なので相関自体が不要（`latest_session(task_id)` を `claude --resume` する）。シグナルは常に自タスクの `job_id` 起点で配路し、セッション id から宛先を推測しない（E-09）。
 
