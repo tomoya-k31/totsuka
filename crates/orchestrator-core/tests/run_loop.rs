@@ -2381,6 +2381,92 @@ async fn elapsed_retention_sweep_releases_pane_and_removes_worktree() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// A worktree removed by hand must not strand its branch. Deleting the branch
+/// used to happen only as the tail of totsuka's own `git worktree remove`, so
+/// under `manual` — the implement default, where a human is the only one who
+/// ever removes it — the branch outlived its worktree forever.
+///
+/// `rm -rf` is the harder of the two ways a human removes one: it leaves the
+/// registration in `.git/worktrees`, and git refuses to delete a branch a
+/// registered worktree has checked out, directory or not.
+#[tokio::test]
+async fn a_branch_whose_worktree_was_removed_by_hand_is_swept() {
+    let base = scratch("gone_worktree_branch");
+    let repo = setup_repo(&base);
+    let source_log = base.join("source.ndjson");
+    let notify_log = base.join("notify.ndjson");
+    let db_path = base.join("state.db");
+
+    let plugins = plugin_set(
+        json!([mock_task("1")]),
+        json!({ "stream_states": ["running", "done"], "commit_on_dispatch": true }),
+        &source_log,
+        &notify_log,
+    )
+    .await;
+    let mut settings = engine_settings(&repo);
+    settings.cleanup_implement = CleanupPolicy::Manual;
+    let mut engine = Engine::new(
+        StateDb::open(&db_path).unwrap(),
+        settings,
+        plugins,
+        SystemGitRunner::default(),
+        no_llm(),
+    )
+    .await;
+    let db_probe = db_path.clone();
+    run_watch_until(&mut engine, move || {
+        StateDb::open(&db_probe)
+            .unwrap()
+            .find_by_source("mock_src", "1")
+            .unwrap()
+            .is_some_and(|t| t.state == TaskState::Done)
+    })
+    .await;
+    engine.shutdown(Duration::from_secs(5)).await;
+
+    let task = StateDb::open(&db_path)
+        .unwrap()
+        .find_by_source("mock_src", "1")
+        .unwrap()
+        .unwrap();
+    let branch = task.branch.clone().expect("the agent branched");
+    let worktree = PathBuf::from(task.worktree_path.clone().unwrap());
+    assert!(worktree.is_dir(), "`manual` keeps the worktree");
+
+    // The human: the PR is merged (so the work is on origin), and the
+    // worktree goes the quick way.
+    git(&repo, &["push", "origin", &branch]);
+    std::fs::remove_dir_all(&worktree).unwrap();
+
+    let plugins = plugin_set(
+        json!([]),
+        json!({ "stream_states": ["running", "done"] }),
+        &source_log,
+        &notify_log,
+    )
+    .await;
+    let mut settings = engine_settings(&repo);
+    settings.cleanup_implement = CleanupPolicy::Manual;
+    let mut engine = Engine::new(
+        StateDb::open(&db_path).unwrap(),
+        settings,
+        plugins,
+        SystemGitRunner::default(),
+        no_llm(),
+    )
+    .await;
+    engine.cycle().await.unwrap();
+    engine.shutdown(Duration::from_secs(5)).await;
+
+    assert!(
+        git(&repo, &["branch", "--list", &branch]).is_empty(),
+        "every commit on the branch is on origin, so it goes with its worktree"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 #[tokio::test]
 async fn dirty_worktree_keeps_both_worktree_and_pane() {
     // F-23's human entry point: a dirty worktree is DirtySkipped, and its pane

@@ -294,24 +294,25 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         };
         let branch = record.branch.as_deref();
         let base_commit = record.base_commit.as_deref();
-        // Already removed (earlier run / manual cleanup): nothing to do. The
-        // task will never be swept again, so drop its release memos too.
-        // The path having *something* at it is not the same as the worktree
-        // still being there — `CleanupDecision::Gone` below is the other half
-        // of this check (#694).
-        if !Path::new(path).exists() {
-            self.forget_release_memos(task_id);
-            return Ok(());
-        }
         // Owned copy: `release_pane` below needs `&mut self`, which a borrow
         // into `self.settings` would block.
-        let Some(repo_path) = self
+        let repo_path = self
             .settings
             .repos
             .iter()
             .find(|r| &r.name == repo_name)
-            .map(|r| r.path.clone())
-        else {
+            .map(|r| r.path.clone());
+        // Already removed (earlier run / manual cleanup): only its branch may
+        // be left. Drop the release memos — nothing about the pane changes
+        // from here. The path having *something* at it is not the same as the
+        // worktree still being there — `CleanupDecision::Gone` below is the
+        // other half of this check (#694).
+        if !Path::new(path).exists() {
+            self.forget_release_memos(task_id);
+            self.delete_branch_of_gone_worktree(&record, repo_path.as_deref());
+            return Ok(());
+        }
+        let Some(repo_path) = repo_path else {
             return Ok(());
         };
         let mode_default = if record.mode == "plan" {
@@ -385,6 +386,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                     "worktree already gone; nothing to clean up"
                 );
                 self.forget_release_memos(task_id);
+                self.delete_branch_of_gone_worktree(&record, Some(&repo_path));
                 return Ok(());
             }
             CleanupDecision::Remove => {}
@@ -422,6 +424,29 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             }
         }
         Ok(())
+    }
+
+    /// Delete the branch a removed worktree left behind — once per task per
+    /// process (`gone_worktree_branches`). Best-effort: a failure only logs,
+    /// the same as a failed removal.
+    fn delete_branch_of_gone_worktree(&mut self, record: &TaskRecord, repo_path: Option<&Path>) {
+        if !self.gone_worktree_branches.insert(record.id) {
+            return;
+        }
+        let (Some(repo_path), Some(branch)) = (repo_path, record.branch.as_deref()) else {
+            return;
+        };
+        if let Err(e) = self.worktrees.delete_branch_of_gone_worktree(
+            repo_path,
+            branch,
+            record.base_commit.as_deref(),
+        ) {
+            tracing::warn!(
+                task_id = record.id,
+                branch,
+                "could not delete a removed worktree's branch: {e}"
+            );
+        }
     }
 
     /// Drop every release memo belonging to `task_id` (#486).

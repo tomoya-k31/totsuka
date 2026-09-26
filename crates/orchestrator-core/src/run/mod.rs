@@ -403,6 +403,11 @@ pub struct Engine<G: GitRunner, L: RepoClassifier + 'static> {
     /// released, which is the leak #210 was filed for. A dispatch creates a new
     /// session row, so this key invalidates itself.
     released_panes: HashSet<i64>,
+    /// Tasks whose worktree was found already gone and whose branch has had
+    /// its one deletion attempt this process. Without it, every finished task
+    /// in history would be re-checked on every sweep; with it, a branch kept
+    /// for unpushed commits is looked at again only by the next process.
+    gone_worktree_branches: HashSet<i64>,
     /// When the last worktree-retention sweep ran (#210); `None` at startup so
     /// the first `cycle()` always sweeps (startup recovery stays immediate).
     last_worktree_sweep: Option<tokio::time::Instant>,
@@ -531,6 +536,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             agent_output: HashMap::new(),
             awaiting_approval: HashSet::new(),
             released_panes: HashSet::new(),
+            gone_worktree_branches: HashSet::new(),
             last_worktree_sweep: None,
             clock,
             stats: RunStats::default(),

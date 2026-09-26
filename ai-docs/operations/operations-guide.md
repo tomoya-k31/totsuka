@@ -4,7 +4,7 @@ title: 運用ガイド（doctor / worktree 掃除 / FAQ）
 description: totsuka 日常運用の手引き。doctor の読み方、ランタイム health（縮退）の読み方と doctor との守備範囲の違い、worktree 掃除ポリシーと孤児掃除、run 停止・回復と SSH keepalive の推奨設定、メニューバー表示（SwiftBar）の導入と読み方、よくある問題の切り分け。
 resource: https://github.com/tomoya-k31/totsuka
 tags: [operations, doctor, health, worktree, menu, swiftbar, faq, troubleshooting]
-generated: { by: claude-code/opus-5, at: 2026-09-24T10:30:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-26T12:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -136,11 +136,11 @@ ls -l "${XDG_STATE_HOME:-$HOME/.local/state}/totsuka/health.json"   # run 中だ
 - `retention_days` は完了後 N 日で削除。`run` の各サイクルで再評価される
 - どのタスクにも属さない **孤児 worktree** は `totsuka doctor` が検出し、TTY 上で対話的に `git worktree remove` を提案する（F-24）。dirty なものは skip
 
-手動で消す場合は `git worktree remove <path>`（committed-but-unpushed があるなら `--force` は慎重に）。**手動削除では pane 解放の連動（#210）が働かない**ため、残った pane は次の `totsuka doctor` の孤児 pane チェックで回収する（下記）。
+手動で消す場合は `git worktree remove <path>`（committed-but-unpushed があるなら `--force` は慎重に）。`rm -rf` でもよい。**ブランチは totsuka が片付ける** — `run` のスイープは、終わったタスクの worktree が消えているのを見つけると、そのブランチを下記と同じ基準で削除する（タスクごとに `run` プロセス 1 つにつき 1 回。未 push で残ったブランチは、次に `run` を起動したときに見直される）。**手動削除では pane 解放の連動（#210）が働かない**ため、残った pane は次の `totsuka doctor` の孤児 pane チェックで回収する（下記）。
 
 ## ブランチの後始末（#266）
 
-worktree を削除するとき、その `agent/*` ブランチも一緒に消す。判定は **「origin に無いコミットを持っているか」** の一点:
+worktree を削除するとき、その `agent/*` ブランチも一緒に消す（worktree が先に手で消されていた場合も、上記のとおりスイープが消す）。判定は **「origin に無いコミットを持っているか」** の一点:
 
 - 全コミットが origin のどこかのリファレンスから辿れる → `git branch -D` で削除（失うものが無い）
 - 1 つでも origin に無い → **ブランチを残す**（未 push の成果物がそこにしか無い）。`totsuka run` のログに `branch kept: it has commits that are not on origin` が出る

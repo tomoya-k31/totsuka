@@ -1,7 +1,7 @@
 > 🌐 [English](operations-guide.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/operations-guide.md sha256:56b4324c25a1ffb07342dc66a9452dd697526df0e98b69b00dcf37c18fdc99ec -->
+<!-- generated-from: ai-docs/operations/operations-guide.md sha256:e1cce61c5dff459d3dae42b82beaf44c52ba5566fa75cd006a154070064206aa -->
 
 # 運用ガイド
 
@@ -112,11 +112,11 @@ totsuka status --json | jq '.health // "not running"'
 - `retention_days` は完了から N 日後に削除する。`run` の各サイクルで再評価される
 - どのタスクにも属さない**孤児 worktree** は `doctor` が検出し、`git worktree remove` を対話的に提案する。未コミット変更があるものは飛ばす
 
-手動で消すなら `git worktree remove <path>`。未 push のコミットがあるときの `--force` は慎重に。**手動削除では pane の解放が連動しない**ので、残った pane は次の `doctor` で回収する。
+手動で消すなら `git worktree remove <path>`（`rm -rf` でもよい）。未 push のコミットがあるときの `--force` は慎重に。**ブランチは totsuka が片付ける** — `run` は、終わったタスクの worktree が消えているのを見つけると、そのブランチを下記と同じ基準で削除する（タスクごとに `run` プロセス 1 つにつき 1 回。未 push で残ったブランチは、次に `run` を起動したときに見直される）。**手動削除では pane の解放が連動しない**ので、残った pane は次の `doctor` で回収する。
 
 ### ブランチの後始末
 
-worktree を削除するとき、その `agent/*` ブランチも一緒に消す。判定は**「origin に無いコミットを持っているか」の一点**。
+worktree を削除するとき、その `agent/*` ブランチも一緒に消す（worktree を手で消した場合も、上記のとおり消す）。判定は**「origin に無いコミットを持っているか」の一点**。
 
 - 全てのコミットが origin のどこかから辿れる → 削除する（失うものが無い）
 - 1 つでも origin に無い → **ブランチを残す**。未 push の成果物がそこにしかないため。`run` のログに `branch kept: it has commits that are not on origin` が出る

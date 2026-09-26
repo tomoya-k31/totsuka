@@ -8,6 +8,7 @@
 * **Update**: [hook-troubleshooting](/operations/hook-troubleshooting.md) — `hook-token` / `hook-socket` の読み方、廃止エラーへの対処、ローテーション手順
 * **Update**: [ADR-0004](/decisions/adr-0004-hook-completion-signal.md) / [ADR-0094](/decisions/adr-0094-task-control-endpoints.md) — トークンの出どころが ADR-0099 で変わったことを相互参照
 * **Update**: [agent-events](/apis/agent-events.md) / [hook-signal-flow](/architecture/hook-signal-flow.md) — `dispatched` のタスクに `SessionStart` / `Heartbeat` / `Notification` が届いたら `running` へ進めるようにした。orca 構成で作業中のタスクが `dispatched` のまま残っていた（#790）
+* **Update**: [運用ガイド](/operations/operations-guide.md) / [orchestrator-core](/components/orchestrator-core.md) — 手で消された worktree のブランチも run のスイープが消すようにした。これまでブランチの削除は totsuka 自身の `git worktree remove` の後にしか起きず、`manual`（implement の既定）ではブランチが永久に残っていた。削除の基準は従来と同じ（このタスクのブランチであり、全コミットが origin にある）。`rm -rf` で残った登録は、先に `git worktree prune` で外す
 * **Update**: [ADR-0100](/decisions/adr-0100-secrets-stdin.md) — `doctor` と `config validate` も `--secrets-stdin` を受け付けるようにした（#754 の層 2）。付けないときは `secret:` を解決せず、それを使うプラグインの検査を注記付きで飛ばす
 * **Update**: [orchestrator-cli](/components/orchestrator-cli.md) — `doctor` / `config validate` の `--secrets-stdin` を追記
 * **Update**: [設定リファレンス](/development/config-reference.md) — `secret:` の項に `doctor` / `config validate` の扱いを追記

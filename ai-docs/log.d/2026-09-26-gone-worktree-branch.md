@@ -1,0 +1,1 @@
+* **Update**: [運用ガイド](/operations/operations-guide.md) / [orchestrator-core](/components/orchestrator-core.md) — 手で消された worktree のブランチも run のスイープが消すようにした。これまでブランチの削除は totsuka 自身の `git worktree remove` の後にしか起きず、`manual`（implement の既定）ではブランチが永久に残っていた。削除の基準は従来と同じ（このタスクのブランチであり、全コミットが origin にある）。`rm -rf` で残った登録は、先に `git worktree prune` で外す
