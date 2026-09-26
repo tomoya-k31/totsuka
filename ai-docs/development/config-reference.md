@@ -17,7 +17,7 @@ owner: tomoya-k31
 
 # 場所
 
-**設定ファイルは 1 本だけ** `$XDG_CONFIG_HOME/totsuka/config.toml`（既定 `~/.config/totsuka/config.toml`）。
+**1 回の起動で読む設定ファイルは 1 本だけ**。既定は `$XDG_CONFIG_HOME/totsuka/config.toml`（`~/.config/totsuka/config.toml`）で、`--config` や `hosts/<host>.toml` があればそちらが代わりに読まれる。
 
 - `--config <path>` で場所を上書き可能（最上位の優先レイヤ）
 - マシンごとに別ファイルを置ける（下の「config ファイルの選択」）

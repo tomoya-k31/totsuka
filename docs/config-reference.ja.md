@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:e337342bc123a92d47ae3aecb02352959bd5d8259b35963eea608f679ff01b03 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:e4c1bb85b213c4681fd813ed7f2a6fe208fb2b650dc2c8c7fe03d8cf30e97e9a -->
 
 # 設定リファレンス
 
@@ -9,7 +9,7 @@
 
 ## ファイルの場所
 
-**設定ファイルは 1 本だけ**である: `$XDG_CONFIG_HOME/totsuka/config.toml`（既定は `~/.config/totsuka/config.toml`）。
+**1 回の起動で読む設定ファイルは 1 本だけ**である。既定は `$XDG_CONFIG_HOME/totsuka/config.toml`（`~/.config/totsuka/config.toml`）で、`--config` や `hosts/<host>.toml` があればそちらが代わりに読まれる。
 
 - `--config <path>` で場所を上書きできる
 - マシンごとに別ファイルを置ける（下の「どのファイルが読まれるか」）

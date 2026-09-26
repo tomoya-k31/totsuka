@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:e337342bc123a92d47ae3aecb02352959bd5d8259b35963eea608f679ff01b03 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:e4c1bb85b213c4681fd813ed7f2a6fe208fb2b650dc2c8c7fe03d8cf30e97e9a -->
 
 # Configuration reference
 
@@ -8,7 +8,7 @@ Every key in `config.toml` — totsuka's own and each plugin's — with its type
 
 ## Where the file lives
 
-**There is one configuration file:** `$XDG_CONFIG_HOME/totsuka/config.toml` (by default `~/.config/totsuka/config.toml`).
+**Each run reads one configuration file.** The default is `$XDG_CONFIG_HOME/totsuka/config.toml` (`~/.config/totsuka/config.toml`); `--config` or a `hosts/<host>.toml` file takes its place when present.
 
 - `--config <path>` overrides its location
 - Each machine can have its own file (see "Which file is read" below)

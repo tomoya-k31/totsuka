@@ -76,8 +76,11 @@ impl std::error::Error for ExitWith {}
 /// `.`, ASCII-lowercased (`M2.local` → `m2`). `None` for a name that cannot
 /// be a file name, which makes resolution skip straight to `config.toml`.
 pub fn host_config_key(raw: &str) -> Option<String> {
+    if raw.contains(['/', '\\', '\0']) {
+        return None;
+    }
     let key = raw.split('.').next()?.to_ascii_lowercase();
-    (!key.is_empty() && !key.contains(['/', '\\', '\0'])).then_some(key)
+    (!key.is_empty()).then_some(key)
 }
 
 /// The config file for this invocation (#832): `--config`, else
@@ -153,6 +156,9 @@ pub struct Cx {
     /// This machine's `hosts/` key ([`host_config_key`]), `None` when the
     /// hostname is unusable.
     pub host: Option<String>,
+    /// Whether `--config` chose [`Cx::config_path`] — then no host fallback
+    /// happened, even when it names `config.toml`.
+    pub config_overridden: bool,
 }
 
 impl Cx {
@@ -167,6 +173,7 @@ impl Cx {
             paths,
             config_path,
             host,
+            config_overridden: config_override.is_some(),
         })
     }
 
@@ -175,7 +182,7 @@ impl Cx {
     /// a hostname that changed with the network would otherwise go unnoticed.
     pub fn host_fallback_warning(&self) -> Option<String> {
         let dir = self.paths.config_dir();
-        if self.config_path != dir.join("config.toml") {
+        if self.config_overridden || self.config_path != dir.join("config.toml") {
             return None;
         }
         let mut names: Vec<String> = std::fs::read_dir(dir.join("hosts"))
@@ -493,7 +500,7 @@ mod tests {
     fn host_config_key_takes_the_first_label_lowercased() {
         assert_eq!(host_config_key("M2.local").as_deref(), Some("m2"));
         assert_eq!(host_config_key("mac-mini").as_deref(), Some("mac-mini"));
-        for bad in ["", ".local", "a/b"] {
+        for bad in ["", ".local", "a/b", "a.b/c"] {
             assert_eq!(host_config_key(bad), None, "{bad:?}");
         }
     }
@@ -514,6 +521,7 @@ mod tests {
             paths,
             config_path,
             host: host.map(str::to_owned),
+            config_overridden: over.is_some(),
         }
     }
 
@@ -526,6 +534,20 @@ mod tests {
             Some(Path::new("/x.toml")),
         );
         assert_eq!(cx.config_path, Path::new("/x.toml"));
+        assert_eq!(cx.host_fallback_warning(), None);
+    }
+
+    #[test]
+    fn an_explicit_config_toml_is_not_a_fallback() {
+        let home = test_support::scratch("host-explicit-default");
+        let default = home.join(".config/totsuka/config.toml");
+        let cx = host_cx(
+            "host-explicit-default",
+            Some(&["macbook.toml"]),
+            Some("m2"),
+            Some(&default),
+        );
+        assert_eq!(cx.config_path, default);
         assert_eq!(cx.host_fallback_warning(), None);
     }
 
