@@ -13,6 +13,7 @@ use orchestrator_core::adapters::llm::gateway_classifier;
 use orchestrator_core::adapters::plugin_host::Plugin;
 use orchestrator_core::adapters::{HostError, LockError, RunLock, StateDb};
 use orchestrator_core::config::{self, PluginKind, RootConfig, secret_resolver};
+use orchestrator_core::domain::TaskId;
 use orchestrator_core::logging::{self, LogConfig};
 use orchestrator_core::platform::PlatformProcessProbe;
 use orchestrator_core::plugins::{check_workflow_options, plugin_spec};
@@ -424,7 +425,7 @@ fn print_summary(summary: &RunSummary, json: bool) -> Result<(), CliError> {
             report.crashes, report.restarts
         );
     }
-    let list = |ids: &[i64]| {
+    let list = |ids: &[TaskId]| {
         ids.iter()
             .map(|id| id.to_string())
             .collect::<Vec<_>>()

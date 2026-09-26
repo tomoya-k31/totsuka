@@ -6,6 +6,7 @@
 //! [`finalize`](super::finalize).
 
 use super::*;
+use crate::domain::TaskId;
 use crate::domain::event_detail::{AgentStateChange, EventDetail};
 
 impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
@@ -21,7 +22,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                     return Ok(());
                 };
                 if let Some(chunk) = &note.log_chunk {
-                    tracing::debug!(task_id, "agent log: {chunk}");
+                    tracing::debug!(task_id = task_id.0, "agent log: {chunk}");
                     // Accumulate the streamed output; it is the `output = source`
                     // publish artifact (F-07).
                     let buf = self.agent_output.entry(task_id).or_default();
@@ -183,7 +184,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// terminal processing.
     pub(super) async fn apply_agent_state(
         &mut self,
-        task_id: i64,
+        task_id: TaskId,
         agent_plugin: &str,
         state: AgentState,
         log_chunk: Option<String>,
@@ -229,7 +230,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                     // a slot another task holds.
                     if !self.slots.acquire(task_id, &repo, agent_plugin) {
                         tracing::warn!(
-                            task_id,
+                            task_id = task_id.0,
                             "resumed task exceeds a concurrency cap temporarily"
                         );
                     }
@@ -247,7 +248,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                         (_, task) = self.db.apply_event(task, event, Some(detail.clone()))?;
                     }
                     // A waiting task keeps its slot (F-45).
-                    tracing::info!(task_id, "agent is waiting for input (F-35)");
+                    tracing::info!(task_id = task_id.0, "agent is waiting for input (F-35)");
                     notify_all(
                         &self.plugins.notifiers,
                         NotifierEvent::WaitingInput,
@@ -300,7 +301,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                     &record,
                     log_chunk,
                 );
-                tracing::warn!(task_id, "task failed");
+                tracing::warn!(task_id = task_id.0, "task failed");
             }
         }
         Ok(())

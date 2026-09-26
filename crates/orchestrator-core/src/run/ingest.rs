@@ -5,6 +5,7 @@
 //! of its own and re-submits everything each tick.
 
 use super::*;
+use crate::domain::TaskId;
 use crate::domain::event_detail::{EventDetail, Reopen, WorkflowHandoff};
 
 impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
@@ -22,7 +23,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         &mut self,
         wf: &Workflow,
         task: &Task,
-    ) -> Result<(i64, IngestOutcome), EngineError> {
+    ) -> Result<(TaskId, IngestOutcome), EngineError> {
         let existing = self.db.find_by_source(&task.source, &task.id)?;
         // A delivery under a **different workflow** hands the conversation
         // over to it (#565), when the conversation has finished. This is what
@@ -131,7 +132,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         existing: &TaskRecord,
         wf: &Workflow,
         task: &Task,
-    ) -> Result<(i64, IngestOutcome), EngineError> {
+    ) -> Result<(TaskId, IngestOutcome), EngineError> {
         let message_key = task.message_key.clone().unwrap_or_else(|| task.id.clone());
         let insert = TaskMessageInsert {
             task_id: existing.id,
@@ -165,7 +166,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         match outcome {
             HandoffOutcome::HandedOff => {
                 tracing::info!(
-                    task_id = existing.id,
+                    task_id = existing.id.0,
                     from = %existing.workflow,
                     to = %wf.name,
                     "conversation handed over to the delivering workflow"
@@ -175,7 +176,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             }
             HandoffOutcome::InFlight => {
                 tracing::warn!(
-                    task_id = existing.id,
+                    task_id = existing.id.0,
                     have = %existing.workflow,
                     delivered = %wf.name,
                     state = %existing.state,
@@ -220,7 +221,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         // the detach below avoids, reached without ever touching git.
         if let Err(e) = self.db.clear_branch(existing.id) {
             tracing::warn!(
-                task_id = existing.id,
+                task_id = existing.id.0,
                 "could not forget the inherited branch before a read-only stage: {e}"
             );
         }
@@ -244,7 +245,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         if self.worktrees.detach(path) {
             if let Some(branch) = branch {
                 tracing::info!(
-                    task_id = existing.id,
+                    task_id = existing.id.0,
                     workflow = %wf.name,
                     branch = %branch,
                     "detached the inherited worktree for a read-only stage (the branch is kept)"
@@ -256,7 +257,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             // fail this task and close its pane for `branch`, which the new
             // stage did not create.
             tracing::error!(
-                task_id = existing.id,
+                task_id = existing.id.0,
                 workflow = %wf.name,
                 branch = %branch,
                 "could not detach the inherited worktree for a read-only stage → the \
@@ -319,22 +320,22 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         match outcome {
             IngestOutcome::Created => {
                 self.stats.submitted += 1;
-                tracing::info!(task_id = id, workflow = %wf.name, title = %task.title, "task submitted");
+                tracing::info!(task_id = id.0, workflow = %wf.name, title = %task.title, "task submitted");
             }
             IngestOutcome::Reopened => {
                 tracing::info!(
-                    task_id = id, workflow = %wf.name,
+                    task_id = id.0, workflow = %wf.name,
                     "conversation reopened by a new message"
                 );
             }
             IngestOutcome::Appended => {
                 tracing::info!(
-                    task_id = id, workflow = %wf.name,
+                    task_id = id.0, workflow = %wf.name,
                     "message appended to a conversation still in progress"
                 );
             }
             IngestOutcome::Duplicate => {
-                tracing::debug!(task_id = id, "message already ingested; dropped");
+                tracing::debug!(task_id = id.0, "message already ingested; dropped");
             }
         }
         Ok(TaskSubmitResult {

@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use orchestrator_core::adapters::git::SystemGitRunner;
 use orchestrator_core::domain::CleanupPolicy;
+use orchestrator_core::domain::TaskId;
 use orchestrator_core::paths::Paths;
 use orchestrator_core::worktree::{
     CleanupDecision, CleanupOutcome, CleanupRequest, CreateRequest, WorktreeManager,
@@ -39,7 +40,7 @@ fn request<'a>(
         source: "github",
         task_id,
         existing_branch: None,
-        task_number: Some(1),
+        task_number: Some(TaskId(1)),
         handle: None,
         location_template: ENV_LOCATION_TEMPLATE,
         base_branch: None,
@@ -93,7 +94,7 @@ fn default_location_creates_a_worktree_without_xdg_state_home() {
             source: "slack",
             task_id: "C0ABCDEF12:1720000000.123456",
             existing_branch: None,
-            task_number: Some(1),
+            task_number: Some(TaskId(1)),
             handle: None,
             location_template: &template,
             base_branch: None,

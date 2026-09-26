@@ -294,7 +294,7 @@ async fn full_path_fetch_worktree_dispatch_done_cleanup() {
         .iter()
         .find(|d| d["method"] == "task/dispatch")
         .expect("a task/dispatch call")["params"];
-    assert_eq!(params["task_number"], task.id);
+    assert_eq!(params["task_number"], task.id.0);
     assert!(
         params["job_id"].is_null(),
         "a non-hook agent gets no job_id: {params}"

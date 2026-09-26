@@ -6,6 +6,7 @@
 //! and a `pub(super)` item in a sibling is not reachable from another.
 
 use super::*;
+use crate::domain::TaskId;
 
 /// The reason a read-only profile's task must not be published as a success:
 /// its worktree ended up on a named branch, which the orchestrator never
@@ -15,7 +16,7 @@ pub(super) fn read_only_side_effect(
     workflow: &str,
     profile: Option<Profile>,
     branch: Option<&str>,
-    task_id: i64,
+    task_id: TaskId,
     worktree_path: &str,
 ) -> Option<String> {
     let branch = branch?;
@@ -401,7 +402,7 @@ mod tests {
         fn msg(id: i64, body: &str) -> TaskMessage {
             TaskMessage {
                 id,
-                task_id: 1,
+                task_id: TaskId(1),
                 message_key: format!("m{id}"),
                 author: None,
                 body: body.to_string(),

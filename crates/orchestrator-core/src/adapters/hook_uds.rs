@@ -82,6 +82,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::watch;
 
+use crate::domain::TaskId;
 use crate::domain::signal::{AgentSignal, JobId, SignalEvent, SignalSource, StopStatus};
 use crate::ports::secret::SecretString;
 use crate::ports::signal_ingress::{ControlPort, SignalPort, TaskOp};
@@ -327,13 +328,13 @@ async fn handle_task<C: ControlPort>(
 /// Extract `task_id` from a control request body. Accepts a JSON number or a
 /// numeric string (`{"task_id": 42}` / `{"task_id": "42"}` — the notifier's
 /// `click_command` template renders it as text).
-fn parse_task_id(body: &[u8]) -> Result<i64, String> {
+fn parse_task_id(body: &[u8]) -> Result<TaskId, String> {
     let value: serde_json::Value =
         serde_json::from_slice(body).map_err(|e| format!("invalid JSON body: {e}"))?;
     let field = value
         .get("task_id")
         .ok_or_else(|| "missing `task_id`".to_string())?;
-    match field {
+    let id = match field {
         serde_json::Value::Number(n) => n
             .as_i64()
             .ok_or_else(|| format!("`task_id` is not an integer: {n}")),
@@ -341,7 +342,8 @@ fn parse_task_id(body: &[u8]) -> Result<i64, String> {
             .parse()
             .map_err(|_| format!("`task_id` is not an integer: {s:?}")),
         other => Err(format!("`task_id` must be a number or string: {other}")),
-    }
+    }?;
+    Ok(TaskId(id))
 }
 
 /// A parsed request: the request path, lower-cased header names, and the raw
@@ -651,7 +653,7 @@ mod tests {
         // filter produces for a final Stop with a COMPLETED marker.
         let body = br#"{"job_id":"job-42-7","session_id":"cc-1","prompt_id":"p-1","hook_event_name":"Stop","ts":"2026-07-18T00:00:00Z","status":"COMPLETED","reason":"","last_assistant_message":"done <<STATUS:COMPLETED>>","transcript_path":"/t.jsonl","background_tasks":[]}"#;
         let sig = parse_signal(body).expect("on-stop.sh payload must parse");
-        assert_eq!(sig.job_id, JobId::new(42, 7));
+        assert_eq!(sig.job_id, JobId::new(TaskId(42), 7));
         assert_eq!(sig.tool_session_id, "cc-1");
         assert_eq!(sig.prompt_id, "p-1");
         match sig.event {
@@ -807,15 +809,15 @@ mod tests {
     impl ControlPort for RecordingControl {
         fn focus(
             &self,
-            task_id: i64,
+            task_id: TaskId,
         ) -> impl std::future::Future<
             Output = Result<
                 crate::ports::signal_ingress::FocusOutcome,
                 crate::ports::signal_ingress::SignalError,
             >,
         > + Send {
-            self.asked.lock().unwrap().push(task_id);
-            let outcome = if task_id > 0 {
+            self.asked.lock().unwrap().push(task_id.0);
+            let outcome = if task_id > TaskId(0) {
                 crate::ports::signal_ingress::FocusOutcome::focused()
             } else {
                 crate::ports::signal_ingress::FocusOutcome::not("pane is gone")
@@ -826,13 +828,13 @@ mod tests {
         fn task(
             &self,
             op: TaskOp,
-            task_id: i64,
+            task_id: TaskId,
         ) -> impl std::future::Future<
             Output = Result<TaskControlOutcome, crate::ports::signal_ingress::SignalError>,
         > + Send {
             use crate::domain::state::TaskState;
-            self.tasks.lock().unwrap().push((op, task_id));
-            let outcome = match (op, task_id > 0) {
+            self.tasks.lock().unwrap().push((op, task_id.0));
+            let outcome = match (op, task_id > TaskId(0)) {
                 (TaskOp::Cancel, true) => {
                     TaskControlOutcome::applied(TaskState::Running, TaskState::Cancelled, None)
                 }
@@ -950,7 +952,7 @@ mod tests {
 
         let signals = sink.signals();
         assert_eq!(signals.len(), 1);
-        assert_eq!(signals[0].job_id, JobId::new(42, 7));
+        assert_eq!(signals[0].job_id, JobId::new(TaskId(42), 7));
         assert_eq!(signals[0].tool_session_id, "s1");
         assert!(matches!(
             signals[0].event,

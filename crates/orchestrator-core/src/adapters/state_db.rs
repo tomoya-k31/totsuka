@@ -32,6 +32,7 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, Row, params};
 use crate::adapters::clock::SystemClock;
 use crate::domain::EventDetail;
 use crate::domain::state::{InvalidTransition, TaskEvent, TaskState, UnknownState, transition};
+use crate::domain::task::TaskId;
 use crate::ports::clock::Clock;
 
 /// Ordered, immutable schema migrations. Index + 1 is the version number.
@@ -291,6 +292,19 @@ const MIGRATIONS: &[&str] = &[
 /// `Escalated → Escalated` is a legal transition.
 pub const NOTE_KEY: &str = "note";
 
+// `tasks.id` is stored as the bare rowid; the newtype is Rust-side only.
+impl rusqlite::ToSql for TaskId {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+        self.0.to_sql()
+    }
+}
+
+impl rusqlite::types::FromSql for TaskId {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+        i64::column_result(value).map(TaskId)
+    }
+}
+
 /// Columns of `tasks`, read by name in [`row_to_task`].
 const TASK_COLUMNS: &str = "id, source, source_task_id, workflow, mode, repo, \
      worktree_path, branch, base_commit, state, priority, title, url, source_payload, \
@@ -322,7 +336,10 @@ pub enum StateError {
     UnknownState(#[from] UnknownState),
     /// No task with the given id.
     #[error("task not found: {0}")]
-    NotFound(i64),
+    NotFound(TaskId),
+    /// No session with the given row id.
+    #[error("session not found: {0}")]
+    SessionNotFound(i64),
     /// [`StateDb::note_task`] was handed a `detail` with no [`NOTE_KEY`]
     /// string (#407).
     ///
@@ -375,7 +392,7 @@ pub enum StateError {
 )]
 pub struct TransitionConflict {
     /// The task.
-    pub id: i64,
+    pub id: TaskId,
     /// The version the caller read.
     pub expected: i64,
     /// The version found at write time.
@@ -416,7 +433,7 @@ pub struct NewTask {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TaskRecord {
     /// Row id.
-    pub id: i64,
+    pub id: TaskId,
     /// Source plugin instance name.
     pub source: String,
     /// Source's own task id.
@@ -478,13 +495,13 @@ impl TaskRecord {
 /// one — reusing the stale reference for the next write does not compile.
 #[derive(Debug, PartialEq, Eq)]
 pub struct TaskRef {
-    id: i64,
+    id: TaskId,
     version: i64,
 }
 
 impl TaskRef {
     /// The task id.
-    pub fn id(&self) -> i64 {
+    pub fn id(&self) -> TaskId {
         self.id
     }
 
@@ -504,7 +521,7 @@ pub struct SessionRecord {
     /// Row id.
     pub id: i64,
     /// Owning task id.
-    pub task_id: i64,
+    pub task_id: TaskId,
     /// Plugin instance name that owns the session (e.g. `herdr`).
     pub plugin: String,
     /// The agent's opaque conversation/session id.
@@ -528,7 +545,7 @@ pub struct EventRecord {
     /// Row id.
     pub id: i64,
     /// Owning task id.
-    pub task_id: i64,
+    pub task_id: TaskId,
     /// State before the transition (`None` for the ingest event; equal to
     /// [`to_state`](Self::to_state) for a note).
     pub from_state: Option<TaskState>,
@@ -548,7 +565,7 @@ pub struct EventExportFilter {
     /// `INTEGER PRIMARY KEY`, so "the last id I saw" is a complete cursor.
     pub after_id: Option<i64>,
     /// Only events belonging to this task.
-    pub task_id: Option<i64>,
+    pub task_id: Option<TaskId>,
     /// Skip the `detail` column entirely.
     ///
     /// Not a redaction feature — the same content is already reachable through
@@ -567,7 +584,7 @@ pub struct ExportedEvent {
     /// `events.id` — the cursor for [`EventExportFilter::after_id`].
     pub event_id: i64,
     /// Owning task id.
-    pub task_id: i64,
+    pub task_id: TaskId,
     /// State before the transition; `null` for the ingest event.
     pub from: Option<&'static str>,
     /// State after the transition.
@@ -637,7 +654,7 @@ pub struct HookEventInsert {
     /// The dispatch this event belongs to (`TOTSUKA_JOB_ID`, E-09).
     pub job_id: String,
     /// Owning task id (resolved from `job_id`, never guessed from a session).
-    pub task_id: i64,
+    pub task_id: TaskId,
     /// The tool-native `session_id` (empty if the hook input lacked one).
     pub tool_session_id: String,
     /// The hook input's `prompt_id` (empty if absent).
@@ -666,7 +683,7 @@ pub enum HookEventOutcome {
 #[derive(Debug, Clone)]
 pub struct TaskMessageInsert {
     /// The conversation this delivery belongs to.
-    pub task_id: i64,
+    pub task_id: TaskId,
     /// Identity of *this* delivery within the conversation — `Task.message_key`
     /// (the source falls back to `Task.id` when it has only one message).
     pub message_key: String,
@@ -686,7 +703,7 @@ pub struct TaskMessage {
     /// Row id; also the arrival order within a conversation.
     pub id: i64,
     /// Owning conversation.
-    pub task_id: i64,
+    pub task_id: TaskId,
     /// Identity of this delivery.
     pub message_key: String,
     /// Display-only author.
@@ -1008,18 +1025,22 @@ impl StateDb {
 
     /// Ingest a task idempotently (F-73). Returns its id, whether newly
     /// inserted or already present under the same `(source, source_task_id)`.
-    pub fn upsert_task(&self, task: &NewTask) -> Result<i64, StateError> {
+    pub fn upsert_task(&self, task: &NewTask) -> Result<TaskId, StateError> {
         self.upsert_task_inner(task, &EventDetail::Ingested)
     }
 
     /// [`upsert_task`](Self::upsert_task) for the push path (`task/submit`,
     /// 0.1.6): identical semantics, but the ingest audit event records
     /// `{"kind":"submitted"}` so push and fetch ingests stay distinguishable.
-    pub fn upsert_submitted_task(&self, task: &NewTask) -> Result<i64, StateError> {
+    pub fn upsert_submitted_task(&self, task: &NewTask) -> Result<TaskId, StateError> {
         self.upsert_task_inner(task, &EventDetail::Submitted)
     }
 
-    fn upsert_task_inner(&self, task: &NewTask, detail: &EventDetail) -> Result<i64, StateError> {
+    fn upsert_task_inner(
+        &self,
+        task: &NewTask,
+        detail: &EventDetail,
+    ) -> Result<TaskId, StateError> {
         let now = self.clock.now_rfc3339();
         let detail = detail.to_json()?;
         let payload = task
@@ -1052,7 +1073,7 @@ impl StateDb {
                 task.last_signal_at,
             ],
         )?;
-        let id: i64 = tx.query_row(
+        let id: TaskId = tx.query_row(
             "SELECT id FROM tasks WHERE source = ?1 AND source_task_id = ?2",
             params![task.source, task.source_task_id],
             |r| r.get(0),
@@ -1070,7 +1091,7 @@ impl StateDb {
     }
 
     /// Fetch a task by id.
-    pub fn get_task(&self, id: i64) -> Result<Option<TaskRecord>, StateError> {
+    pub fn get_task(&self, id: TaskId) -> Result<Option<TaskRecord>, StateError> {
         let sql = format!("SELECT {TASK_COLUMNS} FROM tasks WHERE id = ?1");
         let mut stmt = self.conn.prepare(&sql)?;
         let mut rows = stmt.query_map(params![id], row_to_task)?;
@@ -1164,14 +1185,14 @@ impl StateDb {
     /// The current reference to task `id`, for a caller that decides on
     /// nothing but the id. A transition applied through it still fails if
     /// the task moves after this read.
-    pub fn task_ref(&self, id: i64) -> Result<TaskRef, StateError> {
+    pub fn task_ref(&self, id: TaskId) -> Result<TaskRef, StateError> {
         self.get_task(id)?
             .map(|t| t.task_ref())
             .ok_or(StateError::NotFound(id))
     }
 
     /// Record the selected repository for a task (F-14 confirmation result).
-    pub fn set_repo(&self, id: i64, repo: &str) -> Result<(), StateError> {
+    pub fn set_repo(&self, id: TaskId, repo: &str) -> Result<(), StateError> {
         let n = self.conn.execute(
             "UPDATE tasks SET repo = ?1, updated_at = ?2 WHERE id = ?3",
             params![repo, self.clock.now_rfc3339(), id],
@@ -1200,7 +1221,7 @@ impl StateDb {
     /// means "where this task's work started", which happens once.
     pub fn set_worktree(
         &self,
-        id: i64,
+        id: TaskId,
         path: &str,
         branch: Option<&str>,
         base_commit: &str,
@@ -1222,7 +1243,7 @@ impl StateDb {
     /// no longer known when the worktree is created: it is read back from
     /// `HEAD` after the agent has chosen and created it, which can be any
     /// number of ticks later.
-    pub fn set_branch(&self, id: i64, branch: &str) -> Result<(), StateError> {
+    pub fn set_branch(&self, id: TaskId, branch: &str) -> Result<(), StateError> {
         let n = self.conn.execute(
             "UPDATE tasks SET branch = ?1, updated_at = ?2 WHERE id = ?3",
             params![branch, self.clock.now_rfc3339(), id],
@@ -1241,7 +1262,7 @@ impl StateDb {
     /// newest one as the re-attach target. Returns the new row id.
     pub fn record_session(
         &self,
-        task_id: i64,
+        task_id: TaskId,
         plugin: &str,
         session_id: &str,
     ) -> Result<i64, StateError> {
@@ -1272,7 +1293,7 @@ impl StateDb {
     /// native id and filled in afterwards by
     /// [`set_session_native_id`](Self::set_session_native_id). Returns the new
     /// row id (the `session_row` component of the job id).
-    pub fn reserve_session(&self, task_id: i64, plugin: &str) -> Result<i64, StateError> {
+    pub fn reserve_session(&self, task_id: TaskId, plugin: &str) -> Result<i64, StateError> {
         let exists: bool = self.conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM tasks WHERE id = ?1)",
             params![task_id],
@@ -1303,7 +1324,7 @@ impl StateDb {
             params![session_id, session_row_id],
         )?;
         if n == 0 {
-            return Err(StateError::NotFound(session_row_id));
+            return Err(StateError::SessionNotFound(session_row_id));
         }
         Ok(())
     }
@@ -1334,7 +1355,7 @@ impl StateDb {
     /// rowid, assigned in insertion order, and a reused rowid is only ever
     /// handed out above every surviving row — so it orders these rows exactly
     /// as `created_at` was meant to.
-    pub fn latest_session(&self, task_id: i64) -> Result<Option<SessionRecord>, StateError> {
+    pub fn latest_session(&self, task_id: TaskId) -> Result<Option<SessionRecord>, StateError> {
         let sql = format!(
             "SELECT {SESSION_COLUMNS} FROM sessions WHERE task_id = ?1 \
              ORDER BY id DESC LIMIT 1"
@@ -1348,7 +1369,7 @@ impl StateDb {
     ///
     /// Ordered by `id` for the reason spelled out on
     /// [`latest_session`](Self::latest_session) (#478).
-    pub fn list_sessions(&self, task_id: i64) -> Result<Vec<SessionRecord>, StateError> {
+    pub fn list_sessions(&self, task_id: TaskId) -> Result<Vec<SessionRecord>, StateError> {
         let sql = format!(
             "SELECT {SESSION_COLUMNS} FROM sessions WHERE task_id = ?1 \
              ORDER BY id DESC"
@@ -1360,7 +1381,7 @@ impl StateDb {
     }
 
     /// All audit events for a task, oldest first (F-72; `task show` history).
-    pub fn list_events(&self, task_id: i64) -> Result<Vec<EventRecord>, StateError> {
+    pub fn list_events(&self, task_id: TaskId) -> Result<Vec<EventRecord>, StateError> {
         let mut stmt = self.conn.prepare(
             "SELECT id, task_id, from_state, to_state, occurred_at, detail \
              FROM events WHERE task_id = ?1 ORDER BY id",
@@ -1479,7 +1500,7 @@ impl StateDb {
     /// set does not. It is deliberately a different question from "should we
     /// notify again" — after a restart the operator may never have seen the
     /// first notification, so the two dedups are kept separate.
-    pub fn note_task(&self, id: i64, detail: &serde_json::Value) -> Result<bool, StateError> {
+    pub fn note_task(&self, id: TaskId, detail: &serde_json::Value) -> Result<bool, StateError> {
         // Enforced, not asserted: a `debug_assert!` is gone in release, and
         // the row it would let through is worse than useless — it becomes the
         // latest event and hides the note that was already there.
@@ -1527,7 +1548,7 @@ impl StateDb {
     ///
     /// One query for the whole table rather than one per task: `totsuka
     /// status` renders every row and has a 500 ms budget (§5.5).
-    pub fn open_notes(&self) -> Result<HashMap<i64, TaskNote>, StateError> {
+    pub fn open_notes(&self) -> Result<HashMap<TaskId, TaskNote>, StateError> {
         let mut stmt = self.conn.prepare(
             "SELECT e.task_id, e.detail, e.occurred_at FROM events e \
              JOIN (SELECT task_id, MAX(id) AS max_id FROM events GROUP BY task_id) m \
@@ -1537,7 +1558,7 @@ impl StateDb {
         let rows = stmt.query_map([], |row| {
             let detail: String = row.get("detail")?;
             Ok((
-                row.get::<_, i64>("task_id")?,
+                row.get::<_, TaskId>("task_id")?,
                 detail,
                 row.get::<_, String>("occurred_at")?,
             ))
@@ -1568,7 +1589,7 @@ impl StateDb {
     }
 
     /// Count of audit events recorded for a task (F-72).
-    pub fn event_count(&self, id: i64) -> Result<i64, StateError> {
+    pub fn event_count(&self, id: TaskId) -> Result<i64, StateError> {
         Ok(self.conn.query_row(
             "SELECT COUNT(*) FROM events WHERE task_id = ?1",
             params![id],
@@ -1782,7 +1803,7 @@ impl StateDb {
     ///
     /// The branch itself is untouched — this forgets a pointer, not work. A
     /// later writing stage records whatever branch its agent chooses.
-    pub fn clear_branch(&self, id: i64) -> Result<(), StateError> {
+    pub fn clear_branch(&self, id: TaskId) -> Result<(), StateError> {
         self.conn.execute(
             "UPDATE tasks SET branch = NULL, updated_at = ?1 WHERE id = ?2",
             params![self.clock.now_rfc3339(), id],
@@ -1871,7 +1892,7 @@ impl StateDb {
     /// Ordered by `id` rather than `received_at`: arrival order is what the
     /// agent should read them in, and `id` gives it without depending on
     /// timestamp resolution.
-    pub fn pending_task_messages(&self, task_id: i64) -> Result<Vec<TaskMessage>, StateError> {
+    pub fn pending_task_messages(&self, task_id: TaskId) -> Result<Vec<TaskMessage>, StateError> {
         let mut stmt = self.conn.prepare(&format!(
             "SELECT {TASK_MESSAGE_COLUMNS} FROM task_messages \
              WHERE task_id = ?1 AND processed_at IS NULL ORDER BY id"
@@ -1882,7 +1903,7 @@ impl StateDb {
     }
 
     /// Every message of a conversation, oldest first (display).
-    pub fn list_task_messages(&self, task_id: i64) -> Result<Vec<TaskMessage>, StateError> {
+    pub fn list_task_messages(&self, task_id: TaskId) -> Result<Vec<TaskMessage>, StateError> {
         let mut stmt = self.conn.prepare(&format!(
             "SELECT {TASK_MESSAGE_COLUMNS} FROM task_messages \
              WHERE task_id = ?1 ORDER BY id"
@@ -1898,7 +1919,7 @@ impl StateDb {
     /// The shared stamp is what makes a batch identifiable afterwards without
     /// a batch-id column — see
     /// [`unprocess_last_batch`](Self::unprocess_last_batch).
-    pub fn mark_messages_processed(&self, task_id: i64) -> Result<String, StateError> {
+    pub fn mark_messages_processed(&self, task_id: TaskId) -> Result<String, StateError> {
         let at = self.clock.now_rfc3339();
         self.conn.execute(
             "UPDATE task_messages SET processed_at = ?1 \
@@ -1921,7 +1942,7 @@ impl StateDb {
     /// dispatched). Two batches stamped with the *same* timestamp would be
     /// requeued together; that needs a clock that did not advance between
     /// dispatches, which only a frozen test clock does.
-    pub fn unprocess_last_batch(&self, task_id: i64) -> Result<usize, StateError> {
+    pub fn unprocess_last_batch(&self, task_id: TaskId) -> Result<usize, StateError> {
         unprocess_last_batch_tx(&self.conn, task_id)
     }
 
@@ -1953,7 +1974,7 @@ impl StateDb {
     /// order and the range is simply walked backwards. Measured — the plan is
     /// `SEARCH events USING INDEX idx_events_task (task_id=?)` with **no**
     /// `USE TEMP B-TREE FOR ORDER BY`.
-    pub fn auto_retry_streak(&self, task_id: i64) -> Result<u32, StateError> {
+    pub fn auto_retry_streak(&self, task_id: TaskId) -> Result<u32, StateError> {
         let mut stmt = self
             .conn
             .prepare("SELECT to_state, detail FROM events WHERE task_id = ?1 ORDER BY id DESC")?;
@@ -1993,7 +2014,7 @@ impl StateDb {
     /// until the first non-`UNKNOWN` stop; a `COMPLETED`/`NEEDS_INPUT`/`FAILED`
     /// stop resets the streak. Backed by `idx_hook_events_task`; the early
     /// break keeps it ~O(streak) (≈ O(3) at the escalation threshold).
-    pub fn unknown_stop_streak(&self, task_id: i64) -> Result<u32, StateError> {
+    pub fn unknown_stop_streak(&self, task_id: TaskId) -> Result<u32, StateError> {
         let mut stmt = self.conn.prepare(
             "SELECT status FROM hook_events \
              WHERE task_id = ?1 AND event = 'stop' ORDER BY id DESC",
@@ -2011,7 +2032,7 @@ impl StateDb {
     }
 
     /// Bump a task's `last_signal_at` to now — the R-10 timeout anchor.
-    pub fn touch_last_signal(&self, task_id: i64) -> Result<(), StateError> {
+    pub fn touch_last_signal(&self, task_id: TaskId) -> Result<(), StateError> {
         let now = self.clock.now_rfc3339();
         let n = self.conn.execute(
             "UPDATE tasks SET last_signal_at = ?1, updated_at = ?1 WHERE id = ?2",
@@ -2035,7 +2056,7 @@ impl StateDb {
             params![tool_session_id, session_row_id],
         )?;
         if n == 0 {
-            return Err(StateError::NotFound(session_row_id));
+            return Err(StateError::SessionNotFound(session_row_id));
         }
         Ok(())
     }
@@ -2148,7 +2169,7 @@ fn row_to_exported_event(row: &Row<'_>, without_detail: bool) -> Result<Exported
 
 /// Put the newest dispatched batch of a conversation back on the queue.
 /// See [`StateDb::unprocess_last_batch`] for why the batch is found by id.
-fn unprocess_last_batch_tx(conn: &Connection, task_id: i64) -> Result<usize, StateError> {
+fn unprocess_last_batch_tx(conn: &Connection, task_id: TaskId) -> Result<usize, StateError> {
     Ok(conn.execute(
         "UPDATE task_messages SET processed_at = NULL \
          WHERE task_id = ?1 AND processed_at = ( \
@@ -2198,7 +2219,7 @@ fn insert_task_message_tx(
 fn apply_event_tx(
     conn: &Connection,
     now: &str,
-    id: i64,
+    id: TaskId,
     expected: Option<i64>,
     event: TaskEvent,
     detail: Option<&str>,
@@ -2338,7 +2359,7 @@ mod tests {
     /// A hook event with empty idempotency components (the common case: the
     /// `(job_id, event)` pair carries the key).
     fn hook_event(
-        task_id: i64,
+        task_id: TaskId,
         job_id: &str,
         event: &str,
         status: Option<&str>,
@@ -2354,7 +2375,7 @@ mod tests {
         }
     }
 
-    fn message(task_id: i64, key: &str, body: &str) -> TaskMessageInsert {
+    fn message(task_id: TaskId, key: &str, body: &str) -> TaskMessageInsert {
         TaskMessageInsert {
             task_id,
             message_key: key.to_string(),
@@ -2415,7 +2436,7 @@ mod tests {
             Some(EventDetail::Hook { reason: None }),
         )
         .unwrap();
-        (first, second)
+        (first.0, second.0)
     }
 
     fn collect_export(db: &StateDb, filter: EventExportFilter) -> Vec<ExportedEvent> {
@@ -2441,7 +2462,8 @@ mod tests {
         sorted.sort_unstable();
         assert_eq!(ids, sorted, "oldest first, by event id");
         assert!(
-            all.iter().any(|e| e.task_id == first) && all.iter().any(|e| e.task_id == second),
+            all.iter().any(|e| e.task_id == TaskId(first))
+                && all.iter().any(|e| e.task_id == TaskId(second)),
             "both tasks appear: {all:?}"
         );
 
@@ -2485,12 +2507,12 @@ mod tests {
         let mine = collect_export(
             &db,
             EventExportFilter {
-                task_id: Some(first),
+                task_id: Some(TaskId(first)),
                 ..Default::default()
             },
         );
         assert!(
-            mine.iter().all(|e| e.task_id == first) && !mine.is_empty(),
+            mine.iter().all(|e| e.task_id == TaskId(first)) && !mine.is_empty(),
             "only the requested task: {mine:?}"
         );
         assert!(
@@ -2507,7 +2529,7 @@ mod tests {
         let lean = collect_export(
             &db,
             EventExportFilter {
-                task_id: Some(first),
+                task_id: Some(TaskId(first)),
                 without_detail: true,
                 ..Default::default()
             },
@@ -2557,7 +2579,7 @@ mod tests {
         // writer produces this shape, so it goes in underneath the typed API.
         insert_raw_event(
             &db,
-            id,
+            id.0,
             TaskState::Dispatched,
             &serde_json::json!({
                 "kind": "hook_complete",
@@ -2609,7 +2631,7 @@ mod tests {
         let result =
             db.for_each_exported_event::<_, StateError>(EventExportFilter::default(), |_| {
                 seen += 1;
-                Err(StateError::NotFound(-1))
+                Err(StateError::NotFound(TaskId(-1)))
             });
         assert!(result.is_err(), "the sink's error propagates");
         assert_eq!(seen, 1, "and the walk stopped at the first row");
@@ -3017,13 +3039,13 @@ mod tests {
     fn setters_reject_unknown_task() {
         let db = StateDb::open_in_memory().unwrap();
         assert!(matches!(
-            db.set_repo(999, "totsuka").unwrap_err(),
-            StateError::NotFound(999)
+            db.set_repo(TaskId(999), "totsuka").unwrap_err(),
+            StateError::NotFound(TaskId(999))
         ));
         assert!(matches!(
-            db.set_worktree(999, "/tmp/wt", Some("b"), "c0ffee")
+            db.set_worktree(TaskId(999), "/tmp/wt", Some("b"), "c0ffee")
                 .unwrap_err(),
-            StateError::NotFound(999)
+            StateError::NotFound(TaskId(999))
         ));
     }
 
@@ -3100,8 +3122,9 @@ mod tests {
     fn record_session_rejects_unknown_task() {
         let db = StateDb::open_in_memory().unwrap();
         assert!(matches!(
-            db.record_session(999, "herdr", "sess-x").unwrap_err(),
-            StateError::NotFound(999)
+            db.record_session(TaskId(999), "herdr", "sess-x")
+                .unwrap_err(),
+            StateError::NotFound(TaskId(999))
         ));
     }
 
@@ -3158,7 +3181,7 @@ mod tests {
             Some(serde_json::json!({"kind": "hook_start"}))
         );
         // Unknown task -> empty history, not an error.
-        assert!(db.list_events(999).unwrap().is_empty());
+        assert!(db.list_events(TaskId(999)).unwrap().is_empty());
     }
 
     /// A note for `id`, shaped the way `run` writes one (#407).
@@ -3255,8 +3278,8 @@ mod tests {
     fn noting_an_unknown_task_is_an_error_not_an_orphan_row() {
         let db = StateDb::open_in_memory().unwrap();
         assert!(matches!(
-            db.note_task(999, &blocked_note()),
-            Err(StateError::NotFound(999))
+            db.note_task(TaskId(999), &blocked_note()),
+            Err(StateError::NotFound(TaskId(999)))
         ));
     }
 
@@ -3285,9 +3308,9 @@ mod tests {
     /// Fail `id` and requeue it the way the engine does after a failed
     /// dispatch, recording `detail` on the requeue.
     fn fail_and_requeue(db: &StateDb, id: i64, detail: EventDetail) {
-        db.apply_event(db.task_ref(id).unwrap(), TaskEvent::Fail, None)
+        db.apply_event(db.task_ref(TaskId(id)).unwrap(), TaskEvent::Fail, None)
             .unwrap();
-        db.retry_task(db.task_ref(id).unwrap(), Some(detail))
+        db.retry_task(db.task_ref(TaskId(id)).unwrap(), Some(detail))
             .unwrap();
     }
 
@@ -3300,20 +3323,20 @@ mod tests {
         let db = StateDb::open_in_memory().unwrap();
         let id = db.upsert_task(&sample_task()).unwrap();
         // One before a successful dispatch, which ends the run.
-        fail_and_requeue(&db, id, auto_retry(1));
+        fail_and_requeue(&db, id.0, auto_retry(1));
         db.apply_event(db.task_ref(id).unwrap(), TaskEvent::Dispatch, None)
             .unwrap();
-        fail_and_requeue(&db, id, auto_retry(1));
-        fail_and_requeue(&db, id, auto_retry(2));
+        fail_and_requeue(&db, id.0, auto_retry(1));
+        fail_and_requeue(&db, id.0, auto_retry(2));
         assert_eq!(db.auto_retry_streak(id).unwrap(), 2);
 
         // A human's retry resets the budget.
         let cli = EventDetail::Cli(Cli::Plain {
             command: "task retry".to_string(),
         });
-        fail_and_requeue(&db, id, cli);
+        fail_and_requeue(&db, id.0, cli);
         assert_eq!(db.auto_retry_streak(id).unwrap(), 0);
-        fail_and_requeue(&db, id, auto_retry(1));
+        fail_and_requeue(&db, id.0, auto_retry(1));
         assert_eq!(db.auto_retry_streak(id).unwrap(), 1);
     }
 
@@ -3330,9 +3353,9 @@ mod tests {
         ] {
             let db = StateDb::open_in_memory().unwrap();
             let id = db.upsert_task(&sample_task()).unwrap();
-            fail_and_requeue(&db, id, auto_retry(1));
+            fail_and_requeue(&db, id.0, auto_retry(1));
             assert_eq!(db.auto_retry_streak(id).unwrap(), 1);
-            insert_raw_event(&db, id, TaskState::Queued, &row);
+            insert_raw_event(&db, id.0, TaskState::Queued, &row);
             assert_eq!(db.auto_retry_streak(id).unwrap(), 0, "{row}");
         }
     }
@@ -3505,7 +3528,7 @@ mod tests {
         // UNKNOWN stop's (job, session, prompt) is a NEW row, not a Duplicate.
         let done = HookEventInsert {
             job_id: "job-1-1".into(),
-            task_id: 1,
+            task_id: TaskId(1),
             tool_session_id: "s".into(),
             prompt_id: "p".into(),
             event: "stop".into(),
@@ -3582,7 +3605,7 @@ mod tests {
         );
 
         // The session row reads back through the renamed column.
-        let rec = db.latest_session(1).unwrap().unwrap();
+        let rec = db.latest_session(TaskId(1)).unwrap().unwrap();
         assert_eq!(rec.tool_session_id.as_deref(), Some("cc-old"));
         assert_eq!(
             db.find_session_by_tool_session_id("cc-old")
@@ -3596,7 +3619,7 @@ mod tests {
         // still dedups, a different status still records.
         let redelivery = HookEventInsert {
             job_id: "job-1-1".into(),
-            task_id: 1,
+            task_id: TaskId(1),
             tool_session_id: "cc-old".into(),
             prompt_id: "p".into(),
             event: "stop".into(),
@@ -3669,23 +3692,30 @@ mod tests {
         );
 
         // Pre-existing rows are untouched.
-        let rec = db.get_task(1).unwrap().unwrap();
+        let rec = db.get_task(TaskId(1)).unwrap().unwrap();
         assert_eq!(rec.title, "legacy");
         assert_eq!(rec.state, TaskState::Done);
         assert_eq!(
-            db.latest_session(1).unwrap().unwrap().tool_session_id,
+            db.latest_session(TaskId(1))
+                .unwrap()
+                .unwrap()
+                .tool_session_id,
             Some("cc-1".to_string())
         );
 
         // The ledger is usable, and v6 has given this pre-existing task its
         // backfilled row (see `migrates_v5_to_v6_...` for why that matters).
-        assert_eq!(keys(&db.list_task_messages(1).unwrap()), ["9"]);
-        assert!(db.pending_task_messages(1).unwrap().is_empty());
+        assert_eq!(keys(&db.list_task_messages(TaskId(1)).unwrap()), ["9"]);
+        assert!(db.pending_task_messages(TaskId(1)).unwrap().is_empty());
         assert_eq!(
-            db.append_task_message(&message(1, "m1", "hello")).unwrap(),
+            db.append_task_message(&message(TaskId(1), "m1", "hello"))
+                .unwrap(),
             TaskMessageOutcome::New
         );
-        assert_eq!(keys(&db.list_task_messages(1).unwrap()), ["9", "m1"]);
+        assert_eq!(
+            keys(&db.list_task_messages(TaskId(1)).unwrap()),
+            ["9", "m1"]
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -3740,21 +3770,31 @@ mod tests {
         let db = StateDb::open(&path).unwrap();
 
         for (task_id, key) in [(1, "9"), (2, "10")] {
-            let ledger = db.list_task_messages(task_id).unwrap();
+            let ledger = db.list_task_messages(TaskId(task_id)).unwrap();
             assert_eq!(keys(&ledger), [key], "one row per pre-existing task");
             assert!(
                 ledger[0].processed_at.is_some(),
                 "backfilled rows must not look like queued prompt material"
             );
-            assert!(db.pending_task_messages(task_id).unwrap().is_empty());
+            assert!(
+                db.pending_task_messages(TaskId(task_id))
+                    .unwrap()
+                    .is_empty()
+            );
             // ...so the source's next re-delivery dedups instead of reopening.
             assert_eq!(
-                db.append_task_message_reopening(&message(task_id, key, "re-delivered"), None)
-                    .unwrap(),
+                db.append_task_message_reopening(
+                    &message(TaskId(task_id), key, "re-delivered"),
+                    None
+                )
+                .unwrap(),
                 (TaskMessageOutcome::Duplicate, None)
             );
         }
-        assert_eq!(db.get_task(1).unwrap().unwrap().state, TaskState::Done);
+        assert_eq!(
+            db.get_task(TaskId(1)).unwrap().unwrap().state,
+            TaskState::Done
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -4417,12 +4457,12 @@ mod tests {
 
         // Unknown ids are rejected, matching the other setters' contract.
         assert!(matches!(
-            db.reserve_session(999, "herdr").unwrap_err(),
-            StateError::NotFound(999)
+            db.reserve_session(TaskId(999), "herdr").unwrap_err(),
+            StateError::NotFound(TaskId(999))
         ));
         assert!(matches!(
             db.set_session_native_id(999, "x").unwrap_err(),
-            StateError::NotFound(999)
+            StateError::SessionNotFound(999)
         ));
     }
 
@@ -4528,12 +4568,12 @@ mod tests {
 
         // Unknown ids are rejected, matching the other setters' contract.
         assert!(matches!(
-            db.touch_last_signal(999).unwrap_err(),
-            StateError::NotFound(999)
+            db.touch_last_signal(TaskId(999)).unwrap_err(),
+            StateError::NotFound(TaskId(999))
         ));
         assert!(matches!(
             db.set_tool_session_id(999, "x").unwrap_err(),
-            StateError::NotFound(999)
+            StateError::SessionNotFound(999)
         ));
     }
 }

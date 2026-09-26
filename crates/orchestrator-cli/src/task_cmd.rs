@@ -10,6 +10,7 @@ use std::io::Write;
 
 use clap::Subcommand;
 use orchestrator_core::adapters::state_db::{EventExportFilter, StateError};
+use orchestrator_core::domain::TaskId;
 use orchestrator_core::domain::event_detail::{Cli, EventDetail};
 use orchestrator_core::domain::state::{TaskEvent, TaskState};
 use orchestrator_core::task_control;
@@ -110,7 +111,7 @@ impl TaskCommand {
 /// A `task show --json` document.
 #[derive(Debug, Serialize)]
 struct TaskDetail {
-    id: i64,
+    id: TaskId,
     source: String,
     source_task_id: String,
     workflow: String,
@@ -165,20 +166,20 @@ struct EventRow {
 pub fn run(cx: &Cx, command: TaskCommand) -> Result<(), CliError> {
     match command {
         TaskCommand::List { json } => list(cx, json.json),
-        TaskCommand::Show { id, json } => show(cx, id, json.json),
-        TaskCommand::Cancel { id } => cancel(cx, id),
-        TaskCommand::Retry { id } => retry(cx, id),
+        TaskCommand::Show { id, json } => show(cx, TaskId(id), json.json),
+        TaskCommand::Cancel { id } => cancel(cx, TaskId(id)),
+        TaskCommand::Retry { id } => retry(cx, TaskId(id)),
         TaskCommand::Export {
             since,
             task,
             no_detail,
-        } => export(cx, since, task, no_detail),
+        } => export(cx, since, task.map(TaskId), no_detail),
         TaskCommand::Verify {
             id,
             pass,
             fail,
             reason,
-        } => verify(cx, id, pass, fail, reason),
+        } => verify(cx, TaskId(id), pass, fail, reason),
     }
 }
 
@@ -222,7 +223,7 @@ fn list(cx: &Cx, json: bool) -> Result<(), CliError> {
     Ok(())
 }
 
-fn show(cx: &Cx, id: i64, json: bool) -> Result<(), CliError> {
+fn show(cx: &Cx, id: TaskId, json: bool) -> Result<(), CliError> {
     let db = cx.open_state_db()?;
     let task = db.get_task(id)?.ok_or_else(|| not_found(id))?;
     let detail = TaskDetail {
@@ -370,7 +371,12 @@ fn show(cx: &Cx, id: i64, json: bool) -> Result<(), CliError> {
 /// `serde_json` already escapes control characters, and re-escaping would
 /// corrupt the machine-readable values (see the note on external text in
 /// `orchestrator-cli`'s component doc).
-fn export(cx: &Cx, since: Option<i64>, task: Option<i64>, no_detail: bool) -> Result<(), CliError> {
+fn export(
+    cx: &Cx,
+    since: Option<i64>,
+    task: Option<TaskId>,
+    no_detail: bool,
+) -> Result<(), CliError> {
     let db = cx.open_state_db()?;
     // An unknown `--task` is a user error, not an empty answer, and is
     // rejected the way `show` / `cancel` / `retry` reject it. An exhausted
@@ -438,7 +444,7 @@ fn is_broken_pipe(e: &CliError) -> bool {
         .is_some_and(|io| io.kind() == std::io::ErrorKind::BrokenPipe)
 }
 
-fn cancel(cx: &Cx, id: i64) -> Result<(), CliError> {
+fn cancel(cx: &Cx, id: TaskId) -> Result<(), CliError> {
     let db = cx.open_state_db()?;
     // The rules and the refusal advice are shared with the running engine's
     // control endpoint (#760).
@@ -469,7 +475,7 @@ fn cancel(cx: &Cx, id: i64) -> Result<(), CliError> {
     Ok(())
 }
 
-fn retry(cx: &Cx, id: i64) -> Result<(), CliError> {
+fn retry(cx: &Cx, id: TaskId) -> Result<(), CliError> {
     let db = cx.open_state_db()?;
     let outcome = task_control::retry(
         &db,
@@ -502,7 +508,7 @@ fn retry(cx: &Cx, id: i64) -> Result<(), CliError> {
 
 fn verify(
     cx: &Cx,
-    id: i64,
+    id: TaskId,
     pass: bool,
     fail: bool,
     reason: Option<String>,
@@ -594,7 +600,7 @@ fn one_line(body: &str, limit: usize) -> String {
     }
 }
 
-fn not_found(id: i64) -> CliError {
+fn not_found(id: TaskId) -> CliError {
     task_control::not_found(id).into()
 }
 

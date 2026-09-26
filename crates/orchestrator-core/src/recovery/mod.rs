@@ -19,6 +19,7 @@ use plugin_protocol::methods::AgentState;
 
 use crate::adapters::state_db::{SessionRecord, StateDb, StateError, TaskRecord};
 use crate::domain::EventDetail;
+use crate::domain::TaskId;
 use crate::domain::state::{TaskEvent, TaskState};
 use crate::ports::agent_session::{AgentSession, AttachOutcome};
 use crate::scheduler::counts_toward_slot;
@@ -59,7 +60,7 @@ pub enum RecoveryResult {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskRecovery {
     /// Task id.
-    pub task_id: i64,
+    pub task_id: TaskId,
     /// Owning plugin, if a session was recorded.
     pub plugin: Option<String>,
     /// Session id that was re-attached (or attempted), if any.
@@ -292,7 +293,7 @@ pub fn retry_plan(task: &TaskRecord, latest_session: Option<&SessionRecord>) -> 
 pub fn active_slot_claims(
     db: &StateDb,
     report: &RecoveryReport,
-) -> Result<Vec<(i64, String, String)>, StateError> {
+) -> Result<Vec<(TaskId, String, String)>, StateError> {
     let mut claims = Vec::new();
     for recovery in report.resumed() {
         let RecoveryResult::Resumed { state } = recovery.result else {
@@ -327,7 +328,7 @@ fn recovery_detail(agent: AgentState) -> EventDetail {
 
 /// Build a `Resumed` outcome.
 fn resumed(
-    task_id: i64,
+    task_id: TaskId,
     plugin: Option<String>,
     session_id: Option<String>,
     state: TaskState,
@@ -342,7 +343,7 @@ fn resumed(
 
 /// Build a `NeedsConfirmation` outcome.
 fn needs_confirmation(
-    task_id: i64,
+    task_id: TaskId,
     plugin: Option<String>,
     session_id: Option<String>,
     reason: String,
@@ -454,7 +455,7 @@ mod tests {
         if let Some(sid) = session {
             db.record_session(id, "herdr", sid).unwrap();
         }
-        id
+        id.0
     }
 
     #[tokio::test]
@@ -466,7 +467,10 @@ mod tests {
         let report = recover(&db, &attacher).await.unwrap();
 
         assert_eq!(report.resumed().count(), 1);
-        assert_eq!(db.get_task(id).unwrap().unwrap().state, TaskState::Running);
+        assert_eq!(
+            db.get_task(TaskId(id)).unwrap().unwrap().state,
+            TaskState::Running
+        );
     }
 
     #[tokio::test]
@@ -481,7 +485,10 @@ mod tests {
         // once even though it is advanced into another recoverable state
         // (regression guard: a forward sync must not re-select the task).
         assert_eq!(report.outcomes.len(), 1);
-        assert_eq!(db.get_task(id).unwrap().unwrap().state, TaskState::Running);
+        assert_eq!(
+            db.get_task(TaskId(id)).unwrap().unwrap().state,
+            TaskState::Running
+        );
         assert!(matches!(
             report.outcomes[0].result,
             RecoveryResult::Resumed {
@@ -499,7 +506,7 @@ mod tests {
         recover(&db, &attacher).await.unwrap();
 
         assert_eq!(
-            db.get_task(id).unwrap().unwrap().state,
+            db.get_task(TaskId(id)).unwrap().unwrap().state,
             TaskState::WaitingInput
         );
     }
@@ -514,7 +521,10 @@ mod tests {
 
         assert_eq!(report.needs_confirmation().count(), 1);
         // Crucially: not auto-failed (§5.3).
-        assert_eq!(db.get_task(id).unwrap().unwrap().state, TaskState::Running);
+        assert_eq!(
+            db.get_task(TaskId(id)).unwrap().unwrap().state,
+            TaskState::Running
+        );
         assert!(!NEXT_ACTIONS.is_empty(), "human is offered next actions");
     }
 
@@ -527,7 +537,10 @@ mod tests {
         let report = recover(&db, &attacher).await.unwrap();
 
         assert_eq!(report.needs_confirmation().count(), 1);
-        assert_eq!(db.get_task(id).unwrap().unwrap().state, TaskState::Running);
+        assert_eq!(
+            db.get_task(TaskId(id)).unwrap().unwrap().state,
+            TaskState::Running
+        );
     }
 
     #[tokio::test]
@@ -540,7 +553,10 @@ mod tests {
 
         assert_eq!(report.needs_confirmation().count(), 1);
         assert_eq!(report.outcomes[0].session_id, None);
-        assert_eq!(db.get_task(id).unwrap().unwrap().state, TaskState::Running);
+        assert_eq!(
+            db.get_task(TaskId(id)).unwrap().unwrap().state,
+            TaskState::Running
+        );
     }
 
     #[tokio::test]
@@ -553,7 +569,10 @@ mod tests {
 
         assert_eq!(report.needs_confirmation().count(), 1);
         // Attach succeeded but the agent failed: still defer to the human.
-        assert_eq!(db.get_task(id).unwrap().unwrap().state, TaskState::Running);
+        assert_eq!(
+            db.get_task(TaskId(id)).unwrap().unwrap().state,
+            TaskState::Running
+        );
     }
 
     #[tokio::test]
@@ -569,7 +588,7 @@ mod tests {
 
         assert_eq!(report.needs_confirmation().count(), 1);
         assert_eq!(
-            db.get_task(id).unwrap().unwrap().state,
+            db.get_task(TaskId(id)).unwrap().unwrap().state,
             TaskState::WaitingInput,
             "must not advance to Publishing without a human"
         );
@@ -590,8 +609,14 @@ mod tests {
         let report = recover(&db, &attacher).await.unwrap();
 
         assert_eq!(report.needs_confirmation().count(), 2);
-        assert_eq!(db.get_task(v).unwrap().unwrap().state, TaskState::Verifying);
-        assert_eq!(db.get_task(e).unwrap().unwrap().state, TaskState::Escalated);
+        assert_eq!(
+            db.get_task(TaskId(v)).unwrap().unwrap().state,
+            TaskState::Verifying
+        );
+        assert_eq!(
+            db.get_task(TaskId(e)).unwrap().unwrap().state,
+            TaskState::Escalated
+        );
     }
 
     #[test]
@@ -741,7 +766,7 @@ mod tests {
         // not, and never contribute an empty-agent claim.
         assert_eq!(
             claims,
-            vec![(held, "totsuka".to_string(), "herdr".to_string())]
+            vec![(TaskId(held), "totsuka".to_string(), "herdr".to_string())]
         );
     }
 }

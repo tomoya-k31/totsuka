@@ -11,6 +11,7 @@
 
 use std::future::Future;
 
+use crate::domain::TaskId;
 use crate::domain::signal::AgentSignal;
 use crate::domain::state::TaskState;
 
@@ -146,13 +147,15 @@ impl TaskControlOutcome {
 pub trait ControlPort: Send + Sync {
     /// Ask the engine to focus the task's pane (via the task's agent plugin,
     /// `session/focus`, gated on `pane_control`) and wait for the outcome.
-    fn focus(&self, task_id: i64)
-    -> impl Future<Output = Result<FocusOutcome, SignalError>> + Send;
+    fn focus(
+        &self,
+        task_id: TaskId,
+    ) -> impl Future<Output = Result<FocusOutcome, SignalError>> + Send;
 
     /// Ask the engine to cancel or retry the task and wait for the outcome.
     fn task(
         &self,
         op: TaskOp,
-        task_id: i64,
+        task_id: TaskId,
     ) -> impl Future<Output = Result<TaskControlOutcome, SignalError>> + Send;
 }

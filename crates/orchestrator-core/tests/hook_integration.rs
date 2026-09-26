@@ -19,6 +19,7 @@ use orchestrator_core::adapters::state_db::{HookEventInsert, TaskMessageInsert};
 use orchestrator_core::adapters::{NewTask, StateDb};
 use orchestrator_core::config::RootConfig;
 use orchestrator_core::domain::CleanupPolicy;
+use orchestrator_core::domain::TaskId;
 use orchestrator_core::domain::signal::{
     AgentSignal, JobId, SignalEvent, SignalSource, StopStatus,
 };
@@ -215,7 +216,7 @@ fn seed_running(db: &StateDb, sid: &str) -> (i64, i64) {
     db.apply_event(db.task_ref(id).unwrap(), TaskEvent::Start, None)
         .unwrap();
     let row = db.record_session(id, "mock_agent", sid).unwrap();
-    (id, row)
+    (id.0, row)
 }
 
 fn stop(
@@ -227,7 +228,7 @@ fn stop(
 ) -> AgentSignal {
     AgentSignal {
         source: SignalSource::AgentHook,
-        job_id: JobId::new(task_id, row),
+        job_id: JobId::new(TaskId(task_id), row),
         tool_session_id: "cc-1".into(),
         prompt_id: prompt_id.into(),
         event: SignalEvent::Stop {
@@ -246,7 +247,7 @@ fn stop(
 fn question(task_id: i64, row: i64, prompt_id: &str, msg: &str) -> AgentSignal {
     AgentSignal {
         source: SignalSource::AgentHook,
-        job_id: JobId::new(task_id, row),
+        job_id: JobId::new(TaskId(task_id), row),
         tool_session_id: "cc-1".into(),
         prompt_id: prompt_id.into(),
         event: SignalEvent::QuestionPending {
@@ -259,7 +260,7 @@ fn question(task_id: i64, row: i64, prompt_id: &str, msg: &str) -> AgentSignal {
 fn heartbeat(task_id: i64, row: i64, prompt_id: &str) -> AgentSignal {
     AgentSignal {
         source: SignalSource::AgentHook,
-        job_id: JobId::new(task_id, row),
+        job_id: JobId::new(TaskId(task_id), row),
         tool_session_id: "cc-1".into(),
         prompt_id: prompt_id.into(),
         event: SignalEvent::Heartbeat,
@@ -356,7 +357,7 @@ async fn the_doctor_liveness_probe_is_not_logged_as_an_anomaly() {
     );
 
     let stale = AgentSignal {
-        job_id: JobId::new(999_999, 1),
+        job_id: JobId::new(TaskId(999_999), 1),
         ..stop(id, row, "p2", StopStatus::Completed, Some("ignored"))
     };
     engine.on_signal(stale).await.unwrap();
@@ -367,7 +368,7 @@ async fn the_doctor_liveness_probe_is_not_logged_as_an_anomaly() {
     );
     drop(guard);
 
-    let task = engine.db().get_task(id).unwrap().unwrap();
+    let task = engine.db().get_task(TaskId(id)).unwrap().unwrap();
     assert_eq!(
         task.state,
         TaskState::Running,
@@ -385,8 +386,8 @@ async fn the_doctor_liveness_probe_is_not_logged_as_an_anomaly() {
 fn the_doctor_probe_job_id_is_job_0_0() {
     assert_eq!(JobId::DOCTOR_PROBE.to_string(), "job-0-0");
     assert!("job-0-0".parse::<JobId>().unwrap().is_doctor_probe());
-    assert!(!JobId::new(1, 0).is_doctor_probe());
-    assert!(!JobId::new(0, 1).is_doctor_probe());
+    assert!(!JobId::new(TaskId(1), 0).is_doctor_probe());
+    assert!(!JobId::new(TaskId(0), 1).is_doctor_probe());
 }
 
 #[tokio::test]
@@ -416,7 +417,7 @@ async fn completed_llm_publishes_to_done() {
         .await
         .unwrap();
 
-    let task = engine.db().get_task(id).unwrap().unwrap();
+    let task = engine.db().get_task(TaskId(id)).unwrap().unwrap();
     assert_eq!(
         task.state,
         TaskState::Done,
@@ -474,7 +475,7 @@ async fn completed_llm_on_tool_without_prompt_hooks_parks_in_verifying() {
             .await
             .unwrap();
 
-        let task = engine.db().get_task(id).unwrap().unwrap();
+        let task = engine.db().get_task(TaskId(id)).unwrap().unwrap();
         assert_eq!(
             task.state,
             TaskState::Verifying,
@@ -555,7 +556,7 @@ on_failure = { status = "failed" }
         .unwrap();
 
     assert_eq!(
-        engine.db().get_task(id).unwrap().unwrap().state,
+        engine.db().get_task(TaskId(id)).unwrap().unwrap().state,
         TaskState::Verifying,
         "profile = answer resolves verification to llm, so codex must degrade to human"
     );
@@ -599,7 +600,7 @@ async fn completed_human_waits_for_verify_then_pass_reaches_done() {
         .await
         .unwrap();
     assert_eq!(
-        engine.db().get_task(id).unwrap().unwrap().state,
+        engine.db().get_task(TaskId(id)).unwrap().unwrap().state,
         TaskState::Verifying,
         "human verification parks the task in Verifying"
     );
@@ -608,20 +609,20 @@ async fn completed_human_waits_for_verify_then_pass_reaches_done() {
     engine
         .db()
         .apply_event(
-            engine.db().task_ref(id).unwrap(),
+            engine.db().task_ref(TaskId(id)).unwrap(),
             TaskEvent::ApproveVerification,
             None,
         )
         .unwrap();
     assert_eq!(
-        engine.db().get_task(id).unwrap().unwrap().state,
+        engine.db().get_task(TaskId(id)).unwrap().unwrap().state,
         TaskState::Publishing
     );
 
     // The next run's recover cycle finalizes the Publishing task.
     engine.recover().await.unwrap();
     assert_eq!(
-        engine.db().get_task(id).unwrap().unwrap().state,
+        engine.db().get_task(TaskId(id)).unwrap().unwrap().state,
         TaskState::Done,
         "recover finalizes the approved task"
     );
@@ -667,13 +668,13 @@ async fn verify_fail_returns_to_running() {
     engine
         .db()
         .apply_event(
-            engine.db().task_ref(id).unwrap(),
+            engine.db().task_ref(TaskId(id)).unwrap(),
             TaskEvent::VerificationFailed,
             None,
         )
         .unwrap();
     assert_eq!(
-        engine.db().get_task(id).unwrap().unwrap().state,
+        engine.db().get_task(TaskId(id)).unwrap().unwrap().state,
         TaskState::Running,
         "rejection returns the task to Running for correction"
     );
@@ -708,7 +709,7 @@ async fn three_unknown_stops_escalate_with_snapshot() {
             .on_signal(stop(id, row, p, StopStatus::Unknown, None))
             .await
             .unwrap();
-        let state = engine.db().get_task(id).unwrap().unwrap().state;
+        let state = engine.db().get_task(TaskId(id)).unwrap().unwrap().state;
         if i < 2 {
             assert_eq!(state, TaskState::Running, "below threshold stays Running");
         } else {
@@ -719,7 +720,7 @@ async fn three_unknown_stops_escalate_with_snapshot() {
     // The escalation event carries the pane snapshot (R-10).
     let has_snapshot = engine
         .db()
-        .list_events(id)
+        .list_events(TaskId(id))
         .unwrap()
         .into_iter()
         .filter_map(|e| e.detail)
@@ -761,7 +762,7 @@ async fn focus_task_delegates_to_a_pane_control_agent() {
     )
     .await;
 
-    let outcome = engine.focus_task(id).await;
+    let outcome = engine.focus_task(TaskId(id)).await;
     assert!(outcome.focused, "outcome was {outcome:?}");
 
     // The delegation carried the session id verbatim (opaque, F-37).
@@ -795,7 +796,7 @@ async fn focus_task_degrades_without_pane_control_or_task() {
     )
     .await;
 
-    let outcome = engine.focus_task(id).await;
+    let outcome = engine.focus_task(TaskId(id)).await;
     assert!(!outcome.focused);
     assert!(
         outcome
@@ -806,7 +807,7 @@ async fn focus_task_degrades_without_pane_control_or_task() {
         "outcome was {outcome:?}"
     );
 
-    let outcome = engine.focus_task(9999).await;
+    let outcome = engine.focus_task(TaskId(9999)).await;
     assert!(!outcome.focused);
     assert!(
         outcome
@@ -839,7 +840,7 @@ async fn focus_task_reports_a_closed_pane_as_not_focused() {
     )
     .await;
 
-    let outcome = engine.focus_task(id).await;
+    let outcome = engine.focus_task(TaskId(id)).await;
     assert!(!outcome.focused);
     assert!(
         outcome.reason.as_deref().unwrap_or("").contains("closed"),
@@ -871,7 +872,7 @@ async fn needs_input_parks_in_waiting_input() {
         .await
         .unwrap();
     assert_eq!(
-        engine.db().get_task(id).unwrap().unwrap().state,
+        engine.db().get_task(TaskId(id)).unwrap().unwrap().state,
         TaskState::WaitingInput
     );
     engine.shutdown(GRACE).await;
@@ -912,7 +913,7 @@ async fn question_pending_parks_and_a_later_completed_still_publishes() {
         .await
         .unwrap();
     assert_eq!(
-        engine.db().get_task(id).unwrap().unwrap().state,
+        engine.db().get_task(TaskId(id)).unwrap().unwrap().state,
         TaskState::WaitingInput,
         "an open question dialog parks the task"
     );
@@ -930,7 +931,7 @@ async fn question_pending_parks_and_a_later_completed_still_publishes() {
         .await
         .unwrap();
     assert_eq!(
-        engine.db().get_task(id).unwrap().unwrap().state,
+        engine.db().get_task(TaskId(id)).unwrap().unwrap().state,
         TaskState::Done,
         "COMPLETED after the question park still publishes"
     );
@@ -983,7 +984,7 @@ async fn a_second_question_renotifies_and_a_redelivery_does_not() {
         .await
         .unwrap();
     assert_eq!(
-        engine.db().get_task(id).unwrap().unwrap().state,
+        engine.db().get_task(TaskId(id)).unwrap().unwrap().state,
         TaskState::WaitingInput
     );
 
@@ -1023,7 +1024,7 @@ async fn a_heartbeat_starts_a_dispatched_task() {
     )
     .await;
 
-    engine.on_signal(heartbeat(id, row, "p1")).await.unwrap();
+    engine.on_signal(heartbeat(id.0, row, "p1")).await.unwrap();
     assert_eq!(
         engine.db().get_task(id).unwrap().unwrap().state,
         TaskState::Running
@@ -1042,7 +1043,7 @@ async fn a_heartbeat_leaves_a_running_task_alone() {
     let notify_log = base.join("notify.ndjson");
     let db = StateDb::open(&base.join("state.db")).unwrap();
     let (id, row) = seed_running(&db, "sess-1");
-    let before = db.list_events(id).unwrap().len();
+    let before = db.list_events(TaskId(id)).unwrap().len();
 
     let mut engine = Engine::new(
         db,
@@ -1055,10 +1056,10 @@ async fn a_heartbeat_leaves_a_running_task_alone() {
 
     engine.on_signal(heartbeat(id, row, "p1")).await.unwrap();
     assert_eq!(
-        engine.db().get_task(id).unwrap().unwrap().state,
+        engine.db().get_task(TaskId(id)).unwrap().unwrap().state,
         TaskState::Running
     );
-    assert_eq!(engine.db().list_events(id).unwrap().len(), before);
+    assert_eq!(engine.db().list_events(TaskId(id)).unwrap().len(), before);
     engine.shutdown(GRACE).await;
     let _ = std::fs::remove_dir_all(&base);
 }
@@ -1090,7 +1091,7 @@ async fn duplicate_signal_transitions_once() {
     // The exact same signal (identical idempotency key) is dropped by the DB.
     engine.on_signal(sig).await.unwrap();
     assert_eq!(
-        engine.db().get_task(id).unwrap().unwrap().state,
+        engine.db().get_task(TaskId(id)).unwrap().unwrap().state,
         TaskState::Verifying,
         "the duplicate does not re-transition"
     );
@@ -1297,7 +1298,7 @@ async fn a_zero_timeout_disables_the_silence_sweep() {
 fn notification(task_id: i64, row: i64, prompt_id: &str) -> AgentSignal {
     AgentSignal {
         source: SignalSource::AgentHook,
-        job_id: JobId::new(task_id, row),
+        job_id: JobId::new(TaskId(task_id), row),
         tool_session_id: "cc-1".into(),
         prompt_id: prompt_id.into(),
         event: SignalEvent::Notification {
@@ -1333,7 +1334,10 @@ async fn a_pending_permission_prompt_pauses_the_silence_sweep() {
     )
     .await;
 
-    engine.on_signal(notification(id, row, "p1")).await.unwrap();
+    engine
+        .on_signal(notification(id.0, row, "p1"))
+        .await
+        .unwrap();
     clock.advance(time::Duration::days(1));
     engine.sweep_signal_timeouts().await.unwrap();
     assert_eq!(
@@ -1343,7 +1347,7 @@ async fn a_pending_permission_prompt_pauses_the_silence_sweep() {
     );
 
     // The human answered and the agent moved on: the sweep is armed again.
-    engine.on_signal(heartbeat(id, row, "p1")).await.unwrap();
+    engine.on_signal(heartbeat(id.0, row, "p1")).await.unwrap();
     clock.advance(time::Duration::seconds(1801));
     engine.sweep_signal_timeouts().await.unwrap();
     assert_eq!(
@@ -1380,9 +1384,15 @@ async fn a_duplicate_permission_prompt_does_not_re_arm_the_pause() {
     )
     .await;
 
-    engine.on_signal(notification(id, row, "p1")).await.unwrap();
-    engine.on_signal(heartbeat(id, row, "p1")).await.unwrap();
-    engine.on_signal(notification(id, row, "p1")).await.unwrap();
+    engine
+        .on_signal(notification(id.0, row, "p1"))
+        .await
+        .unwrap();
+    engine.on_signal(heartbeat(id.0, row, "p1")).await.unwrap();
+    engine
+        .on_signal(notification(id.0, row, "p1"))
+        .await
+        .unwrap();
     clock.advance(time::Duration::seconds(1801));
     engine.sweep_signal_timeouts().await.unwrap();
     assert_eq!(
@@ -1469,14 +1479,14 @@ async fn spool_replay_applies_signal_and_deletes_file() {
     // A spooled NDJSON line exactly as on-stop.sh would emit it.
     let line = format!(
         r#"{{"job_id":"{}","session_id":"cc-1","prompt_id":"sp","hook_event_name":"Stop","status":"COMPLETED","last_assistant_message":"spooled <<STATUS:COMPLETED>>","background_tasks":[]}}"#,
-        JobId::new(id, row)
+        JobId::new(TaskId(id), row)
     );
     let spool_file = spool_dir.join("1700000000-1.jsonl");
     std::fs::write(&spool_file, format!("{line}\n")).unwrap();
 
     engine.replay_spool().await.unwrap();
     assert_eq!(
-        engine.db().get_task(id).unwrap().unwrap().state,
+        engine.db().get_task(TaskId(id)).unwrap().unwrap().state,
         TaskState::Done,
         "the spooled completion is applied"
     );
@@ -1490,7 +1500,7 @@ async fn spool_replay_applies_signal_and_deletes_file() {
     std::fs::write(&spool_file, format!("{line}\n")).unwrap();
     engine.replay_spool().await.unwrap();
     assert_eq!(
-        engine.db().get_task(id).unwrap().unwrap().state,
+        engine.db().get_task(TaskId(id)).unwrap().unwrap().state,
         TaskState::Done
     );
     assert!(!spool_file.exists());
@@ -1527,9 +1537,9 @@ async fn unknown_task_signal_does_not_corrupt_state() {
         ))
         .await
         .unwrap();
-    assert!(engine.db().get_task(999).unwrap().is_none());
+    assert!(engine.db().get_task(TaskId(999)).unwrap().is_none());
     assert_eq!(
-        engine.db().get_task(id).unwrap().unwrap().state,
+        engine.db().get_task(TaskId(id)).unwrap().unwrap().state,
         TaskState::Running,
         "the real task is untouched"
     );
@@ -1545,7 +1555,7 @@ async fn unknown_task_signal_does_not_corrupt_state() {
         .await
         .unwrap();
     assert_eq!(
-        engine.db().get_task(id).unwrap().unwrap().state,
+        engine.db().get_task(TaskId(id)).unwrap().unwrap().state,
         TaskState::Done
     );
 
@@ -1645,7 +1655,7 @@ async fn dispatch_wires_job_id_and_hook_launch_spec() {
     // `run_loop::a_dispatch_carries_the_task_number_even_without_hooks` for
     // the other half of that contract.
     assert_eq!(
-        params["task_number"], task.id,
+        params["task_number"], task.id.0,
         "task_number is the Orchestrator's own task id"
     );
     // #411: the separate `hook` spec is gone; the settings path is baked into
@@ -2654,7 +2664,7 @@ async fn duplicate_heartbeat_refreshes_liveness_and_prevents_false_escalation() 
 
     // The duplicate heartbeat must STILL refresh last_signal_at — to the
     // injected clock's current instant, exactly.
-    engine.on_signal(heartbeat(id, row, "hb")).await.unwrap();
+    engine.on_signal(heartbeat(id.0, row, "hb")).await.unwrap();
     let after = engine.db().get_task(id).unwrap().unwrap();
     assert_eq!(
         after.last_signal_at,
@@ -2796,7 +2806,7 @@ async fn spool_replay_quarantines_file_with_corrupt_line() {
 
     let good = format!(
         r#"{{"job_id":"{}","hook_event_name":"Stop","status":"COMPLETED","last_assistant_message":"ok <<STATUS:COMPLETED>>","background_tasks":[]}}"#,
-        JobId::new(id, row)
+        JobId::new(TaskId(id), row)
     );
     let file = spool_dir.join("1700000000-1.jsonl");
     std::fs::write(&file, format!("{good}\n{{not json\n")).unwrap();
@@ -2805,7 +2815,7 @@ async fn spool_replay_quarantines_file_with_corrupt_line() {
 
     // The good line was applied.
     assert_eq!(
-        engine.db().get_task(id).unwrap().unwrap().state,
+        engine.db().get_task(TaskId(id)).unwrap().unwrap().state,
         TaskState::Done,
         "the clean line is still processed"
     );
@@ -2950,7 +2960,7 @@ fn seed_finished_conversation(db: &StateDb, source_task_id: &str, tool_sid: Opti
         db.apply_event(db.task_ref(id).unwrap(), event, None)
             .unwrap();
     }
-    id
+    id.0
 }
 
 /// The params of the last recorded `task/dispatch` in `dispatch_log`.
@@ -3019,7 +3029,7 @@ async fn a_follow_up_message_reopens_the_conversation_and_resumes_its_session() 
         .find_by_source("mock_src", "1")
         .unwrap()
         .unwrap();
-    assert_eq!(follow.id, conversation);
+    assert_eq!(follow.id, TaskId(conversation));
     let wt = follow.worktree_path.expect("a worktree was recorded");
     assert!(Path::new(&wt).exists(), "the worktree exists on disk");
 
@@ -3077,7 +3087,7 @@ async fn a_reopened_conversation_resumes_its_latest_session() {
     let conversation = seed_finished_conversation(&db, "1", Some("cc-1"));
     // A second run of the same conversation left a newer session behind.
     let newer = db
-        .record_session(conversation, "mock_agent", "sess-2")
+        .record_session(TaskId(conversation), "mock_agent", "sess-2")
         .unwrap();
     db.set_tool_session_id(newer, "cc-2").unwrap();
 
@@ -3183,7 +3193,7 @@ async fn reply_destination_is_task_id_origin_never_the_shared_session_id() {
     // A completion for the follow-up: job_id carries the follow-up's task id.
     engine
         .on_signal(stop(
-            follow,
+            follow.0,
             follow_row,
             "p1",
             StopStatus::Completed,

@@ -8,6 +8,8 @@
 use std::fmt;
 use std::str::FromStr;
 
+use super::task::TaskId;
+
 /// A normalized hook signal from an agent process.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentSignal {
@@ -118,7 +120,7 @@ pub enum StopStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct JobId {
     /// The task's id (`tasks.id`).
-    pub task_id: i64,
+    pub task_id: TaskId,
     /// The dispatch's session row id (`sessions.id`).
     pub session_row: i64,
 }
@@ -133,12 +135,12 @@ impl JobId {
     /// convention held in two string literals is one edit away from becoming
     /// a warning nobody can explain.
     pub const DOCTOR_PROBE: Self = Self {
-        task_id: 0,
+        task_id: TaskId(0),
         session_row: 0,
     };
 
     /// Build a job id for a task's dispatch.
-    pub fn new(task_id: i64, session_row: i64) -> Self {
+    pub fn new(task_id: TaskId, session_row: i64) -> Self {
         Self {
             task_id,
             session_row,
@@ -179,7 +181,7 @@ impl FromStr for JobId {
         {
             return Err(invalid());
         }
-        let task_id = task_id.parse().map_err(|_| invalid())?;
+        let task_id = TaskId(task_id.parse().map_err(|_| invalid())?);
         let session_row = session_row.parse().map_err(|_| invalid())?;
         Ok(Self {
             task_id,
@@ -194,11 +196,11 @@ mod tests {
 
     #[test]
     fn job_id_formats_and_round_trips() {
-        let id = JobId::new(42, 7);
+        let id = JobId::new(TaskId(42), 7);
         assert_eq!(id.to_string(), "job-42-7");
         assert_eq!("job-42-7".parse::<JobId>().unwrap(), id);
         // Large ids survive the round trip too.
-        let big = JobId::new(i64::MAX, 0);
+        let big = JobId::new(TaskId(i64::MAX), 0);
         assert_eq!(big.to_string().parse::<JobId>().unwrap(), big);
     }
 

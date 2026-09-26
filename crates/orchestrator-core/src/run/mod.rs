@@ -54,6 +54,7 @@ use crate::adapters::state_db::{
 use crate::adapters::{EngineSignalSink, hook_uds};
 use crate::config::{DEFAULT_GLOBAL_CONCURRENCY, PluginKind, RootConfig, resolve::ResolveError};
 use crate::domain::CleanupPolicy;
+use crate::domain::TaskId;
 use crate::domain::signal::{AgentSignal, JobId};
 use crate::domain::state::{TaskEvent, TaskState};
 use crate::domain::workflow::Workflow;
@@ -189,7 +190,7 @@ pub(crate) enum PluginEvent {
     /// answer the outcome over `respond` (request-response, unlike a signal).
     Focus {
         /// The task whose pane should come to the foreground.
-        task_id: i64,
+        task_id: TaskId,
         /// Where the adapter awaits the outcome.
         respond: tokio::sync::oneshot::Sender<FocusOutcome>,
     },
@@ -200,7 +201,7 @@ pub(crate) enum PluginEvent {
         /// Cancel or retry.
         op: TaskOp,
         /// The task to act on.
-        task_id: i64,
+        task_id: TaskId,
         /// Where the adapter awaits the outcome.
         respond: tokio::sync::oneshot::Sender<TaskControlOutcome>,
     },
@@ -338,7 +339,7 @@ pub struct Engine<G: GitRunner, L: RepoClassifier + 'static> {
     /// release another task's slot.
     slots: SlotManager,
     /// `(agent plugin, session_id)` → task id, for routing notifications.
-    sessions: HashMap<(String, String), i64>,
+    sessions: HashMap<(String, String), TaskId>,
     /// Availability answers for the external tools a profile needs (#399),
     /// cached so the 200 ms dispatch loop does not re-stat every tick.
     agent_prereqs: crate::agent_prereqs::PrereqCache,
@@ -349,11 +350,11 @@ pub struct Engine<G: GitRunner, L: RepoClassifier + 'static> {
     /// right amount — the situation is still true and the previous message is
     /// gone from the operator's notification centre anyway. Persisting it would
     /// mean a schema change for a message.
-    blocked_on_prereqs: std::collections::HashSet<i64>,
+    blocked_on_prereqs: std::collections::HashSet<TaskId>,
     /// Tasks already reported as waiting for a downed agent plugin (#499), on
     /// the same once-per-task contract as `blocked_on_prereqs`. Cleared when the
     /// task finally gets past the gate, so a second outage is reported again.
-    blocked_on_agent: std::collections::HashSet<i64>,
+    blocked_on_agent: std::collections::HashSet<TaskId>,
     /// The supervisor's memory of each plugin (#495 / #497 / #499): relaunch
     /// attempts, the ones given up on, retired call stats and crash/restart
     /// tallies (#758).
@@ -366,7 +367,7 @@ pub struct Engine<G: GitRunner, L: RepoClassifier + 'static> {
     readme_cache: Option<ReadmeCache>,
     /// Accumulated agent output (streamed `log_chunk`s) per task, used as the
     /// `output = source` publish artifact (F-07).
-    agent_output: HashMap<i64, String>,
+    agent_output: HashMap<TaskId, String>,
     /// Tasks whose latest hook signal was a `Notification` (a permission /
     /// idle prompt): blocked on a human, so the silence sweep skips them until
     /// any other signal arrives.
@@ -374,7 +375,7 @@ pub struct Engine<G: GitRunner, L: RepoClassifier + 'static> {
     /// ponytail: in memory only — a restart forgets it and the task is swept
     /// from `last_signal_at` as before; persist it next to that column if
     /// restarts mid-prompt start escalating real waits.
-    awaiting_approval: HashSet<i64>,
+    awaiting_approval: HashSet<TaskId>,
     /// Session rows whose pane has been released — or is known to be
     /// unreleasable — so a repeated cleanup never re-sends `session/release`
     /// for the same dispatch (#210).
@@ -390,7 +391,7 @@ pub struct Engine<G: GitRunner, L: RepoClassifier + 'static> {
     /// its one deletion attempt this process. Without it, every finished task
     /// in history would be re-checked on every sweep; with it, a branch kept
     /// for unpushed commits is looked at again only by the next process.
-    gone_worktree_branches: HashSet<i64>,
+    gone_worktree_branches: HashSet<TaskId>,
     /// When the last worktree-retention sweep ran (#210); `None` at startup so
     /// the first `cycle()` always sweeps (startup recovery stays immediate).
     last_worktree_sweep: Option<tokio::time::Instant>,
@@ -571,7 +572,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         }
         for outcome in report.needs_confirmation() {
             tracing::warn!(
-                task_id = outcome.task_id,
+                task_id = outcome.task_id.0,
                 "task could not be resumed automatically → {} ({:?})",
                 recovery::NEXT_ACTIONS.join(" / "),
                 outcome.result
@@ -811,7 +812,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// human confirmation, §5.3) can never progress, so it must not wedge the
     /// exit.
     fn settled(&self) -> Result<bool, EngineError> {
-        let monitored: HashSet<i64> = self.sessions.values().copied().collect();
+        let monitored: HashSet<TaskId> = self.sessions.values().copied().collect();
         for task_id in monitored {
             // Not `counts_toward_slot`: a task blocked on a human holds its
             // slot (F-45) but has nothing left to do in this run.
@@ -1686,7 +1687,8 @@ mod tests {
     /// failing it would make an existing config start losing tasks on upgrade.
     #[test]
     fn a_read_only_profile_on_a_branch_is_a_publish_failure() {
-        let check = |profile, branch| read_only_side_effect("wf", profile, branch, 42, "/wt/t42");
+        let check =
+            |profile, branch| read_only_side_effect("wf", profile, branch, TaskId(42), "/wt/t42");
 
         for profile in [Profile::Answer, Profile::Triage, Profile::Design] {
             let reason = check(Some(profile), Some("feat/x"))

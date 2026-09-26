@@ -5,6 +5,7 @@
 //! a detached `HEAD`; naming the branch is the agent's job (ADR-0026).
 
 use super::*;
+use crate::domain::TaskId;
 use crate::domain::event_detail::{Dispatch, EventDetail, Reopen};
 
 impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
@@ -24,12 +25,12 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         let decision = self.decide_repo(&task).await;
         match decision {
             RepoDecision::Selected { repo, reason } => {
-                tracing::info!(task_id = record.id, repo = %repo, "repository selected: {reason}");
+                tracing::info!(task_id = record.id.0, repo = %repo, "repository selected: {reason}");
                 self.db.set_repo(record.id, &repo)?;
             }
             RepoDecision::Pending { reason } => {
                 tracing::warn!(
-                    task_id = record.id,
+                    task_id = record.id.0,
                     "repository pending confirmation: {reason}"
                 );
                 self.db.apply_event(
@@ -47,7 +48,10 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                 );
             }
             RepoDecision::Failed { reason } => {
-                tracing::error!(task_id = record.id, "repository selection failed: {reason}");
+                tracing::error!(
+                    task_id = record.id.0,
+                    "repository selection failed: {reason}"
+                );
                 self.db.apply_event(
                     record.task_ref(),
                     TaskEvent::Fail,
@@ -125,20 +129,20 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             "missing": names,
         });
         if let Err(e) = self.db.note_task(record.id, &note) {
-            tracing::warn!(task_id = record.id, error = %e, "could not record the wait reason");
+            tracing::warn!(task_id = record.id.0, error = %e, "could not record the wait reason");
         }
         // The set gates the *notification* only (#399): interrupting someone
         // every 200 ms is spam, whereas re-recording the same note is a no-op.
         if !self.blocked_on_prereqs.insert(record.id) {
             tracing::debug!(
-                task_id = record.id,
+                task_id = record.id.0,
                 missing = ?names,
                 "still waiting on an unavailable agent tool"
             );
             return;
         }
         let reason = format!("waiting: {}", crate::agent_prereqs::blocked_reason(&names));
-        tracing::warn!(task_id = record.id, missing = ?names, "{reason}");
+        tracing::warn!(task_id = record.id.0, missing = ?names, "{reason}");
         notify_all(
             &self.plugins.notifiers,
             NotifierEvent::Pending,
@@ -166,7 +170,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         // source, or one whose workflow was removed from config, never reaches
         // the loop below to clean up after itself, and a `--watch` process
         // runs for weeks.
-        let still_queued: std::collections::HashSet<i64> = queued.iter().map(|r| r.id).collect();
+        let still_queued: std::collections::HashSet<TaskId> = queued.iter().map(|r| r.id).collect();
         self.blocked_on_agent.retain(|id| still_queued.contains(id));
         let mut ready = Vec::new();
         for record in &queued {
@@ -175,7 +179,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             };
             let Some((agent, profile)) = wf_info.get(record.workflow.as_str()).cloned() else {
                 tracing::warn!(
-                    task_id = record.id,
+                    task_id = record.id.0,
                     workflow = %record.workflow,
                     "workflow no longer configured; task stays queued → restore the workflow or cancel the task"
                 );
@@ -227,7 +231,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                 // sends when the restart budget runs out.
                 if self.blocked_on_agent.insert(record.id) {
                     tracing::warn!(
-                        task_id = record.id,
+                        task_id = record.id.0,
                         agent = %agent,
                         "agent plugin is down; leaving the task queued until it is back"
                     );
@@ -577,7 +581,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         );
         self.stats.dispatched += 1;
         tracing::info!(
-            task_id = record.id,
+            task_id = record.id.0,
             agent = %agent_name,
             session_id = %dispatched.session_id,
             worktree = %worktree_path.display(),
@@ -620,12 +624,12 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// fault would express itself as tasks quietly not moving, with nothing
     /// anywhere saying why. That is the failure shape this whole area exists
     /// to remove.
-    fn spent_retries(&self, task_id: i64) -> u32 {
+    fn spent_retries(&self, task_id: TaskId) -> u32 {
         match self.db.auto_retry_streak(task_id) {
             Ok(n) => n,
             Err(e) => {
                 tracing::warn!(
-                    task_id,
+                    task_id = task_id.0,
                     "could not read the retry streak: {e} → treating it as 0, so this task \
                      may wait for its agent instead of exhausting its budget"
                 );
@@ -652,7 +656,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// [`dispatch_task`], [`pane_refusal`], [`route_extra_context`],
     /// [`dispatch_params`] and [`unresumable`]. What remains here is the order
     /// the side effects have to happen in.
-    async fn dispatch_one(&mut self, task_id: i64) -> Result<(), EngineError> {
+    async fn dispatch_one(&mut self, task_id: TaskId) -> Result<(), EngineError> {
         let record = self
             .db
             .get_task(task_id)?
@@ -691,7 +695,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                         .map(|w| w.agent.clone())
                         .unwrap_or_default();
                     tracing::warn!(
-                        task_id,
+                        task_id = task_id.0,
                         agent = %agent,
                         "agent plugin is down; leaving the task queued until it is back"
                     );
@@ -804,11 +808,11 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             // is the ordinary case where the sweep already closed the pane.
             match outcome {
                 PaneRelease::Closed => tracing::info!(
-                    task_id = record.id,
+                    task_id = record.id.0,
                     "closed the previous dispatch's pane before re-dispatching"
                 ),
                 PaneRelease::Failed => tracing::warn!(
-                    task_id = record.id,
+                    task_id = record.id.0,
                     "could not confirm the previous dispatch's pane is closed; if the agent \
                      plugin now refuses this dispatch because the session already exists, \
                      that pane is why"
@@ -895,7 +899,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             && let Some(message) = unresumable(&attempt)
         {
             tracing::warn!(
-                task_id = record.id,
+                task_id = record.id.0,
                 tool_session_id = %sid,
                 "session could not be resumed ({message}); dispatching fresh — \
                  the agent starts without the earlier conversation"
@@ -914,7 +918,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                     && let Err(err) = self.db.delete_session(row)
                 {
                     tracing::warn!(
-                        task_id = record.id,
+                        task_id = record.id.0,
                         "failed to roll back reserved session row: {err}"
                     );
                 }
@@ -978,7 +982,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                 continue;
             }
             tracing::info!(
-                task_id,
+                task_id = task_id.0,
                 "conversation requeued: messages arrived while it was working"
             );
         }
@@ -1031,7 +1035,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             None => {
                 self.release_slot(record.id);
                 tracing::warn!(
-                    task_id = record.id,
+                    task_id = record.id.0,
                     source = %record.source,
                     "cannot claim: source plugin not running; task stays queued"
                 );
@@ -1057,7 +1061,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                 )?;
                 self.stats.skipped += 1;
                 tracing::info!(
-                    task_id = record.id,
+                    task_id = record.id.0,
                     holder = holder.as_deref().unwrap_or("unknown"),
                     "claimed by another member; skipping"
                 );
@@ -1088,7 +1092,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             Err(e) => {
                 self.release_slot(record.id);
                 tracing::warn!(
-                    task_id = record.id,
+                    task_id = record.id.0,
                     "task/claim failed (will retry next cycle): {e}"
                 );
                 Ok(false)
@@ -1097,7 +1101,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     }
 
     /// Release the slot a task holds, if it holds one (per-task ledger).
-    pub(super) fn release_slot(&mut self, task_id: i64) {
+    pub(super) fn release_slot(&mut self, task_id: TaskId) {
         self.slots.release(task_id);
     }
 
@@ -1124,14 +1128,14 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
 
     /// Drop a finished task's session routes so long-running `--watch` does
     /// not accumulate stale `(plugin, session_id)` entries.
-    pub(super) fn drop_task_sessions(&mut self, task_id: i64) {
+    pub(super) fn drop_task_sessions(&mut self, task_id: TaskId) {
         self.sessions.retain(|_, &mut id| id != task_id);
     }
 
     /// Forget everything this run holds in memory for a task: its slot,
     /// session routes, output buffer and the "already told" memos. What the
     /// DB says about the task is left as it is.
-    pub(super) fn forget_task(&mut self, task_id: i64) {
+    pub(super) fn forget_task(&mut self, task_id: TaskId) {
         self.release_slot(task_id);
         self.drop_task_sessions(task_id);
         self.agent_output.remove(&task_id);
@@ -1163,13 +1167,13 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// - Anything else is a state DB failure and stays fatal.
     pub(super) fn isolate_task(
         &mut self,
-        task_id: i64,
+        task_id: TaskId,
         result: Result<(), EngineError>,
     ) -> Result<(), EngineError> {
         match result {
             Err(EngineError::Conflict(c)) => {
                 tracing::warn!(
-                    task_id,
+                    task_id = task_id.0,
                     expected = c.expected,
                     actual = c.actual,
                     state = %c.actual_state,
@@ -1181,7 +1185,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             }
             Err(EngineError::Db(StateError::Transition(e))) if !cfg!(debug_assertions) => {
                 tracing::error!(
-                    task_id,
+                    task_id = task_id.0,
                     from = %e.from,
                     event = ?e.event,
                     "illegal state transition in the engine (a bug) → isolated to this task; please report it"
@@ -1204,7 +1208,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         task: TaskRef,
         reason: String,
     ) -> Result<(), EngineError> {
-        tracing::error!(task_id = record.id, "dispatch failed: {reason}");
+        tracing::error!(task_id = record.id.0, "dispatch failed: {reason}");
         self.release_slot(record.id);
         self.agent_output.remove(&record.id);
         // Recorded before deciding whether to retry, so the reason for *every*
@@ -1247,7 +1251,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                         // failure that repairs itself is the noise this
                         // feature exists to remove.
                         tracing::warn!(
-                            task_id = record.id,
+                            task_id = record.id.0,
                             attempt,
                             limit = DISPATCH_RETRY_LIMIT,
                             "dispatch failed; requeued automatically"
@@ -1261,18 +1265,18 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                     // DB refuses, fall through and fail the task as before
                     // rather than leaving it in `Failed` with nobody told.
                     Err(e) => tracing::warn!(
-                        task_id = record.id,
+                        task_id = record.id.0,
                         "could not requeue a failed dispatch: {e}"
                     ),
                 }
             }
             Ok(_) => tracing::warn!(
-                task_id = record.id,
+                task_id = record.id.0,
                 limit = DISPATCH_RETRY_LIMIT,
                 "dispatch failed and the automatic retries are spent"
             ),
             Err(e) => tracing::warn!(
-                task_id = record.id,
+                task_id = record.id.0,
                 "could not count previous automatic retries: {e}"
             ),
         }
@@ -1639,7 +1643,7 @@ struct DispatchInputs<'a> {
     extra_context: Option<Value>,
     initial_prompt: Option<&'a str>,
     job_id: Option<&'a str>,
-    task_number: i64,
+    task_number: TaskId,
     tool_profile: &'a ToolProfile,
     profile: Option<Profile>,
     /// The core-internal `(settings_path, env)` of a hook-wired dispatch.
@@ -1680,7 +1684,7 @@ fn dispatch_params(inp: &DispatchInputs<'_>, resume: Option<String>) -> TaskDisp
         // ADR-0082) never receives one, and the plugin still has to name what
         // it creates after *something* an operator can carry back to
         // `totsuka status`.
-        task_number: Some(inp.task_number),
+        task_number: Some(inp.task_number.0),
         tool_launch: inp.tool_profile.launch_spec(&LaunchInputs {
             plan: inp.mode == plugin_protocol::methods::ExecutionMode::Plan,
             profile: inp.profile,
@@ -1798,7 +1802,7 @@ mod tests {
 
     fn record(workflow: &str, repo: Option<&str>) -> TaskRecord {
         TaskRecord {
-            id: 1,
+            id: TaskId(1),
             source: "github".to_string(),
             source_task_id: "1".to_string(),
             workflow: workflow.to_string(),
@@ -2106,9 +2110,9 @@ mod tests {
     #[tokio::test]
     async fn the_bulkhead_contains_only_what_belongs_to_one_task() {
         let mut engine = crate::run::test_engine(std::time::Duration::from_secs(3600)).await;
-        assert!(engine.slots.acquire(7, "web", "mock"));
+        assert!(engine.slots.acquire(TaskId(7), "web", "mock"));
         let conflict = TransitionConflict {
-            id: 7,
+            id: TaskId(7),
             expected: 1,
             actual: 2,
             actual_state: TaskState::Cancelled,
@@ -2116,17 +2120,18 @@ mod tests {
         };
 
         engine
-            .isolate_task(7, Err(EngineError::Conflict(conflict)))
+            .isolate_task(TaskId(7), Err(EngineError::Conflict(conflict)))
             .expect("a conflict is the task's, not the run's");
-        assert!(!engine.slots.holds(7), "the slot came back");
-        assert!(engine.slots.acquire(8, "web", "mock"));
+        assert!(!engine.slots.holds(TaskId(7)), "the slot came back");
+        assert!(engine.slots.acquire(TaskId(8), "web", "mock"));
 
-        let db_failure = engine.isolate_task(7, Err(StateError::NotFound(7).into()));
+        let db_failure =
+            engine.isolate_task(TaskId(7), Err(StateError::NotFound(TaskId(7)).into()));
         assert!(matches!(db_failure, Err(EngineError::Db(_))));
 
         let bug =
             crate::domain::state::transition(TaskState::Cancelled, TaskEvent::Fail).unwrap_err();
-        let isolated = engine.isolate_task(7, Err(StateError::Transition(bug).into()));
+        let isolated = engine.isolate_task(TaskId(7), Err(StateError::Transition(bug).into()));
         assert_eq!(isolated.is_err(), cfg!(debug_assertions), "{isolated:?}");
     }
 
@@ -2135,7 +2140,7 @@ mod tests {
     fn session(plugin: &str, tool_session_id: Option<&str>) -> crate::adapters::SessionRecord {
         crate::adapters::SessionRecord {
             id: 1,
-            task_id: 1,
+            task_id: TaskId(1),
             plugin: plugin.to_string(),
             session_id: "s-1".to_string(),
             created_at: String::new(),
@@ -2146,7 +2151,7 @@ mod tests {
     fn message(body: &str) -> TaskMessage {
         TaskMessage {
             id: 1,
-            task_id: 1,
+            task_id: TaskId(1),
             message_key: "m".to_string(),
             author: None,
             body: body.to_string(),
@@ -2279,7 +2284,7 @@ mod tests {
             extra_context: None,
             initial_prompt: Some("read the README first"),
             job_id: Some("job-1"),
-            task_number: 7,
+            task_number: TaskId(7),
             tool_profile: &tool,
             profile: None,
             hook_spec: None,

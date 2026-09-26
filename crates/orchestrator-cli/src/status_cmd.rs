@@ -5,6 +5,7 @@
 
 use orchestrator_core::adapters::state_db::TaskNote;
 use orchestrator_core::agent_prereqs;
+use orchestrator_core::domain::TaskId;
 use orchestrator_core::domain::state::TaskState;
 use serde::Serialize;
 
@@ -16,7 +17,7 @@ use crate::common::{
 /// One task row of the status report.
 #[derive(Debug, Serialize)]
 struct TaskRow {
-    id: i64,
+    id: TaskId,
     state: String,
     workflow: String,
     repo: Option<String>,

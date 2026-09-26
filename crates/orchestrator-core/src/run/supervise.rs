@@ -46,6 +46,7 @@ use super::{
 };
 use crate::adapters::plugin_host::{CallStats, HostError, Liveness, Plugin};
 use crate::domain::EventDetail;
+use crate::domain::TaskId;
 use crate::ports::git::GitRunner;
 use crate::ports::llm::RepoClassifier;
 use plugin_protocol::manifest::PluginKind as ManifestKind;
@@ -316,7 +317,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
 
     /// Fail every in-flight task an exited agent plugin was running.
     async fn fail_sessions_of(&mut self, plugin: &str) -> Result<(), EngineError> {
-        let affected: Vec<i64> = self
+        let affected: Vec<TaskId> = self
             .sessions
             .iter()
             .filter(|((p, _), _)| p == plugin)
