@@ -2733,6 +2733,7 @@ mod tests {
     use orchestrator_core::domain::SourceTaskId;
     use orchestrator_core::domain::Task;
     use orchestrator_core::domain::TaskId;
+    use orchestrator_core::domain::WorkflowMode;
     use orchestrator_core::domain::state::TaskState;
     use orchestrator_core::ports::clock::parse_rfc3339;
     use plugin_protocol::methods::SessionInfo;
@@ -3056,7 +3057,7 @@ location = "${MY_ROOT}/wt/{worktree_name}"
             source: "slack".into(),
             source_task_id: SourceTaskId(source_task_id.into()),
             workflow: "reply".into(),
-            mode: "implement".into(),
+            mode: WorkflowMode::Implement,
             repo: Some("web".into()),
             worktree_path: worktree_path.map(str::to_string),
             branch: None,

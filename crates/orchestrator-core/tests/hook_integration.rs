@@ -21,6 +21,7 @@ use orchestrator_core::config::RootConfig;
 use orchestrator_core::domain::CleanupPolicy;
 use orchestrator_core::domain::SourceTaskId;
 use orchestrator_core::domain::TaskId;
+use orchestrator_core::domain::WorkflowMode;
 use orchestrator_core::domain::signal::{
     AgentSignal, JobId, SignalEvent, SignalSource, StopStatus,
 };
@@ -199,7 +200,7 @@ fn new_task(source_task_id: &str, last_signal_at: Option<&str>) -> NewTask {
         source: "mock_src".into(),
         source_task_id: SourceTaskId(source_task_id.into()),
         workflow: "wf".into(),
-        mode: "implement".into(),
+        mode: WorkflowMode::Implement,
         repo: Some("clone".into()),
         priority: 0,
         title: "hook task".into(),

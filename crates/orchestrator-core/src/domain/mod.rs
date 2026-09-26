@@ -11,6 +11,6 @@ pub use signal::{AgentSignal, InvalidJobId, JobId, SignalEvent, SignalSource, St
 pub use state::{InvalidTransition, TaskEvent, TaskState, UnknownState, transition};
 pub use task::{SourceTaskId, Task, TaskId};
 pub use workflow::{
-    CleanupPolicy, OutcomeAction, OutputPolicy, Profile, Severity, Trigger, VerificationMode,
-    Workflow, WorkflowIssue, WorkflowMode, validate_workflows,
+    CleanupPolicy, OutcomeAction, OutputPolicy, Profile, Severity, Trigger, UnknownMode,
+    VerificationMode, Workflow, WorkflowIssue, WorkflowMode, validate_workflows,
 };

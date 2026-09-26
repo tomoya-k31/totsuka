@@ -27,6 +27,7 @@
 //! to be a word in this module's vocabulary.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::str::FromStr;
 
 use plugin_protocol::manifest::OutputCapability;
 
@@ -43,11 +44,29 @@ pub enum WorkflowMode {
 }
 
 impl WorkflowMode {
-    /// The stable snake_case config string for this mode.
+    /// The stable snake_case string for this mode — the config spelling and
+    /// what `tasks.mode` stores.
     pub fn as_str(self) -> &'static str {
         match self {
             WorkflowMode::Plan => "plan",
             WorkflowMode::Implement => "implement",
+        }
+    }
+}
+
+/// Error returned when parsing an unknown mode string from the DB (#765).
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[error("unknown workflow mode: {0:?}")]
+pub struct UnknownMode(pub String);
+
+impl FromStr for WorkflowMode {
+    type Err = UnknownMode;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "plan" => Ok(WorkflowMode::Plan),
+            "implement" => Ok(WorkflowMode::Implement),
+            other => Err(UnknownMode(other.to_string())),
         }
     }
 }

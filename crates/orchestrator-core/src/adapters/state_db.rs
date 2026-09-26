@@ -34,6 +34,7 @@ use crate::adapters::clock::SystemClock;
 use crate::domain::EventDetail;
 use crate::domain::state::{InvalidTransition, TaskEvent, TaskState, UnknownState, transition};
 use crate::domain::task::{SourceTaskId, Task, TaskId};
+use crate::domain::workflow::WorkflowMode;
 use crate::ports::clock::{Clock, format_rfc3339, parse_rfc3339};
 
 /// Ordered, immutable schema migrations. Index + 1 is the version number.
@@ -425,8 +426,8 @@ pub struct NewTask {
     pub source_task_id: SourceTaskId,
     /// Matched workflow name.
     pub workflow: String,
-    /// Execution mode copied from the workflow (`plan`/`implement`).
-    pub mode: String,
+    /// Execution mode copied from the workflow.
+    pub mode: WorkflowMode,
     /// Selected repository name (NULL while pending selection).
     pub repo: Option<String>,
     /// Priority; higher runs first.
@@ -1033,7 +1034,7 @@ impl StateDb {
                 task.source,
                 task.source_task_id,
                 task.workflow,
-                task.mode,
+                task.mode.as_str(),
                 task.repo,
                 TaskState::Queued.as_str(),
                 task.priority,
@@ -1717,7 +1718,7 @@ impl StateDb {
         &self,
         msg: &TaskMessageInsert,
         new_workflow: &str,
-        new_mode: &str,
+        new_mode: WorkflowMode,
         new_source_payload: Option<&serde_json::Value>,
         detail: Option<EventDetail>,
     ) -> Result<HandoffOutcome, StateError> {
@@ -1756,7 +1757,7 @@ impl StateDb {
         tx.execute(
             "UPDATE tasks SET workflow = ?2, mode = ?3, source_payload = ?4, updated_at = ?5 \
              WHERE id = ?1",
-            params![msg.task_id, new_workflow, new_mode, payload, now],
+            params![msg.task_id, new_workflow, new_mode.as_str(), payload, now],
         )?;
         tx.commit()?;
         Ok(HandoffOutcome::HandedOff)
@@ -2053,6 +2054,10 @@ fn row_to_task(row: &Row<'_>) -> rusqlite::Result<Task> {
     let state = state_str
         .parse::<TaskState>()
         .map_err(|e| conversion_error(Box::new(e)))?;
+    let mode_str: String = row.get("mode")?;
+    let mode = mode_str
+        .parse::<WorkflowMode>()
+        .map_err(|e| conversion_error(Box::new(e)))?;
     let payload: Option<String> = row.get("source_payload")?;
     let source_payload = payload
         .map(|s| serde_json::from_str(&s))
@@ -2064,7 +2069,7 @@ fn row_to_task(row: &Row<'_>) -> rusqlite::Result<Task> {
         source: row.get("source")?,
         source_task_id: row.get("source_task_id")?,
         workflow: row.get("workflow")?,
-        mode: row.get("mode")?,
+        mode,
         repo: row.get("repo")?,
         worktree_path: row.get("worktree_path")?,
         branch: row.get("branch")?,
@@ -2359,7 +2364,7 @@ mod tests {
             source: "github".to_string(),
             source_task_id: SourceTaskId("42".to_string()),
             workflow: "implement".to_string(),
-            mode: "implement".to_string(),
+            mode: WorkflowMode::Implement,
             repo: None,
             priority: 0,
             title: "Fix the bug".to_string(),
@@ -3189,6 +3194,29 @@ mod tests {
             .expect("the source is a BadTimestamp");
         assert_eq!(bad.column, "last_signal_at");
         assert_eq!(bad.value, "yesterday");
+    }
+
+    #[test]
+    fn an_unknown_task_mode_is_an_error_not_implement() {
+        // #765: `mode` used to be read as a string and anything but "plan"
+        // ran as implement. Now the row fails to read, like an unknown state:
+        // a row nobody can vouch for must not start pushing branches.
+        let db = StateDb::open_in_memory().unwrap();
+        let id = db.upsert_task(&sample_task()).unwrap();
+        db.conn
+            .execute(
+                "UPDATE tasks SET mode = 'design' WHERE id = ?1",
+                params![id],
+            )
+            .unwrap();
+        let err = db.get_task(id).unwrap_err();
+        let StateError::Db(rusqlite::Error::FromSqlConversionFailure(_, _, source)) = &err else {
+            panic!("expected a conversion failure, got {err:?}");
+        };
+        assert_eq!(
+            source.downcast_ref::<crate::domain::UnknownMode>(),
+            Some(&crate::domain::UnknownMode("design".to_string()))
+        );
     }
 
     #[test]

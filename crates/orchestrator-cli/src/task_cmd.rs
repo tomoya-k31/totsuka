@@ -232,7 +232,7 @@ fn show(cx: &Cx, id: TaskId, json: bool) -> Result<(), CliError> {
         source: task.source,
         source_task_id: task.source_task_id.0,
         workflow: task.workflow,
-        mode: task.mode,
+        mode: task.mode.as_str().to_string(),
         state: task.state.to_string(),
         repo: task.repo,
         priority: task.priority,

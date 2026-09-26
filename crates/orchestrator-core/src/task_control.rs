@@ -110,6 +110,7 @@ mod tests {
     use super::*;
     use crate::adapters::state_db::NewTask;
     use crate::domain::SourceTaskId;
+    use crate::domain::WorkflowMode;
 
     fn db_with_task() -> (StateDb, i64) {
         let db = StateDb::open_in_memory().unwrap();
@@ -118,7 +119,7 @@ mod tests {
                 source: "github".to_string(),
                 source_task_id: SourceTaskId("42".to_string()),
                 workflow: "implement".to_string(),
-                mode: "implement".to_string(),
+                mode: WorkflowMode::Implement,
                 repo: Some("web".to_string()),
                 priority: 0,
                 title: "Fix the bug".to_string(),

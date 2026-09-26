@@ -4,7 +4,7 @@ title: 状態DB（SQLite state.db）スキーマ
 description: タスク実行状態を永続化する SQLite DB（$XDG_STATE_HOME/totsuka/state.db）の tasks/sessions/events/hook_events/task_messages/schema_migrations スキーマと設計判断。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/adapters/state_db.rs
 tags: [sqlite, state, schema, statemachine, hooks]
-generated: { by: claude-code/opus-5.5, at: 2026-09-27T01:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-09-27T02:00:00+09:00 }
 verified:
   - { by: claude-code/opus-5, at: 2026-08-19T02:36:00Z }
 status: stable
@@ -109,7 +109,7 @@ erDiagram
 | source | TEXT | プラグイン名（"github" 等） |
 | source_task_id | TEXT | Issue番号 / NotionページID |
 | workflow | TEXT | マッチしたワークフロー名 |
-| mode | TEXT | plan / implement |
+| mode | TEXT | plan / implement。Rust 側は `WorkflowMode`（#765）。それ以外の値は未知の `state` と同じく行の読み出しエラー（`UnknownMode`）で、以前のように implement として読み替えない |
 | repo | TEXT NULL | 選択済みリポジトリ名（pending 中 NULL） |
 | worktree_path | TEXT NULL | #53 が設定 |
 | branch | TEXT NULL | #53 が設定。worktree がブランチに載っていなければ NULL のまま |

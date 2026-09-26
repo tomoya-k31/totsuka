@@ -180,7 +180,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             return Ok(());
         }
         tracing::info!(task_id = task_id.0, branch = %head, "recorded the agent's branch");
-        if let Some(warning) = plan_mode_side_effect(&record.mode, &head) {
+        if let Some(warning) = plan_mode_side_effect(record.mode, &head) {
             tracing::warn!(task_id = task_id.0, branch = %head, "{warning}");
         }
         self.db.set_branch(task_id, &head)?;

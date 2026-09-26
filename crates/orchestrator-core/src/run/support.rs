@@ -67,11 +67,11 @@ pub(super) fn read_only_side_effect(
 /// claiming a branch the worktree is not on.
 pub(super) fn branch_instruction(
     prompts: &crate::prompts::Prompts,
-    mode: &str,
+    mode: WorkflowMode,
     on_a_branch: bool,
     branch_hint: Option<&str>,
 ) -> Option<String> {
-    match (branch_hint, mode == "plan", on_a_branch) {
+    match (branch_hint, mode == WorkflowMode::Plan, on_a_branch) {
         (Some(branch), true, _) => Some(prompts.hinted_branch_detached(branch)),
         (Some(branch), false, true) => Some(prompts.hinted_branch_on(branch)),
         (_, false, false) => Some(prompts.branch_convention().to_string()),
@@ -84,14 +84,6 @@ pub(super) fn policy_str(policy: OutputPolicy) -> &'static str {
     match policy {
         OutputPolicy::Source => "source",
         OutputPolicy::None => "none",
-    }
-}
-
-/// The stable mode string persisted in `tasks.mode`.
-pub(super) fn mode_str(mode: WorkflowMode) -> &'static str {
-    match mode {
-        WorkflowMode::Plan => "plan",
-        WorkflowMode::Implement => "implement",
     }
 }
 
@@ -131,8 +123,8 @@ pub(super) fn mode_str(mode: WorkflowMode) -> &'static str {
 /// created one. `HEAD` cannot tell the two apart — `git switch -c feat/x` and
 /// `git switch main` both land here — and during incident response a wrong
 /// claim about what happened costs more than a vague one.
-pub(super) fn plan_mode_side_effect(mode: &str, branch: &str) -> Option<String> {
-    (mode == "plan").then(|| {
+pub(super) fn plan_mode_side_effect(mode: WorkflowMode, branch: &str) -> Option<String> {
+    (mode == WorkflowMode::Plan).then(|| {
         format!(
             concat!(
                 "a plan-mode task's worktree is on the branch `{}` — normally the agent ",
@@ -151,12 +143,11 @@ pub(super) fn plan_mode_side_effect(mode: &str, branch: &str) -> Option<String> 
     })
 }
 
-/// Parse a persisted mode string into the dispatch execution mode (F-31).
-pub(super) fn execution_mode(mode: &str) -> ExecutionMode {
-    if mode == "plan" {
-        ExecutionMode::Plan
-    } else {
-        ExecutionMode::Implement
+/// The dispatch execution mode for a task's mode (F-31).
+pub(super) fn execution_mode(mode: WorkflowMode) -> ExecutionMode {
+    match mode {
+        WorkflowMode::Plan => ExecutionMode::Plan,
+        WorkflowMode::Implement => ExecutionMode::Implement,
     }
 }
 
@@ -284,32 +275,35 @@ mod tests {
 
         // No hint: exactly what was sent before the field existed.
         assert_eq!(
-            pick("implement", false, None).as_deref(),
+            pick(WorkflowMode::Implement, false, None).as_deref(),
             Some(prompts.branch_convention())
         );
-        assert_eq!(pick("implement", true, None), None);
-        assert_eq!(pick("plan", false, None), None);
-        assert_eq!(pick("plan", true, None), None);
+        assert_eq!(pick(WorkflowMode::Implement, true, None), None);
+        assert_eq!(pick(WorkflowMode::Plan, false, None), None);
+        assert_eq!(pick(WorkflowMode::Plan, true, None), None);
 
-        let on = pick("implement", true, Some("renovate/x")).unwrap();
+        let on = pick(WorkflowMode::Implement, true, Some("renovate/x")).unwrap();
         assert!(
             on.contains("`renovate/x`") && on.contains("EXISTING"),
             "{on}"
         );
         assert!(!on.contains("git switch -c"), "{on}");
 
-        let detached = pick("plan", false, Some("renovate/x")).unwrap();
+        let detached = pick(WorkflowMode::Plan, false, Some("renovate/x")).unwrap();
         assert!(
             detached.contains("`renovate/x`") && detached.contains("DETACHED"),
             "{detached}"
         );
         // Plan is detached whatever HEAD claims; the text must not change.
-        assert_eq!(pick("plan", true, Some("renovate/x")).unwrap(), detached);
+        assert_eq!(
+            pick(WorkflowMode::Plan, true, Some("renovate/x")).unwrap(),
+            detached
+        );
 
         // Unreachable through `acquire_worktree`, and deliberately not a lie:
         // the worktree is not on the hinted branch, so it is not told it is.
         assert_eq!(
-            pick("implement", false, Some("renovate/x")).as_deref(),
+            pick(WorkflowMode::Implement, false, Some("renovate/x")).as_deref(),
             Some(prompts.branch_convention())
         );
     }
@@ -380,7 +374,7 @@ mod tests {
                 source: "github".into(),
                 source_task_id: SourceTaskId(task.id.clone()),
                 workflow: "implement".into(),
-                mode: "implement".into(),
+                mode: WorkflowMode::Implement,
                 repo: None,
                 priority: task.priority,
                 title: task.title.clone(),
@@ -439,12 +433,17 @@ mod tests {
 
     #[test]
     fn mode_strings_round_trip() {
-        assert_eq!(mode_str(WorkflowMode::Plan), "plan");
-        assert_eq!(execution_mode("plan"), ExecutionMode::Plan);
-        assert_eq!(execution_mode("implement"), ExecutionMode::Implement);
-        // Unknown persisted values fall back to implement (never plan: plan is
-        // the restrictive read-oriented mode only when explicitly chosen).
-        assert_eq!(execution_mode("bogus"), ExecutionMode::Implement);
+        for mode in [WorkflowMode::Plan, WorkflowMode::Implement] {
+            assert_eq!(mode.as_str().parse::<WorkflowMode>(), Ok(mode));
+        }
+        assert_eq!(execution_mode(WorkflowMode::Plan), ExecutionMode::Plan);
+        assert_eq!(
+            execution_mode(WorkflowMode::Implement),
+            ExecutionMode::Implement
+        );
+        // An unknown persisted value is no longer read as implement: reading
+        // the row fails, like an unknown state (#765).
+        assert!("bogus".parse::<WorkflowMode>().is_err());
     }
 
     /// `tasks.mode` is what routes worktree cleanup (`cleanup_plan` vs
@@ -492,7 +491,7 @@ agent = "herdr"
         .unwrap();
         let workflows = cfg.domain_workflows();
         for (wf, expected) in workflows.iter().zip(["plan", "plan", "plan", "implement"]) {
-            assert_eq!(mode_str(wf.mode), expected, "{}", wf.name);
+            assert_eq!(wf.mode.as_str(), expected, "{}", wf.name);
         }
     }
 
@@ -502,8 +501,8 @@ agent = "herdr"
     /// told it to (#378). Detection is what keeps that from being silent.
     #[test]
     fn a_plan_task_that_branched_is_reported() {
-        let warning =
-            plan_mode_side_effect("plan", "feat/count-by-hour").expect("a plan-mode branch warns");
+        let warning = plan_mode_side_effect(WorkflowMode::Plan, "feat/count-by-hour")
+            .expect("a plan-mode branch warns");
         // Not "created": `HEAD` cannot tell a new branch from an existing one
         // being checked out, and overclaiming misleads incident response.
         assert!(!warning.contains("created"), "{warning}");
@@ -519,6 +518,6 @@ agent = "herdr"
     /// ADR-0026), so warning there would train operators to ignore this.
     #[test]
     fn an_implement_task_that_branched_is_not_reported() {
-        assert!(plan_mode_side_effect("implement", "feat/add-slugify").is_none());
+        assert!(plan_mode_side_effect(WorkflowMode::Implement, "feat/add-slugify").is_none());
     }
 }
