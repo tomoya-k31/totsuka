@@ -1327,6 +1327,38 @@ impl<G: GitRunner> WorktreeManager<G> {
         Ok(CleanupOutcome::Removed)
     }
 
+    /// The branch half of [`remove`](Self::remove), for a worktree someone
+    /// else already removed — by hand, or an earlier run. Same guards as
+    /// `remove`'s: the branch goes only if it is this task's and fully on
+    /// `origin`.
+    ///
+    /// Prunes first: an `rm -rf` leaves the registration in `.git/worktrees`,
+    /// and `git branch -D` refuses a branch a registered worktree has checked
+    /// out even when its directory is gone. `prune` touches only registrations
+    /// whose directory is missing (the same call `create` recovers with).
+    pub fn delete_branch_of_gone_worktree(
+        &self,
+        repo_path: &Path,
+        branch: &str,
+        base_commit: Option<&str>,
+    ) -> Result<(), WorktreeError> {
+        // The common case — `remove` already took it — costs one `show-ref`,
+        // and skips a repo-wide prune and a misleading "branch kept" line.
+        if !self.ref_exists(repo_path, &format!("refs/heads/{branch}"))? {
+            return Ok(());
+        }
+        let prune = self.run_with_transient_retry(repo_path, &["worktree", "prune"])?;
+        if !prune.success() {
+            // Not fatal: `branch -D` below then refuses and says why.
+            tracing::warn!(
+                repo = %repo_path.display(),
+                stderr = %prune.stderr,
+                "`git worktree prune` failed before deleting a removed worktree's branch"
+            );
+        }
+        self.delete_branch_if_published(repo_path, branch, base_commit)
+    }
+
     /// Delete the task's branch, but only once every commit on it also exists
     /// on `origin` — best-effort, and never at the cost of unpushed work.
     ///
@@ -1362,6 +1394,12 @@ impl<G: GitRunner> WorktreeManager<G> {
         branch: &str,
         base_commit: Option<&str>,
     ) -> Result<(), WorktreeError> {
+        // Both tests below pass for the default branch itself, which a row
+        // written before #694 can carry as the task's branch.
+        if branch == self.detect_default_branch(repo_path)? {
+            tracing::info!(branch, "branch kept: it is the default branch");
+            return Ok(());
+        }
         if !self.branch_descends_from_base(repo_path, branch, base_commit)? {
             tracing::info!(
                 branch,

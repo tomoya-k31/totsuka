@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](operations-guide.ja.md)
 
-<!-- generated-from: ai-docs/operations/operations-guide.md sha256:56b4324c25a1ffb07342dc66a9452dd697526df0e98b69b00dcf37c18fdc99ec -->
+<!-- generated-from: ai-docs/operations/operations-guide.md sha256:49247c8cb0f86fda0d53c3ee328d4619311dc8bbf889571664a300e62d39af1b -->
 
 # Operations guide
 
@@ -111,14 +111,15 @@ Each task gets its own worktree, and a cleanup policy decides what happens after
 - `retention_days` deletes N days after completion, re-evaluated on each `run` cycle
 - **Orphaned worktrees** — ones that belong to no task — are detected by `doctor`, which offers to run `git worktree remove` interactively. Ones with uncommitted changes are skipped
 
-To remove one by hand, use `git worktree remove <path>`; be careful with `--force` if there are unpushed commits. **Removing by hand does not release the associated pane**, so pick the leftover up with the next `doctor` run.
+To remove one by hand, use `git worktree remove <path>` (or just `rm -rf` it); be careful with `--force` if there are unpushed commits. **totsuka still cleans up the branch**: when `run` finds that a finished task's worktree is gone, it deletes the branch by the same rule as below (once per task per `run` process; a branch kept for unpushed commits is looked at again the next time `run` starts). **Removing by hand does not release the associated pane**, so pick the leftover up with the next `doctor` run.
 
 ### Branch cleanup
 
-When a worktree is deleted, its `agent/*` branch goes with it. The test is a single question: **does the branch have commits that are not on origin?**
+When a worktree is deleted, its `agent/*` branch goes with it — including when you removed the worktree by hand, as described above. The test is a single question: **does the branch have commits that are not on origin?**
 
 - Every commit is reachable from origin → delete the branch, since nothing is lost
 - Even one commit is not → **keep the branch**, because unpushed work exists only there. `run` logs `branch kept: it has commits that are not on origin`
+- The branch has the same name as origin's default branch (`main` or similar) → **always kept**, because an old task record may name the default branch as the task's branch. `run` logs `branch kept: it is the default branch`
 
 A squash-merged branch has commit hashes that no longer exist on origin. Once `origin/{branch}` is pruned, those commits count as unpushed and the branch is kept from then on. The failure direction is "keep", so nothing is lost; clean the accumulation up by hand with the same test:
 

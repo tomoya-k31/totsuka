@@ -217,7 +217,8 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
 
     /// Re-apply the cleanup policy to finished tasks whose worktree still
     /// exists (F-23: a `retention_days` policy elapses long after the
-    /// finishing run's immediate cleanup attempt retained the worktree).
+    /// finishing run's immediate cleanup attempt retained the worktree), and
+    /// delete the branch of one that was removed without totsuka.
     pub(super) async fn sweep_finished_worktrees(&mut self) -> Result<(), EngineError> {
         let mut candidates = Vec::new();
         // `Skipped` is included (#556): a failed task that a human retried
@@ -225,11 +226,14 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         // worktree its failed run left behind* — nothing else sweeps it.
         for state in [TaskState::Done, TaskState::Cancelled, TaskState::Skipped] {
             for record in self.db.tasks_in_state(state)? {
-                if record
-                    .worktree_path
-                    .as_deref()
-                    .is_some_and(|p| Path::new(p).exists())
-                {
+                // A worktree already gone still gets one visit per process, for
+                // the branch it may have left behind.
+                // ponytail: that is one `show-ref` per finished task in history
+                // on each process's first sweep; batch it with one
+                // `for-each-ref` if the history grows into the thousands.
+                if record.worktree_path.as_deref().is_some_and(|p| {
+                    Path::new(p).exists() || !self.gone_worktree_branches.contains(&record.id)
+                }) {
                     candidates.push(record.id);
                 }
             }

@@ -786,6 +786,33 @@ fn cleanup_keeps_a_branch_that_does_not_descend_from_the_base_commit() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// A row written before #694 can carry the enclosing repo's `main` as "the
+/// task's branch". `main` passes both ownership tests — it descends from any
+/// base commit and is all on origin — so only a name check keeps a sweep of
+/// old rows from taking the local default branch out from under the clone.
+#[test]
+fn a_gone_worktree_never_takes_the_default_branch_with_it() {
+    let base = scratch("gone_worktree_default_branch");
+    let clone = setup(&base);
+    let state = base.join("state");
+    let env = env(&state);
+    let mgr = WorktreeManager::new(SystemGitRunner::default());
+
+    let wt = mgr.create(&request(&clone, "16", &env)).unwrap();
+    std::fs::remove_dir_all(&wt.path).unwrap();
+    // Off `main`, so git itself would not refuse to delete it.
+    git(&clone, &["switch", "-c", "elsewhere"]);
+
+    mgr.delete_branch_of_gone_worktree(&clone, "main", Some(&wt.base_commit))
+        .unwrap();
+    assert!(
+        git(&clone, &["branch", "--list", "main"]).contains("main"),
+        "the default branch is never a task's to delete"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// A row written before the base commit was recorded cannot prove ownership,
 /// and being unable to prove it is not permission to destroy.
 #[test]
