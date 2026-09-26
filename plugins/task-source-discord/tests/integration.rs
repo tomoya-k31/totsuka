@@ -71,7 +71,12 @@ fn server(shared: &std::sync::Arc<Shared>) -> Server<FakeFactory> {
     let stdio = plugin_sdk::runtime::stdio();
     // No runtime: a Gateway task would consume the canned responses meant for
     // the assertions below.
-    Server::new(FakeFactory(std::sync::Arc::clone(shared)), stdio.submit).without_runtime()
+    Server::new(
+        FakeFactory(std::sync::Arc::clone(shared)),
+        stdio.submit,
+        stdio.lookup,
+    )
+    .without_runtime()
 }
 
 async fn call(srv: &mut Server<FakeFactory>, method: &str, params: Value) -> Response {

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
-use plugin_sdk::{BackfillLimits, Submitter};
+use plugin_sdk::{BackfillLimits, LookupClient, Submitter};
 use serde_json::Value;
 use tokio_tungstenite::tungstenite::Message;
 
@@ -40,6 +40,7 @@ pub fn spawn<T, S>(
     limits: BackfillLimits,
     state: SharedState,
     submitter: S,
+    lookup: LookupClient,
 ) -> tokio::task::JoinHandle<()>
 where
     T: DiscordTransport + Send + Sync + 'static,
@@ -55,6 +56,7 @@ where
             &triggers,
             &limits,
             &submitter,
+            &lookup,
             &state,
         )
         .await;
@@ -117,6 +119,7 @@ where
                         &triggers,
                         &limits,
                         &submitter,
+                        &lookup,
                         &state,
                     )
                     .await;

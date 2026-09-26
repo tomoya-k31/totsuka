@@ -4,13 +4,13 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
-use plugin_sdk::{BackfillLimits, SubmitOutcome, Submitter};
+use plugin_sdk::{BackfillLimits, Lookup, LookupClient, SubmitOutcome, Submitter};
 use serde_json::Value;
 
 use crate::config::DiscordConfig;
 use crate::discord_api::{DiscordApi, DiscordMessage, snowflake_for};
 use crate::transport::DiscordTransport;
-use crate::watch::WatchTriggers;
+use crate::watch::{WatchTriggers, WatchedChannel};
 
 /// Where a task's result must be posted, remembered from when it was raised.
 ///
@@ -27,6 +27,16 @@ pub struct PendingPost {
     pub message_id: String,
     /// The author, so the report can mention them.
     pub author_id: String,
+}
+
+impl PendingPost {
+    fn of(message: &DiscordMessage) -> Self {
+        Self {
+            channel_id: message.channel_id.clone(),
+            message_id: message.id.clone(),
+            author_id: message.author_id.clone().unwrap_or_default(),
+        }
+    }
 }
 
 /// Bound on the pending index; oldest entries fall out first.
@@ -101,17 +111,20 @@ pub async fn verify_watched_names<T: DiscordTransport>(
 /// Recover the posts made while the plugin was down.
 ///
 /// The Gateway replays a dropped session only inside its resume window; past
-/// that, history is the only way back. No cursor is kept: re-submitting a
-/// post the ledger already holds is an idempotent `duplicate` ack, so
-/// over-fetching costs nothing while under-fetching loses a post silently.
+/// that, history is the only way back. No cursor is kept: over-fetching costs
+/// nothing while under-fetching loses a post silently. Each recovered post is
+/// asked about first ([`recover_message`]), so one the Orchestrator already
+/// has is not re-submitted.
 pub async fn backfill<T: DiscordTransport, S: Submitter>(
     api: &DiscordApi<T>,
     config: &DiscordConfig,
     triggers: &WatchTriggers,
     limits: &BackfillLimits,
     submitter: &S,
+    lookup: &LookupClient,
     state: &SharedState,
 ) {
+    let mut lookup = Some(lookup);
     let cutoff = limits
         .cutoff(SystemTime::now())
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -141,7 +154,8 @@ pub async fn backfill<T: DiscordTransport, S: Submitter>(
             .rev()
             .filter(|m| crate::discord_api::is_at_or_after(&m.id, &oldest))
         {
-            if let Some(task_id) = submit_message(config, triggers, submitter, state, message).await
+            if let Some(task_id) =
+                recover_message(config, triggers, submitter, &mut lookup, state, message).await
             {
                 tracing::info!(
                     task_id,
@@ -162,24 +176,77 @@ pub async fn submit_message<S: Submitter>(
     state: &SharedState,
     message: &DiscordMessage,
 ) -> Option<String> {
-    let (watched, mut task) = triggers.admit(message)?;
+    let (watched, task) = triggers.admit(message)?;
+    submit_admitted(config, watched, task, submitter, state, message).await
+}
+
+/// The backfill's [`submit_message`]: skip the submit for a post the
+/// Orchestrator already has.
+///
+/// One post is one task (`{channel}:{message}`, no `message_key`), so a known
+/// task id means *this* post was ingested — whether it is still running or
+/// long done, a submit could only come back `duplicate`. Its coordinates are
+/// still registered: the pending index lives in memory, and a task still
+/// running across a plugin restart needs them for its `result/publish`.
+///
+/// An unanswered lookup falls back to the submit, whose `duplicate` ack is
+/// just as safe — only slower to read in the log. It also clears `lookup` for
+/// the rest of the pass: the backfill runs before the Gateway connects, and a
+/// busy engine loop would otherwise add a lookup timeout to every post's
+/// submit wait.
+pub async fn recover_message<S: Submitter>(
+    config: &DiscordConfig,
+    triggers: &WatchTriggers,
+    submitter: &S,
+    lookup: &mut Option<&LookupClient>,
+    state: &SharedState,
+    message: &DiscordMessage,
+) -> Option<String> {
+    let (watched, task) = triggers.admit(message)?;
+    // Before the lookup, not after: a running task can `result/publish`
+    // between the answer and this task resuming.
+    state.insert_pending(task.id.clone(), PendingPost::of(message));
+    if let Some(client) = *lookup {
+        match client.lookup(&config.source_name, &task.id).await {
+            Lookup::Known { .. } => {
+                tracing::debug!(
+                    task_id = %task.id,
+                    "backfill: the orchestrator already has this post; not re-submitting"
+                );
+                return None;
+            }
+            Lookup::Unknown { reason } => {
+                tracing::info!(
+                    "backfill: task/lookup unanswered ({reason}); submitting the rest of this \
+                     pass without asking"
+                );
+                *lookup = None;
+            }
+            Lookup::New => {}
+        }
+    }
+    submit_admitted(config, watched, task, submitter, state, message).await
+}
+
+async fn submit_admitted<S: Submitter>(
+    config: &DiscordConfig,
+    watched: &WatchedChannel,
+    mut task: plugin_protocol::Task,
+    submitter: &S,
+    state: &SharedState,
+    message: &DiscordMessage,
+) -> Option<String> {
     task.source = config.source_name.clone();
     let task_id = task.id.clone();
     let workflow = watched.trigger.workflow.clone();
 
     // Registered before the submit so a `result/publish` racing the ack still
     // finds its coordinates.
-    state.insert_pending(
-        task_id.clone(),
-        PendingPost {
-            channel_id: message.channel_id.clone(),
-            message_id: message.id.clone(),
-            author_id: message.author_id.clone().unwrap_or_default(),
-        },
-    );
+    state.insert_pending(task_id.clone(), PendingPost::of(message));
     match submitter.submit(task, &workflow).await {
         SubmitOutcome::Accepted => Some(task_id),
-        // The steady state for a backfilled post the ledger already has.
+        // A backfilled post the ledger already has, reached only when
+        // `task/lookup` could not answer (see `recover_message`).
         //
         // **The pending entry stays.** `duplicate` means the task exists —
         // very possibly still running — and taking its coordinates here would
@@ -380,21 +447,7 @@ mod tests {
         assert_eq!(state.pending("t1"), None, "only one entry existed");
     }
 
-    /// A `duplicate` ack means the task **exists** — very possibly still
-    /// running — so its publish coordinates must survive. Taking them here is
-    /// how a backfill would silently break an in-flight task's result.
-    #[tokio::test]
-    async fn a_duplicate_submission_leaves_the_coordinates_in_place() {
-        use crate::watch::WatchTriggers;
-        use plugin_sdk::{SubmitOutcome, Submitter};
-
-        struct AlwaysDuplicate;
-        impl Submitter for AlwaysDuplicate {
-            async fn submit(&self, _task: plugin_protocol::Task, _wf: &str) -> SubmitOutcome {
-                SubmitOutcome::Duplicate
-            }
-        }
-
+    fn fixture() -> (DiscordConfig, WatchTriggers, DiscordMessage) {
         let trigger = serde_json::json!({
             "channel": "C1", "channel_name": "clip", "repo": "docs",
         });
@@ -415,7 +468,6 @@ mod tests {
             "bot_token": "t", "operator_user_id": "U_OP",
         }))
         .unwrap();
-        let state = SharedState::default();
         let message = DiscordMessage {
             id: "M1".into(),
             channel_id: "C1".into(),
@@ -424,18 +476,139 @@ mod tests {
             content: "https://example.com".into(),
             kind: 0,
         };
+        (config, triggers, message)
+    }
 
-        let raised = submit_message(&config, &triggers, &AlwaysDuplicate, &state, &message).await;
+    /// Answers every submit with `outcome` and counts the calls.
+    #[derive(Default)]
+    struct Recording {
+        outcome: Option<SubmitOutcome>,
+        calls: std::sync::atomic::AtomicUsize,
+    }
+    impl Submitter for Recording {
+        async fn submit(&self, _task: plugin_protocol::Task, _wf: &str) -> SubmitOutcome {
+            self.calls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.outcome.clone().unwrap_or(SubmitOutcome::Accepted)
+        }
+    }
+
+    /// A lookup client whose Orchestrator knows exactly `known`.
+    fn lookup_knowing(known: &'static [&'static str]) -> LookupClient {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let client = LookupClient::new(plugin_sdk::Writer::from_channel(tx));
+        let responder = client.clone();
+        tokio::spawn(async move {
+            while let Some(line) = rx.recv().await {
+                let request: Value = serde_json::from_str(&line).unwrap();
+                let task_id = request["params"]["task_id"].as_str().unwrap_or_default();
+                responder.resolve(&serde_json::json!({
+                    "jsonrpc": "2.0", "id": request["id"],
+                    "result": { "known": known.contains(&task_id) },
+                }));
+            }
+        });
+        client
+    }
+
+    fn expected_post() -> PendingPost {
+        PendingPost {
+            channel_id: "C1".into(),
+            message_id: "M1".into(),
+            author_id: "U_OP".into(),
+        }
+    }
+
+    /// A `duplicate` ack means the task **exists** — very possibly still
+    /// running — so its publish coordinates must survive. Taking them here is
+    /// how a backfill would silently break an in-flight task's result.
+    #[tokio::test]
+    async fn a_duplicate_submission_leaves_the_coordinates_in_place() {
+        let (config, triggers, message) = fixture();
+        let submitter = Recording {
+            outcome: Some(SubmitOutcome::Duplicate),
+            ..Default::default()
+        };
+        let state = SharedState::default();
+
+        let raised = submit_message(&config, &triggers, &submitter, &state, &message).await;
         assert_eq!(raised, None, "a duplicate raises no new task");
         assert_eq!(
             state.pending("C1:M1"),
-            Some(PendingPost {
-                channel_id: "C1".into(),
-                message_id: "M1".into(),
-                author_id: "U_OP".into(),
-            }),
+            Some(expected_post()),
             "the running task's result still needs somewhere to go"
         );
+    }
+
+    /// The backfill re-reads posts that finished long ago; one the
+    /// Orchestrator already has must not be re-submitted — yet it must keep
+    /// its coordinates, since it may still be running.
+    #[tokio::test]
+    async fn the_backfill_does_not_resubmit_a_post_the_orchestrator_has() {
+        let (config, triggers, message) = fixture();
+        let submitter = Recording::default();
+        let state = SharedState::default();
+
+        let raised = recover_message(
+            &config,
+            &triggers,
+            &submitter,
+            &mut Some(&lookup_knowing(&["C1:M1"])),
+            &state,
+            &message,
+        )
+        .await;
+        assert_eq!(raised, None);
+        assert_eq!(
+            submitter.calls.into_inner(),
+            0,
+            "no task/submit for a known post"
+        );
+        assert_eq!(state.pending("C1:M1"), Some(expected_post()));
+    }
+
+    #[tokio::test]
+    async fn the_backfill_submits_a_post_the_orchestrator_has_not_seen() {
+        let (config, triggers, message) = fixture();
+        let submitter = Recording::default();
+        let state = SharedState::default();
+
+        let raised = recover_message(
+            &config,
+            &triggers,
+            &submitter,
+            &mut Some(&lookup_knowing(&[])),
+            &state,
+            &message,
+        )
+        .await;
+        assert_eq!(raised.as_deref(), Some("C1:M1"));
+        assert_eq!(submitter.calls.into_inner(), 1);
+    }
+
+    /// One unanswered lookup stops the asking for the rest of the pass, so a
+    /// busy engine loop costs one timeout per backfill, not one per post.
+    #[tokio::test]
+    async fn an_unanswered_lookup_submits_and_stops_asking() {
+        let (config, triggers, message) = fixture();
+        let submitter = Recording::default();
+        let state = SharedState::default();
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        drop(rx); // the host is gone: the lookup answers `Unknown` at once
+        let client = LookupClient::new(plugin_sdk::Writer::from_channel(tx));
+        let mut lookup = Some(&client);
+
+        let raised = recover_message(
+            &config,
+            &triggers,
+            &submitter,
+            &mut lookup,
+            &state,
+            &message,
+        )
+        .await;
+        assert_eq!(raised.as_deref(), Some("C1:M1"), "falls back to the submit");
+        assert!(lookup.is_none(), "the rest of the pass does not ask");
     }
 
     #[test]

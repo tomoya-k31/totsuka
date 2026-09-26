@@ -12,7 +12,8 @@ use plugin_protocol::methods::{
 };
 use plugin_protocol::{Capabilities, OutputCapability};
 use plugin_sdk::{
-    LineHandler, Reply, SubmitClient, TaskSourceHandler, not_initialized, unknown_trigger_keys,
+    LineHandler, LookupClient, Reply, SubmitClient, TaskSourceHandler, not_initialized,
+    unknown_trigger_keys,
 };
 use serde_json::Value;
 
@@ -62,6 +63,7 @@ impl<T> Drop for Session<T> {
 pub struct Server<F: TransportFactory> {
     factory: F,
     submit: SubmitClient,
+    lookup: LookupClient,
     start_runtime: bool,
     session: Option<Session<F::Transport>>,
 }
@@ -71,10 +73,11 @@ where
     F::Transport: Send + Sync + 'static,
 {
     /// A fresh, uninitialized server.
-    pub fn new(factory: F, submit: SubmitClient) -> Self {
+    pub fn new(factory: F, submit: SubmitClient, lookup: LookupClient) -> Self {
         Self {
             factory,
             submit,
+            lookup,
             start_runtime: true,
             session: None,
         }
@@ -203,6 +206,7 @@ where
                 backfill_limits,
                 state.clone(),
                 self.submit.clone(),
+                self.lookup.clone(),
             );
             runtime.push(handle.abort_handle());
         }
