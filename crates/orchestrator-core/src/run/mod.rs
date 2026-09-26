@@ -354,21 +354,10 @@ pub struct Engine<G: GitRunner, L: RepoClassifier + 'static> {
     /// the same once-per-task contract as `blocked_on_prereqs`. Cleared when the
     /// task finally gets past the gate, so a second outage is reported again.
     blocked_on_agent: std::collections::HashSet<i64>,
-    /// Plugins the supervisor has stopped trying to relaunch (#495/#499).
-    /// A task waiting on one of these is waiting forever, so dispatch fails it
-    /// with a reason instead of parking it.
-    abandoned_plugins: std::collections::HashSet<String>,
-    /// Relaunch attempts per plugin inside the policy window (#495).
-    restarts: HashMap<String, supervise::RestartLedger>,
-    /// Call stats harvested from plugin instances that have been replaced
-    /// (#497). A restart (#495) creates a **new** `Plugin`, so its counters
-    /// start at zero; without carrying the old ones forward, the plugin that
-    /// crashed most would report the fewest calls — the opposite of the truth.
-    retired_stats: HashMap<String, crate::adapters::plugin_host::CallStats>,
-    /// Per-plugin crash and restart tallies (#497), so the summary can name
-    /// *which* plugin is flapping rather than only how many times something
-    /// did.
-    plugin_events: HashMap<String, (usize, usize)>,
+    /// The supervisor's memory of each plugin (#495 / #497 / #499): relaunch
+    /// attempts, the ones given up on, retired call stats and crash/restart
+    /// tallies (#758).
+    supervision: supervise::SupervisionLedger,
     events: mpsc::UnboundedReceiver<PluginEvent>,
     /// Kept so `events.recv()` never observes a closed channel, and cloned
     /// whenever a consumer task has to be re-spawned — which a plugin restart
@@ -507,7 +496,6 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             agent_prereqs: crate::agent_prereqs::PrereqCache::default(),
             blocked_on_prereqs: std::collections::HashSet::new(),
             blocked_on_agent: std::collections::HashSet::new(),
-            abandoned_plugins: std::collections::HashSet::new(),
             db,
             settings,
             plugins,
@@ -516,9 +504,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             last_cycle_clock: None,
             hook_receiver: HookReceiver::NotConfigured,
             slots,
-            restarts: HashMap::new(),
-            retired_stats: HashMap::new(),
-            plugin_events: HashMap::new(),
+            supervision: supervise::SupervisionLedger::default(),
             sessions: HashMap::new(),
             events: rx,
             events_tx: tx,
@@ -958,7 +944,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             .filter(|(_, plugin)| plugin.is_closed())
             .map(|(name, _)| Degradation::PluginDown {
                 plugin: name.clone(),
-                abandoned: self.abandoned_plugins.contains(name),
+                abandoned: self.supervision.is_abandoned(name),
             })
             .collect();
         down.sort_by(|a, b| match (a, b) {

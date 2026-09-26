@@ -33,6 +33,7 @@
 //!    instance, so a consumer task left pointing at the dead one would sit
 //!    there forever.
 
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::Duration;
 
 use tokio::sync::{Semaphore, mpsc};
@@ -49,26 +50,151 @@ use crate::ports::llm::RepoClassifier;
 use plugin_protocol::manifest::PluginKind as ManifestKind;
 use plugin_protocol::methods::{NotifierEvent, NotifyParams};
 
-/// Relaunch attempts for one plugin, as timestamps inside the policy window.
+/// What the supervisor remembers about each plugin over the run (#495 /
+/// #497 / #499, pulled out of `Engine` in #758).
 ///
-/// A sliding window rather than a lifetime counter: a plugin that crashes once
-/// a week is not the failure this budget exists to stop, and a `--watch` run
-/// can stay up for weeks.
+/// Bookkeeping only (ADR-0103): relaunching, notifying and reading stats off a
+/// live [`Plugin`] stay with the engine, so everything here is testable
+/// without a process.
 #[derive(Debug, Default)]
-pub(super) struct RestartLedger {
-    attempts: Vec<Instant>,
+pub(super) struct SupervisionLedger {
+    /// Relaunch attempts per plugin, as timestamps inside the policy window.
+    ///
+    /// A sliding window rather than a lifetime counter: a plugin that crashes
+    /// once a week is not the failure this budget exists to stop, and a
+    /// `--watch` run can stay up for weeks.
+    attempts: HashMap<String, Vec<Instant>>,
+    /// Plugins the supervisor has stopped trying to relaunch (#495/#499).
+    /// A task waiting on one of these is waiting forever, so dispatch fails it
+    /// with a reason instead of parking it.
+    abandoned: HashSet<String>,
+    /// Call stats harvested from plugin instances that have been replaced
+    /// (#497). A restart (#495) creates a **new** `Plugin`, so its counters
+    /// start at zero; without carrying the old ones forward, the plugin that
+    /// crashed most would report the fewest calls — the opposite of the truth.
+    retired_stats: HashMap<String, CallStats>,
+    /// Per-plugin `(crashes, restarts)` tallies (#497), so the summary can name
+    /// *which* plugin is flapping rather than only how many times something
+    /// did.
+    tallies: HashMap<String, (usize, usize)>,
 }
 
-impl RestartLedger {
-    /// Attempts still inside `window`, dropping the ones that aged out.
-    fn recent(&mut self, now: Instant, window: Duration) -> usize {
-        self.attempts
-            .retain(|at| now.saturating_duration_since(*at) < window);
-        self.attempts.len()
+/// The answer to "may this plugin be relaunched again?".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum RestartBooking {
+    /// Booked. `used` is the attempts inside the window **before** this one.
+    Booked { used: usize },
+    /// The window already holds `used` attempts, the whole budget.
+    Exhausted { used: usize },
+}
+
+impl SupervisionLedger {
+    /// Book a relaunch attempt for `plugin` at `now` if fewer than
+    /// `max_attempts` fall inside `window`; attempts that aged out are
+    /// dropped first. An exhausted budget books nothing.
+    pub(super) fn book_restart(
+        &mut self,
+        plugin: &str,
+        now: Instant,
+        window: Duration,
+        max_attempts: u32,
+    ) -> RestartBooking {
+        let attempts = self.attempts.entry(plugin.to_string()).or_default();
+        attempts.retain(|at| now.saturating_duration_since(*at) < window);
+        let used = attempts.len();
+        if used >= max_attempts as usize {
+            return RestartBooking::Exhausted { used };
+        }
+        attempts.push(now);
+        RestartBooking::Booked { used }
     }
 
-    fn record(&mut self, now: Instant) {
-        self.attempts.push(now);
+    /// Count a crash, whatever is decided about it afterwards.
+    pub(super) fn crashed(&mut self, plugin: &str) {
+        self.tallies.entry(plugin.to_string()).or_default().0 += 1;
+    }
+
+    /// The plugin came back: count the restart, and a task waiting on it
+    /// should wait rather than fail. Clearing here (not on the attempt) means
+    /// the flag only ever says "down for good" while that is true.
+    pub(super) fn restarted(&mut self, plugin: &str) {
+        self.abandoned.remove(plugin);
+        self.tallies.entry(plugin.to_string()).or_default().1 += 1;
+    }
+
+    /// The supervisor gave up on `plugin`.
+    pub(super) fn abandon(&mut self, plugin: &str) {
+        self.abandoned.insert(plugin.to_string());
+    }
+
+    /// Whether the supervisor gave up on `plugin`.
+    pub(super) fn is_abandoned(&self, plugin: &str) -> bool {
+        self.abandoned.contains(plugin)
+    }
+
+    /// Fold the call stats of an instance about to be replaced into the
+    /// retired accumulator (#497).
+    pub(super) fn retire(&mut self, plugin: &str, stats: &CallStats) {
+        let retired = self.retired_stats.entry(plugin.to_string()).or_default();
+        for (method, m) in stats {
+            retired.entry(method.clone()).or_default().merge(m);
+        }
+    }
+
+    /// Per-plugin RPC accounting for the run summary (#497): the `live`
+    /// instances' stats plus everything retired from instances a restart
+    /// replaced, so the numbers describe **the plugin over the run**, not
+    /// whichever process happens to be current.
+    pub(super) fn reports<'a>(
+        &self,
+        live: impl IntoIterator<Item = (&'a String, CallStats)>,
+    ) -> BTreeMap<String, PluginReport> {
+        let mut merged: BTreeMap<String, CallStats> = self
+            .retired_stats
+            .iter()
+            .map(|(name, stats)| (name.clone(), stats.clone()))
+            .collect();
+        for (name, stats) in live {
+            let target = merged.entry(name.clone()).or_default();
+            for (method, m) in &stats {
+                target.entry(method.clone()).or_default().merge(m);
+            }
+        }
+        // A plugin that only ever crashed made no calls, but its crash count
+        // is exactly what the operator needs — so the key set is the union.
+        for name in self.tallies.keys() {
+            merged.entry(name.clone()).or_default();
+        }
+        merged
+            .into_iter()
+            .map(|(name, stats)| {
+                let (crashes, restarts) = self.tallies.get(&name).copied().unwrap_or((0, 0));
+                let methods = stats
+                    .into_iter()
+                    .map(|(method, m)| {
+                        let report = MethodReport {
+                            calls: m.calls,
+                            outcomes: m
+                                .outcomes
+                                .iter()
+                                .map(|(o, n)| (o.as_str().to_string(), *n))
+                                .collect(),
+                            p50_ms: m.percentile_ms(0.50),
+                            p95_ms: m.percentile_ms(0.95),
+                        };
+                        (method, report)
+                    })
+                    .collect();
+                (
+                    name,
+                    PluginReport {
+                        crashes,
+                        restarts,
+                        methods,
+                    },
+                )
+            })
+            .collect()
     }
 }
 
@@ -184,7 +310,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// RPC — a 120s hang after the run already decided to exit.
     pub(super) fn count_plugin_crash(&mut self, plugin: &str) {
         self.stats.plugin_crashes += 1;
-        self.plugin_events.entry(plugin.to_string()).or_default().0 += 1;
+        self.supervision.crashed(plugin);
     }
 
     /// Fail every in-flight task an exited agent plugin was running.
@@ -252,22 +378,26 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             return;
         }
         let policy = &self.settings.plugin_restart;
-        let now = Instant::now();
-        let ledger = self.restarts.entry(plugin.to_string()).or_default();
-        let used = ledger.recent(now, policy.window);
-        if used >= policy.max_attempts as usize {
-            let window_secs = policy.window.as_secs();
-            tracing::error!(
-                plugin,
-                "gave up restarting after {used} attempts in {window_secs}s"
-            );
-            self.escalate_dead_plugin(
-                plugin,
-                &format!("{used} restart attempts in {window_secs}s all failed"),
-            );
-            return;
-        }
-        ledger.record(now);
+        let used = match self.supervision.book_restart(
+            plugin,
+            Instant::now(),
+            policy.window,
+            policy.max_attempts,
+        ) {
+            RestartBooking::Booked { used } => used,
+            RestartBooking::Exhausted { used } => {
+                let window_secs = policy.window.as_secs();
+                tracing::error!(
+                    plugin,
+                    "gave up restarting after {used} attempts in {window_secs}s"
+                );
+                self.escalate_dead_plugin(
+                    plugin,
+                    &format!("{used} restart attempts in {window_secs}s all failed"),
+                );
+                return;
+            }
+        };
         // 1s, 2s, 4s, … — `used` is the count *before* this attempt.
         let delay = policy.first_backoff.saturating_mul(1u32 << used.min(16));
         tracing::info!(
@@ -321,11 +451,9 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                 };
                 self.install_restarted(&name, kind, launched).await;
                 // It came back, so a task waiting on it should wait rather
-                // than fail. Clearing here (not on the attempt) means the flag
-                // only ever says "down for good" while that is true.
-                self.abandoned_plugins.remove(&name);
+                // than fail (the ledger clears the "abandoned" flag).
+                self.supervision.restarted(&name);
                 self.stats.plugin_restarts += 1;
-                self.plugin_events.entry(name.clone()).or_default().1 += 1;
                 tracing::info!(plugin = %name, "plugin restarted");
             }
             Err(e) => {
@@ -370,10 +498,8 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             .or_else(|| self.plugins.agents.get(name))
             .or_else(|| self.plugins.notifiers.get(name))
             .map(|p| p.stats());
-        let Some(live) = live else { return };
-        let retired = self.retired_stats.entry(name.to_string()).or_default();
-        for (method, stats) in &live {
-            retired.entry(method.clone()).or_default().merge(stats);
+        if let Some(live) = live {
+            self.supervision.retire(name, &live);
         }
     }
 
@@ -382,59 +508,15 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// Live instances plus everything harvested from instances a restart
     /// replaced, so the numbers describe **the plugin over the run**, not
     /// whichever process happens to be current.
-    pub(super) fn plugin_reports(&self) -> std::collections::BTreeMap<String, PluginReport> {
-        let mut merged: std::collections::BTreeMap<String, CallStats> = self
-            .retired_stats
-            .iter()
-            .map(|(name, stats)| (name.clone(), stats.clone()))
-            .collect();
-        for (name, plugin) in self
+    pub(super) fn plugin_reports(&self) -> BTreeMap<String, PluginReport> {
+        let live = self
             .plugins
             .sources
             .iter()
             .chain(self.plugins.agents.iter())
             .chain(self.plugins.notifiers.iter())
-        {
-            let target = merged.entry(name.clone()).or_default();
-            for (method, stats) in &plugin.stats() {
-                target.entry(method.clone()).or_default().merge(stats);
-            }
-        }
-        // A plugin that only ever crashed made no calls, but its crash count
-        // is exactly what the operator needs — so the key set is the union.
-        for name in self.plugin_events.keys() {
-            merged.entry(name.clone()).or_default();
-        }
-        merged
-            .into_iter()
-            .map(|(name, stats)| {
-                let (crashes, restarts) = self.plugin_events.get(&name).copied().unwrap_or((0, 0));
-                let methods = stats
-                    .into_iter()
-                    .map(|(method, m)| {
-                        let report = MethodReport {
-                            calls: m.calls,
-                            outcomes: m
-                                .outcomes
-                                .iter()
-                                .map(|(o, n)| (o.as_str().to_string(), *n))
-                                .collect(),
-                            p50_ms: m.percentile_ms(0.50),
-                            p95_ms: m.percentile_ms(0.95),
-                        };
-                        (method, report)
-                    })
-                    .collect();
-                (
-                    name,
-                    PluginReport {
-                        crashes,
-                        restarts,
-                        methods,
-                    },
-                )
-            })
-            .collect()
+            .map(|(name, plugin)| (name, plugin.stats()));
+        self.supervision.reports(live)
     }
 
     /// Tell the operator a plugin is staying down.
@@ -447,7 +529,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         // Marked **here**, not at the three call sites, so "we gave up" and
         // "dispatch knows we gave up" cannot drift apart. Every path that
         // leaves a plugin down runs through this function (#499).
-        self.abandoned_plugins.insert(plugin.to_string());
+        self.supervision.abandon(plugin);
         let params = NotifyParams {
             event: NotifierEvent::Escalated,
             task_id: None,
@@ -483,17 +565,87 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
 mod tests {
     use super::*;
 
+    const WINDOW: Duration = Duration::from_secs(300);
+
     #[test]
     fn the_window_slides_rather_than_counting_a_lifetime() {
-        let mut ledger = RestartLedger::default();
+        let mut ledger = SupervisionLedger::default();
         let start = Instant::now();
-        ledger.record(start);
-        ledger.record(start);
-        assert_eq!(ledger.recent(start, Duration::from_secs(300)), 2);
-        // Both attempts age out once the window has passed, so a plugin that
+        ledger.book_restart("p", start, WINDOW, 10);
+        ledger.book_restart("p", start, WINDOW, 10);
+        assert_eq!(
+            ledger.book_restart("p", start, WINDOW, 10),
+            RestartBooking::Booked { used: 2 }
+        );
+        // Every attempt ages out once the window has passed, so a plugin that
         // crashes rarely never exhausts its budget.
         let later = start + Duration::from_secs(301);
-        assert_eq!(ledger.recent(later, Duration::from_secs(300)), 0);
+        assert_eq!(
+            ledger.book_restart("p", later, WINDOW, 10),
+            RestartBooking::Booked { used: 0 }
+        );
+    }
+
+    #[test]
+    fn an_exhausted_budget_books_nothing_and_is_per_plugin() {
+        let mut ledger = SupervisionLedger::default();
+        let now = Instant::now();
+        assert_eq!(
+            ledger.book_restart("p", now, WINDOW, 2),
+            RestartBooking::Booked { used: 0 }
+        );
+        assert_eq!(
+            ledger.book_restart("p", now, WINDOW, 2),
+            RestartBooking::Booked { used: 1 }
+        );
+        assert_eq!(
+            ledger.book_restart("p", now, WINDOW, 2),
+            RestartBooking::Exhausted { used: 2 }
+        );
+        assert_eq!(
+            ledger.book_restart("p", now, WINDOW, 2),
+            RestartBooking::Exhausted { used: 2 },
+            "a refusal is not itself an attempt"
+        );
+        assert_eq!(
+            ledger.book_restart("other", now, WINDOW, 2),
+            RestartBooking::Booked { used: 0 }
+        );
+    }
+
+    #[test]
+    fn a_restart_clears_abandonment_and_counts() {
+        let mut ledger = SupervisionLedger::default();
+        ledger.crashed("p");
+        ledger.abandon("p");
+        assert!(ledger.is_abandoned("p"));
+        ledger.restarted("p");
+        assert!(
+            !ledger.is_abandoned("p"),
+            "back up → no longer down for good"
+        );
+        let report = &ledger.reports([])["p"];
+        assert_eq!((report.crashes, report.restarts), (1, 1));
+    }
+
+    /// #497: the summary describes the plugin over the run — a crash-only
+    /// plugin still appears, and retired stats add to the live instance's.
+    #[test]
+    fn reports_merge_retired_and_live_stats_and_list_crash_only_plugins() {
+        let mut ledger = SupervisionLedger::default();
+        let calls = |n: usize| -> CallStats {
+            let mut m = crate::adapters::plugin_host::MethodStats::default();
+            m.calls = n;
+            CallStats::from([("task/dispatch".to_string(), m)])
+        };
+        ledger.retire("agent", &calls(3));
+        ledger.crashed("dead");
+        let name = "agent".to_string();
+        let reports = ledger.reports([(&name, calls(2))]);
+
+        assert_eq!(reports["agent"].methods["task/dispatch"].calls, 5);
+        assert_eq!(reports["dead"].crashes, 1);
+        assert!(reports["dead"].methods.is_empty());
     }
 
     #[test]

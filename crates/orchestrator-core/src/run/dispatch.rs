@@ -640,7 +640,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         self.plugins.agents.get(agent).map(|a| AgentStatus {
             capabilities: a.capabilities().clone(),
             live: !a.is_closed(),
-            abandoned: self.abandoned_plugins.contains(agent),
+            abandoned: self.supervision.is_abandoned(agent),
         })
     }
 
