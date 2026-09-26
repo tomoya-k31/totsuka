@@ -15,6 +15,7 @@ use agent_ide_orca::cli::OrcaCli;
 use agent_ide_orca::config::OrcaConfig;
 use agent_ide_orca::error::OrcaError;
 use agent_ide_orca::server::{CliFactory, Server};
+use plugin_sdk::{AgentIdeServer, LineHandler, Writer};
 
 /// A scripted answer for one `orca <sub> <verb>` invocation.
 #[derive(Clone)]
@@ -157,7 +158,10 @@ impl CliFactory for FakeFactory {
 
 /// A driver around a `Server` writing to an in-memory line channel.
 struct Driver {
-    server: Server<FakeFactory>,
+    server: AgentIdeServer<Server<FakeFactory>>,
+    /// Where replies go, the way `serve` writes them: through the same
+    /// channel the server streams notifications into.
+    replies: mpsc::UnboundedSender<String>,
     out: mpsc::UnboundedReceiver<String>,
     next_id: i64,
     /// This driver's launch env FIFO directory.
@@ -184,7 +188,11 @@ impl Driver {
         let (tx, rx) = mpsc::unbounded_channel();
         let dir = handoff_dir();
         Self {
-            server: Server::new(FakeFactory { cli }, tx).with_handoff(dir.clone(), wait),
+            server: AgentIdeServer::new(
+                Server::new(FakeFactory { cli }).with_handoff(dir.clone(), wait),
+                Writer::from_channel(tx.clone()),
+            ),
+            replies: tx,
             out: rx,
             next_id: 0,
             handoff_dir: dir,
@@ -195,7 +203,11 @@ impl Driver {
         self.next_id += 1;
         let id = self.next_id;
         let line = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
-        assert!(self.server.handle_line(&line.to_string()).await);
+        let reply = self.server.handle_line(&line.to_string()).await;
+        assert!(!reply.shutdown);
+        if let Some(line) = reply.line {
+            self.replies.send(line).unwrap();
+        }
         let resp = self.recv().await.expect("a response line");
         assert_eq!(resp["id"], id, "response id must match request");
         resp

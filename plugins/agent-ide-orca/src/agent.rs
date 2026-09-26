@@ -305,7 +305,7 @@ impl<C: OrcaCli> OrcaAgent<C> {
         }
         self.wait_for_agent(params, handle).await?;
 
-        let prompt = compose_prompt(params);
+        let prompt = plugin_sdk::compose_prompt(params);
         if prompt.trim().is_empty() {
             return Ok(());
         }
@@ -1113,21 +1113,6 @@ fn resume_failure(params: &TaskDispatchParams, error: OrcaError) -> OrcaError {
     error
 }
 
-/// Compose the agent prompt: any extra context as a preamble, then the task
-/// (body, or the title when there is no body) — the herdr plugin's layout.
-///
-/// A string `extra_context` is rendered as raw text, not as a JSON literal
-/// (#158). Hook-capable dispatches usually carry none: the instructions ride
-/// the `UserPromptSubmit` hook instead.
-fn compose_prompt(params: &TaskDispatchParams) -> String {
-    let task_text = params.task.body.as_ref().unwrap_or(&params.task.title);
-    match &params.extra_context {
-        Some(Value::String(s)) => format!("{s}\n\n---\n{task_text}"),
-        Some(other) => format!("{other}\n\n---\n{task_text}"),
-        None => task_text.clone(),
-    }
-}
-
 /// The worktree's display name: `{repo}: {title}`, whitespace collapsed and
 /// cut to [`DISPLAY_NAME_CHARS`] characters on a char boundary (task titles
 /// here are often Japanese, so a byte slice would panic).
@@ -1205,21 +1190,6 @@ mod tests {
             tool_launch: None,
             repo_name: None,
         }
-    }
-
-    #[test]
-    fn compose_prompt_puts_string_extra_context_first_as_raw_text() {
-        let prompt = compose_prompt(&params(
-            Some("body"),
-            Some(Value::String("line one\nline two".into())),
-        ));
-        assert_eq!(prompt, "line one\nline two\n\n---\nbody");
-        assert!(!prompt.contains("\\n"), "no JSON escapes: {prompt}");
-    }
-
-    #[test]
-    fn compose_prompt_falls_back_to_the_title() {
-        assert_eq!(compose_prompt(&params(None, None)), "title");
     }
 
     #[test]
