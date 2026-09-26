@@ -110,7 +110,7 @@ on_failure = {{ status = "failed" }}
 "#
     ))
     .unwrap();
-    Workflow::from_configs(&cfg.workflows, &cfg.projects)
+    cfg.domain_workflows()
 }
 
 /// Engine settings on a real repo clone with a hook runtime bound to `socket`.

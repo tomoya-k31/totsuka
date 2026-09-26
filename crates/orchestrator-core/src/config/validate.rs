@@ -11,7 +11,7 @@ use plugin_protocol::manifest::OutputCapability;
 
 use super::resolve::expand_path;
 use super::schema::{CURRENT_SCHEMA_VERSION, PluginKind, RootConfig, VerificationMode};
-use crate::domain::workflow::{self, Severity, Workflow};
+use crate::domain::workflow::{self, Severity};
 use crate::template;
 use crate::tool::{ToolKind, ToolProfile};
 
@@ -386,12 +386,12 @@ where
         ] {
             let Some(action) = action else { continue };
             for key in action.keys() {
-                if !workflow::OUTCOME_ACTION_KEYS.contains(&key.as_str()) {
+                if !super::interpret::OUTCOME_ACTION_KEYS.contains(&key.as_str()) {
                     errors.push(ValidationError::UnknownOutcomeActionKey {
                         referrer: format!("workflow `{}`", wf.name),
                         table,
                         key: key.clone(),
-                        allowed: workflow::OUTCOME_ACTION_KEYS
+                        allowed: super::interpret::OUTCOME_ACTION_KEYS
                             .iter()
                             .map(|k| format!("`{k}`"))
                             .collect::<Vec<_>>()
@@ -628,7 +628,7 @@ where
         })
         .collect();
 
-    let workflows = Workflow::from_configs(&cfg.workflows, &cfg.projects);
+    let workflows = cfg.domain_workflows();
     for issue in workflow::validate_workflows(&workflows, source_outputs) {
         findings.push(Finding {
             severity: match issue.severity {

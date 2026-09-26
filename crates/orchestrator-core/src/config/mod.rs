@@ -2,6 +2,8 @@
 //! (§4.7, F-60–F-66).
 //!
 //! - [`schema`]: `config.toml` types and parsing.
+//! - [`interpret`]: config → [`domain`](crate::domain) values (the one place
+//!   the file's spelling is translated, #762).
 //! - [`resolve`]: `${ENV}` / `keychain:` secret resolution and path expansion.
 //! - [`env_file`]: `[tools.<name>].env_file` parsing and startup resolution.
 //! - [`env_overrides`]: `TOTSUKA_*` overrides, layer 2 of the CLI > env >
@@ -11,6 +13,7 @@
 pub mod edit;
 pub mod env_file;
 pub mod env_overrides;
+pub mod interpret;
 pub mod resolve;
 pub mod schema;
 pub mod validate;

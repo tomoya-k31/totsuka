@@ -203,7 +203,7 @@ pub fn settings_from_config(
         // Supplied by the caller (the CLI) after this returns, like `hook`.
         health_path: None,
         tool_env: Default::default(),
-        workflows: Workflow::from_configs(&cfg.workflows, &cfg.projects),
+        workflows: cfg.domain_workflows(),
         repos,
         limits,
         location_template: cfg
@@ -213,10 +213,16 @@ pub fn settings_from_config(
             .unwrap_or_else(|| default_location_template(paths)),
         // Implement-mode default is `manual`: a worktree may hold committed but
         // unpushed work until the output policy (#65) publishes it.
-        cleanup_implement: cleanup_policy(cfg.worktree.cleanup, CleanupPolicy::Manual),
+        cleanup_implement: cfg
+            .worktree
+            .cleanup
+            .map_or(CleanupPolicy::Manual, CleanupPolicy::from),
         // Plan-mode default is `immediate` (F-85): design output is published
         // to the source, the worktree carries nothing unique.
-        cleanup_plan: cleanup_policy(cfg.worktree.plan_cleanup, CleanupPolicy::Immediate),
+        cleanup_plan: cfg
+            .worktree
+            .plan_cleanup
+            .map_or(CleanupPolicy::Immediate, CleanupPolicy::from),
         env: env.clone(),
         select: SelectConfig {
             confidence_threshold: cfg
@@ -249,29 +255,6 @@ pub fn settings_from_config(
         // engine; interpreting config alone leaves it unset.
         hook: None,
     })
-}
-
-/// Map a config cleanup policy to the worktree policy, with a default. The
-/// `keep_*` presets (#210) desugar to `RetentionDays` here — [`CleanupPolicy`]
-/// never learns about them.
-pub(super) fn cleanup_policy(
-    config: Option<CleanupPolicyConfig>,
-    default: CleanupPolicy,
-) -> CleanupPolicy {
-    match config {
-        None => default,
-        Some(CleanupPolicyConfig::Named(CleanupPolicyName::Immediate)) => CleanupPolicy::Immediate,
-        Some(CleanupPolicyConfig::Named(CleanupPolicyName::Manual)) => CleanupPolicy::Manual,
-        Some(CleanupPolicyConfig::Named(CleanupPolicyName::Keep7d)) => {
-            CleanupPolicy::RetentionDays(7)
-        }
-        Some(CleanupPolicyConfig::Named(CleanupPolicyName::Keep28d)) => {
-            CleanupPolicy::RetentionDays(28)
-        }
-        Some(CleanupPolicyConfig::Retention { retention_days }) => {
-            CleanupPolicy::RetentionDays(retention_days)
-        }
-    }
 }
 
 /// The launched plugins, split by kind (enabled entries only, F-58).

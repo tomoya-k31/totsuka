@@ -53,8 +53,8 @@ use crate::adapters::state_db::{
 };
 use crate::adapters::{EngineSignalSink, hook_uds};
 use crate::config::{
-    CleanupPolicyConfig, CleanupPolicyName, DEFAULT_GLOBAL_CONCURRENCY, OutputPolicy, PluginKind,
-    Profile, RootConfig, WorkflowMode, resolve::ResolveError,
+    DEFAULT_GLOBAL_CONCURRENCY, OutputPolicy, PluginKind, Profile, RootConfig, WorkflowMode,
+    resolve::ResolveError,
 };
 use crate::domain::signal::{AgentSignal, JobId};
 use crate::domain::state::{TaskEvent, TaskState};

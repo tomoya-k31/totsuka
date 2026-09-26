@@ -327,9 +327,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             .get(record.workflow.as_str())
             .map(|wf| wf.cleanup)
         {
-            Some(Some(cleanup)) => {
-                crate::run::settings::cleanup_policy(Some(cleanup), mode_default)
-            }
+            Some(Some(cleanup)) => cleanup,
             Some(None) => mode_default,
             None => {
                 tracing::info!(

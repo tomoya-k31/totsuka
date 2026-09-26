@@ -93,7 +93,7 @@ output = "none"
 "#,
     )
     .unwrap();
-    Workflow::from_configs(&cfg.workflows, &cfg.projects)
+    cfg.domain_workflows()
 }
 
 /// Settings with a **zero backoff** — the seam that keeps these tests instant.
@@ -653,7 +653,7 @@ output = "none"
     .unwrap();
 
     let mut settings = settings_with_backoff(5, Duration::from_secs(30));
-    settings.workflows = Workflow::from_configs(&cfg.workflows, &cfg.projects);
+    settings.workflows = cfg.domain_workflows();
     settings.repos = vec![RepoSettings {
         name: "clone".to_string(),
         path: repo.clone(),

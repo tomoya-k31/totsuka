@@ -15,10 +15,10 @@ use plugin_protocol::methods::{LlmApiKind, LlmInfo, ProjectInfo, RepoInfo, Workf
 use serde_json::Value;
 
 use crate::adapters::plugin_host::PluginSpec;
+use crate::config::interpret::outcome_action;
 use crate::config::{
     self, ConfigError, LlmApi, ResolveError, RootConfig, resolve_strings, secret_resolver,
 };
-use crate::domain::workflow::OutcomeAction;
 use crate::plugins::{PluginStore, StoreError};
 
 /// Default per-call plugin RPC timeout when `timeout_secs` is omitted.
@@ -103,15 +103,13 @@ pub fn plugin_spec(
 /// The status columns a workflow writes back to, in `on_start` →
 /// `on_success` → `on_failure` order with duplicates dropped (#626).
 ///
-/// Read through [`OutcomeAction::from_table`] rather than off the tables here:
+/// Read through [`outcome_action`] rather than off the tables here:
 /// which key names a column is stated in one place, and a second reader could
 /// drift from it without anything failing.
 fn status_writebacks(w: &config::WorkflowConfig) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for table in [&w.on_start, &w.on_success, &w.on_failure] {
-        if let Some(status) = table
-            .as_ref()
-            .and_then(|t| OutcomeAction::from_table(t).status)
+        if let Some(status) = table.as_ref().and_then(|t| outcome_action(t).status)
             && !out.contains(&status)
         {
             out.push(status);

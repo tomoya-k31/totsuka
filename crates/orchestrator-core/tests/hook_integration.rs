@@ -132,7 +132,7 @@ on_failure = {{ status = "failed" }}
 "#
     ))
     .unwrap();
-    Workflow::from_configs(&cfg.workflows, &cfg.projects)
+    cfg.domain_workflows()
 }
 
 fn engine_settings(wfs: Vec<Workflow>, hook: Option<HookRuntime>) -> EngineSettings {
@@ -531,7 +531,7 @@ on_failure = { status = "failed" }
 "#,
     )
     .unwrap();
-    let mut settings = engine_settings(Workflow::from_configs(&cfg.workflows, &cfg.projects), None);
+    let mut settings = engine_settings(cfg.domain_workflows(), None);
     settings.default_tool = "codex".to_string();
 
     let mut engine = Engine::new(
@@ -1238,7 +1238,7 @@ on_failure = {{ status = "failed" }}
 "#
     ))
     .unwrap();
-    Workflow::from_configs(&cfg.workflows, &cfg.projects)
+    cfg.domain_workflows()
 }
 
 /// `timeout_secs = 0` opts a workflow out of the D-03 sweep (#439). Before
@@ -2000,10 +2000,7 @@ on_failure = { status = "failed" }
 "#,
         )
         .unwrap();
-        let mut settings = engine_settings(
-            Workflow::from_configs(&cfg.workflows, &cfg.projects),
-            Some(hook),
-        );
+        let mut settings = engine_settings(cfg.domain_workflows(), Some(hook));
         settings.prompts = orchestrator_core::prompts::PromptSet::from_config(&cfg);
         settings.repos = vec![RepoSettings {
             name: "clone".to_string(),
@@ -2073,7 +2070,7 @@ agent = "mock_agent"
 "#
     ))
     .unwrap();
-    Workflow::from_configs(&cfg.workflows, &cfg.projects)
+    cfg.domain_workflows()
 }
 
 const CLAIM_DESTINATION: &str = "GitHub Project #7 owned by the user `tomoya-k31`.";
