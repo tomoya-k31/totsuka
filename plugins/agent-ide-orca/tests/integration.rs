@@ -1260,23 +1260,3 @@ async fn config_validate_checks_the_runtime_and_names_removed_keys() {
             .contains("`poll_interval_ms` was removed")
     );
 }
-
-#[tokio::test]
-async fn methods_before_initialize_are_rejected() {
-    let mut d = Driver::new(FakeCli::default());
-    for method in [
-        "task/dispatch",
-        "session/attach",
-        "session/focus",
-        "session/release",
-        "session/list",
-        "diagnostics/snapshot",
-    ] {
-        let r = d.call(method, json!({ "session_id": HANDLE })).await;
-        assert_eq!(
-            r["error"]["code"],
-            plugin_protocol::error_code::INVALID_REQUEST,
-            "{method}: {r}"
-        );
-    }
-}

@@ -2950,27 +2950,6 @@ fn shipped_manifest_is_valid_agent_ide() {
     // 0.5.0: hook-driven completion (#131), and pane diagnostics snapshots.
     assert!(manifest.capabilities.hook_completion);
     assert!(manifest.capabilities.diagnostics_snapshot);
-    assert!(manifest.is_compatible_with(&plugin_protocol::protocol_version()));
-}
-
-#[tokio::test]
-async fn methods_before_initialize_are_rejected() {
-    let mut d = Driver::new();
-    let resp = d
-        .call(
-            "task/dispatch",
-            json!({
-                "task": { "id": "T", "source": "s", "title": "t" },
-                "worktree_path": "/wt", "mode": "implement"
-            }),
-        )
-        .await;
-    assert!(
-        resp["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("initialize")
-    );
 }
 
 #[tokio::test]

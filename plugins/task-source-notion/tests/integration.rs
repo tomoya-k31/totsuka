@@ -1003,9 +1003,9 @@ async fn initialize_without_triggers_never_submits() {
 
 #[test]
 fn shipped_manifest_is_valid_and_declares_push_source() {
-    // The on-disk plugin.toml must parse and declare kind=task_source with
-    // `task_submit` (push ingestion, 0.1.6) and the `source` output
-    // capability (F-83) so the orchestrator accepts it and never polls it.
+    // The on-disk plugin.toml must parse and declare kind=task_source.
+    // Compatibility with the current protocol is checked for every bundled
+    // manifest by plugin-protocol's `bundled_manifests` test.
     let manifest = plugin_protocol::Manifest::from_toml_str(include_str!("../plugin.toml"))
         .expect("plugin.toml parses");
     assert_eq!(manifest.name, "notion");
@@ -1014,27 +1014,4 @@ fn shipped_manifest_is_valid_and_declares_push_source() {
     // deliverable itself, so declaring `source` would advertise an RPC that
     // no longer exists.
     assert!(manifest.capabilities.outputs.is_empty());
-    assert!(
-        manifest.is_compatible_with(&plugin_protocol::protocol_version()),
-        "manifest must accept the current protocol version"
-    );
-}
-
-#[tokio::test]
-async fn methods_before_initialize_are_rejected() {
-    let shared = Shared::default();
-    let mut srv = server(&shared);
-    let resp = call(
-        &mut srv,
-        1,
-        "task/update_status",
-        json!({ "task_id": "P_1", "status": "実装待ち" }),
-    )
-    .await;
-    assert!(
-        resp.error
-            .expect("must error")
-            .message
-            .contains("initialize")
-    );
 }

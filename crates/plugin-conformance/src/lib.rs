@@ -29,11 +29,17 @@
 //!    this plugin ([`HOST_REQUESTS`], filtered by the manifest's
 //!    capabilities) is refused with `INVALID_REQUEST` — with well-formed
 //!    params and with `{}`. A notifier instead answers nothing to an early
-//!    `notify`.
-//! 2. A line that is not JSON gets `PARSE_ERROR` with a `null` id.
+//!    `notify`. A request before `initialize` must say so rather than fail on
+//!    an absent session.
+//! 2. A line that is not JSON gets `PARSE_ERROR` with a `null` id: there is
+//!    no id to correlate against, and a made-up one (an empty string) would
+//!    match nothing the host sent.
 //! 3. An unknown method gets `METHOD_NOT_FOUND`.
-//! 4. A blank line and a notification get no answer.
+//! 4. A blank line and a notification get no answer — answering a
+//!    notification puts a line on the wire the host is not waiting for.
 //! 5. `initialize` with params of the wrong shape gets `INVALID_PARAMS`.
+//!    Malformed params are a protocol problem; `CONFIG_INVALID` would send the
+//!    operator to edit a file that is not the cause.
 //! 6. `config/validate` on the given config plus one unknown top-level key
 //!    answers `valid: false`, with an error naming the key.
 //! 7. `shutdown` is answered and the process exits with status 0.
@@ -42,7 +48,9 @@
 //! `task_source` only:
 //!
 //! 9. `initialize` with an unknown key in the first workflow's trigger fails
-//!    with `CONFIG_INVALID`, and the message names the key.
+//!    with `CONFIG_INVALID`, and the message names the key. An unknown key is
+//!    a typo, and dropping it *widens* the trigger instead of narrowing it
+//!    (#574).
 //!
 //! Error **messages** are never compared, only codes: the wording is not part
 //! of the protocol. The unknown key in 6 and 9 is the exception because it is

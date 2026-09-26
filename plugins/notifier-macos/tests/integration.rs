@@ -246,5 +246,4 @@ fn shipped_manifest_is_a_notifier() {
         .expect("plugin.toml parses");
     assert_eq!(manifest.name, "macos");
     assert_eq!(manifest.kind, plugin_protocol::PluginKind::Notifier);
-    assert!(manifest.is_compatible_with(&plugin_protocol::protocol_version()));
 }

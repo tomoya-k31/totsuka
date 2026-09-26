@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](plugin-dev-guide.ja.md)
 
-<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:e0281f03b5694868e05c8ccdd59ac9e9ef0bda376fe317bc49b956131ee2ce91 -->
+<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:045b8669cb2dc03086bfa72d4ba75ef6d891fe35c559860b7e9caee695bfcdc8 -->
 
 # Plugin development guide
 
@@ -236,6 +236,53 @@ You can also define keys on the orchestrator's own structures:
 | `[[projects]]` | **Settled by `source`.** An entry names exactly one plugin | Deserialize into a `deny_unknown_fields` struct. No handshake needed |
 
 A workflow key nobody claims fails startup, and so does one two plugins claim.
+
+## Conformance tests
+
+The `plugin-conformance` crate checks whether your plugin follows the protocol's rules. It starts your plugin's **binary** and talks to it over stdio, so it works the same whether or not you use `plugin-sdk`. All seven official plugins run it from their `tests/conformance.rs`.
+
+```toml
+[dev-dependencies]
+plugin-conformance = { git = "https://github.com/tomoya-k31/totsuka" }
+```
+
+```rust
+#[test]
+fn the_binary_conforms_to_the_protocol() {
+    // The smallest initialize params your plugin accepts; a task_source also
+    // needs one workflow with a valid trigger.
+    let init = serde_json::from_value(serde_json::json!({
+        "protocol_version": plugin_protocol::PROTOCOL_VERSION,
+        "config": { "token": "test" },
+        "workflows": [{ "workflow": "w", "trigger": { "status": "todo" } }]
+    }))
+    .unwrap();
+    let violations = plugin_conformance::check(
+        env!("CARGO_BIN_EXE_mytool"),                       // your [[bin]] name
+        concat!(env!("CARGO_MANIFEST_DIR"), "/plugin.toml"), // source of kind and capabilities
+        &init,
+    );
+    assert!(violations.is_empty(), "\n{}", violations.join("\n"));
+}
+```
+
+The kit never sends `init` as it is: a successful `initialize` would reach real services, so it only sends broken copies. Test what your plugin does after a successful `initialize` in your own tests.
+
+It checks the nine rules below and reports every violation at once. **If you write your plugin in another language, this is the list of rules to follow.**
+
+| # | Applies to | Rule |
+|---|---|---|
+| 1 | every kind | Before `initialize`, refuse each kind-specific request the host may send you (filtered by your capabilities) with `INVALID_REQUEST` (-32600). A notifier answers nothing to an early `notify` |
+| 2 | every kind | Answer a line that is not JSON with `PARSE_ERROR` (-32700) and `id: null` |
+| 3 | every kind | Answer an unknown method with `METHOD_NOT_FOUND` (-32601) |
+| 4 | every kind | Answer nothing to a blank line or a notification (no `id`) |
+| 5 | every kind | Answer malformed `initialize` params with `INVALID_PARAMS` (-32602) |
+| 6 | every kind | `config/validate` on a config with an unknown key returns `valid: false`, with an error naming the key |
+| 7 | every kind | Answer `shutdown` with a result, then exit with status 0 |
+| 8 | every kind | Exit when stdin reaches EOF |
+| 9 | task_source | `initialize` with an unknown key in a trigger fails with `CONFIG_INVALID` (-32003), and the message names the key |
+
+Only error **codes** are checked, never the message wording. The exception is the key name in rules 6 and 9: it is the one thing an operator needs from the error to fix their config.
 
 ## Checking it works
 

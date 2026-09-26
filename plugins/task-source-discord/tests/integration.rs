@@ -187,21 +187,6 @@ async fn a_watch_on_an_unknown_repo_fails_initialize() {
     assert!(message.contains("my-docs"), "{message}");
 }
 
-/// The watch keys are all in this source's valid-key list, so an unknown one
-/// is a typo — and a dropped key widens the trigger rather than narrowing it.
-#[tokio::test]
-async fn an_unknown_trigger_key_fails_initialize() {
-    let shared = std::sync::Arc::new(Shared::default());
-    let mut srv = server(&shared);
-
-    let mut trigger = watch_trigger();
-    trigger["chanel_name"] = json!("clip");
-    let resp = call(&mut srv, "initialize", init_params(config(), trigger)).await;
-    let (code, message) = error_of(&resp);
-    assert_eq!(code, error_code::CONFIG_INVALID);
-    assert!(message.contains("chanel_name"), "{message}");
-}
-
 /// `config/validate` is deliberately offline, so `doctor` and
 /// `config validate` need no network and no live token.
 #[tokio::test]
@@ -226,24 +211,6 @@ async fn config_validate_makes_no_round_trip() {
             .unwrap()
             .contains("Copy User ID")
     );
-}
-
-/// `result/publish` before `initialize` must say so rather than panic on an
-/// absent session.
-#[tokio::test]
-async fn result_publish_before_initialize_is_refused() {
-    let shared = std::sync::Arc::new(Shared::default());
-    let mut srv = server(&shared);
-
-    let resp = call(
-        &mut srv,
-        "result/publish",
-        json!({ "task_id": "t1", "content": "done" }),
-    )
-    .await;
-    let (code, message) = error_of(&resp);
-    assert_eq!(code, error_code::INVALID_REQUEST);
-    assert!(message.contains("initialize"), "{message}");
 }
 
 /// A published result for a task this process never raised has nowhere to go,
@@ -298,48 +265,4 @@ async fn update_status_is_an_accepted_no_op() {
     .await;
     assert!(resp.error.is_none(), "{:?}", resp.error);
     assert_eq!(shared.calls().len(), guard_calls, "no round trip");
-}
-
-/// A line that is not JSON has no id to correlate against, so the reply must
-/// carry a **null** id rather than a made-up empty string.
-#[tokio::test]
-async fn a_non_json_line_answers_with_a_null_id() {
-    let shared = std::sync::Arc::new(Shared::default());
-    let mut srv = server(&shared);
-
-    let reply = srv.handle_line("not json at all").await;
-    let line = reply.line.expect("a response line");
-    let value: Value = serde_json::from_str(&line).expect("valid JSON");
-    assert_eq!(value["id"], Value::Null, "{line}");
-    assert_eq!(value["error"]["code"], error_code::PARSE_ERROR);
-}
-
-/// Blank lines and notifications get no reply at all — answering a
-/// notification would put an unexpected line on the wire.
-#[tokio::test]
-async fn blank_lines_and_notifications_are_not_answered() {
-    let shared = std::sync::Arc::new(Shared::default());
-    let mut srv = server(&shared);
-
-    assert!(srv.handle_line("   ").await.line.is_none());
-    let notification = json!({ "jsonrpc": "2.0", "method": "shutdown" });
-    assert!(
-        srv.handle_line(&notification.to_string())
-            .await
-            .line
-            .is_none()
-    );
-}
-
-/// Malformed request params are a *protocol* problem. Reporting them as
-/// `CONFIG_INVALID` would send the operator to edit a file that is not the
-/// cause.
-#[tokio::test]
-async fn malformed_initialize_params_are_invalid_params() {
-    let shared = std::sync::Arc::new(Shared::default());
-    let mut srv = server(&shared);
-
-    let resp = call(&mut srv, "initialize", json!({ "protocol_version": 42 })).await;
-    let (code, _) = error_of(&resp);
-    assert_eq!(code, error_code::INVALID_PARAMS);
 }

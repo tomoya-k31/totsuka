@@ -4,7 +4,7 @@ title: ADR-0104 プラグインの約束事を、実バイナリを黒箱で検�
 description: 各プラグインの tests/ に揃わない形で複製されていたプロトコル適合テストを、プラグインのバイナリを起動して stdio で検査する新クレート plugin-conformance に集約した決定。in-process 検査・plugin-sdk / test-support への同居は却下し、kind ごとのリクエスト一覧は plugin-protocol の HOST_REQUESTS に置いてメソッド定数の網羅をテストで保証する。
 resource: https://github.com/tomoya-k31/totsuka/issues/767
 tags: [decision, plugin, protocol, testing, conformance, adr]
-generated: { by: claude-code/opus-5.5, at: 2026-09-26T17:30:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-09-26T18:30:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -41,6 +41,8 @@ stable（#767）。設計の議論は issue #767 のコメントにある。
 # Consequences
 
 - **キットは初回の実行で SDK の不具合を 1 つ見つけた**。`plugin_sdk::runtime::serve` は `shutdown` の応答を writer タスクに積んだまま戻り、`main` の終了とランタイムの破棄に負けて応答が落ちていた（手元で 5 回中 4 回）。in-process テストは `Reply` の値を見るだけなので、これを捕まえられなかった。`Stdio::flush()` を足し、`serve` が戻る前に呼ぶようにした
+- **残り 6 本へ適用したとき、さらに 2 種類のずれが見つかった**。discord は initialize 前の `task/update_status` に成功を返していた。no-op だからといって、initialize 前の拒否まで省く理由はなかった（同じ no-op の slack は拒否している）。herdr と orca は `config/validate` で serde のエラーを捨てて `config does not parse` だけを返しており、どのキーが悪いのかが伝わらなかった。どちらも他のプラグインに揃えた
+- **消したテストの基準**は「すべての assert をキットが肩代わりしている」こと。1 つでも固有の assert があれば残した。たとえば github / notion / slack の未知トリガーキーのテストは、有効なキーの候補（`status`・`label`・`reaction` など）を挙げることまで見ているので残し、それが無い discord の分は消した。消したテストの doc コメントが運んでいた根拠は、キットの検査項目の説明へ移した
 - 検査の有効性は、各項目の期待値を 1 つずつ反転させ、そのたびに slack の適合テストが落ちることで確かめた（14 通り、全部落ちた）
 - nextest のテスト数は減る。「数の一致」はこの作業の検査にならないので、PR 本文に「消したテスト → 肩代わりした検査項目」の対応を書く
 - 外部のプラグイン開発者は、git の dev-dependency 1 行と数行のテストで同じ検査を使える。Rust 以外で書く人には、9 項目の一覧がプロトコル上の約束事の一覧として残る

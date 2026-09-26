@@ -38,6 +38,7 @@ thiserror.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+plugin-conformance.workspace = true
 # `test-util` is what makes `#[tokio::test(start_paused = true)]` available:
 # the integration test for the never-clears `agent_not_ready` path has to wait
 # out PROMPT_READY_WINDOW, and on a paused clock that costs no wall time.
