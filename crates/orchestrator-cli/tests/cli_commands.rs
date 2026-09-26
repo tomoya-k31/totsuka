@@ -128,7 +128,7 @@ fn seed_db(base: &Path) -> (i64, i64, i64) {
         db.apply_event(db.task_ref(done).unwrap(), event, None)
             .unwrap();
     }
-    (running, failed, done)
+    (running.0, failed.0, done.0)
 }
 
 #[test]
@@ -2065,7 +2065,7 @@ fn menu_renders_the_glyph_the_count_and_a_focus_action() {
     let doc: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("jq-parseable JSON");
     assert_eq!(doc["availability"], "down");
     assert_eq!(doc["attention_count"], 1);
-    assert_eq!(doc["attention"][0]["task_id"], waiting_id);
+    assert_eq!(doc["attention"][0]["task_id"], waiting_id.0);
 }
 
 /// A menu-bar plugin that exits non-zero renders as a broken item, so every

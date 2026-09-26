@@ -5,6 +5,7 @@
 //! shape.
 
 use super::*;
+use crate::domain::TaskId;
 
 /// Counters accumulated over one `run` invocation.
 #[derive(Debug, Default, Clone, PartialEq, Eq, serde::Serialize)]
@@ -43,11 +44,11 @@ pub struct RunSummary {
     /// Counters for this run.
     pub stats: RunStats,
     /// Tasks left in `waiting_input` (resume via answer + next run).
-    pub waiting: Vec<i64>,
+    pub waiting: Vec<TaskId>,
     /// Tasks left in `pending` (repo confirmation, F-14).
-    pub pending: Vec<i64>,
+    pub pending: Vec<TaskId>,
     /// Tasks left in `queued` (e.g. unknown workflow after a config change).
-    pub queued: Vec<i64>,
+    pub queued: Vec<TaskId>,
     /// Whether the loop exited due to a shutdown signal.
     pub interrupted: bool,
     /// Per-plugin RPC accounting (#497), keyed by plugin instance name.

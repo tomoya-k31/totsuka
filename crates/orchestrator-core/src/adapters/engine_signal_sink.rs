@@ -10,6 +10,7 @@
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 
+use crate::domain::TaskId;
 use crate::domain::signal::AgentSignal;
 use crate::ports::signal_ingress::{
     ControlPort, FocusOutcome, SignalAck, SignalError, SignalPort, TaskControlOutcome, TaskOp,
@@ -54,7 +55,7 @@ impl SignalPort for EngineSignalSink {
 impl ControlPort for EngineSignalSink {
     fn focus(
         &self,
-        task_id: i64,
+        task_id: TaskId,
     ) -> impl std::future::Future<Output = Result<FocusOutcome, SignalError>> + Send {
         // Unlike a signal, focus is request-response (F-94): the outcome comes
         // back over a oneshot the run loop answers when it processes the event.
@@ -74,7 +75,7 @@ impl ControlPort for EngineSignalSink {
     fn task(
         &self,
         op: TaskOp,
-        task_id: i64,
+        task_id: TaskId,
     ) -> impl std::future::Future<Output = Result<TaskControlOutcome, SignalError>> + Send {
         // The same request-response trip as `focus` (#760).
         let (respond, outcome) = oneshot::channel();
@@ -102,7 +103,7 @@ mod tests {
     fn sample_signal() -> AgentSignal {
         AgentSignal {
             source: SignalSource::AgentHook,
-            job_id: JobId::new(1, 2),
+            job_id: JobId::new(TaskId(1), 2),
             tool_session_id: String::new(),
             prompt_id: String::new(),
             event: SignalEvent::Heartbeat,
@@ -119,7 +120,7 @@ mod tests {
 
         match rx.recv().await {
             Some(PluginEvent::HookSignal(signal)) => {
-                assert_eq!(signal.job_id, JobId::new(1, 2));
+                assert_eq!(signal.job_id, JobId::new(TaskId(1), 2));
             }
             other => panic!(
                 "expected HookSignal, got {other:?}",

@@ -2731,6 +2731,7 @@ fn check_orphan_panes(
 mod tests {
     use super::*;
     use orchestrator_core::adapters::TaskRecord;
+    use orchestrator_core::domain::TaskId;
     use orchestrator_core::domain::state::TaskState;
     use plugin_protocol::methods::SessionInfo;
 
@@ -3049,7 +3050,7 @@ location = "${MY_ROOT}/wt/{worktree_name}"
     /// Slack thread key, never the DB row id) is `source_task_id`.
     fn task(source_task_id: &str, state: TaskState, worktree_path: Option<&str>) -> TaskRecord {
         TaskRecord {
-            id: 1000,
+            id: TaskId(1000),
             source: "slack".into(),
             source_task_id: source_task_id.into(),
             workflow: "reply".into(),

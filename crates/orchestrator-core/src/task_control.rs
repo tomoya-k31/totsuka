@@ -9,6 +9,7 @@
 
 use crate::adapters::state_db::{StateDb, StateError};
 use crate::domain::EventDetail;
+use crate::domain::TaskId;
 use crate::domain::state::{TaskEvent, TaskState};
 use crate::ports::signal_ingress::TaskControlOutcome;
 
@@ -18,7 +19,7 @@ use crate::ports::signal_ingress::TaskControlOutcome;
 /// routes) is the engine's to release after an applied cancel.
 pub fn cancel(
     db: &StateDb,
-    id: i64,
+    id: TaskId,
     detail: EventDetail,
 ) -> Result<TaskControlOutcome, StateError> {
     let Some(task) = db.get_task(id)? else {
@@ -49,7 +50,11 @@ pub fn cancel(
 }
 
 /// Retry task `id`. `detail` is the audit detail recorded with the event.
-pub fn retry(db: &StateDb, id: i64, detail: EventDetail) -> Result<TaskControlOutcome, StateError> {
+pub fn retry(
+    db: &StateDb,
+    id: TaskId,
+    detail: EventDetail,
+) -> Result<TaskControlOutcome, StateError> {
     let Some(task) = db.get_task(id)? else {
         return Ok(TaskControlOutcome::refused(not_found(id)));
     };
@@ -89,14 +94,14 @@ pub fn retry(db: &StateDb, id: i64, detail: EventDetail) -> Result<TaskControlOu
 /// can no longer mean a race here, only a refusal the checks above missed,
 /// and is answered the same way rather than stopping `run`. A refusal, not an error: inside the engine an `Err` is run-fatal,
 /// and losing this race must not stop `run`.
-fn lost_race(id: i64, e: &impl std::fmt::Display) -> TaskControlOutcome {
+fn lost_race(id: TaskId, e: &impl std::fmt::Display) -> TaskControlOutcome {
     TaskControlOutcome::refused(format!(
         "task {id} changed state while this was being applied ({e}) → `totsuka task show {id}` and try again"
     ))
 }
 
 /// The refusal for an id the DB does not know.
-pub fn not_found(id: i64) -> String {
+pub fn not_found(id: TaskId) -> String {
     format!("task {id} not found → `totsuka task list` shows known ids")
 }
 
@@ -121,7 +126,7 @@ mod tests {
                 last_signal_at: None,
             })
             .unwrap();
-        (db, id)
+        (db, id.0)
     }
 
     fn control() -> EventDetail {
@@ -133,12 +138,12 @@ mod tests {
     #[test]
     fn cancel_then_retry_round_trips_and_reports_where_it_came_from() {
         let (db, id) = db_with_task();
-        let cancelled = cancel(&db, id, control()).unwrap();
+        let cancelled = cancel(&db, TaskId(id), control()).unwrap();
         assert_eq!(
             cancelled,
             TaskControlOutcome::applied(TaskState::Queued, TaskState::Cancelled, None)
         );
-        let retried = retry(&db, id, control()).unwrap();
+        let retried = retry(&db, TaskId(id), control()).unwrap();
         assert_eq!(
             retried,
             TaskControlOutcome::applied(TaskState::Cancelled, TaskState::Queued, Some(0))
@@ -149,16 +154,19 @@ mod tests {
     fn refusals_are_answers_with_advice_not_errors() {
         let (db, id) = db_with_task();
         // Queued is not retryable.
-        let refused = retry(&db, id, control()).unwrap();
+        let refused = retry(&db, TaskId(id), control()).unwrap();
         assert!(!refused.ok);
         assert!(refused.reason.unwrap().contains("cancel` it first"));
 
-        cancel(&db, id, control()).unwrap();
-        let twice = cancel(&db, id, control()).unwrap();
+        cancel(&db, TaskId(id), control()).unwrap();
+        let twice = cancel(&db, TaskId(id), control()).unwrap();
         assert!(!twice.ok);
         assert!(twice.reason.unwrap().contains(&format!("task retry {id}")));
 
-        let unknown = cancel(&db, 9999, control()).unwrap();
-        assert_eq!(unknown.reason.as_deref(), Some(not_found(9999).as_str()));
+        let unknown = cancel(&db, TaskId(9999), control()).unwrap();
+        assert_eq!(
+            unknown.reason.as_deref(),
+            Some(not_found(TaskId(9999)).as_str())
+        );
     }
 }

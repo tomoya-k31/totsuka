@@ -67,6 +67,7 @@
 use std::io::Write;
 use std::path::Path;
 
+use orchestrator_core::domain::TaskId;
 use orchestrator_core::domain::state::TaskState;
 use serde::Serialize;
 
@@ -161,7 +162,7 @@ fn classify(state: TaskState, has_wait_reason: bool) -> Section {
 #[derive(Debug, Serialize)]
 pub struct MenuRow {
     /// Task id — also the argument `totsuka focus` is invoked with.
-    pub task_id: i64,
+    pub task_id: TaskId,
     /// The task's state, spelled exactly as `status` and `--json` spell it.
     pub state: String,
     /// Matched workflow name.
@@ -439,7 +440,7 @@ mod tests {
 
     fn row(task_id: i64, state: &str, title: &str) -> MenuRow {
         MenuRow {
-            task_id,
+            task_id: TaskId(task_id),
             state: state.to_string(),
             workflow: "implement".to_string(),
             title: title.to_string(),

@@ -5,6 +5,7 @@
 //! keeps its worktree and commits, so `task retry` can resume from here.
 
 use super::*;
+use crate::domain::TaskId;
 use crate::domain::event_detail::{AgentStateChange, EventDetail, Publish};
 use serde::Deserialize;
 
@@ -109,7 +110,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                 self.stats.done += 1;
                 self.cleanup_worktree(record.id).await?;
                 notify_all(&self.plugins.notifiers, NotifierEvent::Done, record, None);
-                tracing::info!(task_id = record.id, "task done");
+                tracing::info!(task_id = record.id.0, "task done");
                 Ok(())
             }
             Err(reason) => {
@@ -142,7 +143,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         reason: String,
     ) -> Result<(), EngineError> {
         tracing::error!(
-            task_id = record.id,
+            task_id = record.id.0,
             kind = detail.kind(),
             "task failed: {reason}"
         );
@@ -180,7 +181,10 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// `hook_complete` and `self_report` — and none other ever has. A row
     /// whose artifact is `null` is passed over for an older one, and a row
     /// that does not read as an [`EventDetail`] carries none (#766).
-    pub(super) fn persisted_artifact(&self, task_id: i64) -> Result<Option<String>, EngineError> {
+    pub(super) fn persisted_artifact(
+        &self,
+        task_id: TaskId,
+    ) -> Result<Option<String>, EngineError> {
         Ok(self
             .db
             .list_events(task_id)?
@@ -257,7 +261,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         };
         let Some(source) = self.plugins.sources.get(&record.source) else {
             tracing::warn!(
-                task_id = record.id,
+                task_id = record.id.0,
                 "cannot write back status: source plugin not launched"
             );
             return;
@@ -272,10 +276,10 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         };
         match source.request::<rpc::TaskUpdateStatus>(&params).await {
             Ok(_) => {
-                tracing::info!(task_id = record.id, status = %status, "source status updated (F-84)");
+                tracing::info!(task_id = record.id.0, status = %status, "source status updated (F-84)");
             }
             Err(e) => {
-                tracing::warn!(task_id = record.id, "task/update_status failed: {e}");
+                tracing::warn!(task_id = record.id.0, "task/update_status failed: {e}");
             }
         }
     }
@@ -284,7 +288,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// (#210): decide → release the pane → remove. The pane is released only
     /// on a `Remove` decision, so `Retained`/`DirtySkipped` worktrees keep
     /// their pane as the human's entry point (F-23/F-85).
-    pub(super) async fn cleanup_worktree(&mut self, task_id: i64) -> Result<(), EngineError> {
+    pub(super) async fn cleanup_worktree(&mut self, task_id: TaskId) -> Result<(), EngineError> {
         // The other consumer of the branch, and the one reached by paths that
         // never publish at all (a cancel, a sweep of a task finished by an
         // earlier process). Deleting the branch is the only thing that needs
@@ -344,7 +348,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             Some(None) => mode_default,
             None => {
                 tracing::info!(
-                    task_id,
+                    task_id = task_id.0,
                     workflow = %record.workflow,
                     "workflow no longer in config; using the mode-default cleanup policy"
                 );
@@ -362,7 +366,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         ) {
             Ok(decision) => decision,
             Err(e) => {
-                tracing::warn!(task_id, "worktree cleanup failed: {e}");
+                tracing::warn!(task_id = task_id.0, "worktree cleanup failed: {e}");
                 return Ok(());
             }
         };
@@ -370,14 +374,14 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             CleanupDecision::Retain => {
                 // Expected under retention/manual policies; the sweep re-checks
                 // periodically, so keep this quiet.
-                tracing::debug!(task_id, "worktree retained per policy");
+                tracing::debug!(task_id = task_id.0, "worktree retained per policy");
                 return Ok(());
             }
             CleanupDecision::Dirty => {
                 // Data-loss guard (F-23): keep the worktree AND its pane — the
                 // pane is the human's way in to the uncommitted work.
                 tracing::info!(
-                    task_id,
+                    task_id = task_id.0,
                     outcome = ?CleanupOutcome::DirtySkipped,
                     "worktree cleanup"
                 );
@@ -389,7 +393,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                 // the missing-path case above — including dropping the release
                 // memos, since nothing about this task will change from here.
                 tracing::debug!(
-                    task_id,
+                    task_id = task_id.0,
                     worktree = %path,
                     "worktree already gone; nothing to clean up"
                 );
@@ -413,7 +417,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                 // already gone, but data loss (irreversible) outranks a lost
                 // pane (minor). The sweep retries the removal later.
                 tracing::warn!(
-                    task_id,
+                    task_id = task_id.0,
                     worktree = %path,
                     "worktree turned dirty after its pane was released; kept (F-23)"
                 );
@@ -425,10 +429,10 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                 // `--watch` run ever made (same hygiene as
                 // `drop_task_sessions`).
                 self.forget_release_memos(task_id);
-                tracing::info!(task_id, ?outcome, "worktree cleanup");
+                tracing::info!(task_id = task_id.0, ?outcome, "worktree cleanup");
             }
             Err(e) => {
-                tracing::warn!(task_id, "worktree cleanup failed: {e}");
+                tracing::warn!(task_id = task_id.0, "worktree cleanup failed: {e}");
             }
         }
         Ok(())
@@ -450,7 +454,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             record.base_commit.as_deref(),
         ) {
             tracing::warn!(
-                task_id = record.id,
+                task_id = record.id.0,
                 branch,
                 "could not delete a removed worktree's branch: {e}"
             );
@@ -464,14 +468,14 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// leaving the older ones behind would grow the set for the life of the
     /// process. A lookup failure only skips the pruning — the memo is an
     /// optimisation, never correctness.
-    pub(super) fn forget_release_memos(&mut self, task_id: i64) {
+    pub(super) fn forget_release_memos(&mut self, task_id: TaskId) {
         match self.db.list_sessions(task_id) {
             Ok(sessions) => {
                 for session in sessions {
                     self.released_panes.remove(&session.id);
                 }
             }
-            Err(e) => tracing::debug!(task_id, "could not prune release memos: {e}"),
+            Err(e) => tracing::debug!(task_id = task_id.0, "could not prune release memos: {e}"),
         }
     }
 
@@ -499,7 +503,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             }
             Err(e) => {
                 tracing::warn!(
-                    task_id = record.id,
+                    task_id = record.id.0,
                     "cannot resolve session for pane release: {e}"
                 );
                 return PaneRelease::Failed;
@@ -518,7 +522,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             // The owning plugin is not launched this run; that cannot change
             // until restart, so do not retry every sweep.
             tracing::debug!(
-                task_id = record.id,
+                task_id = record.id.0,
                 plugin = %session.plugin,
                 "pane release skipped: agent plugin not launched"
             );
@@ -543,7 +547,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                 self.released_panes.insert(session.id);
                 match (result.released, result.not_released) {
                     (true, _) => {
-                        tracing::info!(task_id = record.id, "pane released");
+                        tracing::info!(task_id = record.id.0, "pane released");
                         PaneRelease::Closed
                     }
                     // The pane is alive and the plugin declined to touch it
@@ -552,7 +556,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                     // this task.
                     (false, Some(NotReleased::Refused)) => {
                         tracing::warn!(
-                            task_id = record.id,
+                            task_id = record.id.0,
                             "pane not released: the plugin's identity guard refused — \
                              the pane id names a different pane now"
                         );
@@ -563,13 +567,13 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                     // 0.4.2 — both mean "cannot tell", and the pre-0.4.2
                     // behaviour was to carry on.
                     (false, reason) => {
-                        tracing::debug!(task_id = record.id, ?reason, "pane not released");
+                        tracing::debug!(task_id = record.id.0, ?reason, "pane not released");
                         PaneRelease::Untouched
                     }
                 }
             }
             Err(e) => {
-                tracing::warn!(task_id = record.id, "session/release failed: {e}");
+                tracing::warn!(task_id = record.id.0, "session/release failed: {e}");
                 PaneRelease::Failed
             }
         }
@@ -652,7 +656,7 @@ mod tests {
                 .apply_event(engine.db.task_ref(id).unwrap(), event, detail)
                 .unwrap();
         }
-        id
+        id.0
     }
 
     /// All three kinds that persist an artifact are read back, and the
@@ -692,7 +696,7 @@ mod tests {
             history.extend(tail);
             let id = task_with_history(&engine, expected, history);
             assert_eq!(
-                engine.persisted_artifact(id).unwrap().as_deref(),
+                engine.persisted_artifact(TaskId(id)).unwrap().as_deref(),
                 Some(expected)
             );
         }
@@ -726,7 +730,7 @@ mod tests {
             ],
         );
         assert_eq!(
-            engine.persisted_artifact(id).unwrap().as_deref(),
+            engine.persisted_artifact(TaskId(id)).unwrap().as_deref(),
             Some("older")
         );
     }

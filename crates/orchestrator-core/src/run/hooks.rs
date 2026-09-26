@@ -27,6 +27,7 @@ use super::{Engine, EngineError, StatusMoment, notify_all, workflows_by_name};
 use crate::adapters::hook_uds;
 use crate::adapters::state_db::{HookEventInsert, HookEventOutcome, StateError, TaskRecord};
 use crate::config::{DEFAULT_BLOCK_RETRY_LIMIT, DEFAULT_WORKFLOW_TIMEOUT_SECS};
+use crate::domain::TaskId;
 use crate::domain::VerificationMode;
 use crate::domain::event_detail::{EventDetail, HookStart};
 use crate::domain::signal::{AgentSignal, SignalEvent, StopStatus};
@@ -222,7 +223,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                 | TaskState::WaitingInput
                 | TaskState::Escalated
         ) {
-            tracing::debug!(task_id = record.id, state = %record.state, "ignoring COMPLETED in a non-pipeline state");
+            tracing::debug!(task_id = record.id.0, state = %record.state, "ignoring COMPLETED in a non-pipeline state");
             return Ok(());
         }
 
@@ -279,7 +280,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                     record,
                     Some("completion self-reported → `totsuka task verify`".to_string()),
                 );
-                tracing::info!(task_id = record.id, "awaiting human verification (D-01)");
+                tracing::info!(task_id = record.id.0, "awaiting human verification (D-01)");
             }
         }
         Ok(())
@@ -370,7 +371,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                     .await?;
             }
             _ => {
-                tracing::debug!(task_id = record.id, state = %record.state, kind = detail.kind(), "ignoring a park request in a non-pipeline state")
+                tracing::debug!(task_id = record.id.0, state = %record.state, kind = detail.kind(), "ignoring a park request in a non-pipeline state")
             }
         }
         Ok(())
@@ -404,7 +405,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             record,
             reason,
         );
-        tracing::warn!(task_id = record.id, "task failed (hook FAILED)");
+        tracing::warn!(task_id = record.id.0, "task failed (hook FAILED)");
         Ok(())
     }
 
@@ -421,7 +422,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             .await?;
         } else {
             tracing::info!(
-                task_id = record.id,
+                task_id = record.id.0,
                 streak,
                 "UNKNOWN stop recorded; below escalation threshold"
             );
@@ -452,7 +453,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             && existing != tool_session_id
         {
             tracing::warn!(
-                task_id = record.id,
+                task_id = record.id.0,
                 "SessionStart reported tool session id differs from the recorded one (correlation anomaly, E-09); keeping the newest"
             );
         }
@@ -460,8 +461,8 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             Ok(()) => {}
             // The job_id's session_row does not exist: a stale/anomalous
             // correlation. Record nothing, do not fail.
-            Err(StateError::NotFound(_)) => tracing::warn!(
-                task_id = record.id,
+            Err(StateError::SessionNotFound(_)) => tracing::warn!(
+                task_id = record.id.0,
                 session_row,
                 "SessionStart for an unknown session row → ignored (E-09)"
             ),
@@ -478,7 +479,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             return;
         }
         tracing::warn!(
-            task_id = record.id,
+            task_id = record.id.0,
             reason = ?reason,
             "agent session ended before completion → deferring to the timeout sweep / pane.exited deadman"
         );
@@ -507,7 +508,10 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             record,
             Some(reason),
         );
-        tracing::warn!(task_id = record.id, "task escalated to a human (D-02/D-03)");
+        tracing::warn!(
+            task_id = record.id.0,
+            "task escalated to a human (D-02/D-03)"
+        );
         Ok(())
     }
 
@@ -520,7 +524,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// (F-37). Every "cannot focus" is a normal [`FocusOutcome`] with a
     /// reason, never an error: clicking a notification for a finished task,
     /// or one whose agent cannot focus panes, must degrade quietly.
-    pub async fn focus_task(&self, task_id: i64) -> FocusOutcome {
+    pub async fn focus_task(&self, task_id: TaskId) -> FocusOutcome {
         let record = match self.db.get_task(task_id) {
             Ok(Some(record)) => record,
             Ok(None) => return FocusOutcome::not(crate::task_control::not_found(task_id)),
@@ -575,7 +579,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     pub(super) fn control_task(
         &mut self,
         op: TaskOp,
-        task_id: i64,
+        task_id: TaskId,
     ) -> Result<TaskControlOutcome, StateError> {
         let outcome = match op {
             TaskOp::Cancel => crate::task_control::cancel(
@@ -626,7 +630,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         match agent.request::<rpc::DiagnosticsSnapshot>(&params).await {
             Ok(result) => result.text,
             Err(e) => {
-                tracing::warn!(task_id = record.id, "diagnostics/snapshot failed: {e}");
+                tracing::warn!(task_id = record.id.0, "diagnostics/snapshot failed: {e}");
                 None
             }
         }
@@ -832,7 +836,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         match self.settings.tools.get(&tool_name) {
             Some(tool) if !tool.capabilities().prompt_verification => {
                 tracing::warn!(
-                    task_id = record.id,
+                    task_id = record.id.0,
                     workflow = %record.workflow,
                     tool = %tool_name,
                     kind = tool.kind.as_str(),

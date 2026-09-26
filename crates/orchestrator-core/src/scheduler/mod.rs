@@ -12,6 +12,7 @@
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
 
+use crate::domain::TaskId;
 use crate::domain::state::TaskState;
 
 /// Whether a task in `state` occupies a concurrency slot (F-45).
@@ -78,7 +79,7 @@ pub struct SlotManager {
     repo_used: HashMap<String, u32>,
     agent_used: HashMap<String, u32>,
     /// Task id → the exact `(repo, agent)` pair it holds a slot under.
-    holders: HashMap<i64, (String, String)>,
+    holders: HashMap<TaskId, (String, String)>,
 }
 
 impl SlotManager {
@@ -104,7 +105,7 @@ impl SlotManager {
     /// task that is already running.
     pub fn rebuild<I>(&mut self, active: I)
     where
-        I: IntoIterator<Item = (i64, String, String)>,
+        I: IntoIterator<Item = (TaskId, String, String)>,
     {
         self.global_used = 0;
         self.repo_used.clear();
@@ -135,7 +136,7 @@ impl SlotManager {
     /// it, recording the task as its holder. A task that already holds a slot
     /// keeps the one it has and is answered `true` — one task, at most one
     /// slot.
-    pub fn acquire(&mut self, task_id: i64, repo: &str, agent: &str) -> bool {
+    pub fn acquire(&mut self, task_id: TaskId, repo: &str, agent: &str) -> bool {
         if self.holds(task_id) {
             return true;
         }
@@ -150,7 +151,7 @@ impl SlotManager {
     /// completion). A task that holds none — never acquired, or already
     /// released — is a safe no-op, so no release can free a slot another task
     /// holds.
-    pub fn release(&mut self, task_id: i64) {
+    pub fn release(&mut self, task_id: TaskId) {
         let Some((repo, agent)) = self.holders.remove(&task_id) else {
             return;
         };
@@ -160,12 +161,12 @@ impl SlotManager {
     }
 
     /// Whether `task_id` currently holds a slot.
-    pub fn holds(&self, task_id: i64) -> bool {
+    pub fn holds(&self, task_id: TaskId) -> bool {
         self.holders.contains_key(&task_id)
     }
 
     /// The tasks currently holding a slot, in no particular order.
-    pub fn holders(&self) -> impl Iterator<Item = i64> + '_ {
+    pub fn holders(&self) -> impl Iterator<Item = TaskId> + '_ {
         self.holders.keys().copied()
     }
 
@@ -185,7 +186,7 @@ impl SlotManager {
     }
 
     /// Count a slot for `task_id` across every tier and record the holder.
-    fn take(&mut self, task_id: i64, repo: String, agent: String) {
+    fn take(&mut self, task_id: TaskId, repo: String, agent: String) {
         self.global_used += 1;
         *self.repo_used.entry(repo.clone()).or_insert(0) += 1;
         *self.agent_used.entry(agent.clone()).or_insert(0) += 1;
@@ -206,7 +207,7 @@ fn decrement(map: &mut HashMap<String, u32>, key: &str) {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReadyTask {
     /// Task id.
-    pub task_id: i64,
+    pub task_id: TaskId,
     /// Selected repository.
     pub repo: String,
     /// Agent plugin.
@@ -220,7 +221,7 @@ pub struct ReadyTask {
 /// dispatch; each one is recorded in `slots` as a holder, so the caller has
 /// nothing to mirror. A task blocked by a full tier is skipped so it does not
 /// head-of-line-block a different repo/agent.
-pub fn plan_dispatch(slots: &mut SlotManager, ready: &[ReadyTask]) -> Vec<i64> {
+pub fn plan_dispatch(slots: &mut SlotManager, ready: &[ReadyTask]) -> Vec<TaskId> {
     let mut order: Vec<&ReadyTask> = ready.iter().collect();
     // Stable sort keeps input order (FIFO) among equal priorities.
     order.sort_by_key(|t| std::cmp::Reverse(t.priority));
@@ -246,7 +247,7 @@ pub struct PriorityQueue {
 struct QueueEntry {
     priority: i64,
     seq: u64,
-    task_id: i64,
+    task_id: TaskId,
 }
 
 impl Ord for QueueEntry {
@@ -271,7 +272,7 @@ impl PriorityQueue {
     }
 
     /// Enqueue a task.
-    pub fn push(&mut self, task_id: i64, priority: i64) {
+    pub fn push(&mut self, task_id: TaskId, priority: i64) {
         let seq = self.next_seq;
         self.next_seq += 1;
         self.heap.push(QueueEntry {
@@ -282,7 +283,7 @@ impl PriorityQueue {
     }
 
     /// Dequeue the highest-priority (then earliest) task id.
-    pub fn pop(&mut self) -> Option<i64> {
+    pub fn pop(&mut self) -> Option<TaskId> {
         self.heap.pop().map(|e| e.task_id)
     }
 
@@ -337,13 +338,13 @@ mod tests {
     fn all_three_tiers_gate_dispatch() {
         let mut slots = SlotManager::new(limits());
         // per_agent herdr cap = 1.
-        assert!(slots.acquire(1, "repoA", "herdr"));
+        assert!(slots.acquire(TaskId(1), "repoA", "herdr"));
         assert!(!slots.can_dispatch("repoB", "herdr"), "agent cap reached");
         // A different agent is fine (repoA cap = 2, global 3).
-        assert!(slots.acquire(2, "repoA", "orca"));
+        assert!(slots.acquire(TaskId(2), "repoA", "orca"));
         assert!(!slots.can_dispatch("repoA", "orca"), "repoA cap reached");
         // global cap = 3.
-        assert!(slots.acquire(3, "repoB", "orca"));
+        assert!(slots.acquire(TaskId(3), "repoB", "orca"));
         assert!(!slots.can_dispatch("repoC", "orca"), "global cap reached");
         assert_eq!(slots.global_used(), 3);
     }
@@ -351,27 +352,27 @@ mod tests {
     #[test]
     fn release_frees_a_slot_for_another_task() {
         let mut slots = SlotManager::new(Limits::global(1));
-        assert!(slots.acquire(1, "r", "a"));
+        assert!(slots.acquire(TaskId(1), "r", "a"));
         assert!(!slots.can_dispatch("r", "a"), "global full");
         // Simulate waiting_input releasing the slot (F-45).
-        slots.release(1);
+        slots.release(TaskId(1));
         assert!(slots.can_dispatch("r", "a"), "slot freed");
-        assert!(slots.acquire(2, "r", "a"));
+        assert!(slots.acquire(TaskId(2), "r", "a"));
     }
 
     #[test]
     fn waiting_resume_round_trip_preserves_counts() {
         let mut slots = SlotManager::new(limits());
-        slots.acquire(1, "repoA", "herdr");
+        slots.acquire(TaskId(1), "repoA", "herdr");
         let before = (
             slots.global_used(),
             slots.repo_used("repoA"),
             slots.agent_used("herdr"),
         );
         // waiting_input -> release, resume -> re-acquire.
-        slots.release(1);
+        slots.release(TaskId(1));
         assert_eq!(slots.global_used(), before.0 - 1);
-        assert!(slots.acquire(1, "repoA", "herdr"));
+        assert!(slots.acquire(TaskId(1), "repoA", "herdr"));
         assert_eq!(
             (
                 slots.global_used(),
@@ -386,18 +387,18 @@ mod tests {
     #[test]
     fn stray_release_does_not_corrupt_the_invariant() {
         let mut slots = SlotManager::new(limits());
-        slots.acquire(1, "repoA", "herdr");
+        slots.acquire(TaskId(1), "repoA", "herdr");
         // Double release: the second is a no-op (slot no longer held).
-        slots.release(1);
-        slots.release(1);
+        slots.release(TaskId(1));
+        slots.release(TaskId(1));
         assert_eq!(slots.global_used(), 0);
         assert_eq!(slots.repo_used("repoA"), 0);
         assert_eq!(slots.agent_used("herdr"), 0);
 
         // A release by a task that never acquired must not drop the count and
         // leave the real slot leaked.
-        slots.acquire(1, "repoA", "herdr");
-        slots.release(2); // task 2 never held -> no-op
+        slots.acquire(TaskId(1), "repoA", "herdr");
+        slots.release(TaskId(2)); // task 2 never held -> no-op
         assert_eq!(
             slots.global_used(),
             1,
@@ -405,7 +406,7 @@ mod tests {
         );
         assert_eq!(slots.repo_used("repoA"), 1);
         assert_eq!(slots.agent_used("herdr"), 1);
-        assert!(slots.holds(1));
+        assert!(slots.holds(TaskId(1)));
     }
 
     #[test]
@@ -414,20 +415,20 @@ mod tests {
         // task, so it frees exactly the pair that task holds — the per-tier
         // breakdown of the other one is untouched.
         let mut slots = SlotManager::new(Limits::global(4));
-        slots.acquire(1, "repoA", "herdr");
-        slots.acquire(2, "repoB", "orca");
-        slots.release(3); // no such holder -> no-op
+        slots.acquire(TaskId(1), "repoA", "herdr");
+        slots.acquire(TaskId(2), "repoB", "orca");
+        slots.release(TaskId(3)); // no such holder -> no-op
         assert_eq!(
             slots.global_used(),
             2,
             "a stranger's release must be a no-op"
         );
-        slots.release(1);
+        slots.release(TaskId(1));
         assert_eq!(slots.repo_used("repoA"), 0);
         assert_eq!(slots.agent_used("herdr"), 0);
         assert_eq!(slots.repo_used("repoB"), 1);
         assert_eq!(slots.agent_used("orca"), 1);
-        slots.release(2);
+        slots.release(TaskId(2));
         assert_eq!(slots.global_used(), 0);
     }
 
@@ -435,9 +436,9 @@ mod tests {
     fn rebuild_reconstructs_from_active_tasks() {
         let mut slots = SlotManager::new(limits());
         slots.rebuild([
-            (1, "repoA".to_string(), "herdr".to_string()),
-            (2, "repoA".to_string(), "orca".to_string()),
-            (3, "repoB".to_string(), "orca".to_string()),
+            (TaskId(1), "repoA".to_string(), "herdr".to_string()),
+            (TaskId(2), "repoA".to_string(), "orca".to_string()),
+            (TaskId(3), "repoB".to_string(), "orca".to_string()),
         ]);
         assert_eq!(slots.global_used(), 3);
         assert_eq!(slots.repo_used("repoA"), 2);
@@ -454,15 +455,18 @@ mod tests {
     #[test]
     fn rebuild_records_holders_alongside_usage() {
         let mut slots = SlotManager::new(Limits::global(4));
-        slots.acquire(9, "stale", "x"); // wiped by the rebuild
+        slots.acquire(TaskId(9), "stale", "x"); // wiped by the rebuild
         slots.rebuild([
-            (1, "repoA".to_string(), "herdr".to_string()),
-            (2, "repoB".to_string(), "orca".to_string()),
+            (TaskId(1), "repoA".to_string(), "herdr".to_string()),
+            (TaskId(2), "repoB".to_string(), "orca".to_string()),
         ]);
-        assert!(slots.holds(1) && slots.holds(2));
-        assert!(!slots.holds(9), "rebuild replaces the ledger, not merges");
-        slots.release(1);
-        slots.release(2);
+        assert!(slots.holds(TaskId(1)) && slots.holds(TaskId(2)));
+        assert!(
+            !slots.holds(TaskId(9)),
+            "rebuild replaces the ledger, not merges"
+        );
+        slots.release(TaskId(1));
+        slots.release(TaskId(2));
         assert_eq!(slots.global_used(), 0);
         assert_eq!(slots.repo_used("repoA") + slots.repo_used("repoB"), 0);
     }
@@ -472,22 +476,22 @@ mod tests {
     #[test]
     fn a_task_that_failed_to_acquire_releases_nothing() {
         let mut slots = SlotManager::new(Limits::global(1));
-        assert!(slots.acquire(1, "r", "a"));
-        assert!(!slots.acquire(2, "r", "a"), "global full");
-        assert!(!slots.holds(2));
-        slots.release(2);
+        assert!(slots.acquire(TaskId(1), "r", "a"));
+        assert!(!slots.acquire(TaskId(2), "r", "a"), "global full");
+        assert!(!slots.holds(TaskId(2)));
+        slots.release(TaskId(2));
         assert_eq!(slots.global_used(), 1);
-        assert!(slots.holds(1));
+        assert!(slots.holds(TaskId(1)));
     }
 
     /// One task, at most one slot: acquiring again keeps the slot it has.
     #[test]
     fn acquiring_twice_counts_once() {
         let mut slots = SlotManager::new(Limits::global(2));
-        assert!(slots.acquire(1, "r", "a"));
-        assert!(slots.acquire(1, "r", "a"));
+        assert!(slots.acquire(TaskId(1), "r", "a"));
+        assert!(slots.acquire(TaskId(1), "r", "a"));
         assert_eq!(slots.global_used(), 1);
-        slots.release(1);
+        slots.release(TaskId(1));
         assert_eq!(slots.global_used(), 0);
     }
 
@@ -496,19 +500,19 @@ mod tests {
         let mut slots = SlotManager::new(Limits::global(2));
         let ready = vec![
             ReadyTask {
-                task_id: 1,
+                task_id: TaskId(1),
                 repo: "r".into(),
                 agent: "a".into(),
                 priority: 0,
             },
             ReadyTask {
-                task_id: 2,
+                task_id: TaskId(2),
                 repo: "r".into(),
                 agent: "a".into(),
                 priority: 5,
             },
             ReadyTask {
-                task_id: 3,
+                task_id: TaskId(3),
                 repo: "r".into(),
                 agent: "a".into(),
                 priority: 5,
@@ -516,25 +520,25 @@ mod tests {
         ];
         // global=2: highest priority (2) then FIFO tie (3 after 2); id1 blocked.
         let dispatched = plan_dispatch(&mut slots, &ready);
-        assert_eq!(dispatched, vec![2, 3]);
+        assert_eq!(dispatched, vec![TaskId(2), TaskId(3)]);
         assert_eq!(slots.global_used(), 2);
         // The plan records its picks as holders; the blocked task holds none.
-        assert!(slots.holds(2) && slots.holds(3));
-        assert!(!slots.holds(1));
+        assert!(slots.holds(TaskId(2)) && slots.holds(TaskId(3)));
+        assert!(!slots.holds(TaskId(1)));
     }
 
     #[test]
     fn priority_queue_orders_by_priority_then_fifo() {
         let mut q = PriorityQueue::new();
-        q.push(1, 0);
-        q.push(2, 5);
-        q.push(3, 5);
-        q.push(4, 10);
+        q.push(TaskId(1), 0);
+        q.push(TaskId(2), 5);
+        q.push(TaskId(3), 5);
+        q.push(TaskId(4), 10);
         assert_eq!(q.len(), 4);
-        assert_eq!(q.pop(), Some(4)); // highest priority
-        assert_eq!(q.pop(), Some(2)); // priority 5, earlier
-        assert_eq!(q.pop(), Some(3)); // priority 5, later
-        assert_eq!(q.pop(), Some(1)); // lowest
+        assert_eq!(q.pop(), Some(TaskId(4))); // highest priority
+        assert_eq!(q.pop(), Some(TaskId(2))); // priority 5, earlier
+        assert_eq!(q.pop(), Some(TaskId(3))); // priority 5, later
+        assert_eq!(q.pop(), Some(TaskId(1))); // lowest
         assert!(q.is_empty());
     }
 }

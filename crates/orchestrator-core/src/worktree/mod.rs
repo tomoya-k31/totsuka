@@ -15,6 +15,7 @@ use plugin_protocol::identifier::{Case, IdentifierCore, IdentifierPolicy};
 
 use crate::config::resolve::{ResolveError, expand_env};
 use crate::domain::CleanupPolicy;
+use crate::domain::TaskId;
 use crate::paths::Paths;
 use crate::ports::git::GitRunner;
 
@@ -311,7 +312,7 @@ pub struct Worktree {
 /// from different arguments.
 fn location_core<'a>(ctx: &LocationContext<'a>) -> IdentifierCore<'a> {
     IdentifierCore {
-        task_number: ctx.task_number,
+        task_number: ctx.task_number.map(|n| n.0),
         source: ctx.source,
         source_task_id: ctx.task_id,
         handle: ctx.handle,
@@ -330,7 +331,7 @@ pub struct LocationContext<'a> {
     /// Task id as the source spells it.
     pub task_id: &'a str,
     /// The Orchestrator's own task number (`tasks.id`), for `{task_number}`.
-    pub task_number: Option<i64>,
+    pub task_number: Option<TaskId>,
     /// The source's short name for the task (0.7.2, #646), for `{handle}`.
     pub handle: Option<&'a str>,
 }
@@ -458,7 +459,7 @@ pub struct CreateRequest<'a> {
     pub existing_branch: Option<&'a str>,
     /// The Orchestrator's own task number (`tasks.id`), which becomes the
     /// readable half of the leaf name (ADR-0071 D-1).
-    pub task_number: Option<i64>,
+    pub task_number: Option<TaskId>,
     /// The source's short name for the task (0.7.2, #646), which follows the
     /// number in the leaf when it fits.
     pub handle: Option<&'a str>,
@@ -1816,7 +1817,7 @@ mod tests {
             repo_name: "totsuka",
             source: "github",
             task_id: "123",
-            task_number: Some(1),
+            task_number: Some(TaskId(1)),
             handle: None,
         };
         // An operator-written template with a `${ENV}` reference — the shape
@@ -1891,7 +1892,7 @@ mod tests {
             repo_name: "totsuka",
             source: "slack",
             task_id: "C1:{hash}",
-            task_number: Some(7),
+            task_number: Some(TaskId(7)),
             handle: None,
         };
         let loc = render_location(
@@ -1915,7 +1916,7 @@ mod tests {
             repo_name: "totsuka",
             source: "notion",
             task_id: "1f2a3b4c-5d6e-7f80-9a1b-2c3d4e5f6a7b",
-            task_number: Some(7),
+            task_number: Some(TaskId(7)),
             handle: None,
         };
         let leaf = WorktreeLeaf.identifier(&location_core(&ctx));
@@ -1944,7 +1945,7 @@ mod tests {
             repo_name: "totsuka",
             source: "slack",
             task_id: "C1:100.1",
-            task_number: Some(7),
+            task_number: Some(TaskId(7)),
             handle: Some("../../outside"),
         };
         let loc = render_location(
@@ -1977,7 +1978,7 @@ mod tests {
             repo_name: "totsuka",
             source: "slack",
             task_id: "C1:100.1",
-            task_number: Some(42),
+            task_number: Some(TaskId(42)),
             handle: None,
         };
         let loc = render_location(
@@ -2022,7 +2023,7 @@ mod tests {
             repo_name: "totsuka",
             source: "slack",
             task_id: "C1:100.1",
-            task_number: Some(1),
+            task_number: Some(TaskId(1)),
             handle: None,
         };
         let name = WorktreeLeaf.identifier(&location_core(&ctx));
@@ -2054,7 +2055,7 @@ mod tests {
             repo_name: "totsuka",
             source: "github",
             task_id: "123",
-            task_number: Some(1),
+            task_number: Some(TaskId(1)),
             handle: None,
         };
         let name = WorktreeLeaf.identifier(&location_core(&ctx));
@@ -2082,7 +2083,7 @@ mod tests {
             repo_name: "totsuka",
             source: "github",
             task_id: "1",
-            task_number: Some(1),
+            task_number: Some(TaskId(1)),
             handle: None,
         };
         let loc = render_location(
@@ -2563,7 +2564,7 @@ mod tests {
             repo_name: "r",
             source: "github",
             task_id: "1",
-            task_number: Some(1),
+            task_number: Some(TaskId(1)),
             handle: None,
         };
         let loc = render_location(
@@ -2585,7 +2586,7 @@ mod tests {
             repo_name: "r",
             source: "s",
             task_id: "1",
-            task_number: Some(1),
+            task_number: Some(TaskId(1)),
             handle: None,
         };
         assert!(render_location("${MISSING}/{worktree_name}", &ctx, "b", &env(&[])).is_err());

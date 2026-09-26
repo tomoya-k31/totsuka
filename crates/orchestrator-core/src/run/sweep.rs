@@ -7,6 +7,7 @@
 
 use super::*;
 use crate::domain::EventDetail;
+use crate::domain::TaskId;
 
 impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// Read `HEAD` in the worktree of every in-flight task and record the
@@ -82,7 +83,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     ///
     /// The worktree and its commits are deliberately kept (`fail_publish`'s
     /// contract), so the evidence outlives the failure.
-    async fn enforce_read_only(&mut self, task_id: i64) -> Result<(), EngineError> {
+    async fn enforce_read_only(&mut self, task_id: TaskId) -> Result<(), EngineError> {
         let Some(record) = self.db.get_task(task_id)? else {
             return Ok(());
         };
@@ -127,7 +128,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             PaneRelease::Failed | PaneRelease::Refused
         ) {
             tracing::error!(
-                task_id = record.id,
+                task_id = record.id.0,
                 "could not confirm the pane closed: the agent may still be running. \
                  `totsuka doctor` lists it as an orphan pane"
             );
@@ -149,7 +150,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// implemented three times over (claude / codex / opencode) and trusted to
     /// report accurately. `HEAD` is the ground truth by construction.
     ///
-    pub(super) fn sync_branch(&mut self, task_id: i64) -> Result<(), EngineError> {
+    pub(super) fn sync_branch(&mut self, task_id: TaskId) -> Result<(), EngineError> {
         let Some(record) = self.db.get_task(task_id)? else {
             return Ok(());
         };
@@ -178,9 +179,9 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         if record.branch.as_deref() == Some(head.as_str()) {
             return Ok(());
         }
-        tracing::info!(task_id, branch = %head, "recorded the agent's branch");
+        tracing::info!(task_id = task_id.0, branch = %head, "recorded the agent's branch");
         if let Some(warning) = plan_mode_side_effect(&record.mode, &head) {
-            tracing::warn!(task_id, branch = %head, "{warning}");
+            tracing::warn!(task_id = task_id.0, branch = %head, "{warning}");
         }
         self.db.set_branch(task_id, &head)?;
         Ok(())
@@ -211,7 +212,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             Ok(registered) => registered,
             Err(e) => {
                 tracing::debug!(
-                    task_id = record.id,
+                    task_id = record.id.0,
                     "could not confirm the worktree is still registered: {e}"
                 );
                 true
