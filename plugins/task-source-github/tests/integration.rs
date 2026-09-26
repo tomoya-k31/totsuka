@@ -12,6 +12,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use plugin_protocol::jsonrpc::Response;
+use plugin_sdk::LineHandler;
 use task_source_github::error::GithubError;
 use task_source_github::server::{Server, TransportFactory};
 use task_source_github::transport::GithubTransport;

@@ -1,4 +1,5 @@
-//! JSON-RPC dispatch for the stdio server (F-51). Generic over a
+//! The stdio server (F-51): a [`TaskSourceHandler`] whose wire protocol is
+//! the SDK's (`plugin_sdk::dispatch::handle_line`, #759). Generic over a
 //! [`TransportFactory`] so the whole request/response surface — including
 //! `initialize` and `config/validate` — is driven in tests with a recorded
 //! transport, no network involved.
@@ -12,17 +13,16 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use plugin_protocol::jsonrpc::{Error, Response, error_code};
+use plugin_protocol::Capabilities;
+use plugin_protocol::jsonrpc::{Error, error_code};
 use plugin_protocol::methods::{
     ClaimedRepo, ConfigValidateParams, ConfigValidateResult, InitializeParams, InitializeResult,
-    TaskClaimParams, TaskUpdateStatusParams, WorkflowInfo,
+    ResultPublishParams, TaskClaimParams, TaskClaimResult, TaskUpdateStatusParams, WorkflowInfo,
 };
-use plugin_protocol::{Capabilities, RequestId, method};
 use plugin_sdk::{
-    LineHandler, Reply, SubmitClient, check_assignee_triggers, poll_loop, unknown_exclude_keys,
-    unknown_trigger_keys,
+    LineHandler, Reply, SubmitClient, TaskSourceHandler, check_assignee_triggers, not_initialized,
+    poll_loop, unknown_exclude_keys, unknown_trigger_keys,
 };
-use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::client::{EXCLUDE_KEYS, GithubClient, TRIGGER_KEYS, static_config_errors};
@@ -84,93 +84,28 @@ where
             session: None,
         }
     }
+}
 
-    /// Parse one NDJSON line, dispatch it, and produce a reply. A non-JSON line
-    /// yields a `PARSE_ERROR` response with a null id; blank lines and
-    /// notifications (no `id`) produce no response.
-    pub async fn handle_line(&mut self, line: &str) -> Reply {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            return Reply::none();
-        }
-        let Ok(value) = serde_json::from_str::<Value>(trimmed) else {
-            return Reply::respond(Response::error_without_id(Error::new(
-                error_code::PARSE_ERROR,
-                "request was not valid JSON",
-            )));
-        };
-        // A message without an `id` is a notification: never answered.
-        let Some(id) = value.get("id").map(request_id) else {
-            return Reply::none();
-        };
-        let method = value.get("method").and_then(Value::as_str).unwrap_or("");
-        let params = value.get("params").cloned().unwrap_or(Value::Null);
-        self.dispatch(id, method, params).await
-    }
-
-    async fn dispatch(&mut self, id: RequestId, method: &str, params: Value) -> Reply {
-        match method {
-            method::INITIALIZE => self.initialize(id, params),
-            method::CONFIG_VALIDATE => self.config_validate(id, params).await,
-            method::SHUTDOWN => Reply::shutdown_ack(id),
-            method::TASK_UPDATE_STATUS => self.update_status(id, params).await,
-            method::TASK_CLAIM => self.task_claim(id, params).await,
-            // Named rather than left to `unknown method`. An older config with
-            // `output = "source"` reaches here only after the agent has done
-            // all the work, and the orchestrator reports whatever comes back
-            // as a publish failure — so the message has to say what to change.
-            // `config validate` catches this earlier, but only when it can see
-            // the plugin's declared outputs.
-            method::RESULT_PUBLISH => Reply::respond(Response::error(
-                id,
-                Error::new(
-                    error_code::METHOD_NOT_FOUND,
-                    "`result/publish` was removed: the deliverable is the agent's to write itself. Set the workflow's `profile` to design/implement, or write `output = \"none\"` — `output = \"source\"` no longer has a plugin behind it",
-                ),
-            )),
-            other => Reply::respond(Response::error(
-                id,
-                Error::new(
-                    error_code::METHOD_NOT_FOUND,
-                    format!("unknown method: {other}"),
-                ),
-            )),
-        }
-    }
-
+impl<F> TaskSourceHandler for Server<F>
+where
+    F: TransportFactory + Send,
+    F::Transport: Send + Sync + 'static,
+{
     /// `initialize`: deserialize the config, build the client, then start the
     /// resident [`poll_loop`] over the supplied triggers — each tick fetches
     /// every trigger and pushes the matching tasks via `task/submit` (0.1.6).
-    fn initialize(&mut self, id: RequestId, params: Value) -> Reply {
-        let init: InitializeParams = match parse_params(&params) {
-            Ok(v) => v,
-            Err(reply) => return reply.with_id(id),
-        };
-        let mut config: GithubConfig = match serde_json::from_value(init.config) {
-            Ok(c) => c,
-            Err(e) => {
-                return Reply::respond(Response::error(
-                    id,
-                    Error::new(
-                        error_code::CONFIG_INVALID,
-                        format!("invalid github plugin config: {e}"),
-                    ),
-                ));
-            }
-        };
+    async fn initialize(&mut self, init: InitializeParams) -> Result<InitializeResult, Error> {
+        let mut config: GithubConfig = serde_json::from_value(init.config).map_err(|e| {
+            Error::new(
+                error_code::CONFIG_INVALID,
+                format!("invalid github plugin config: {e}"),
+            )
+        })?;
         // The boards come from the Orchestrator's `[[projects]]` and their
         // repositories from `[[repositories]].project` (#554), not from
         // `[github]`.
-        config.projects =
-            match crate::config::ProjectConfig::resolve(&init.projects, &init.repositories) {
-                Ok(p) => p,
-                Err(errors) => {
-                    return Reply::respond(Response::error(
-                        id,
-                        Error::new(error_code::CONFIG_INVALID, errors.join("; ")),
-                    ));
-                }
-            };
+        config.projects = crate::config::ProjectConfig::resolve(&init.projects, &init.repositories)
+            .map_err(|errors| Error::new(error_code::CONFIG_INVALID, errors.join("; ")))?;
         // Trigger keys are this plugin's vocabulary, so this is the only
         // place that can tell a typo from a condition (#574). Without it an
         // unread key is dropped and the trigger matches *more* than written.
@@ -191,9 +126,9 @@ where
         );
         config_errors.extend(assignee_errors);
         if !config_errors.is_empty() {
-            return Reply::respond(Response::error(
-                id,
-                Error::new(error_code::CONFIG_INVALID, config_errors.join("; ")),
+            return Err(Error::new(
+                error_code::CONFIG_INVALID,
+                config_errors.join("; "),
             ));
         }
         for warning in assignee_warnings {
@@ -243,17 +178,16 @@ where
         };
         let claims = client.config().claimed_repos();
         self.session = Some(Session { client, poll });
-        Reply::respond(Response::result(id, capabilities_result(claims)))
+        Ok(capabilities_result(claims))
     }
 
-    async fn config_validate(&mut self, id: RequestId, params: Value) -> Reply {
-        let parsed: ConfigValidateParams = match parse_params(&params) {
-            Ok(v) => v,
-            Err(reply) => return reply.with_id(id),
-        };
+    async fn config_validate(
+        &mut self,
+        parsed: ConfigValidateParams,
+    ) -> Result<ConfigValidateResult, Error> {
         let mut config: GithubConfig = match serde_json::from_value(parsed.config) {
             Ok(c) => c,
-            Err(e) => return ok_validate(id, vec![format!("config does not parse: {e}")]),
+            Err(e) => return Ok(validate_result(vec![format!("config does not parse: {e}")])),
         };
         // Same resolution as `initialize` (#554): validating the raw `[github]`
         // table alone would report "declare at least one board" for every
@@ -261,7 +195,7 @@ where
         config.projects =
             match crate::config::ProjectConfig::resolve(&parsed.projects, &parsed.repositories) {
                 Ok(p) => p,
-                Err(errors) => return ok_validate(id, errors),
+                Err(errors) => return Ok(validate_result(errors)),
             };
         let mut errors = static_config_errors(&config);
         // Only ping the API if the config is otherwise well-formed (F-63).
@@ -284,7 +218,7 @@ where
                 }
             }
         }
-        ok_validate(id, errors)
+        Ok(validate_result(errors))
     }
 
     /// `task/claim` (#556): delegate to
@@ -292,39 +226,36 @@ where
     /// including "the adjudication cannot be decided on this read" — go back
     /// as JSON-RPC errors, which the Orchestrator answers by leaving the task
     /// queued and retrying next cycle.
-    async fn task_claim(&mut self, id: RequestId, params: Value) -> Reply {
-        let Some(session) = self.session.as_ref() else {
-            return not_initialized(id);
-        };
-        let parsed: TaskClaimParams = match parse_params(&params) {
-            Ok(v) => v,
-            Err(reply) => return reply.with_id(id),
-        };
-        match session.client.claim(&parsed.task_id).await {
-            Ok(result) => Reply::respond(Response::result(
-                id,
-                serde_json::to_value(result).unwrap_or(Value::Null),
-            )),
-            Err(e) => Reply::respond(rpc_error(id, &e)),
-        }
+    async fn task_claim(&mut self, parsed: TaskClaimParams) -> Result<TaskClaimResult, Error> {
+        let session = self.session.as_ref().ok_or_else(not_initialized)?;
+        session
+            .client
+            .claim(&parsed.task_id)
+            .await
+            .map_err(rpc_error)
     }
 
-    async fn update_status(&mut self, id: RequestId, params: Value) -> Reply {
-        let Some(session) = self.session.as_ref() else {
-            return not_initialized(id);
-        };
-        let parsed: TaskUpdateStatusParams = match parse_params(&params) {
-            Ok(v) => v,
-            Err(reply) => return reply.with_id(id),
-        };
-        match session
+    async fn update_status(&mut self, parsed: TaskUpdateStatusParams) -> Result<Value, Error> {
+        let session = self.session.as_ref().ok_or_else(not_initialized)?;
+        session
             .client
             .update_status(&parsed.task_id, &parsed.status, &parsed.projects)
             .await
-        {
-            Ok(()) => Reply::respond(Response::result(id, Value::Null)),
-            Err(e) => Reply::respond(rpc_error(id, &e)),
-        }
+            .map(|()| Value::Null)
+            .map_err(rpc_error)
+    }
+
+    /// Named rather than left to `unknown method`. An older config with
+    /// `output = "source"` reaches here only after the agent has done all the
+    /// work, and the orchestrator reports whatever comes back as a publish
+    /// failure — so the message has to say what to change. `config validate`
+    /// catches this earlier, but only when it can see the plugin's declared
+    /// outputs.
+    async fn result_publish(&mut self, _: ResultPublishParams) -> Result<Value, Error> {
+        Err(Error::new(
+            error_code::METHOD_NOT_FOUND,
+            "`result/publish` was removed: the deliverable is the agent's to write itself. Set the workflow's `profile` to design/implement, or write `output = \"none\"` — `output = \"source\"` no longer has a plugin behind it",
+        ))
     }
 }
 
@@ -336,7 +267,7 @@ where
     F::Transport: Send + Sync + 'static,
 {
     async fn handle_line(&mut self, line: &str) -> Reply {
-        Server::handle_line(self, line).await
+        plugin_sdk::dispatch::handle_line(self, line).await
     }
 }
 
@@ -347,8 +278,8 @@ where
 /// that is no longer declared. Since `tasks/fetch` was removed at protocol
 /// 0.2.0 every task source is push-only, so the `task_submit` flag could only
 /// ever be `true`; it was removed in 0.5.0 (#496).
-fn capabilities_result(claimed_repos: Vec<ClaimedRepo>) -> Value {
-    let result = InitializeResult {
+fn capabilities_result(claimed_repos: Vec<ClaimedRepo>) -> InitializeResult {
+    InitializeResult {
         // No workflow options of its own (#554).
         claimed_options: Vec::new(),
         plugin_version: plugin_version(),
@@ -362,8 +293,7 @@ fn capabilities_result(claimed_repos: Vec<ClaimedRepo>) -> Value {
             task_claim: true,
             ..Capabilities::default()
         },
-    };
-    serde_json::to_value(result).unwrap_or(Value::Null)
+    }
 }
 
 /// This plugin's version, from Cargo. Falls back to `0.0.0` if unparseable.
@@ -371,68 +301,18 @@ fn plugin_version() -> semver::Version {
     semver::Version::parse(env!("CARGO_PKG_VERSION")).unwrap_or(semver::Version::new(0, 0, 0))
 }
 
-/// A carrier used before an id is available (params-parse failures).
-struct DeferredError {
-    error: Error,
-}
-
-impl DeferredError {
-    fn with_id(self, id: RequestId) -> Reply {
-        Reply::respond(Response::error(id, self.error))
-    }
-}
-
-/// Deserialize params, returning a deferred INVALID_PARAMS error on failure.
-fn parse_params<T: DeserializeOwned>(params: &Value) -> Result<T, DeferredError> {
-    serde_json::from_value(params.clone()).map_err(|e| DeferredError {
-        error: Error::new(error_code::INVALID_PARAMS, format!("invalid params: {e}")),
-    })
-}
-
-/// A `config/validate` success reply (the RPC itself succeeds; validity is in
-/// the payload).
-fn ok_validate(id: RequestId, errors: Vec<String>) -> Reply {
-    let result = ConfigValidateResult {
+/// A `config/validate` answer (the RPC itself succeeds; validity is in the
+/// payload).
+fn validate_result(errors: Vec<String>) -> ConfigValidateResult {
+    ConfigValidateResult {
         valid: errors.is_empty(),
         errors,
         warnings: Vec::new(),
-    };
-    Reply::respond(Response::result(
-        id,
-        serde_json::to_value(result).unwrap_or(Value::Null),
-    ))
-}
-
-/// The error for a task_source method invoked before `initialize`.
-fn not_initialized(id: RequestId) -> Reply {
-    Reply::respond(Response::error(
-        id,
-        Error::new(
-            error_code::INVALID_REQUEST,
-            "plugin not initialized → send `initialize` first",
-        ),
-    ))
+    }
 }
 
 /// Map a [`crate::error::GithubError`] to a JSON-RPC error carrying its
 /// actionable message.
-fn rpc_error(id: RequestId, error: &crate::error::GithubError) -> Response {
-    Response::error(
-        id,
-        Error::new(error_code::INTERNAL_ERROR, error.to_string()),
-    )
-}
-
-/// Convert a JSON id value into a [`RequestId`]. The host uses numeric ids; a
-/// string id round-trips as-is, and any other JSON scalar (e.g. a float or an
-/// out-of-`i64`-range number) is preserved via its textual form rather than
-/// collapsing to an empty string, so the caller can still correlate the reply.
-fn request_id(id: &Value) -> RequestId {
-    if let Some(n) = id.as_i64() {
-        RequestId::Number(n)
-    } else if let Some(s) = id.as_str() {
-        RequestId::Str(s.to_string())
-    } else {
-        RequestId::Str(id.to_string())
-    }
+fn rpc_error(error: crate::error::GithubError) -> Error {
+    Error::new(error_code::INTERNAL_ERROR, error.to_string())
 }

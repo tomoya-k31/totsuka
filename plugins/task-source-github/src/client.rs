@@ -450,7 +450,11 @@ impl<T: GithubTransport> GithubClient<T> {
                     } else {
                         "issue_number"
                     };
-                    crate::template::render(
+                    // Single pass (the SDK's `render`): the number and repo
+                    // come from the GitHub API, but the text is rendered next
+                    // to issue titles and bodies — content anyone with write
+                    // access to the repository controls.
+                    plugin_sdk::template::render(
                         template,
                         &[(number_key, issue_number.as_str()), ("repo", repo)],
                     )
