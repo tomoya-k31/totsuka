@@ -40,7 +40,7 @@ config を 1 箇所間違えただけで再起動が無限ループする。別�
    - config の読み込み・パース・検証、どのプラグインも持ち主にならない workflow キー（#554）
    - エンジン設定の組み立てとパス展開（`~` / `${VAR}`）
    - `[tools.X].env_file` の解決（パス・読み込み・中の参照の解決をすべて含む）
-   - 機密参照の解決: プラグインの `[<name>]` 表（`plugin_spec` の失敗全般。未インストールも含む）、`[llm].api_key_ref`、`[hooks].auth_token_ref`
+   - 機密参照の解決: プラグインの `[<name>]` 表（`plugin_spec` の失敗全般。未インストールも含む）、`[llm].api_key_ref`、`[hooks].auth_token_ref`（[ADR-0099](/decisions/adr-0099-generated-hook-token.md) で廃止。いまは書いてあること自体が config のエラーで 4。`run` が生成するトークンファイルの読み書きの失敗は I/O なので 1）
    - プラグインの起動: プロトコル版の不一致、spawn の `NotFound` / `PermissionDenied`、`initialize` が `CONFIG_INVALID`（-32003）を返したとき
 
 3. **`SecretError` はバリアントを問わず 4。** `Backend`（`op` の未サインイン、Keychain のロック、`cmd:` の非 0 終了）も含む。ロックされた vault はループで再試行しても解錠されない。#754 が入ればアプリが解決済みの値を渡すので、backend の一時障害は実質起きなくなる。バリアントで分けないので規則が単純なまま保てる。
