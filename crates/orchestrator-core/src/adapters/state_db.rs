@@ -30,6 +30,7 @@ use std::sync::Arc;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, Row, params};
 
 use crate::adapters::clock::SystemClock;
+use crate::domain::EventDetail;
 use crate::domain::state::{InvalidTransition, TaskEvent, TaskState, UnknownState, transition};
 use crate::ports::clock::Clock;
 
@@ -280,13 +281,6 @@ const MIGRATIONS: &[&str] = &[
     ALTER TABLE tasks ADD COLUMN state_version INTEGER NOT NULL DEFAULT 0;
     "#,
 ];
-
-/// `events.detail` for the ingest event. Stored as JSON so consumers can
-/// parse every `detail` value uniformly.
-const INGEST_DETAIL: &str = r#"{"kind":"ingested"}"#;
-
-/// `events.detail` for a push ingest (`task/submit`, 0.1.6).
-const SUBMIT_DETAIL: &str = r#"{"kind":"submitted"}"#;
 
 /// The `events.detail` key that marks a row as a **note** rather than a state
 /// transition (#407), and whose value names the kind of note.
@@ -1023,18 +1017,19 @@ impl StateDb {
     /// Ingest a task idempotently (F-73). Returns its id, whether newly
     /// inserted or already present under the same `(source, source_task_id)`.
     pub fn upsert_task(&self, task: &NewTask) -> Result<i64, StateError> {
-        self.upsert_task_inner(task, INGEST_DETAIL)
+        self.upsert_task_inner(task, &EventDetail::Ingested)
     }
 
     /// [`upsert_task`](Self::upsert_task) for the push path (`task/submit`,
     /// 0.1.6): identical semantics, but the ingest audit event records
     /// `{"kind":"submitted"}` so push and fetch ingests stay distinguishable.
     pub fn upsert_submitted_task(&self, task: &NewTask) -> Result<i64, StateError> {
-        self.upsert_task_inner(task, SUBMIT_DETAIL)
+        self.upsert_task_inner(task, &EventDetail::Submitted)
     }
 
-    fn upsert_task_inner(&self, task: &NewTask, detail: &str) -> Result<i64, StateError> {
+    fn upsert_task_inner(&self, task: &NewTask, detail: &EventDetail) -> Result<i64, StateError> {
         let now = self.clock.now_rfc3339();
+        let detail = detail.to_json()?;
         let payload = task
             .source_payload
             .as_ref()
@@ -1132,10 +1127,10 @@ impl StateDb {
         &self,
         task: TaskRef,
         event: TaskEvent,
-        detail: Option<serde_json::Value>,
+        detail: Option<EventDetail>,
     ) -> Result<(TaskState, TaskRef), StateError> {
         let now = self.clock.now_rfc3339();
-        let detail = detail.as_ref().map(serde_json::to_string).transpose()?;
+        let detail = detail.as_ref().map(EventDetail::to_json).transpose()?;
         // Update + audit event in one transaction: state never advances
         // without its recorded event (F-72).
         let tx = self.write_transaction()?;
@@ -1661,10 +1656,10 @@ impl StateDb {
     pub fn append_task_message_reopening(
         &self,
         msg: &TaskMessageInsert,
-        detail: Option<serde_json::Value>,
+        detail: Option<EventDetail>,
     ) -> Result<(TaskMessageOutcome, Option<TaskState>), StateError> {
         let now = self.clock.now_rfc3339();
-        let detail = detail.as_ref().map(serde_json::to_string).transpose()?;
+        let detail = detail.as_ref().map(EventDetail::to_json).transpose()?;
         let tx = self.conn.unchecked_transaction()?;
         let changed = insert_task_message_tx(&tx, msg, &now)?;
         if changed == 0 {
@@ -1740,10 +1735,10 @@ impl StateDb {
         new_workflow: &str,
         new_mode: &str,
         new_source_payload: Option<&serde_json::Value>,
-        detail: Option<serde_json::Value>,
+        detail: Option<EventDetail>,
     ) -> Result<HandoffOutcome, StateError> {
         let now = self.clock.now_rfc3339();
-        let detail = detail.as_ref().map(serde_json::to_string).transpose()?;
+        let detail = detail.as_ref().map(EventDetail::to_json).transpose()?;
         let payload = new_source_payload.map(serde_json::to_string).transpose()?;
         let tx = self.conn.unchecked_transaction()?;
 
@@ -1825,10 +1820,10 @@ impl StateDb {
     pub fn retry_task(
         &self,
         task: TaskRef,
-        detail: Option<serde_json::Value>,
+        detail: Option<EventDetail>,
     ) -> Result<(TaskState, TaskRef, usize), StateError> {
         let now = self.clock.now_rfc3339();
-        let detail = detail.as_ref().map(serde_json::to_string).transpose()?;
+        let detail = detail.as_ref().map(EventDetail::to_json).transpose()?;
         let tx = self.write_transaction()?;
         let id = task.id;
         let (to, version) = apply_event_tx(
@@ -2292,6 +2287,29 @@ fn conversion_error(e: Box<dyn std::error::Error + Send + Sync>) -> rusqlite::Er
 mod tests {
     use super::*;
     use crate::adapters::clock::ManualClock;
+    use crate::domain::event_detail::{Dispatch, HookStart, Publish, Reopen};
+
+    /// Append an `events` row whose `detail` is `detail`'s JSON, verbatim.
+    ///
+    /// The write API only takes an [`EventDetail`] (#766), so a row no
+    /// current writer produces — one from an older version, or one shaped to
+    /// stress a reader — can only be written underneath it. The column gets
+    /// the same bytes `apply_event` wrote for a `serde_json::Value` before
+    /// #766.
+    fn insert_raw_event(db: &StateDb, task_id: i64, to: TaskState, detail: &serde_json::Value) {
+        db.conn
+            .execute(
+                "INSERT INTO events (task_id, from_state, to_state, occurred_at, detail)
+                 VALUES (?1, NULL, ?2, ?3, ?4)",
+                params![
+                    task_id,
+                    to.as_str(),
+                    T0,
+                    serde_json::to_string(detail).unwrap()
+                ],
+            )
+            .unwrap();
+    }
 
     /// Real-clock RFC 3339 timestamp for direct-INSERT helpers whose exact
     /// value is irrelevant.
@@ -2387,7 +2405,10 @@ mod tests {
         db.apply_event(
             db.task_ref(first).unwrap(),
             TaskEvent::Start,
-            Some(serde_json::json!({"kind": "dispatch", "plugin": "herdr"})),
+            Some(EventDetail::Dispatch(Dispatch::Started {
+                plugin: "herdr".to_string(),
+                session_id: "s-1".to_string(),
+            })),
         )
         .unwrap();
 
@@ -2398,7 +2419,7 @@ mod tests {
         db.apply_event(
             db.task_ref(second).unwrap(),
             TaskEvent::Fail,
-            Some(serde_json::json!({"kind": "hook"})),
+            Some(EventDetail::Hook { reason: None }),
         )
         .unwrap();
         (first, second)
@@ -2539,18 +2560,19 @@ mod tests {
         let db = StateDb::open_in_memory().unwrap();
         let id = db.upsert_task(&sample_task()).unwrap();
         // Keys deliberately out of alphabetical order, plus a nested object
-        // and a number, since those are where a reshape would show up.
-        db.apply_event(
-            db.task_ref(id).unwrap(),
-            TaskEvent::Dispatch,
-            Some(serde_json::json!({
+        // and a number, since those are where a reshape would show up. No
+        // writer produces this shape, so it goes in underneath the typed API.
+        insert_raw_event(
+            &db,
+            id,
+            TaskState::Dispatched,
+            &serde_json::json!({
                 "kind": "hook_complete",
                 "publish_artifact": "line one\nline two",
                 "attempt": 3,
                 "agent": {"plugin": "herdr", "session": "s-1"},
-            })),
-        )
-        .unwrap();
+            }),
+        );
 
         // Compare **every** row against its own stored column, keyed by
         // event id: picking one row by hand is how this test first passed
@@ -2741,7 +2763,10 @@ mod tests {
             .apply_event(
                 db.task_ref(id).unwrap(),
                 TaskEvent::Complete,
-                Some(serde_json::json!({"pr": 7})),
+                Some(EventDetail::Publish(Publish::Succeeded {
+                    policy: "source".to_string(),
+                    pr_url: None,
+                })),
             )
             .unwrap()
             .0;
@@ -3123,7 +3148,7 @@ mod tests {
         db.apply_event(
             db.task_ref(id).unwrap(),
             TaskEvent::Start,
-            Some(serde_json::json!({"k": 1})),
+            Some(EventDetail::HookStart(HookStart::Plain {})),
         )
         .unwrap();
 
@@ -3135,7 +3160,10 @@ mod tests {
         assert_eq!(events[1].from_state, Some(TaskState::Queued));
         assert_eq!(events[1].to_state, TaskState::Dispatched);
         assert_eq!(events[2].to_state, TaskState::Running);
-        assert_eq!(events[2].detail, Some(serde_json::json!({"k": 1})));
+        assert_eq!(
+            events[2].detail,
+            Some(serde_json::json!({"kind": "hook_start"}))
+        );
         // Unknown task -> empty history, not an error.
         assert!(db.list_events(999).unwrap().is_empty());
     }
@@ -3213,7 +3241,10 @@ mod tests {
         db.apply_event(
             db.task_ref(id).unwrap(),
             TaskEvent::Dispatch,
-            Some(serde_json::json!({"kind": "dispatch"})),
+            Some(EventDetail::Dispatch(Dispatch::Started {
+                plugin: "herdr".to_string(),
+                session_id: "s-1".to_string(),
+            })),
         )
         .unwrap();
         assert!(db.open_notes().unwrap().is_empty());
@@ -3267,7 +3298,7 @@ mod tests {
         db.apply_event(
             db.task_ref(id).unwrap(),
             TaskEvent::Start,
-            Some(serde_json::json!({"pid": 7})),
+            Some(EventDetail::HookStart(HookStart::Plain {})),
         )
         .unwrap();
 
@@ -4179,7 +4210,9 @@ mod tests {
         let (outcome, reopened) = db
             .append_task_message_reopening(
                 &message(id, "m2", "a follow-up"),
-                Some(serde_json::json!({"kind": "reopen"})),
+                Some(EventDetail::Reopen(Reopen::Message {
+                    message_key: "m2".to_string(),
+                })),
             )
             .unwrap();
         assert_eq!(outcome, TaskMessageOutcome::New);

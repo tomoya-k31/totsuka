@@ -8,6 +8,7 @@
 //! this only decides which event to ask for and phrases the refusals.
 
 use crate::adapters::state_db::{StateDb, StateError};
+use crate::domain::EventDetail;
 use crate::domain::state::{TaskEvent, TaskState};
 use crate::ports::signal_ingress::TaskControlOutcome;
 
@@ -18,7 +19,7 @@ use crate::ports::signal_ingress::TaskControlOutcome;
 pub fn cancel(
     db: &StateDb,
     id: i64,
-    detail: serde_json::Value,
+    detail: EventDetail,
 ) -> Result<TaskControlOutcome, StateError> {
     let Some(task) = db.get_task(id)? else {
         return Ok(TaskControlOutcome::refused(not_found(id)));
@@ -48,11 +49,7 @@ pub fn cancel(
 }
 
 /// Retry task `id`. `detail` is the audit detail recorded with the event.
-pub fn retry(
-    db: &StateDb,
-    id: i64,
-    detail: serde_json::Value,
-) -> Result<TaskControlOutcome, StateError> {
+pub fn retry(db: &StateDb, id: i64, detail: EventDetail) -> Result<TaskControlOutcome, StateError> {
     let Some(task) = db.get_task(id)? else {
         return Ok(TaskControlOutcome::refused(not_found(id)));
     };
@@ -127,15 +124,21 @@ mod tests {
         (db, id)
     }
 
+    fn control() -> EventDetail {
+        EventDetail::Control {
+            command: "test".to_string(),
+        }
+    }
+
     #[test]
     fn cancel_then_retry_round_trips_and_reports_where_it_came_from() {
         let (db, id) = db_with_task();
-        let cancelled = cancel(&db, id, serde_json::json!({})).unwrap();
+        let cancelled = cancel(&db, id, control()).unwrap();
         assert_eq!(
             cancelled,
             TaskControlOutcome::applied(TaskState::Queued, TaskState::Cancelled, None)
         );
-        let retried = retry(&db, id, serde_json::json!({})).unwrap();
+        let retried = retry(&db, id, control()).unwrap();
         assert_eq!(
             retried,
             TaskControlOutcome::applied(TaskState::Cancelled, TaskState::Queued, Some(0))
@@ -146,16 +149,16 @@ mod tests {
     fn refusals_are_answers_with_advice_not_errors() {
         let (db, id) = db_with_task();
         // Queued is not retryable.
-        let refused = retry(&db, id, serde_json::json!({})).unwrap();
+        let refused = retry(&db, id, control()).unwrap();
         assert!(!refused.ok);
         assert!(refused.reason.unwrap().contains("cancel` it first"));
 
-        cancel(&db, id, serde_json::json!({})).unwrap();
-        let twice = cancel(&db, id, serde_json::json!({})).unwrap();
+        cancel(&db, id, control()).unwrap();
+        let twice = cancel(&db, id, control()).unwrap();
         assert!(!twice.ok);
         assert!(twice.reason.unwrap().contains(&format!("task retry {id}")));
 
-        let unknown = cancel(&db, 9999, serde_json::json!({})).unwrap();
+        let unknown = cancel(&db, 9999, control()).unwrap();
         assert_eq!(unknown.reason.as_deref(), Some(not_found(9999).as_str()));
     }
 }

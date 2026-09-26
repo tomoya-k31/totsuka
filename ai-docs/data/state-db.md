@@ -4,7 +4,7 @@ title: 状態DB（SQLite state.db）スキーマ
 description: タスク実行状態を永続化する SQLite DB（$XDG_STATE_HOME/totsuka/state.db）の tasks/sessions/events/hook_events/task_messages/schema_migrations スキーマと設計判断。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/adapters/state_db.rs
 tags: [sqlite, state, schema, statemachine, hooks]
-generated: { by: claude-code/opus-5.5, at: 2026-09-27T09:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-09-26T16:14:00+09:00 }
 verified:
   - { by: claude-code/opus-5, at: 2026-08-19T02:36:00Z }
 status: stable
@@ -198,6 +198,8 @@ Claude Code フック（Stop / Notification / SessionStart / SessionEnd / heartb
 
 **全状態遷移**を記録する監査ログ（F-72。状態が動くときは必ず 1 行増える）と、**動いていないタスクについてのノート行**（#407、下記）が同居する。`from_state`（取り込み時 NULL）→ `to_state`、`occurred_at`、`detail`（JSON）。実行ログ断片（F-38）は含めず JSONL ログ側（#49）に置く。
 
+**遷移行の `detail` は型 `domain::EventDetail` でしか書けない（#766）。** `apply_event` / `retry_task` / `append_task_message_reopening` / `append_task_message_handing_off` は `Option<EventDetail>` を、`task_control::cancel` / `retry` は（detail を必ず記録するので）`EventDetail` を受け、取り込み時の `ingested` / `submitted` も同じ型から作る。列に入るのは `EventDetail::to_json` の出力で、`serde_json::Value` を経由するのでキーはソート済みになる — #766 以前の `json!` の書き手が保存したのと同じバイト列で、形ごとのゴールデンテストがそれを固定している。kind とフィールドの対応は `EventDetail` の定義が唯一の一覧。ノート行（下記）は別の語彙で、`note_task` が `serde_json::Value` のまま受ける。
+
 ### ノート行（#407、[ADR-0037](/decisions/adr-0037-task-notes-in-the-event-log.md)）
 
 **このテーブルには遷移でない行も入る。** 「タスクが動いていない理由」は `from_state == to_state` の行として書かれ、`detail` の **`note` キー**がその印になる（例: `{"note":"blocked_agent_tools","missing":["gh"]}`）。マイグレーションは不要（スキーマは変わっていない）。
@@ -216,7 +218,7 @@ Claude Code フック（Stop / Notification / SessionStart / SessionEnd / heartb
 - **同梱するタスク側の列は不変フィールドだけ**（`source` / `source_task_id` / `workflow` / `title`）。`state` や `branch` を載せると「過去の一瞬」を語る event に「今」の値が並ぶことになる
 - **秘密の扱い**: `detail` は `logging/redact.rs`（tracing レイヤの実装）の対象外なので、原理的に秘密を含みうる。ただし `task show --json` が既に同じ `detail` を露出しているため、export が新しい露出クラスを作るわけではない。`--no-detail` は**サイズ削減のオプションであってリダクション機能ではない**
 - **「落とした」と「元から無い」を区別する**。`ExportedEvent.detail` は `Option<Option<Value>>` で、キー無し = `--no-detail` が落とした / `"detail": null` = その行に detail が無かった / 値あり = 記録どおり。潰すと、`--no-detail` で取ったアーカイブが「どの遷移が detail を持っていたか」に答えられなくなり、DB に戻るしかなくなる — この取り出し口が避けようとしている状況そのもの
-- **出力は保存されているバイト列と一致する**。書き込み側も `serde_json::Value` を通るので列にはこのクレートの正準形（キーはソート済み・重複解消済み）が入っており、export の round-trip は恒等になる。**構造上そうなるだけで保証ではないので、`export_detail_round_trips_byte_for_byte` が全行を突き合わせて固定している**（監査チェーンが出力行をハッシュする用途がこれに依存する）
+- **出力は保存されているバイト列と一致する**。書き込み側も `EventDetail::to_json` で `serde_json::Value` を通るので列にはこのクレートの正準形（キーはソート済み・重複解消済み）が入っており、export の round-trip は恒等になる。**構造上そうなるだけで保証ではないので、`export_detail_round_trips_byte_for_byte` が全行を突き合わせて固定している**（監査チェーンが出力行をハッシュする用途がこれに依存する）
 
 ## schema_migrations（§10.3）
 

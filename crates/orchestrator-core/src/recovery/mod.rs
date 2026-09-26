@@ -18,6 +18,7 @@
 use plugin_protocol::methods::AgentState;
 
 use crate::adapters::state_db::{SessionRecord, StateDb, StateError, TaskRecord};
+use crate::domain::EventDetail;
 use crate::domain::state::{TaskEvent, TaskState};
 use crate::ports::agent_session::{AgentSession, AttachOutcome};
 use crate::scheduler::counts_toward_slot;
@@ -317,8 +318,11 @@ pub fn active_slot_claims(
 }
 
 /// The `events.detail` recorded for a recovery-driven transition.
-fn recovery_detail(agent: AgentState) -> serde_json::Value {
-    serde_json::json!({ "kind": "recovery", "attached": true, "agent_state": agent })
+fn recovery_detail(agent: AgentState) -> EventDetail {
+    EventDetail::Recovery {
+        attached: true,
+        agent_state: agent,
+    }
 }
 
 /// Build a `Resumed` outcome.

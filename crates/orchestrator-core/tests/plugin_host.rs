@@ -9,6 +9,7 @@ use orchestrator_core::adapters::plugin_host::{
 };
 use orchestrator_core::adapters::{NewTask, StateDb};
 use orchestrator_core::config::RootConfig;
+use orchestrator_core::domain::EventDetail;
 use orchestrator_core::domain::state::{TaskEvent, TaskState};
 use plugin_protocol::manifest::Manifest;
 use plugin_protocol::methods::StateSubscribeParams;
@@ -181,7 +182,9 @@ async fn crash_fails_task_and_host_survives() {
         .apply_event(
             db.task_ref(task_id).unwrap(),
             TaskEvent::Fail,
-            Some(serde_json::json!({ "reason": "plugin crashed" })),
+            Some(EventDetail::PluginCrash {
+                plugin: "mock".to_string(),
+            }),
         )
         .unwrap()
         .0;

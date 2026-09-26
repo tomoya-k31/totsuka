@@ -6,6 +6,7 @@
 //! [`finalize`](super::finalize).
 
 use super::*;
+use crate::domain::event_detail::{AgentStateChange, EventDetail};
 
 impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// Handle one plugin event.
@@ -204,7 +205,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             return Ok(());
         }
         let repo = record.repo.clone().unwrap_or_default();
-        let detail = serde_json::json!({ "kind": "agent_state", "state": state });
+        let detail = EventDetail::AgentState(AgentStateChange::Plain { state });
 
         match state {
             AgentState::Idle => {}
@@ -268,9 +269,9 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                     // transition, so a crash before finalize can recover the
                     // artifact from the audit log (source publish / PR summary).
                     let event_detail = if event == TaskEvent::BeginPublish {
-                        serde_json::json!({
-                            "kind": "agent_state", "state": state,
-                            "publish_artifact": self.agent_output.get(&task_id),
+                        EventDetail::AgentState(AgentStateChange::WithArtifact {
+                            state,
+                            publish_artifact: self.agent_output.get(&task_id).cloned(),
                         })
                     } else {
                         detail.clone()
@@ -283,7 +284,9 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                 self.db.apply_event(
                     record.task_ref(),
                     TaskEvent::Fail,
-                    Some(serde_json::json!({ "kind": "agent_state", "state": "failed" })),
+                    Some(EventDetail::AgentState(AgentStateChange::Plain {
+                        state: AgentState::Failed,
+                    })),
                 )?;
                 self.release_slot(task_id);
                 self.drop_task_sessions(task_id);

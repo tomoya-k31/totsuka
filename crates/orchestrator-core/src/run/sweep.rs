@@ -6,6 +6,7 @@
 //! 200ms tick, because each one costs a git subprocess per task.
 
 use super::*;
+use crate::domain::EventDetail;
 
 impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// Read `HEAD` in the worktree of every in-flight task and record the
@@ -132,7 +133,10 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             );
         }
         self.drop_task_sessions(record.id);
-        self.fail_publish(&record, record.task_ref(), "read_only_violation", reason)
+        let detail = EventDetail::ReadOnlyViolation {
+            reason: reason.clone(),
+        };
+        self.fail_publish(&record, record.task_ref(), detail, reason)
             .await
     }
 

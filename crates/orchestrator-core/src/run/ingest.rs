@@ -5,6 +5,7 @@
 //! of its own and re-submits everything each tick.
 
 use super::*;
+use crate::domain::event_detail::{EventDetail, Reopen, WorkflowHandoff};
 
 impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     /// Persist one normalized task under `wf`, idempotently (F-73), appending
@@ -80,7 +81,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         // message forever.
         let (appended, reopened) = self.db.append_task_message_reopening(
             &insert,
-            Some(serde_json::json!({ "kind": "reopen", "message_key": message_key })),
+            Some(EventDetail::Reopen(Reopen::Message { message_key })),
         )?;
 
         let outcome = match (existing, appended, reopened) {
@@ -146,11 +147,13 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         // task from nothing. On the create path a `None` merely means a fresh
         // row has no payload yet, which is why that one may be lenient.
         let payload = serde_json::to_value(task).map_err(StateError::from)?;
-        let detail = serde_json::json!({
-            "kind": "reopen",
-            "cause": "workflow_handoff",
-            "workflow": { "from": existing.workflow, "to": wf.name },
-            "message_key": message_key,
+        let detail = EventDetail::Reopen(Reopen::Handoff {
+            cause: "workflow_handoff".to_string(),
+            workflow: WorkflowHandoff {
+                from: existing.workflow.clone(),
+                to: wf.name.clone(),
+            },
+            message_key,
         });
         let outcome = self.db.append_task_message_handing_off(
             &insert,
