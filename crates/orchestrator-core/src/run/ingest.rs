@@ -44,7 +44,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             source: task.source.clone(),
             source_task_id: SourceTaskId(task.id.clone()),
             workflow: wf.name.clone(),
-            mode: mode_str(wf.mode).to_string(),
+            mode: wf.mode,
             repo: None,
             priority: task.priority,
             title: task.title.clone(),
@@ -161,7 +161,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         let outcome = self.db.append_task_message_handing_off(
             &insert,
             &wf.name,
-            mode_str(wf.mode),
+            wf.mode,
             Some(&payload),
             Some(detail),
         )?;
@@ -703,7 +703,8 @@ mod tests {
         let record = engine.db.get_task(id).unwrap().unwrap();
         assert_eq!(record.workflow, "review", "the stage moved");
         assert_eq!(
-            record.mode, "plan",
+            record.mode,
+            WorkflowMode::Plan,
             "dispatch reads this column, not the workflow"
         );
         assert_eq!(record.state, TaskState::Queued, "reopened");
@@ -766,7 +767,7 @@ mod tests {
 
         let record = engine.db.get_task(id).unwrap().unwrap();
         assert_eq!(record.workflow, "implement", "the running stage keeps it");
-        assert_eq!(record.mode, "implement");
+        assert_eq!(record.mode, WorkflowMode::Implement);
         assert_eq!(
             engine.db.list_task_messages(id).unwrap().len(),
             1,

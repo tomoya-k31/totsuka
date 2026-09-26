@@ -11,6 +11,7 @@ use orchestrator_core::adapters::{NewTask, StateDb};
 use orchestrator_core::config::RootConfig;
 use orchestrator_core::domain::EventDetail;
 use orchestrator_core::domain::SourceTaskId;
+use orchestrator_core::domain::WorkflowMode;
 use orchestrator_core::domain::state::{TaskEvent, TaskState};
 use plugin_protocol::manifest::Manifest;
 use plugin_protocol::methods::StateSubscribeParams;
@@ -154,7 +155,7 @@ async fn crash_fails_task_and_host_survives() {
             source: "github".into(),
             source_task_id: SourceTaskId("1".into()),
             workflow: "implement".into(),
-            mode: "implement".into(),
+            mode: WorkflowMode::Implement,
             repo: None,
             priority: 0,
             title: "t".into(),

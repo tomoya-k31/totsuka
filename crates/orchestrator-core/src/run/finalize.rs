@@ -329,7 +329,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         let Some(repo_path) = repo_path else {
             return Ok(());
         };
-        let mode_default = if record.mode == "plan" {
+        let mode_default = if record.mode == WorkflowMode::Plan {
             self.settings.cleanup_plan
         } else {
             self.settings.cleanup_implement
@@ -641,7 +641,7 @@ mod tests {
                 source: "mock".to_string(),
                 source_task_id: SourceTaskId(key.to_string()),
                 workflow: "implement".to_string(),
-                mode: "implement".to_string(),
+                mode: WorkflowMode::Implement,
                 repo: None,
                 priority: 0,
                 title: "t".to_string(),

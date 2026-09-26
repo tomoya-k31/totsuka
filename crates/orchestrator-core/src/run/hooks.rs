@@ -932,6 +932,7 @@ fn strip_status_markers(text: &str) -> String {
 mod tests {
     use super::*;
     use crate::domain::SourceTaskId;
+    use crate::domain::WorkflowMode;
 
     #[test]
     fn strip_status_markers_removes_inline_and_standalone() {
@@ -1005,7 +1006,7 @@ mod tests {
                 source: "github".to_string(),
                 source_task_id: SourceTaskId("42".to_string()),
                 workflow: "implement".to_string(),
-                mode: "implement".to_string(),
+                mode: WorkflowMode::Implement,
                 repo: Some("web".to_string()),
                 priority: 0,
                 title: "Fix the bug".to_string(),

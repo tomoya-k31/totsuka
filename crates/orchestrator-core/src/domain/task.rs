@@ -5,6 +5,7 @@ use std::fmt;
 use time::OffsetDateTime;
 
 use super::state::TaskState;
+use super::workflow::WorkflowMode;
 
 /// A task's row id (`tasks.id`) — the id totsuka itself assigns.
 ///
@@ -48,7 +49,7 @@ pub struct Task {
     /// Matched workflow name.
     pub workflow: String,
     /// Execution mode.
-    pub mode: String,
+    pub mode: WorkflowMode,
     /// Selected repository name.
     pub repo: Option<String>,
     /// worktree path once created.

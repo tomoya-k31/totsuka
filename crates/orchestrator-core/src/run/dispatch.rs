@@ -283,7 +283,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         // on one ourselves would make that warning fire on every dispatch.
         let task = task_from_record(record);
         let hinted = task.branch_hint.as_deref().map(|branch| {
-            if record.mode == "plan" {
+            if record.mode == WorkflowMode::Plan {
                 HintedStart::DetachedAt(branch)
             } else {
                 HintedStart::On(branch)
@@ -483,7 +483,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                 // see `branch_instruction`.
                 if let Some(text) = branch_instruction(
                     prompts,
-                    &record.mode,
+                    record.mode,
                     on_a_branch,
                     task.branch_hint.as_deref(),
                 ) {
@@ -877,7 +877,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         let inputs = DispatchInputs {
             task: &task,
             worktree_path: &worktree_path,
-            mode: execution_mode(&record.mode),
+            mode: execution_mode(record.mode),
             extra_context: route_extra_context(
                 hook_spec.is_some(),
                 visible_hook_context,
@@ -1807,7 +1807,7 @@ mod tests {
             source: "github".to_string(),
             source_task_id: SourceTaskId("1".to_string()),
             workflow: workflow.to_string(),
-            mode: "implement".to_string(),
+            mode: WorkflowMode::Implement,
             repo: repo.map(str::to_string),
             worktree_path: None,
             branch: None,

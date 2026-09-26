@@ -14,6 +14,7 @@
 //! is capped.
 
 use orchestrator_core::domain::SourceTaskId;
+use orchestrator_core::domain::WorkflowMode;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, Command, Output, Stdio};
@@ -594,7 +595,7 @@ fn doctor_detects_orphan_panes_via_session_list() {
         source: "mock_src".into(),
         source_task_id: SourceTaskId(sid.into()),
         workflow: "wf".into(),
-        mode: "implement".into(),
+        mode: WorkflowMode::Implement,
         repo: None,
         priority: 0,
         title: format!("task {sid}"),

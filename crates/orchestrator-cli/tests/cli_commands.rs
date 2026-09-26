@@ -14,6 +14,7 @@ use orchestrator_core::adapters::state_db::TaskMessageInsert;
 use orchestrator_core::adapters::{NewTask, StateDb};
 use orchestrator_core::domain::EventDetail;
 use orchestrator_core::domain::SourceTaskId;
+use orchestrator_core::domain::WorkflowMode;
 use orchestrator_core::domain::state::TaskEvent;
 
 fn totsuka() -> PathBuf {
@@ -79,7 +80,7 @@ fn seed_db(base: &Path) -> (i64, i64, i64) {
         source: "github".into(),
         source_task_id: SourceTaskId(id.into()),
         workflow: "implement".into(),
-        mode: "implement".into(),
+        mode: WorkflowMode::Implement,
         repo: Some("web".into()),
         priority: 0,
         title: format!("task {id}"),
@@ -333,7 +334,7 @@ fn menu_exits_quietly_when_the_reader_goes_away() {
                     source: "github".into(),
                     source_task_id: SourceTaskId(i.to_string()),
                     workflow: "implement".into(),
-                    mode: "implement".into(),
+                    mode: WorkflowMode::Implement,
                     repo: None,
                     priority: 0,
                     title: format!("waiting task number {i} with a title long enough to matter"),
@@ -431,7 +432,7 @@ fn task_export_exits_quietly_when_the_reader_goes_away() {
                     source: "github".into(),
                     source_task_id: SourceTaskId(i.to_string()),
                     workflow: "implement".into(),
-                    mode: "implement".into(),
+                    mode: WorkflowMode::Implement,
                     repo: None,
                     priority: 0,
                     title: format!("t{i}"),
@@ -524,7 +525,7 @@ fn status_explains_why_a_queued_task_is_not_starting() {
             source: "github".into(),
             source_task_id: SourceTaskId("7".into()),
             workflow: "github-implement".into(),
-            mode: "implement".into(),
+            mode: WorkflowMode::Implement,
             repo: Some("web".into()),
             priority: 0,
             title: "Add a flag".into(),
@@ -601,7 +602,7 @@ fn external_text_cannot_repaint_the_terminal_yet_json_stays_verbatim() {
             source: "github".into(),
             source_task_id: SourceTaskId(source_task_id.clone()),
             workflow: "implement".into(),
-            mode: "implement".into(),
+            mode: WorkflowMode::Implement,
             repo: Some("web".into()),
             priority: 0,
             title: title.clone(),
@@ -2028,7 +2029,7 @@ fn menu_renders_the_glyph_the_count_and_a_focus_action() {
                 source: "github".into(),
                 source_task_id: SourceTaskId("waiting".into()),
                 workflow: "implement".into(),
-                mode: "implement".into(),
+                mode: WorkflowMode::Implement,
                 repo: Some("web".into()),
                 priority: 0,
                 title: "needs an answer".into(),
