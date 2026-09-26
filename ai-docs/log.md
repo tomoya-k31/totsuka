@@ -22,6 +22,7 @@
 * **Update**: [plugin-sdk クレート](/components/plugin-sdk.md) — agent_ide 向けの `AgentIdeHandler` / `AgentIdeServer`（`state/subscribe` の ACK → 通知の順序を SDK が保証）、`template`（`{placeholder}` の単一パス置換）、`compose_prompt`、`not_initialized()`、task_source の `handle_line` を追加（#759）
 * **Update**: [プラグイン開発ガイド](/development/plugin-dev-guide.md) — 「SDK のハンドラで書く」節を追加
 * **Update**: [task-source-slack](/components/task-source-slack.md) — server を plugin-sdk の `TaskSourceHandler` に載せ、`template` モジュールを SDK のものに置き換えた（#759）
+* **Update**: [orchestrator-core](/components/orchestrator-core.md) — `adapters::state_db` をテーブル単位の子モジュール（`tasks` / `events` / `sessions` / `hook_events` / `task_messages` / `migrations`）に分けた（#761）。移動だけで振る舞い・シグネチャ・スキーマは変えていない。`state_db::X` の参照経路は `pub use` で保つ
 * **Update**: [orchestrator-core](/components/orchestrator-core.md) — モジュール構成を「ヘキサゴナルの中心 / アプリケーション層 / 基盤」の実際の姿に書き直し、`agent_tools` を `agent_prereqs`（`AgentPrereq` / `PrereqCache`）に改名した（#762、[ADR-0102](/decisions/adr-0102-core-internal-layering.md)）。保存済みの `blocked_agent_tools` は変えない
 * **Update**: [orchestrator-cli](/components/orchestrator-cli.md) / [テスト戦略](/quality/test-strategy.md) — 改名に追従
 * **Creation**: [ADR-0102](/decisions/adr-0102-core-internal-layering.md) — orchestrator-core の domain を config から切り離した（#762）。値型（`Profile` / `WorkflowMode` / `OutputPolicy` / `VerificationMode` / `CleanupPolicy`）は domain に、`config.toml` からの変換は `config::interpret`（`RootConfig::domain_workflows`）に置き、domain / ports が config と adapters を参照しないことを `arch-lint` の `core-layer` で検査する
