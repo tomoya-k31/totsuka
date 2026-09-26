@@ -2,7 +2,7 @@
 type: Migration
 title: アップグレードとロールバック（state.db）
 description: totsuka のバージョンアップ時に state.db のマイグレーションを適用する手順と、バックアップから戻すロールバック手順。schema v7 時点。バージョン不整合エラー（SchemaTooNew / SchemaOutdated）の読み方も含む。
-resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/adapters/state_db.rs
+resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/orchestrator-core/src/adapters/state_db
 tags: [migration, state-db, upgrade, rollback, operations]
 generated: { by: human:tomoya-k31, at: 2026-07-26T15:00:00+09:00 }
 status: stable
