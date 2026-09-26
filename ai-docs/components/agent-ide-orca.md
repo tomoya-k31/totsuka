@@ -4,7 +4,7 @@ title: agent-ide-orca プラグイン
 description: orca を Agent IDE として接続する公式 agent_ide プラグイン。herdr プラグインと同じ契約（tool_launch をそのまま起動・hook で完了報告・exit の deadman・pane_control・diagnostics_snapshot）を、orca CLI（--json）の端末操作で実現する。セッションは Orchestrator の worktree に開いた orca 端末。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/agent-ide-orca
 tags: [rust, crate, plugin, agent-ide, orca, cli, terminal, hooks]
-generated: { by: claude-code/opus-5-5, at: 2026-09-23T15:00:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-26T16:00:00+09:00 }
 stale_after: 2027-03-19
 status: stable
 owner: tomoya-k31
@@ -29,8 +29,8 @@ orca は公開 REST/ソケット API を持たず、**`orca` CLI（`--json`）�
 | `config` | `[orca]` = `orca_bin` / `request_timeout_secs`（既定 30）/ `[orca.layout]`（`shell` 既定 **false**・`direction` は `horizontal` / `vertical` の閉じた集合）/ `[orca.identity]`（`enabled` 既定 true）。`deny_unknown_fields`。廃止キー（`agent` / `setup` / `repo_selector` / `plan_prompt_prefix` / `poll_interval_ms`）は `removed_keys_in` が名指しで代替を案内する |
 | `state` | orca の worktree `status`（state dots 由来）→ `AgentState`。**`session/attach` 専用**で、完了判定には使わない。`active` など不明値は呼び出し側が渡す前値（`running`）を保つ |
 | `agent` | `OrcaAgent<C: OrcaCli>`。下のメソッド写像のすべて |
-| `server` | JSON-RPC ディスパッチ `Server<F: CliFactory>`。herdr と同じメソッド集合。`SessionUnresumable` → `SESSION_UNRESUMABLE`、`MissingToolLaunch` → `INVALID_PARAMS` |
-| `main` | `#[tokio::main]`。専用 writer タスクが stdout を直列化 |
+| `server` | `Server<F: CliFactory>`: plugin-sdk の **`AgentIdeHandler` の実装**（#759。行処理・params の型検査・`state/subscribe` の ACK → 通知の順序は SDK の `AgentIdeServer`）。herdr と同じメソッド集合。プロンプトは SDK の `compose_prompt`。`SessionUnresumable` → `SESSION_UNRESUMABLE`、`MissingToolLaunch` → `INVALID_PARAMS` |
+| `main` | `#[tokio::main]`。SDK の `stdio()` / `serve` に `AgentIdeServer` で載せる（stdout は SDK の単一 writer タスクが直列化、#759） |
 
 # メソッド写像
 
