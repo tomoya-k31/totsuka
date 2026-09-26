@@ -4,7 +4,7 @@ title: task-source-discord プラグイン
 description: "Discord のチャンネル監視をタスクソースとして接続する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。Gateway WebSocket で MESSAGE_CREATE を受け、監視チャンネルへのトップレベル投稿を Task へ正規化し、結果を bot 名義でその投稿のスレッドへ返す。self-bot 禁止により本人名義投稿・承認フローは持たない薄い設計。"
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-discord
 tags: [rust, crate, plugin, task-source, discord, gateway, websocket, channel-watch]
-generated: { by: claude-code/opus-5, at: 2026-09-12T23:10:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-09-26T22:30:00+09:00 }
 status: stable
 owner: tomoya-k31
 sources:
@@ -41,7 +41,7 @@ Discord の[チャンネル監視トリガ](/glossary/channel-watch.md)を totsu
 | `discord_api` | 使う 4 ルートの型付きラッパ: `GET /users/@me`（トークンガード兼 bot 自身の id）、`GET /channels/{id}`（改名検知用の実名）、`GET /channels/{id}/messages`（バックフィル）、`POST …/messages` と `POST …/messages/{id}/threads`（結果投稿）。`is_human_post()` が bot・webhook・システムメッセージを落とす —— **webhook 投稿の author には `bot` フラグが無い**ので、そこだけ見ると通り抜ける。`snowflake_for()` は「now − max_age」の合成 snowflake を作る（snowflake は生成時刻を内包するので、余分な往復なしで `after` の下限になる） |
 | `gateway` | Gateway プロトコルの純粋な部分[^discord-gateway]: intent ビット（`GUILD_MESSAGES \| MESSAGE_CONTENT` の 2 つだけ。増やすとこのプロセスに流れ込む範囲が広がる）、`IDENTIFY` / `RESUME` / `HEARTBEAT` のペイロード、`close_code_is_permanent()`、`step()` によるフレーム分類。**`step()` が seq を進めるのは読まないイベントでも**行う —— 古い seq から resume すると、それ以降が全部再配送される |
 | `watch` | 判定表と `Task` 生成。**「スレッド返信を除く」行が無い**のは、Discord ではスレッドがチャンネルであり、返信はスレッド自身の `channel_id` を持つため構造的に弾かれるから。表は ①監視チャンネル ②人間の投稿のみ ③bot 自身の id を除外 ④起動者ゲート。`task_id` は `{prefix:}{channel}:{message}`、**`message_key` は付けない**（id が既にその 1 投稿を名指すので、2 回目の配送は id で止まる = at-most-once） |
-| `pipeline` | 起動時のチャンネル名照合（改名を warn、失敗しても続行）、バックフィル、1 メッセージの submit、結果投稿。`SharedState` は `PendingPost`（channel / message / author）を task id で持つ。座標は task id から**導出可能**だが記録する —— `result/publish` に id の書式を解析させると、prefix を足した日に壊れる |
+| `pipeline` | 起動時のチャンネル名照合（改名を warn、失敗しても続行）、バックフィル、1 メッセージの submit、結果投稿。**バックフィルは submit の前に `task/lookup` で聞き、Orchestrator が既に持つ投稿（完了済みも実行中も）は submit しない**（`recover_message`）—— 1 投稿 = 1 タスクなので、既知なら submit は `duplicate` にしかならず、再起動のたびに完了済み投稿の数だけ `ack=Duplicate` が info で並んでいた。ただし座標は登録し直す（pending はメモリにしか無く、再起動をまたいで実行中のタスクが `result/publish` で使う）。lookup が答えなければ従来どおり submit に倒す。ライブ経路は新しい投稿しか来ないので聞かない。`SharedState` は `PendingPost`（channel / message / author）を task id で持つ。座標は task id から**導出可能**だが記録する —— `result/publish` に id の書式を解析させると、prefix を足した日に壊れる |
 | `run` | 常駐 Gateway ループ。接続 → `HELLO` → `IDENTIFY` か `RESUME` → heartbeat → フレーム消費。終わり方を 3 つに分類する: **Permanent**（止まる）・**Resumable**（resume して再接続）・**Restart**（session を捨て、再接続してバックフィル）。4007 / 4009 は再接続してよいが session は無効なので Restart に倒す |
 | `server` | JSON-RPC dispatch。`initialize` で設定検査 → trigger 解決 → **監視が 0 本ならエラー**（このソースには他のトリガ種別が無く、何もしないまま起動するのは常に間違い）→ トークンガード → 常駐ランタイム起動。`config/validate` は**意図的にオフライン**で、`doctor` がネットワークもトークンも要らない。`task/update_status` は no-op だが**成功を返す**（失敗にすると全タスクが失敗に見える） |
 
