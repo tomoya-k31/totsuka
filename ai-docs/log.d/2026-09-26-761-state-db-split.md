@@ -1,0 +1,1 @@
+* **Update**: [orchestrator-core](/components/orchestrator-core.md) — `adapters::state_db` をテーブル単位の子モジュール（`tasks` / `events` / `sessions` / `hook_events` / `task_messages` / `migrations`）に分けた（#761）。移動だけで振る舞い・シグネチャ・スキーマは変えていない。`state_db::X` の参照経路は `pub use` で保つ
