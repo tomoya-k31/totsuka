@@ -377,6 +377,8 @@ design in prose.
         assert!(js.contains("ctx.session.prompt({ sessionID, text: REASK_MARKER })"));
         // One re-ask per chain, like `stop_hook_active`.
         assert!(js.contains("if (marker || !reask || wasReask) return"));
+        // A rejected prompt leaves no re-asked turn to consume the flag.
+        assert!(js.contains("reasking.delete(sessionID)\n      }"));
         assert!(js.contains(r#"t === "permission.asked""#));
         assert!(js.contains(r#"hook_event_name: "Notification""#));
         assert!(js.contains(r#"hook_event_name: "SessionEnd""#));
@@ -396,11 +398,13 @@ design in prose.
     /// A task-tool subagent gets its own session (`parentID` set, confirmed on
     /// 2.0.18). Its turn end is not the task's — relayed, it was a Stop that
     /// fed the UNKNOWN streak — and it must not be told the marker convention.
+    /// Its question or permission prompt still blocks the parent turn, so
+    /// those two are relayed.
     #[test]
     fn embedded_plugin_skips_subagent_sessions() {
         let js = include_str!("totsuka-opencode.js");
         assert!(js.contains(r#"if (t === "session.created" && data.parentID) {"#));
-        assert!(js.contains("if (children.has(sessionID)) return"));
+        assert!(js.contains(r#"if (children.has(sessionID) && t !== "form.created" && t !== "permission.asked") return"#));
         assert!(js.contains("if (isChild.get(id)) return"));
     }
 }

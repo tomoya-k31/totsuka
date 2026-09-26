@@ -162,7 +162,12 @@ export default {
       const wasReask = reasking.delete(sessionID)
       if (marker || !reask || wasReask) return
       reasking.add(sessionID)
-      await ctx.session.prompt({ sessionID, text: REASK_MARKER })
+      try {
+        await ctx.session.prompt({ sessionID, text: REASK_MARKER })
+      } catch {
+        // No re-asked turn will come; the next marker-less stop may ask again.
+        reasking.delete(sessionID)
+      }
     }
 
     async function onEvent(event) {
@@ -173,7 +178,9 @@ export default {
         children.add(sessionID)
         return
       }
-      if (children.has(sessionID)) return
+      // A subagent's turns are not the task's, but its question or permission
+      // prompt blocks the parent turn just the same, so those still go out.
+      if (children.has(sessionID) && t !== "form.created" && t !== "permission.asked") return
       if (t === "session.execution.started") {
         // A turn that ends without text must not report the previous turn's
         // message (its marker, and its prompt_id as a duplicate).

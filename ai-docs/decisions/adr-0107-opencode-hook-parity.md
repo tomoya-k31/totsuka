@@ -34,7 +34,7 @@ v2 の `setup(ctx)` が受け取る `ctx` を読むと、v1 には無かった�
 2. **マーカー欠落時の再依頼**: `session.execution.succeeded` でマーカーが無ければ、UNKNOWN を送った**後に** `on-stop.sh` の block 理由と同じ文を `ctx.session.prompt` で 1 回だけ送る。再依頼したターンがまたマーカー無しで終わっても 2 度目は送らない（claude の `stop_hook_active` と同じ 1 往復）。オペレーターの中断（`interrupted` の `shutdown` 以外）は再依頼しない。`marker_block = true` にする
 3. **Notification**: `permission.asked` を `Notification`（`permission_prompt: <action> <resources>`）で送る。`prompt_id` は承認要求 id — 同じセッションの 2 件目が冪等キーで落ちないように。`--auto` は明示 deny 以外を自動承認するので、発火するのは運用者が `mode_args` / `plan_args` を書き換えたときだけである
 4. **SessionEnd**: `interrupted` の `reason = "shutdown"`（opencode の終了）を `SessionEnd{reason: "shutdown"}` で送る。従来は何も送っていなかった
-5. **サブエージェントを除外する**: `session.created` に `parentID` があるセッションのイベントは全部捨てる。`context` フックの入力には `parentID` が無いので、未分類のセッションは `ctx.session.get` で 1 回だけ引いて判定し、子にはマーカー規約を注入しない（子が `COMPLETED` を書くとタスクが早く完了してしまう）
+5. **サブエージェントを除外する**: `session.created` に `parentID` があるセッションのターン系イベント（開始・本文・終了・失敗）は捨てる。質問フォーム（`form.created`）と `permission.asked` だけは送る — 子の質問・承認待ちでも親のターンは止まるので、送らないとタスクが park されず timeout まで待つ。`context` フックの入力には `parentID` が無いので、未分類のセッションは `ctx.session.get` で 1 回だけ引いて判定し、子にはマーカー規約を注入しない（子が `COMPLETED` を書くとタスクが早く完了してしまう）
 
 見送ったもの:
 
