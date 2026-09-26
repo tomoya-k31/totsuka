@@ -42,6 +42,7 @@ libc.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+plugin-conformance.workspace = true
 # `test-util` makes `#[tokio::test(start_paused = true)]` available: the
 # dispatch path that waits out AGENT_DETECT_WAIT for an agent orca never
 # recognises costs no wall time on a paused clock (as in agent-ide-herdr).

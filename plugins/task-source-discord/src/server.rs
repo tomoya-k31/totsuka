@@ -245,8 +245,10 @@ where
         })
     }
 
-    /// A deliberate no-op: a Discord post has no status column to move.
+    /// A deliberate no-op: a Discord post has no status column to move. Still
+    /// refused before `initialize`, like every other request (#767).
     async fn update_status(&mut self, _: TaskUpdateStatusParams) -> Result<Value, Error> {
+        self.session.as_ref().ok_or_else(not_initialized)?;
         Ok(Value::Null)
     }
 

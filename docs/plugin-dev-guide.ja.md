@@ -1,7 +1,7 @@
 > 🌐 [English](plugin-dev-guide.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:e0281f03b5694868e05c8ccdd59ac9e9ef0bda376fe317bc49b956131ee2ce91 -->
+<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:2dc6a357d9a7ae259c164297c8a4652307c96402c0648a7cde43058524cde352 -->
 
 # プラグイン開発ガイド
 
@@ -231,6 +231,53 @@ Orchestrator 側の構造体にキーを定義することもできる:
 | `[[projects]]` | **`source` が決める。** エントリはちょうど 1 つのプラグインを名指す | `deny_unknown_fields` の構造体へデシリアライズするだけ。握手は不要 |
 
 誰も引き取らない workflow のキーは起動を止める。2 つが引き取る場合も同じ。
+
+## 適合テスト
+
+書いたプラグインがプロトコルの約束事を守っているかは、`plugin-conformance` クレートで確かめられる。キットはプラグインの**バイナリ**を起動して stdio で話すので、`plugin-sdk` を使っているかどうかに関係なく同じ形で使える。公式の 7 本も、それぞれの `tests/conformance.rs` でこのキットを通している。
+
+```toml
+[dev-dependencies]
+plugin-conformance = { git = "https://github.com/tomoya-k31/totsuka" }
+serde_json = "1"  # 下の例で params を組むのに使う
+```
+
+```rust
+#[test]
+fn the_binary_conforms_to_the_protocol() {
+    // initialize が通る最小の params。task_source なら有効なワークフローを 1 つ含める
+    let init = serde_json::from_value(serde_json::json!({
+        "protocol_version": plugin_protocol::PROTOCOL_VERSION,
+        "config": { "token": "test" },
+        "workflows": [{ "workflow": "w", "trigger": { "status": "todo" } }]
+    }))
+    .unwrap();
+    let violations = plugin_conformance::check(
+        env!("CARGO_BIN_EXE_mytool"),                       // [[bin]] name
+        concat!(env!("CARGO_MANIFEST_DIR"), "/plugin.toml"), // kind と capability の出どころ
+        &init,
+    );
+    assert!(violations.is_empty(), "\n{}", violations.join("\n"));
+}
+```
+
+キットは `init` をそのままは送らない。そのまま送って `initialize` が成功すると実際のサービスに触れてしまうので、壊した複製だけを送る。したがって `initialize` が成功した後の振る舞いは、各自のテストで確かめること。
+
+検査するのは次の 9 項目で、違反は全部まとめて返る。**Rust 以外で書く場合も、これがプロトコル上の約束事の一覧になる。**
+
+| # | 対象 | 約束事 |
+|---|---|---|
+| 1 | 全 kind | initialize 前に届いた kind 固有のリクエストは `INVALID_REQUEST`（-32600）で拒否する。対象は、ホストがそのプラグインへ送りうるもの（capability で絞ったもの）。notifier は、initialize 前の `notify` に応答しない |
+| 2 | 全 kind | JSON でない行には `PARSE_ERROR`（-32700）を、`id: null` で返す |
+| 3 | 全 kind | 未知のメソッドには `METHOD_NOT_FOUND`（-32601）を返す |
+| 4 | 全 kind | 空行と通知（`id` なし）には何も返さない |
+| 5 | 全 kind | 形の崩れた `initialize` の params には `INVALID_PARAMS`（-32602）を返す |
+| 6 | 全 kind | 未知のキーを含む config に対して、`config/validate` は `valid: false` を返し、エラーにそのキー名を含める |
+| 7 | 全 kind | `shutdown` に result で応答し、終了コード 0 で終わる |
+| 8 | 全 kind | stdin が EOF になったら終わる |
+| 9 | task_source | trigger に未知のキーがある `initialize` は `CONFIG_INVALID`（-32003）で失敗させ、メッセージにそのキー名を含める |
+
+検査するのはエラーの**コード**だけで、メッセージの文言は見ない。例外は 6 と 9 のキー名で、運用者が設定を直すための唯一の手がかりなので要求する。
 
 ## 動作確認
 

@@ -141,7 +141,11 @@ where
         }
         let config: OrcaConfig = match serde_json::from_value(raw) {
             Ok(c) => c,
-            Err(_) => return Ok(validate_result(vec!["config does not parse".into()])),
+            // Keep serde's detail: it names an unknown or mistyped key, which is
+            // what the operator has to fix (#767's conformance check 6).
+            Err(e) => {
+                return Ok(validate_result(vec![format!("config does not parse: {e}")]));
+            }
         };
         // Connectivity check (F-59): does `orca status` run, and is the
         // runtime behind it up? The CLI answers `status` even with the app

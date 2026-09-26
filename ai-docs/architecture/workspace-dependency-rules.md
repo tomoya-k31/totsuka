@@ -4,7 +4,7 @@ title: ワークスペース依存境界ルール（Fitness Function）
 description: ヘキサゴナル構成の依存不変条件（plugins → plugin-protocol / plugin-sdk / repo-classifier のみ（dev は + test-support / plugin-conformance）、plugin-protocol と repo-classifier は leaf、plugin-conformance は plugin-protocol のみ、依存循環なし、core の domain / ports は config と adapters を参照しない）と、それを CI で機械検証する scripts/arch-lint.sh の仕組み・正当な依存追加時の更新手順。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/scripts/arch-lint.sh
 tags: [architecture, fitness-function, ci, workspace, dependency]
-generated: { by: claude-code/opus-5.5, at: 2026-09-26T17:30:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-09-26T18:30:00+09:00 }
 status: stable
 ---
 
@@ -34,7 +34,7 @@ graph BT
     core --> classifier
     plugins -. "現状の利用は task-source-slack のみ（許可は全 plugins/*）" .-> classifier
     conf --> protocol
-    plugins -. "dev（#767・現状の利用は task-source-slack）" .-> conf
+    plugins -. "dev（#767・全 7 本の tests/conformance.rs）" .-> conf
     core -. dev .-> ts
     cli -. dev .-> ts
     cli -. "dev（#349・生成した plugins/*.toml の検証用）" .-> plugins

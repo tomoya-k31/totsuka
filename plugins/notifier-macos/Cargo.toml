@@ -33,3 +33,6 @@ semver = { workspace = true, features = ["serde"] }
 tokio = { workspace = true, features = ["io-std"] }
 thiserror.workspace = true
 tracing.workspace = true
+
+[dev-dependencies]
+plugin-conformance.workspace = true

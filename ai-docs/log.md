@@ -33,6 +33,10 @@
 * **Update**: [plugin-sdk](/components/plugin-sdk.md) — `serve` が戻る前に `Stdio::flush()` で書き込みを出し切るようにした。キットが `shutdown` の応答が落ちているのを見つけた
 * **Update**: [ワークスペース依存境界ルール](/architecture/workspace-dependency-rules.md) — plugins の dev 許可に `plugin-conformance`、`conformance-deps` 検査を追加
 * **Update**: [テスト戦略](/quality/test-strategy.md) — プラグイン適合（黒箱）の層を追加
+* **Update**: [プラグイン開発ガイド](/development/plugin-dev-guide.md) — 適合テスト（plugin-conformance）の節。git の dev-dependency での使い方と、プロトコル上の約束事 9 項目の一覧（#767）
+* **Update**: [ADR-0104](/decisions/adr-0104-plugin-conformance-kit.md) — 残り 6 本への適用で見つかったずれ（discord の initialize 前の `task/update_status`、herdr / orca の `config/validate` のエラー）と、消したテストの基準
+* **Update**: [テスト戦略](/quality/test-strategy.md) — 適合テストが公式 7 本すべてに入った
+* **Update**: [ワークスペース依存境界ルール](/architecture/workspace-dependency-rules.md) — plugin-conformance の利用者を全 7 本に
 * **Creation**: [ADR-0099](/decisions/adr-0099-generated-hook-token.md) — hook の Bearer トークンは `totsuka run` が生成して `$XDG_STATE_HOME/totsuka/hook-token`（0600）に保存し、以後は使い回す（#785）。`[hooks].auth_token_ref` と `TOTSUKA_HOOKS_AUTH_TOKEN_REF` は猶予なしで廃止し、書いてあれば「この行を消す」専用のエラーにする
 * **Update**: [hook-security](/security/hook-security.md) — §1 のトークンの供給と保管、ローテーション、`hook-token` / `hook-socket` チェックを生成ファイル方式に書き換えた
 * **Update**: [config-reference](/development/config-reference.md) — `[hooks]` から `auth_token_ref` を削除し、トークンの仕組みと移行手順（行の削除・Keychain 項目の消し方）を追記
