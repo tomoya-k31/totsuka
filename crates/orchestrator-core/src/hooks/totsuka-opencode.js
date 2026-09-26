@@ -21,9 +21,17 @@
 // (the shared background service was started without it).
 //
 // Fail-open (D-09): no throw may escape the subscription; a failed POST is
-// spooled as one NDJSON line under TOTSUKA_HOOK_SPOOL_DIR (E-07). OpenCode
-// cannot block a stop (marker_block = false), so a missing marker posts
-// UNKNOWN and escalation is handled by the engine's UNKNOWN streak (D-02).
+// spooled as one NDJSON line under TOTSUKA_HOOK_SPOOL_DIR (E-07).
+//
+// The rest of claude's --settings hooks, as far as v2 can express them:
+// - UserPromptSubmit additionalContext → a `context` session hook that
+//   appends TOTSUKA_PROMPT_CONTEXT to the system prompt (invisible_injection)
+// - a blocked marker-less Stop → UNKNOWN is posted, then the marker is asked
+//   for once with ctx.session.prompt; the re-asked turn is never re-asked
+//   again, like claude's stop_hook_active (marker_block)
+// - Notification → `permission.asked`; SessionEnd → a `shutdown` interrupt
+// Subagent sessions (task tool, `parentID` set) are skipped throughout: their
+// turn ends are not the task's, and they must not see the marker convention.
 
 import { appendFileSync, mkdirSync } from "node:fs"
 import { join } from "node:path"
@@ -32,6 +40,11 @@ const ENDPOINT = process.env.TOTSUKA_HOOK_ENDPOINT ?? ""
 const JOB_ID = process.env.TOTSUKA_JOB_ID ?? ""
 const TOKEN = process.env.TOTSUKA_HOOK_TOKEN ?? ""
 const SPOOL_DIR = process.env.TOTSUKA_HOOK_SPOOL_DIR ?? ""
+const PROMPT_CONTEXT = process.env.TOTSUKA_PROMPT_CONTEXT ?? ""
+
+// Same text as on-stop.sh's block reason.
+const REASK_MARKER =
+  '応答の最終行に <<STATUS:COMPLETED>> / <<STATUS:NEEDS_INPUT reason="...">> / <<STATUS:FAILED reason="...">> のいずれかを付けてください'
 
 function isoNow() {
   return new Date().toISOString().replace(/\.\d{3}Z$/, "Z")
@@ -101,8 +114,32 @@ export default {
     // assistant message, filled from `session.text.ended` (one per ordinal).
     const lastText = new Map()
     const started = new Set()
+    // Subagent session ids, from `session.created` (which precedes the
+    // child's own execution events on the stream).
+    const children = new Set()
+    // Sessions whose in-flight turn is the marker re-ask.
+    const reasking = new Set()
 
-    async function onTurnEnd(sessionID) {
+    if (PROMPT_CONTEXT) {
+      // Per LLM request; the hook input carries no parentID, so a session
+      // not yet classified is looked up once.
+      const isChild = new Map()
+      void ctx.session
+        .hook("context", async (input) => {
+          try {
+            const id = input.sessionID
+            if (!isChild.has(id)) {
+              const s = await ctx.session.get({ sessionID: id })
+              isChild.set(id, Boolean(s?.parentID))
+            }
+            if (isChild.get(id)) return
+            input.system.push({ type: "text", text: PROMPT_CONTEXT })
+          } catch {}
+        })
+        .catch(() => {})
+    }
+
+    async function onTurnEnd(sessionID, { reask }) {
       const last = lastText.get(sessionID)
       const text = last ? last.texts.join("") : ""
       const marker = parseMarker(text)
@@ -121,18 +158,28 @@ export default {
         last_assistant_message: text,
         background_tasks: [],
       })
+      // After the UNKNOWN is on record, like on-stop.sh's block.
+      const wasReask = reasking.delete(sessionID)
+      if (marker || !reask || wasReask) return
+      reasking.add(sessionID)
+      await ctx.session.prompt({ sessionID, text: REASK_MARKER })
     }
 
     async function onEvent(event) {
       const t = event?.type ?? ""
       const data = event?.data ?? {}
-      const sessionID = data.sessionID ?? ""
+      const sessionID = data.sessionID ?? data.form?.sessionID ?? ""
+      if (t === "session.created" && data.parentID) {
+        children.add(sessionID)
+        return
+      }
+      if (children.has(sessionID)) return
       if (t === "session.execution.started") {
         // A turn that ends without text must not report the previous turn's
         // message (its marker, and its prompt_id as a duplicate).
         lastText.delete(sessionID)
-        // v2 has no session-created event on the stream; the first execution
-        // of a session stands in for it.
+        // The first execution of a session stands in for SessionStart (it is
+        // what the turn-end events are correlated with).
         if (sessionID && !started.has(sessionID)) {
           started.add(sessionID)
           await postEvent({
@@ -151,11 +198,22 @@ export default {
         }
         cur.texts[data.ordinal ?? cur.texts.length] = data.text ?? ""
       } else if (t === "session.execution.succeeded") {
-        await onTurnEnd(sessionID)
+        await onTurnEnd(sessionID, { reask: true })
       } else if (t === "session.execution.interrupted") {
         // "shutdown" is opencode exiting (the pane closing), not a turn the
-        // agent ended; anything else (an operator abort) is judged like a stop.
-        if (data.reason !== "shutdown") await onTurnEnd(sessionID)
+        // agent ended: claude's SessionEnd. Anything else (an operator abort)
+        // is judged like a stop, but never re-asked — a human stopped it.
+        if (data.reason === "shutdown") {
+          await postEvent({
+            job_id: JOB_ID,
+            session_id: sessionID,
+            hook_event_name: "SessionEnd",
+            ts: isoNow(),
+            reason: "shutdown",
+          })
+        } else {
+          await onTurnEnd(sessionID, { reask: false })
+        }
       } else if (t === "session.execution.failed") {
         await postEvent({
           job_id: JOB_ID,
@@ -187,6 +245,22 @@ export default {
           hook_event_name: "QuestionPending",
           ts: isoNow(),
           message: summarizeQuestion(form),
+        })
+      } else if (t === "permission.asked") {
+        // claude's Notification(permission_prompt): notify the operator and
+        // pause the timeout, without parking the task. `--auto` approves all
+        // but explicit denies, so this fires only under an operator's own
+        // mode_args / plan_args.
+        const what = [data.action, ...(data.resources ?? [])].filter(Boolean).join(" ")
+        await postEvent({
+          job_id: JOB_ID,
+          session_id: sessionID,
+          // The request id: distinct per prompt, so a second one in the same
+          // session is not dropped as a duplicate.
+          prompt_id: data.id ?? `perm-${Date.now()}`,
+          hook_event_name: "Notification",
+          ts: isoNow(),
+          message: data.message || `permission_prompt: ${what}`,
         })
       }
     }

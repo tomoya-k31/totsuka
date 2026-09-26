@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:e4c1bb85b213c4681fd813ed7f2a6fe208fb2b650dc2c8c7fe03d8cf30e97e9a -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:a3490c65c23c15de1599deb12630f409e9a68f5a1da6f7a211d00eb24dbea2be -->
 
 # Configuration reference
 
@@ -574,7 +574,7 @@ Defines the AI tool CLI launched inside the pane. `claude`, `codex`, and `openco
 
 Using `kind = "codex"` needs a one-time trust setup in the tool itself. `kind = "opencode"` needs no trust step but degrades in more places.
 
-The adapters differ in how they resume and how they receive hook configuration. Claude takes a settings file and resumes with a flag; codex registers hooks globally and resumes with a subcommand; opencode also registers globally and resumes with a flag. opencode has no invisible injection, so task instructions and the marker convention reach it as visible context in the pane.
+The adapters differ in how they resume and how they receive hook configuration. Claude takes a settings file and resumes with a flag; codex registers hooks globally and resumes with a subcommand; opencode also registers globally and resumes with a flag. On opencode too, task instructions and the marker convention are added to the system prompt by the plugin, so they are not shown in the pane.
 
 ### Choosing a model and a reasoning effort
 

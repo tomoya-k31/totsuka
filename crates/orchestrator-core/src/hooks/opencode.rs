@@ -362,4 +362,45 @@ design in prose.
         assert!(js.contains(r#"hook_event_name: "QuestionPending""#));
         assert!(js.contains("prompt_id: form.id"));
     }
+
+    /// The rest of claude's `--settings` hooks, each on the v2 surface that was
+    /// confirmed on opencode 2.0.18: the `context` hook for injection (it backs
+    /// `invisible_injection`), a one-shot `session.prompt` re-ask (backs
+    /// `marker_block`), `permission.asked` → Notification, and the `shutdown`
+    /// interrupt → SessionEnd.
+    #[test]
+    fn embedded_plugin_covers_claudes_other_hooks() {
+        let js = include_str!("totsuka-opencode.js");
+        assert!(js.contains("process.env.TOTSUKA_PROMPT_CONTEXT"));
+        assert!(js.contains(r#".hook("context","#));
+        assert!(js.contains(r#"input.system.push({ type: "text", text: PROMPT_CONTEXT })"#));
+        assert!(js.contains("ctx.session.prompt({ sessionID, text: REASK_MARKER })"));
+        // One re-ask per chain, like `stop_hook_active`.
+        assert!(js.contains("if (marker || !reask || wasReask) return"));
+        assert!(js.contains(r#"t === "permission.asked""#));
+        assert!(js.contains(r#"hook_event_name: "Notification""#));
+        assert!(js.contains(r#"hook_event_name: "SessionEnd""#));
+    }
+
+    /// The re-ask repeats `on-stop.sh`'s block reason word for word, so both
+    /// tools ask for the marker the same way.
+    #[test]
+    fn reask_text_matches_on_stop_sh() {
+        let js = include_str!("totsuka-opencode.js");
+        let sh = include_str!("on-stop.sh");
+        let reason = r#"応答の最終行に <<STATUS:COMPLETED>> / <<STATUS:NEEDS_INPUT reason="...">> / <<STATUS:FAILED reason="...">> のいずれかを付けてください"#;
+        assert!(js.contains(reason));
+        assert!(sh.contains(&reason.replace('"', r#"\""#)));
+    }
+
+    /// A task-tool subagent gets its own session (`parentID` set, confirmed on
+    /// 2.0.18). Its turn end is not the task's — relayed, it was a Stop that
+    /// fed the UNKNOWN streak — and it must not be told the marker convention.
+    #[test]
+    fn embedded_plugin_skips_subagent_sessions() {
+        let js = include_str!("totsuka-opencode.js");
+        assert!(js.contains(r#"if (t === "session.created" && data.parentID) {"#));
+        assert!(js.contains("if (children.has(sessionID)) return"));
+        assert!(js.contains("if (isChild.get(id)) return"));
+    }
 }

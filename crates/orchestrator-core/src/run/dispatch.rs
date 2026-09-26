@@ -506,10 +506,10 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                     None => prompt_context.push_str(prompts.marker_self_report()),
                 }
                 // Context routing per tool capability (#196 Phase 3): a tool
-                // without invisible injection (opencode — no UserPromptSubmit
-                // additionalContext channel) gets the same instructions +
+                // without invisible injection gets the same instructions +
                 // marker convention as *visible* extra_context instead, so
                 // the completion contract still reaches the model up front.
+                // (Every built-in kind injects since opencode's v2 plugin.)
                 let visible_hook_context = if tool_profile.capabilities().invisible_injection {
                     env.insert("TOTSUKA_PROMPT_CONTEXT".to_string(), prompt_context);
                     None
