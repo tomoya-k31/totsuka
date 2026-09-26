@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](plugin-dev-guide.ja.md)
 
-<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:606f1569b20fa112340bf0089a9a4d4ca3d8e6256da1ad7a77f6b553e9cbc19f -->
+<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:e0281f03b5694868e05c8ccdd59ac9e9ef0bda376fe317bc49b956131ee2ce91 -->
 
 # Plugin development guide
 
@@ -157,6 +157,20 @@ Calls the orchestrator makes to your plugin are timed and counted per method on 
 side. `totsuka run --json` reports them under `plugins`, with call counts, a
 breakdown by outcome, and recent p50/p95 latency. Your plugin does not have to do
 anything for this.
+
+## Writing it with the SDK handlers
+
+You do not have to write the JSON-RPC line handling yourself (parse errors, silence on notifications, `shutdown`, unknown methods, type-checking params). Implement one of the `plugin-sdk` typed handlers and the SDK takes care of the rest.
+
+| Kind | Trait to implement | How to put it on stdio |
+|---|---|---|
+| `task_source` | `TaskSourceHandler` (initialize / config_validate / update_status / result_publish, optionally task_claim) | `serve(TaskSourceServer(handler), &stdio)`. If your server is itself the handler, implement `LineHandler` with `plugin_sdk::dispatch::handle_line(self, line)` |
+| `agent_ide` | `AgentIdeHandler` (initialize / config_validate / task_dispatch / session_attach / task_cancel / state_subscribe, optionally session_focus / session_release / session_list / diagnostics_snapshot) | `serve(AgentIdeServer::new(handler, stdio.writer.clone()), &stdio)` |
+
+- Each method receives its params type and returns its result type or a `plugin_protocol::jsonrpc::Error`. Return `plugin_sdk::not_initialized()` for calls that arrive before `initialize`. Override `initialized()` as well, so that a request with malformed params arriving before `initialize` gets the same "initialize first" answer instead of `INVALID_PARAMS`.
+- **Methods gated on a capability answer `METHOD_NOT_FOUND` by default** (`task_claim`, `session_focus` / `session_release` / `session_list`, `diagnostics_snapshot`). If you override one, declare its capability; if you declare the capability, override the method.
+- **`state_subscribe` only has to return a receiver of state changes.** `AgentIdeServer` guarantees the order: the reply first, then the `state/notification`s.
+- For `{placeholder}` substitution in configurable prompts and instructions, use `plugin_sdk::template::render`. It substitutes in a single pass, so `{...}` written inside external content is never expanded. An agent_ide can build the prompt it hands the agent with `plugin_sdk::compose_prompt`.
 
 ## Building and installing
 

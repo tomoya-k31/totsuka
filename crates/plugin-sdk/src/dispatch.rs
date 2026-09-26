@@ -1,7 +1,8 @@
-//! JSON-RPC dispatch boilerplate shared by task_source plugins: the
-//! [`Reply`] shape, id/params helpers, and a typed [`TaskSourceHandler`]
-//! whose [`TaskSourceServer`] wrapper implements the full line protocol
-//! (parse errors, notifications, `shutdown`, unknown methods).
+//! JSON-RPC dispatch boilerplate shared by every plugin kind: the [`Reply`]
+//! shape, id/params helpers, and a typed [`TaskSourceHandler`] whose
+//! [`handle_line`] (or the [`TaskSourceServer`] wrapper) implements the full
+//! line protocol (parse errors, notifications, `shutdown`, unknown methods).
+//! The agent_ide counterpart is [`crate::agent_ide`].
 
 use plugin_protocol::jsonrpc::{Error, Response, error_code};
 use plugin_protocol::methods::{
@@ -9,6 +10,7 @@ use plugin_protocol::methods::{
     ResultPublishParams, TaskClaimParams, TaskClaimResult, TaskUpdateStatusParams,
 };
 use plugin_protocol::{RequestId, method};
+use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
@@ -75,6 +77,19 @@ pub fn parse_params<T: DeserializeOwned>(params: &Value) -> Result<T, Error> {
 /// The typed surface a task_source plugin implements; [`TaskSourceServer`]
 /// turns it into a [`LineHandler`] covering the whole wire protocol.
 pub trait TaskSourceHandler: Send {
+    /// Whether `initialize` has succeeded. Read only when a request's params
+    /// do not parse: while `false`, such a request to any method but
+    /// `initialize` / `config/validate` is answered [`not_initialized`]
+    /// instead of `INVALID_PARAMS` — "initialize first" before "fix the
+    /// params", the order the hand-written plugin servers had (#759). A
+    /// request whose params do parse reaches the handler, which refuses it
+    /// itself when it must.
+    ///
+    /// Defaults to `true`: params errors are reported as such.
+    fn initialized(&self) -> bool {
+        true
+    }
+
     /// `initialize`: store config, answer version + capabilities.
     fn initialize(
         &mut self,
@@ -121,62 +136,126 @@ pub trait TaskSourceHandler: Send {
     }
 }
 
+/// The error for a method that needs `initialize` first — the same code and
+/// message for every plugin kind.
+pub fn not_initialized() -> Error {
+    Error::new(
+        error_code::INVALID_REQUEST,
+        "plugin not initialized → send `initialize` first",
+    )
+}
+
+/// One request, pulled out of a line: its id, method and params.
+pub(crate) struct Request {
+    pub(crate) id: RequestId,
+    pub(crate) method: String,
+    pub(crate) params: Value,
+}
+
+/// Parse one NDJSON line into a [`Request`], or the [`Reply`] it gets
+/// without reaching a handler: nothing for a blank line or a notification
+/// (no `id`: never answered), `PARSE_ERROR` with a null id for non-JSON.
+pub(crate) fn parse_request(line: &str) -> Result<Request, Reply> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return Err(Reply::none());
+    }
+    let Ok(value) = serde_json::from_str::<Value>(trimmed) else {
+        return Err(Reply::respond(Response::error_without_id(Error::new(
+            error_code::PARSE_ERROR,
+            "request was not valid JSON",
+        ))));
+    };
+    let Some(id) = value.get("id").map(request_id) else {
+        return Err(Reply::none());
+    };
+    Ok(Request {
+        id,
+        method: value
+            .get("method")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        params: value.get("params").cloned().unwrap_or(Value::Null),
+    })
+}
+
+/// Encode a handler's outcome as the response to `id`.
+pub(crate) fn respond<T: Serialize>(id: RequestId, outcome: Result<T, Error>) -> Reply {
+    Reply::respond(match outcome {
+        Ok(result) => match serde_json::to_value(result) {
+            Ok(v) => Response::result(id, v),
+            Err(e) => Response::error(
+                id,
+                Error::new(
+                    error_code::INTERNAL_ERROR,
+                    format!("failed to encode result: {e}"),
+                ),
+            ),
+        },
+        Err(error) => Response::error(id, error),
+    })
+}
+
+/// The reply to params that did not parse: [`not_initialized`] when the
+/// handler is not initialized and `method` is not one of the two that need
+/// no `initialize`, `INVALID_PARAMS` otherwise.
+pub(crate) fn params_error(id: RequestId, method: &str, initialized: bool, error: Error) -> Reply {
+    let setup = matches!(method, method::INITIALIZE | method::CONFIG_VALIDATE);
+    let error = if initialized || setup {
+        error
+    } else {
+        not_initialized()
+    };
+    Reply::respond(Response::error(id, error))
+}
+
+/// `METHOD_NOT_FOUND` for a method this plugin kind does not serve.
+pub(crate) fn unknown_method(id: RequestId, method: &str) -> Reply {
+    Reply::respond(Response::error(
+        id,
+        Error::new(
+            error_code::METHOD_NOT_FOUND,
+            format!("unknown method: {method}"),
+        ),
+    ))
+}
+
+/// Handle one NDJSON line against `handler`: the whole task_source wire
+/// protocol. A plugin whose server *is* the handler implements
+/// [`LineHandler`] by calling this; [`TaskSourceServer`] does the same for a
+/// handler it owns.
+pub async fn handle_line<H: TaskSourceHandler>(handler: &mut H, line: &str) -> Reply {
+    let Request { id, method, params } = match parse_request(line) {
+        Ok(request) => request,
+        Err(reply) => return reply,
+    };
+    let initialized = handler.initialized();
+    macro_rules! call {
+        ($parse:ty, $call:ident) => {
+            match parse_params::<$parse>(&params) {
+                Ok(p) => respond(id, handler.$call(p).await),
+                Err(error) => params_error(id, &method, initialized, error),
+            }
+        };
+    }
+    match method.as_str() {
+        method::INITIALIZE => call!(InitializeParams, initialize),
+        method::CONFIG_VALIDATE => call!(ConfigValidateParams, config_validate),
+        method::TASK_UPDATE_STATUS => call!(TaskUpdateStatusParams, update_status),
+        method::TASK_CLAIM => call!(TaskClaimParams, task_claim),
+        method::RESULT_PUBLISH => call!(ResultPublishParams, result_publish),
+        method::SHUTDOWN => Reply::shutdown_ack(id),
+        other => unknown_method(id, other),
+    }
+}
+
 /// Adapter: drive a [`TaskSourceHandler`] as a [`LineHandler`].
 pub struct TaskSourceServer<H>(pub H);
 
 impl<H: TaskSourceHandler> LineHandler for TaskSourceServer<H> {
     async fn handle_line(&mut self, line: &str) -> Reply {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            return Reply::none();
-        }
-        let Ok(value) = serde_json::from_str::<Value>(trimmed) else {
-            return Reply::respond(Response::error_without_id(Error::new(
-                error_code::PARSE_ERROR,
-                "request was not valid JSON",
-            )));
-        };
-        // A message without an `id` is a notification: never answered.
-        let Some(id) = value.get("id").map(request_id) else {
-            return Reply::none();
-        };
-        let method = value.get("method").and_then(Value::as_str).unwrap_or("");
-        let params = value.get("params").cloned().unwrap_or(Value::Null);
-        macro_rules! call {
-            ($parse:ty, $call:ident) => {
-                match parse_params::<$parse>(&params) {
-                    Ok(p) => match self.0.$call(p).await {
-                        Ok(result) => match serde_json::to_value(result) {
-                            Ok(v) => Reply::respond(Response::result(id, v)),
-                            Err(e) => Reply::respond(Response::error(
-                                id,
-                                Error::new(
-                                    error_code::INTERNAL_ERROR,
-                                    format!("failed to encode result: {e}"),
-                                ),
-                            )),
-                        },
-                        Err(error) => Reply::respond(Response::error(id, error)),
-                    },
-                    Err(error) => Reply::respond(Response::error(id, error)),
-                }
-            };
-        }
-        match method {
-            method::INITIALIZE => call!(InitializeParams, initialize),
-            method::CONFIG_VALIDATE => call!(ConfigValidateParams, config_validate),
-            method::TASK_UPDATE_STATUS => call!(TaskUpdateStatusParams, update_status),
-            method::TASK_CLAIM => call!(TaskClaimParams, task_claim),
-            method::RESULT_PUBLISH => call!(ResultPublishParams, result_publish),
-            method::SHUTDOWN => Reply::shutdown_ack(id),
-            other => Reply::respond(Response::error(
-                id,
-                Error::new(
-                    error_code::METHOD_NOT_FOUND,
-                    format!("unknown method: {other}"),
-                ),
-            )),
-        }
+        handle_line(&mut self.0, line).await
     }
 }
 

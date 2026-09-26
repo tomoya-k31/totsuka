@@ -1,24 +1,27 @@
 ---
 type: Library
 title: plugin-sdk クレート
-description: task_source プラグイン作成用のヘルパークレート。単一 writer タスクの stdio ランタイム・JSON-RPC dispatch ボイラープレート（TaskSourceHandler）・task/submit クライアント（バックオフ再送）・ポーリング型ソース向け poll_loop・trigger キーの未知検査・trigger.assignee 条件の解釈・チャンネル監視トリガ（trigger.channel）の解釈とバックフィル窓の定義を提供する。
+description: task_source / agent_ide プラグイン作成用のヘルパークレート。単一 writer タスクの stdio ランタイム・JSON-RPC dispatch ボイラープレート（TaskSourceHandler / AgentIdeHandler）・{placeholder} 置換（template）とエージェント向けプロンプト組み立て（compose_prompt）・task/submit クライアント（バックオフ再送）・ポーリング型ソース向け poll_loop・trigger キーの未知検査・trigger.assignee 条件の解釈・チャンネル監視トリガ（trigger.channel）の解釈とバックフィル窓の定義を提供する。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/plugin-sdk
-tags: [rust, crate, plugin, sdk, task-source, push]
-generated: { by: claude-code/opus-5, at: 2026-09-24T11:30:00+09:00 }
+tags: [rust, crate, plugin, sdk, task-source, agent-ide, push]
+generated: { by: claude-code/opus-5, at: 2026-09-26T14:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
 
 # 責務
 
-サードパーティが task_source プラグインを実装する際の共通機構（[ADR-0008](/decisions/adr-0008-task-submit-push-ingestion.md)）。作者はソース固有ロジック（イベント受信 / API フェッチ / Task 変換）だけを書けばよい。**範囲外**: HTTP クライアント・LLM ヘルパー・config スキーマ（ソース固有のまま）。
+サードパーティが task_source / agent_ide プラグインを実装する際の共通機構（[ADR-0008](/decisions/adr-0008-task-submit-push-ingestion.md)）。作者はソース固有ロジック（イベント受信 / API フェッチ / Task 変換）や IDE 固有ロジック（ペイン操作・状態の写像）だけを書けばよい。**範囲外**: HTTP クライアント・LLM ヘルパー・config スキーマ（ソース固有のまま）。
 
 # モジュール構成
 
 | モジュール | 内容 |
 |---|---|
 | `runtime` | stdio NDJSON ランタイム。**`init_tracing()` が全プラグイン共通のログ初期化**（#639）—— stderr 出力。**stderr がパイプ（本体の下）なら全レベルの JSON Lines** を書き、本体が元のレベル・target・フィールドで出し直して `[log] level` で判定する（`RUST_LOG` は読まない。[ADR-0096](/decisions/adr-0096-plugin-log-relay.md)）。**端末なら人間向けの表示**で `RUST_LOG` 準拠（未設定なら `info`）。以下は #639 の経緯:各プラグインが手書きしていた `tracing_subscriber::fmt().with_writer(stderr).init()` は 2 点で黙って壊れていた: `RUST_LOG` を読むのは*自由関数*の `fmt::init()` だけで**ビルダーの `.init()` は INFO 固定**（`debug!` が全プラグインで到達不能だった）、かつ ANSI が常時 on なので**ホストがパイプ経由で拾って JSON ログにエスケープ列（`\u001b[2m` 等）を埋め込んでいた**。どちらもエラーも警告も出ないので、ログを見て調べようとした人が静かに空振りする。**単一 writer タスク（mpsc）が stdout を専有**し、返信行とバックグラウンドの `task/submit` リクエスト行が部分行で交錯しないことを構造的に保証（従来の read ループ内 inline 書き込みの恒久修正）。`serve()` は response 行（`id` + result/error、`method` なし）を `SubmitClient` へ、それ以外を `LineHandler` へ配路。`Writer::from_channel` でテスト/カスタムトランスポートにも載る |
-| `dispatch` | `Reply` / `request_id` / `parse_params` と、型付き **`TaskSourceHandler`** trait（initialize / config_validate / update_status / result_publish）。`TaskSourceServer` が trait を `LineHandler` に変換し、PARSE_ERROR・notification 無応答・shutdown・METHOD_NOT_FOUND を含む wire protocol 全体を実装。**0.2.0（#190）**: `tasks_fetch` は trait・dispatch とも削除済み — 全 task_source は push（`task/submit`）専用 |
+| `dispatch` | `Reply` / `request_id` / `parse_params` / **`not_initialized()`**（`initialize` 前の呼び出しへの `INVALID_REQUEST`。全 kind 共通の文言）と、型付き **`TaskSourceHandler`** trait（initialize / config_validate / update_status / result_publish、`task_claim` は既定で `METHOD_NOT_FOUND`）。**`handle_line(&mut handler, line)`** が wire protocol 全体（PARSE_ERROR・notification 無応答・shutdown・METHOD_NOT_FOUND・params 不正は handler に届く前に `INVALID_PARAMS`）を実装し、`TaskSourceServer` はそれを `LineHandler` に包むだけ。server 自身が handler を兼ねるプラグインは `LineHandler` を `handle_line(self, line)` で実装すればよい（#759）。**`initialized()`**（既定 `true`）を上書きすると、`initialize` 前に params が解析できない request へ `INVALID_PARAMS` でなく `not_initialized()` を返す（`initialize` / `config/validate` / 未知メソッドは対象外）—— 手書き server は params より先に session を見ていたので、その順序の応答コードを保つため。params が解析できれば handler に届き、未初期化の拒否は handler 自身が行う。agent_ide 側も同じ。**0.2.0（#190）**: `tasks_fetch` は trait・dispatch とも削除済み — 全 task_source は push（`task/submit`）専用 |
+| `agent_ide` | **`AgentIdeHandler`** trait と **`AgentIdeServer`**（#759）。必須はホストが無条件に呼ぶ initialize / config_validate / task_dispatch / session_attach / task_cancel / state_subscribe。能力で守られた `session/focus`・`session/release`・`session/list`（`pane_control`）と `diagnostics/snapshot`（`diagnostics_snapshot`）は既定で `METHOD_NOT_FOUND`（`task_claim` と同じ規則: 上書きするならフラグを宣言し、宣言するなら上書きする）。`session/list` は params を読まない。**`state_subscribe` は通知の受信チャネルを返すだけで、ACK → `state/notification` の順序（F-38）は `AgentIdeServer` が持つ**: ACK を `Reply` として返さず共有 writer へ自分で書いてから転送タスクを起こす。`Reply` で返すと `serve` が書くのは `handle_line` が戻った後なので、転送タスクが先に通知を書けてしまう |
+| `template` | **`render(template, vars)`** / **`scan(template)`**: `{placeholder}` の**単一パス**置換（#759 で github / notion / slack の同一コピー 3 本から昇格）。単一パスは安全上の性質 —— 置換値やその隣はソースの外部入力（Issue 本文・Notion のページ名・Slack のメッセージ）で、2 パス目はそこに書かれた `{placeholder}` を指示に変える。未知キーと閉じない `{` はそのまま出す。`scan` は識別子の形の `{name}` だけを拾う（JSON 形の波括弧は内容） |
+| `prompt` | **`compose_prompt(&TaskDispatchParams)`**（#759 で herdr / orca の同一コピーから昇格）: extra context を前置きに、本文（無ければタイトル）を末尾に置いた agent 向けプロンプト。文字列の extra context は JSON リテラルでなく生テキスト（#158） |
 | `submit` | **`SubmitClient`**: `task/submit` を送り persist-before-ack の結果を待つ。ack 3 値（`accepted`/`duplicate`/`rejected`）は**最終**（再送しない）。JSON-RPC error（`NOT_ACCEPTING`/`SUBMIT_OVERLOADED`/`INTERNAL_ERROR`）・writer 喪失・ack timeout（30s）は指数バックオフ（1s→…→30s、最大 5 回）で再送 — submit は冪等なので再送は常に安全（ack 喪失後の再送は `duplicate` で吸収）。5 回で `GaveUp`（ソースシステムが durable origin なので恒久喪失なし）。clone 共有の pending map を `serve()` が解決 |
 | `lookup` | **`LookupClient`**: `task/lookup` を送り「この会話は既知か / どのリポジトリか」を得る（0.2.4、#242）。**失敗はエラー条件ではない** — `submit` と違い最終的に通す必要がなく、タイムアウトやエラーは単に「答えが無い」なので、**リトライもバックオフもしない**（1 回・タイムアウト・`Lookup::Unknown`）。再試行しても呼び出し側が同じフォールバックを待たされるだけ。`Lookup::{Known{repo}, New, Unknown{reason}}` の 3 値で、`skips_resolution()` が true になるのは `Known` のみ — **未応答を「既知」と読むと会話がリポジトリ無しでディスパッチされる**ため、`Unknown` は必ず false。orchestrator はエンジンループで応答するので `git fetch` 等で数秒待たされうる（タイムアウト前提の設計） |
 | `assignee` | **`AssigneeFilter`** / **`check(...)`**（#572）: `trigger.assignee` の条件（`@me` / `@none` / `@any` / login / 配列の OR）を解釈し、タスクの assignee 一覧と突き合わせる。**省略時の既定は `["@me", "@none"]`** で、これは #572 以前のプラグイン全体のゲート（F-08）と同一 —— つまりこれは旧ゲートの**置き換え**であって前段ではない。二重ゲートにすると `assignee = "teammate"` のような「書けるのに効かない」設定が作れてしまうため、経路を 1 本にしてある。特殊語に `@` を付けるのは衝突回避で、`me` / `none` / `any` はどれも実在しうるログイン名である。`check` は `initialize` 用で、**評価不能な条件を起動時に落とす**（`@me` なのに identity 設定が無い / people プロパティが未マップ）。**ただし `@any` は people プロパティを要求しない**（#582）—— `matches` が assignee 一覧を読む前に `true` を返すので、未マップでも評価できる。以前は本当にプロパティを要る条件と一緒に弾いていたため、**「assignee で絞り込まない」と明示する手段が無く**、キーを省略するのが唯一の静かな道になっていた（そしてその省略が #582 の穴そのものである）。判定は `reads_assignees()`ほか、`status` を伴わない `assignee` 単独トリガーに「1 タスク 1 回になる」warning を返す（**lane identity を刻むソースにだけ**。notion はどのトリガーでも刻まないので #573、`status` を足しても直らず、効かない対処を案内しないよう `status_mints_lane_identity = false` を渡す）。**共有しているのはキー名と値の語彙だけ**で、何と突き合わせるか（github は Issue 組み込みの assignee と `github_login`、notion は `property_map.assignee` と `notion_user_id`）は各プラグインが持つ。**`AssigneeFilter::parse_exclude`**（[ADR-0091](/decisions/adr-0091-trigger-exclude.md)）は `trigger.exclude.assignee` を同じ語彙で読むが既定を持たず、書かれていなければ `None`（誰も除外しない）。`check` はこちらにも同じ評価可能性の検査（people プロパティ・`@me` の identity）をかける —— 評価できない除外条件は「何も除外しない」まま黙るため |
@@ -29,6 +32,7 @@ owner: tomoya-k31
 # 利用パターン
 
 - **イベント駆動ソース（slack 型）**: `runtime::stdio()` → パイプラインに `SubmitClient` の clone を渡してイベント→`submit_task(task, workflow)`（**どの `[[workflows]]` に属するかはプラグインが決めて名前で渡す** — 0.6.0 / #554）、`serve(handler, &stdio)` で host リクエストに応答。 会話継続ソースは submit の前に `LookupClient` で既知判定し、既知なら新規会話向けの解決（LLM 呼び出し・リポジトリ選択 UI）を省く。`serve()` は全 response 行を `submit` / `lookup` 両クライアントへ渡し、各自が発行していない id を無視する（id 接頭辞 `submit-` / `lookup-` で分離）。
+- **agent_ide**: `stdio()` → `serve(AgentIdeServer::new(handler, stdio.writer.clone()), &stdio)`。handler は IDE 固有の処理だけを持ち、`state_subscribe` では状態変化を流す `mpsc` の受信側を返す。
 - **ポーリングソース（github/notion 型）**: `initialize` で受けた `workflows` と、自分の config の `poll_interval_secs`（0.6.0 / #554 で `[<name>]` のキーになり、`InitializeParams` からは消えた）を `poll_loop(workflows, interval, submit, fetch_fn)` に渡して spawn。`fetch_fn` は `WorkflowInfo` を受け取り、その `trigger` の解釈もワークフローの選択もプラグイン側で行う（core に予約語彙は無い、[ADR-0058](/decisions/adr-0058-config-ownership-boundary.md)）。
 
 # 依存

@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Runtime, dispatch, submit and poll helpers for totsuka task_source plugins (stdio JSON-RPC)."
+description = "Runtime, dispatch, submit and poll helpers for totsuka task_source and agent_ide plugins (stdio JSON-RPC)."
 # Internal crate — depends on plugin-protocol by path, so it must be
 # non-publishable for cargo-deny to permit the path dependency.
 publish = false
