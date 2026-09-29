@@ -1,10 +1,10 @@
 ---
 type: Component
 title: task-source-github プラグイン
-description: GitHub Issues / ProjectsV2 をタスクソースとして接続する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。GraphQL で fetch→正規化、ProjectsV2 ステータス書き戻し、task/claim（Issue / PullRequest への self-assign + AssignedEvent 先着裁定による楽観排他）を行う。ボード上の OPEN な PullRequest も Issue と同じくタスクになる（#734）。Issue / PullRequest への書き込みは claim の assignee 操作と、on_*.labels のラベル付け外し（ADR-0108）。呼び出す 13 の GraphQL 操作と、トークン権限（ラベル書き込み以外の十分条件は実測済み・ラベル書き込みの権限と最小値は未実測。fine-grained PAT が user 所有ボードに使えない理由を含む）を扱う。
+description: GitHub Issues / ProjectsV2 をタスクソースとして接続する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。GraphQL で fetch→正規化、ProjectsV2 ステータス書き戻し、task/claim（Issue / PullRequest への self-assign + AssignedEvent 先着裁定による楽観排他）を行う。ボード上の OPEN な PullRequest も Issue と同じくタスクになる（#734）。Issue / PullRequest への書き込みは claim の assignee 操作と、on_*.labels のラベル付け外し（ADR-0108）。呼び出す 13 の GraphQL 操作と、トークン権限（十分条件は実測済み・最小値は未実測。fine-grained PAT が user 所有ボードに使えない理由を含む）を扱う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-github
 tags: [rust, crate, plugin, task-source, github, graphql, projectsv2]
-generated: { by: claude-code/opus-5.5, at: 2026-09-30T16:30:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-09-30T18:30:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -96,7 +96,7 @@ manifest（`plugins/task-source-github/plugin.toml`、`protocol_version = ">=0.7
 
 # トークンに必要な権限
 
-**十分条件は実測済み、最小値は未実測**（#514、2026-08-23 / #556、2026-08-25）。下の「実際に呼んでいるもの」は確定した事実で、「実測できたこと」は 2 本のプローブが分担する: 従来 4 操作（fetch / resolve / viewer / カード移動）は `.claude/skills/live-e2e-herdr/scripts/github-permissions.sh`（2026-08-23）、claim の 4 操作（claim 読み / user id / self-assign / 自己除去）は `.claude/skills/live-e2e-herdr/scripts/github-claim-probe.sh`（2026-08-25、OAuth `gho_` トークンで全 PASS）が、同じサンドボックス（user 所有の Project、private リポジトリ 2 本）へ実際に投げて確かめた。「導いた権限」の側は**依然として導出**である — 権限を削ったトークンをまだ試していないので、そこに書かれた値が**最小**であることは示されていない。**この但し書きは実測が済むまで消さないこと。** 断定に固まると、間違っていたときに誰も疑わなくなる。
+**十分条件は実測済み、最小値は未実測**（#514、2026-08-23 / #556、2026-08-25 / #840、2026-09-30）。下の「実際に呼んでいるもの」は確定した事実で、「実測できたこと」は 3 本のプローブが分担する: 従来 4 操作（fetch / resolve / viewer / カード移動）は `.claude/skills/live-e2e-herdr/scripts/github-permissions.sh`（2026-08-23）、claim の 4 操作（claim 読み / user id / self-assign / 自己除去）は `.claude/skills/live-e2e-herdr/scripts/github-claim-probe.sh`（2026-08-25、OAuth `gho_` トークンで全 PASS）、ラベル書き戻しの 5 操作（ラベル解決 / 付与 / 除去 / 作成 / 存在検査）は `.claude/skills/live-e2e-herdr/scripts/github-label-probe.sh`（2026-09-30、下記）が、同じサンドボックス（user 所有の Project、private リポジトリ 2 本）へ実際に投げて確かめた。「導いた権限」の側は**依然として導出**である — 権限を削ったトークンをまだ試していないので、そこに書かれた値が**最小**であることは示されていない。**この但し書きは実測が済むまで消さないこと。** 断定に固まると、間違っていたときに誰も疑わなくなる。
 
 ## 実際に呼んでいるもの
 
@@ -129,6 +129,14 @@ manifest（`plugins/task-source-github/plugin.toml`、`protocol_version = ">=0.7
 
 これが言うのは「**この scope 集合で足りる**」までで、**どれが要らないかは言っていない**。
 
+**ラベル書き戻し（2026-09-30、#840）**: `github-label-probe.sh probe` を同じサンドボックス（private リポジトリ `totsuka-sandbox-web`）に対して実行した。プラグインと同じクエリ本文で、Issue と PR の両方にラベル解決・付与・除去、リポジトリにラベル作成・存在検査を投げ、付与と除去は別トークン（準備役）で**読み戻して**反映を確かめた。
+
+| トークン | 結果 |
+|---|---|
+| OAuth（`gh auth token`）scope = `admin:public_key, admin:ssh_signing_key, gist, project, read:org, repo` | **8 項目すべて成功**（Issue・PR それぞれ解決 / 付与 / 除去、`createLabel`、存在検査） |
+
+これも「**この scope 集合で足りる**」までで、`repo` 無しで足りるか・fine-grained PAT で Pull requests: write が要るかは測っていない。
+
 **「エラーが出なかった」を pass と読まないこと。** GraphQL の権限不足は HTTP 200・`data` あり・
 **フィールドが `null`** という形で出うる。スクリプトが `errors` の有無と独立にフィールド単位で
 present/null を判定しているのはこのためで、`assignees` / `labels` は
@@ -159,12 +167,12 @@ present/null を判定しているのはこのためで、`assignees` / `labels`
 | 種別 | 権限 | なぜ |
 |---|---|---|
 | Repository | **Metadata: Read** | 必須（他の Repository 権限の前提） |
-| Repository | **Issues: Read**（`on_*.labels` を使うなら **Read and write**） | Project アイテム経由で読む Issue の本文・ラベル・アサイニー。write は `on_*.labels` のラベル付け外しと作成でだけ要る（[ADR-0108](/decisions/adr-0108-label-writeback.md)。#398 で `addComment` が消えてから、それ以外に write の理由は無い）。**PR のラベルに Pull requests: write も要るかは未実測** |
+| Repository | **Issues: Read**（`on_*.labels` を使うなら **Read and write**） | Project アイテム経由で読む Issue の本文・ラベル・アサイニー。write は `on_*.labels` のラベル付け外しと作成でだけ要る（[ADR-0108](/decisions/adr-0108-label-writeback.md)。#398 で `addComment` が消えてから、それ以外に write の理由は無い）。**PR のラベルに Pull requests: write も要るかは未実測**（scope ベースのトークンでは PR のラベルも通ることを実測済み、上節） |
 | Organization | **Projects: Read and write** | ProjectsV2 の読み取りと `updateProjectV2ItemFieldValue`。**Organization permissions にしか無い** — user 所有ボード向けの Account permissions は存在しないので、その場合は classic PAT を使う（上節） |
 
 **Contents は不要**である。このトークンでリポジトリの中身を読み書きすることはない。
 
-**scope ベースのトークン**（classic PAT、または `gh auth token` の OAuth トークン。user 所有ボードではこちら。最小値は未実測）: `project`（ProjectsV2 の読み書き）と、`repo`（private リポジトリを含む場合）または `public_repo`。`on_*.labels` を使うなら `repo` / `public_repo` は**必須**（ラベルの書き込みは Project の外、リポジトリ側の操作なので `project` では足りない。導出・未実測）。private org のボードでは `organization(login:)` の解決に `read:org` も要りうる。
+**scope ベースのトークン**（classic PAT、または `gh auth token` の OAuth トークン。user 所有ボードではこちら。最小値は未実測）: `project`（ProjectsV2 の読み書き）と、`repo`（private リポジトリを含む場合）または `public_repo`。`on_*.labels` を使うなら `repo` / `public_repo` は**必須**（ラベルの書き込みは Project の外、リポジトリ側の操作なので `project` では足りない。`repo` + `project` で足りることは実測済み、`project` だけで足りないことは導出）。private org のボードでは `organization(login:)` の解決に `read:org` も要りうる。
 
 **未解決の問い**: Issue の本文・ラベル・アサイニーは `projectV2` のアイテム経由でしか読んでおらず、Issues エンドポイントを直接は叩かない。**`project` scope だけでこれらが返るなら `repo` は要らない**。どちらなのかは `project` だけの classic PAT を切って上のスクリプトを回せば 1 回で分かる（#514 手順 2）。
 
