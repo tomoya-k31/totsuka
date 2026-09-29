@@ -290,8 +290,15 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             }
         }
         // `config validate` refuses `labels` on a source without the
-        // capability; this guards the manifest and `initialize` disagreeing.
-        if action.has_labels() && source.capabilities().label_writeback {
+        // capability (from its manifest); this guards `initialize` then
+        // declaring otherwise — said out loud, since skipping is silent.
+        if action.has_labels() && !source.capabilities().label_writeback {
+            tracing::warn!(
+                task_id = record.id.0,
+                "labels not written back: source `{}` did not declare `label_writeback` at initialize",
+                record.source
+            );
+        } else if action.has_labels() {
             let params = TaskUpdateLabelsParams {
                 task_id: record.source_task_id.0.clone(),
                 add: action.add_labels.clone(),
