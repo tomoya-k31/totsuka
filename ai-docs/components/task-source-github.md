@@ -78,7 +78,7 @@ warn は PR の node id ごとに 1 回だけ出す（`skipped_pull_requests`。
 
 # capabilities（F-83）
 
-manifest（`plugins/task-source-github/plugin.toml`、`protocol_version = ">=0.7.5, <0.8"`（#626 で 0.7.0 へ: 複数 domain を持つので `WorkflowInfo.projects` に依存する。無視すると全ボードを走査してしまう。**#734 で 0.7.5 へ**: `Task.branch_hint` を埋める唯一のプラグインになった。これを無視する Orchestrator は PR のタスクを既定ブランチに detached で始め「新しいブランチを作れ」と指示するので、このプラグインの「2 本目の PR を開くな」と矛盾する。下限は依存を表すので、patch でも上げる））と `initialize` 応答で `kind = task_source` を宣言する。**`task_claim = true`**（#556、protocol 0.6.1）— `task/claim` に上記の self-assign で答える。**`outputs` は空**（#398）—— 成果物はエージェントが `gh` で自分で書くので、このプラグインは何も publish しない。`output = "source"` を書いた workflow は `config validate` が弾く（F-83）。
+manifest（`plugins/task-source-github/plugin.toml`、`protocol_version = ">=0.7.5, <0.8"`（#626 で 0.7.0 へ: 複数 domain を持つので `WorkflowInfo.projects` に依存する。無視すると全ボードを走査してしまう。**#734 で 0.7.5 へ**: `Task.branch_hint` を埋める唯一のプラグインになった。これを無視する Orchestrator は PR のタスクを既定ブランチに detached で始め「新しいブランチを作れ」と指示するので、このプラグインの「2 本目の PR を開くな」と矛盾する。下限は依存を表すので、patch でも上げる））と `initialize` 応答で `kind = task_source` を宣言する。**`task_claim = true`**（#556、protocol 0.6.1）— `task/claim` に上記の self-assign で答える。**`label_writeback = true`**（protocol 0.7.6、[ADR-0108](/decisions/adr-0108-label-writeback.md)）— `task/update_labels` に Issue / PR のラベル付け外しで答える。下限は 0.7.5 のまま動かさない: 0.7.6 より古い Orchestrator は `on_*.labels` を未知キーとして起動時に弾くので、宣言が無視されて黙って効かない経路が無い。**`outputs` は空**（#398）—— 成果物はエージェントが `gh` で自分で書くので、このプラグインは何も publish しない。`output = "source"` を書いた workflow は `config validate` が弾く（F-83）。
 
 # テスト
 
