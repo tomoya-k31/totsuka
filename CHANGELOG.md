@@ -11,6 +11,15 @@ Note: the plugin protocol is versioned independently of the application (see
 `crates/plugin-protocol`); a totsuka release does not imply a protocol-version
 change.
 
+## [0.10.3](https://github.com/tomoya-k31/totsuka/compare/v0.10.2...v0.10.3) (2026-09-29)
+
+
+### Features
+
+* **core:** on_* の labels を解釈・検証し task/update_labels で書き戻す ([#837](https://github.com/tomoya-k31/totsuka/issues/837)) ([ff701e0](https://github.com/tomoya-k31/totsuka/commit/ff701e04b9fd541a6ac3a422ce8d4a8801477a6d))
+* **github:** task/update_labels で Issue / PR のラベルを付け外しする ([#838](https://github.com/tomoya-k31/totsuka/issues/838)) ([49c6979](https://github.com/tomoya-k31/totsuka/commit/49c69799ccd888663a401672964f465314143c62))
+* **protocol:** ラベル書き戻し用の task/update_labels と capability label_writeback を追加する ([#836](https://github.com/tomoya-k31/totsuka/issues/836)) ([67a5c4e](https://github.com/tomoya-k31/totsuka/commit/67a5c4e73e4df44710aa422a34fb9c24a876a2c5))
+
 ## [0.10.2](https://github.com/tomoya-k31/totsuka/compare/v0.10.1...v0.10.2) (2026-09-26)
 
 
