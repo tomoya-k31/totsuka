@@ -254,7 +254,7 @@ fn main() {
                     },
                 )
             }
-            "task/update_status" | "result/publish" => {
+            "task/update_status" | "task/update_labels" | "result/publish" => {
                 record(&config, method, &params);
                 Response::result(request_id(&id), Value::Null)
             }

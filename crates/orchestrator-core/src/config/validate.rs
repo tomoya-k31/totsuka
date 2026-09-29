@@ -7,7 +7,7 @@
 
 use std::collections::HashSet;
 
-use plugin_protocol::manifest::OutputCapability;
+use plugin_protocol::manifest::Capabilities;
 
 use super::resolve::expand_path;
 use super::schema::{CURRENT_SCHEMA_VERSION, PluginKind, RootConfig};
@@ -142,6 +142,21 @@ pub enum ValidationError {
         table: &'static str,
         key: String,
         allowed: String,
+    },
+
+    /// A `labels` value in an `on_*` table that is not an array of `+name` /
+    /// `-name` strings (ADR-0108).
+    ///
+    /// A bare name is refused rather than read as "add": the operator must
+    /// say which edit they mean, and `-name` read the wrong way round would
+    /// strip a label a human put there.
+    #[error(
+        "{referrer} `{table}.labels` {problem} → write each entry as `+name` (add) or `-name` (remove), e.g. `labels = [\"+ai:needs-human\", \"-ai:running\"]`"
+    )]
+    InvalidOutcomeLabels {
+        referrer: String,
+        table: &'static str,
+        problem: String,
     },
 
     /// A key written under a `prompts` table that #465 removed.
@@ -386,6 +401,7 @@ where
             ("on_failure", &wf.on_failure),
         ] {
             let Some(action) = action else { continue };
+            check_outcome_labels(&wf.name, table, action, &mut errors);
             for key in action.keys() {
                 if !super::interpret::OUTCOME_ACTION_KEYS.contains(&key.as_str()) {
                     errors.push(ValidationError::UnknownOutcomeActionKey {
@@ -610,16 +626,49 @@ pub struct Finding {
     pub message: String,
 }
 
+/// `labels` must be an array of `+name` / `-name` strings (ADR-0108).
+fn check_outcome_labels(
+    workflow: &str,
+    table: &'static str,
+    action: &toml::Table,
+    errors: &mut Vec<ValidationError>,
+) {
+    let Some(labels) = action.get("labels") else {
+        return;
+    };
+    let mut report = |problem: String| {
+        errors.push(ValidationError::InvalidOutcomeLabels {
+            referrer: format!("workflow `{workflow}`"),
+            table,
+            problem,
+        });
+    };
+    let Some(entries) = labels.as_array() else {
+        report(format!("is {labels}, not an array"));
+        return;
+    };
+    for entry in entries {
+        match entry.as_str() {
+            None => report(format!("has {entry}, which is not a string")),
+            Some(s) => match s.strip_prefix(['+', '-']) {
+                None => report(format!("has `{s}` without a `+` / `-` prefix")),
+                Some("") => report(format!("has `{s}` with no label name")),
+                Some(_) => {}
+            },
+        }
+    }
+}
+
 /// Run the full config validation: static checks (F-58/63) **plus** workflow
 /// validation (F-81/82/83), returning errors and warnings in one list. This is
 /// the entry point the `config validate` command (#64) drives.
 ///
-/// `source_outputs` returns a task-source plugin's declared output
+/// `source_capabilities` returns a task-source plugin's declared
 /// capabilities (from its manifest offline, or `None` when unknown).
-pub fn validate<E, F>(cfg: &RootConfig, env: &E, source_outputs: F) -> Vec<Finding>
+pub fn validate<E, F>(cfg: &RootConfig, env: &E, source_capabilities: F) -> Vec<Finding>
 where
     E: Fn(&str) -> Option<String>,
-    F: Fn(&str) -> Option<Vec<OutputCapability>>,
+    F: Fn(&str) -> Option<Capabilities>,
 {
     let mut findings: Vec<Finding> = validate_static(cfg, env)
         .into_iter()
@@ -630,7 +679,7 @@ where
         .collect();
 
     let workflows = cfg.domain_workflows();
-    for issue in workflow::validate_workflows(&workflows, source_outputs) {
+    for issue in workflow::validate_workflows(&workflows, source_capabilities) {
         findings.push(Finding {
             severity: match issue.severity {
                 Severity::Error => FindingSeverity::Error,
@@ -1385,6 +1434,76 @@ on_failure = { nope = "x" }
         assert!(hits[0].contains("on_failure"), "got {hits:?}");
     }
 
+    /// `labels` (ADR-0108): every entry needs a `+` / `-` prefix and a name,
+    /// and the source must declare `label_writeback`.
+    #[test]
+    fn on_action_labels_need_a_prefix_and_a_capable_source() {
+        let cfg_with = |labels: &str| {
+            RootConfig::from_toml_str(&format!(
+                r#"
+[plugins.github]
+enabled = true
+kind = "task_source"
+
+[plugins.herdr]
+enabled = true
+kind = "agent_ide"
+
+[[projects]]
+name = "github"
+source = "github"
+
+[[workflows]]
+name = "impl"
+projects = ["github"]
+trigger = {{ status = "todo" }}
+mode = "implement"
+agent = "herdr"
+output = "none"
+on_success = {{ labels = {labels} }}
+"#
+            ))
+            .unwrap()
+        };
+        let capable = |_: &str| {
+            Some(Capabilities {
+                label_writeback: true,
+                ..Default::default()
+            })
+        };
+        let errors = |cfg: &RootConfig, caps: &dyn Fn(&str) -> Option<Capabilities>| {
+            validate(cfg, &env_from(&[]), caps)
+                .into_iter()
+                .filter(|f| f.severity == FindingSeverity::Error)
+                .map(|f| f.message)
+                .collect::<Vec<_>>()
+        };
+
+        let good = cfg_with(r#"["+ai:needs-human", "-ai:running"]"#);
+        assert_eq!(errors(&good, &capable), Vec::<String>::new());
+
+        for (labels, problem) in [
+            (r#"["ai:needs-human"]"#, "without a `+` / `-` prefix"),
+            (r#"["+"]"#, "with no label name"),
+            (r#""+ai:needs-human""#, "not an array"),
+            ("[1]", "not a string"),
+        ] {
+            let found = errors(&cfg_with(labels), &capable);
+            assert!(
+                found
+                    .iter()
+                    .any(|e| e.contains("on_success.labels") && e.contains(problem)),
+                "{labels}: {found:?}"
+            );
+        }
+
+        let found = errors(&good, &|_| Some(Capabilities::default()));
+        assert!(
+            found.iter().any(|e| e.contains("label_writeback")),
+            "an incapable source is refused: {found:?}"
+        );
+    }
+
     #[test]
     fn disabled_plugin_reference_is_rejected() {
         let toml = r#"
@@ -1749,7 +1868,7 @@ tool = "codex-cli"
 "#,
         )
         .unwrap();
-        let findings = validate(&cfg, &env_from(&[]), |_| Some(vec![]));
+        let findings = validate(&cfg, &env_from(&[]), |_| Some(Capabilities::default()));
         assert!(
             findings
                 .iter()
@@ -1802,7 +1921,7 @@ verification = "none"
 rubric = "the PR is open"
 "#;
         let cfg = RootConfig::from_toml_str(toml).unwrap();
-        let findings = validate(&cfg, &env_from(&[]), |_| Some(vec![]));
+        let findings = validate(&cfg, &env_from(&[]), |_| Some(Capabilities::default()));
 
         assert!(has_errors(&findings), "{findings:?}");
         assert!(

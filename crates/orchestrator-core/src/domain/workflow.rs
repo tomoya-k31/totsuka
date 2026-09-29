@@ -29,7 +29,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
 
-use plugin_protocol::manifest::OutputCapability;
+use plugin_protocol::manifest::{Capabilities, OutputCapability};
 
 use serde::Deserialize;
 
@@ -275,6 +275,18 @@ impl Trigger {
 pub struct OutcomeAction {
     /// Status to set on the source (`status`).
     pub status: Option<String>,
+    /// Labels to add — the `+name` entries of `labels`, prefix stripped
+    /// (ADR-0108).
+    pub add_labels: Vec<String>,
+    /// Labels to remove — the `-name` entries of `labels`, prefix stripped.
+    pub remove_labels: Vec<String>,
+}
+
+impl OutcomeAction {
+    /// Whether this action writes any label.
+    pub fn has_labels(&self) -> bool {
+        !self.add_labels.is_empty() || !self.remove_labels.is_empty()
+    }
 }
 
 /// A named workflow binding (F-80).
@@ -364,9 +376,11 @@ pub struct WorkflowIssue {
 /// Validate workflows (F-81, F-83).
 ///
 /// - `output = source` requires the source plugin to declare the `source`
-///   output capability (F-83). `source_outputs` returns a plugin's declared
-///   outputs, or `None` when unknown (then the check is skipped — an unknown
-///   plugin is already flagged by config validation).
+///   output capability (F-83). `source_capabilities` returns a plugin's
+///   declared capabilities, or `None` when unknown (then the check is skipped
+///   — an unknown plugin is already flagged by config validation).
+/// - `labels` in an `on_*` table requires the `label_writeback` capability
+///   (ADR-0108): without it the labels would silently never be written.
 ///
 /// # What is no longer checked here
 ///
@@ -379,17 +393,37 @@ pub struct WorkflowIssue {
 /// remains genuinely ambiguous (two workflows claiming the same emoji, two
 /// claiming plain mentions) is refused by the plugin at `initialize`, where the
 /// semantics live.
-pub fn validate_workflows<F>(workflows: &[Workflow], source_outputs: F) -> Vec<WorkflowIssue>
+pub fn validate_workflows<F>(workflows: &[Workflow], source_capabilities: F) -> Vec<WorkflowIssue>
 where
-    F: Fn(&str) -> Option<Vec<OutputCapability>>,
+    F: Fn(&str) -> Option<Capabilities>,
 {
     let mut issues = Vec::new();
 
     for wf in workflows {
+        let caps = source_capabilities(&wf.source);
+        if let Some(caps) = &caps
+            && !caps.label_writeback
+        {
+            for (table, action) in [
+                ("on_start", &wf.on_start),
+                ("on_success", &wf.on_success),
+                ("on_failure", &wf.on_failure),
+            ] {
+                if action.as_ref().is_some_and(OutcomeAction::has_labels) {
+                    issues.push(WorkflowIssue {
+                        severity: Severity::Error,
+                        message: format!(
+                            "workflow `{}` sets `labels` in `{table}` but plugin `{}` does not declare the `label_writeback` capability → remove `labels`, or use a source that writes labels (github)",
+                            wf.name, wf.source
+                        ),
+                    });
+                }
+            }
+        }
         // F-83: output = source needs the plugin to declare it.
         if wf.output == OutputPolicy::Source
-            && let Some(outputs) = source_outputs(&wf.source)
-            && !outputs.contains(&OutputCapability::Source)
+            && let Some(caps) = &caps
+            && !caps.outputs.contains(&OutputCapability::Source)
         {
             issues.push(WorkflowIssue {
                 severity: Severity::Error,
@@ -1054,12 +1088,17 @@ output = "source"
 "#,
         );
         // Plugin does not declare `source` output -> error.
-        let issues = validate_workflows(&workflows, |_| Some(vec![]));
+        let issues = validate_workflows(&workflows, |_| Some(Capabilities::default()));
         assert!(issues.iter().any(|i| i.severity == Severity::Error
             && i.message.contains("does not declare the `source` output")));
 
         // Plugin declares it -> no capability error.
-        let issues = validate_workflows(&workflows, |_| Some(vec![OutputCapability::Source]));
+        let issues = validate_workflows(&workflows, |_| {
+            Some(Capabilities {
+                outputs: vec![OutputCapability::Source],
+                ..Default::default()
+            })
+        });
         assert!(
             !issues
                 .iter()

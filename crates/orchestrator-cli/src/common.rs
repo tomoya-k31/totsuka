@@ -334,7 +334,7 @@ impl Cx {
                 .manifest_of(name)
                 .ok()
                 .flatten()
-                .map(|m| m.capabilities.outputs)
+                .map(|m| m.capabilities)
         }));
         findings
     }

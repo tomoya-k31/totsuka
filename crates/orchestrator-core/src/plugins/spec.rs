@@ -118,6 +118,23 @@ fn status_writebacks(w: &config::WorkflowConfig) -> Vec<String> {
     out
 }
 
+/// The label names a workflow adds or removes, in `on_start` → `on_success`
+/// → `on_failure` order, prefix stripped, duplicates dropped (ADR-0108).
+fn label_writebacks(w: &config::WorkflowConfig) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for table in [&w.on_start, &w.on_success, &w.on_failure] {
+        let Some(action) = table.as_ref().map(outcome_action) else {
+            continue;
+        };
+        for name in action.add_labels.into_iter().chain(action.remove_labels) {
+            if !out.contains(&name) {
+                out.push(name);
+            }
+        }
+    }
+    out
+}
+
 /// The `[[projects]]` entries `name` owns, with their opaque options (#554).
 ///
 /// Filtered here rather than sent whole and filtered plugin-side: `source` is
@@ -169,8 +186,12 @@ pub fn workflow_infos(cfg: &RootConfig, name: &str, is_source: bool) -> Vec<Work
             } else {
                 Vec::new()
             },
-            // Filled in once core reads `labels` from the `on_*` tables.
-            label_writebacks: Vec::new(),
+            // The labels it adds or removes (ADR-0108), for the same check.
+            label_writebacks: if is_source {
+                label_writebacks(w)
+            } else {
+                Vec::new()
+            },
             // Which of this plugin's domains the workflow watches (#626).
             // Sent as written, so a plugin scans the boards it was pointed at
             // and no others; an old plugin that ignored this field would scan
@@ -621,8 +642,8 @@ trigger = { status = "Todo" }
 mode = "implement"
 output = "none"
 agent = "herdr"
-on_start = { status = "In progress" }
-on_success = { status = "Done" }
+on_start = { status = "In progress", labels = ["+ai:running"] }
+on_success = { status = "Done", labels = ["+ai:needs-human", "-ai:running"] }
 on_failure = { status = "In progress" }
 
 [[workflows]]
@@ -649,6 +670,12 @@ agent = "herdr"
             source_of("quiet").status_writebacks.is_empty(),
             "nothing written back, nothing to check"
         );
+        // Labels likewise (ADR-0108): prefix stripped, adds and removes alike.
+        assert_eq!(
+            source_of("impl").label_writebacks,
+            vec!["ai:running".to_string(), "ai:needs-human".to_string()]
+        );
+        assert!(source_of("quiet").label_writebacks.is_empty());
 
         // The agent gets none of it: which column a task lands in is the
         // source's business, the same reason its trigger arrives empty.
@@ -657,6 +684,7 @@ agent = "herdr"
             .find(|w| w.workflow == "impl")
             .unwrap();
         assert!(agent.status_writebacks.is_empty());
+        assert!(agent.label_writebacks.is_empty());
         assert!(agent.projects.is_empty());
     }
 

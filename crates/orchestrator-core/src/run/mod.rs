@@ -38,7 +38,7 @@ use plugin_protocol::methods::{
     AgentState, ExecutionMode, NotReleased, NotifierEvent, NotifyParams, ResultPublishParams,
     SessionReleaseParams, StateNotification, TaskClaimOutcome, TaskClaimParams, TaskClaimResult,
     TaskDispatchParams, TaskDispatchResult, TaskLookupParams, TaskLookupResult, TaskSubmitParams,
-    TaskSubmitResult, TaskSubmitStatus, TaskUpdateStatusParams,
+    TaskSubmitResult, TaskSubmitStatus, TaskUpdateLabelsParams, TaskUpdateStatusParams,
 };
 use plugin_protocol::{Notification, Task, jsonrpc, rpc};
 use serde_json::Value;
