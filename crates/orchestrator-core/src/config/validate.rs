@@ -647,13 +647,19 @@ fn check_outcome_labels(
         report(format!("is {labels}, not an array"));
         return;
     };
+    let mut seen: Vec<&str> = Vec::new();
     for entry in entries {
         match entry.as_str() {
             None => report(format!("has {entry}, which is not a string")),
             Some(s) => match s.strip_prefix(['+', '-']) {
                 None => report(format!("has `{s}` without a `+` / `-` prefix")),
                 Some("") => report(format!("has `{s}` with no label name")),
-                Some(_) => {}
+                // `task/update_labels` promises `add` and `remove` never
+                // overlap, so no plugin has to pick which one wins.
+                Some(name) if seen.contains(&name) => {
+                    report(format!("names `{name}` more than once"))
+                }
+                Some(name) => seen.push(name),
             },
         }
     }
@@ -1487,6 +1493,7 @@ on_success = {{ labels = {labels} }}
             (r#"["+"]"#, "with no label name"),
             (r#""+ai:needs-human""#, "not an array"),
             ("[1]", "not a string"),
+            (r#"["+a", "-a"]"#, "more than once"),
         ] {
             let found = errors(&cfg_with(labels), &capable);
             assert!(
