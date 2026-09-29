@@ -4,7 +4,7 @@ title: task-source-github プラグイン
 description: GitHub Issues / ProjectsV2 をタスクソースとして接続する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。GraphQL で fetch→正規化、ProjectsV2 ステータス書き戻し、task/claim（Issue / PullRequest への self-assign + AssignedEvent 先着裁定による楽観排他）を行う。ボード上の OPEN な PullRequest も Issue と同じくタスクになる（#734）。Issue / PullRequest への書き込みは claim の assignee 操作と、on_*.labels のラベル付け外し（ADR-0108）。呼び出す 13 の GraphQL 操作と、トークン権限（十分条件は実測済み・最小値は未実測。fine-grained PAT が user 所有ボードに使えない理由を含む）を扱う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-github
 tags: [rust, crate, plugin, task-source, github, graphql, projectsv2]
-generated: { by: claude-code/opus-5.5, at: 2026-09-30T18:30:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-09-30T03:20:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -172,7 +172,7 @@ present/null を判定しているのはこのためで、`assignees` / `labels`
 
 **Contents は不要**である。このトークンでリポジトリの中身を読み書きすることはない。
 
-**scope ベースのトークン**（classic PAT、または `gh auth token` の OAuth トークン。user 所有ボードではこちら。最小値は未実測）: `project`（ProjectsV2 の読み書き）と、`repo`（private リポジトリを含む場合）または `public_repo`。`on_*.labels` を使うなら `repo` / `public_repo` は**必須**（ラベルの書き込みは Project の外、リポジトリ側の操作なので `project` では足りない。`repo` + `project` で足りることは実測済み、`project` だけで足りないことは導出）。private org のボードでは `organization(login:)` の解決に `read:org` も要りうる。
+**scope ベースのトークン**（classic PAT、または `gh auth token` の OAuth トークン。user 所有ボードではこちら。最小値は未実測）: `project`（ProjectsV2 の読み書き）と、`repo`（private リポジトリを含む場合）または `public_repo`。`on_*.labels` を使うなら `repo` / `public_repo` は**必須**（ラベルの書き込みは Project の外、リポジトリ側の操作なので `project` では足りない。上の実測で足りたのは `repo` + `project` を**含む** OAuth の scope 集合で、`repo` + `project` だけで足りること・`project` だけでは足りないことはどちらも導出）。private org のボードでは `organization(login:)` の解決に `read:org` も要りうる。
 
 **未解決の問い**: Issue の本文・ラベル・アサイニーは `projectV2` のアイテム経由でしか読んでおらず、Issues エンドポイントを直接は叩かない。**`project` scope だけでこれらが返るなら `repo` は要らない**。どちらなのかは `project` だけの classic PAT を切って上のスクリプトを回せば 1 回で分かる（#514 手順 2）。
 

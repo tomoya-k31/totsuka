@@ -4,7 +4,7 @@ title: ADR-0108 on_start / on_success / on_failure でラベルを付け外し�
 description: on_* テーブルに `labels = ["+a", "-b"]` を足し、GitHub Project のカードに紐づく Issue / PR のラベルを書き戻せるようにした決定。新メソッド task/update_labels と capability label_writeback で送り、接頭辞なしは起動時エラー、存在しないラベルは validate / doctor で検出、失敗は status と同じく warn のみ、閉路検査は拡張しない。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/plugin-protocol/src/methods.rs
 tags: [decision, protocol, config, github, workflow, adr]
-generated: { by: claude-code/opus-5.5, at: 2026-09-30T18:30:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-09-30T03:20:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -37,5 +37,5 @@ stable。プロトコル（0.7.6）→ core → github プラグインの 3 層�
 
 # Consequences
 
-- GitHub のトークンにラベルを書く権限（と、無いラベルを作る権限）が要る。**`repo` + `project` の OAuth トークンで足りることは実測した**（#840、`github-label-probe.sh` で Issue・PR とも 8 項目 PASS）。fine-grained PAT なら Issues: write と導出したが、**最小値と fine-grained PAT は未実測**で、PR のラベルに Pull requests: write も要るかは未確認。他の操作と同じく「十分条件は実測・最小値は未実測」で止めている。
+- GitHub のトークンにラベルを書く権限（と、無いラベルを作る権限）が要る。**OAuth トークン（scope = `admin:public_key, admin:ssh_signing_key, gist, project, read:org, repo`）で足りることは実測した**（#840、`github-label-probe.sh` で Issue・PR とも 8 項目 PASS）。`repo` + `project` だけで足りるかは導出で、fine-grained PAT なら Issues: write と導出したが、**最小値と fine-grained PAT は未実測**で、PR のラベルに Pull requests: write も要るかは未確認。他の操作と同じく「十分条件は実測・最小値は未実測」で止めている。
 - core が `on_*` から読むキーは `status` と `labels` の 2 つになる。どちらも core のキーで、プラグインには意味の確定した形（`task/update_labels` の `add` / `remove`）で渡るので、`on_*` テーブルそのものは引き続きプラグインに見えない。
