@@ -10,7 +10,8 @@
 # - **準備役** `E2E_GH_TOKEN`（`.env`）: probe 用の Issue・PR（ブランチ + コミット）・
 #   ラベルを作り、読み戻し、最後に片付ける。十分な権限を持つサンドボックス用トークン
 # - **測定役** `GH_PROBE_TOKEN`（省略時は準備役と同じ）: プラグインが実際に投げる
-#   5 操作**だけ**を投げる
+#   5 操作**だけ**を投げる。ほかに使うのは、scope を表示するための REST `/user` の
+#   ヘッダ取得 1 回だけ（成否は判定に使わない）
 #
 # 分けるのは、PR を作るのに要る権限（Contents: write など）を測定結果に混ぜないため。
 # 測定役に要るのは「プラグインが要るもの」だけで、それ以外は準備役が肩代わりする。
@@ -76,7 +77,8 @@ POLL_LIMIT_MS=10000
 SETUP_RC="$(mktemp "${TMPDIR:-/tmp}/ghlabel-setup.XXXXXX")"
 PROBE_RC="$(mktemp "${TMPDIR:-/tmp}/ghlabel-probe.XXXXXX")"
 chmod 600 "${SETUP_RC}" "${PROBE_RC}"
-trap 'rm -f "${SETUP_RC}" "${PROBE_RC}"' EXIT INT TERM
+trap 'rm -f "${SETUP_RC}" "${PROBE_RC}"' EXIT
+trap 'exit 130' INT TERM
 printf 'header = "Authorization: Bearer %s"\nheader = "User-Agent: %s"\n' "${SETUP_TOKEN}" "${UA}" >"${SETUP_RC}"
 printf 'header = "Authorization: Bearer %s"\nheader = "User-Agent: %s"\n' "${PROBE_TOKEN}" "${UA}" >"${PROBE_RC}"
 
@@ -155,11 +157,6 @@ scopes="$(curl -sS --config "${PROBE_RC}" --connect-timeout "${CONNECT_TIMEOUT}"
   -o /dev/null -D - https://api.github.com/user 2>/dev/null |
   tr -d '\r' | sed -n 's/^[Xx]-[Oo][Aa]uth-[Ss]copes: //p' || true)"
 say "  測定役の scope: ${scopes:-（ヘッダ無し — fine-grained PAT なら正常）}"
-body="$(call probe 'viewer' 'query { viewer { login } }')" || {
-  ng '測定役のトークンで viewer が読めない'
-  exit 1
-}
-say "  viewer: $(jqr "${body}" '.data.viewer.login')"
 
 # --- 1. fixture（準備役） --------------------------------------------------------
 say '== 1. fixture（準備役が作る） =='
@@ -197,7 +194,10 @@ cleanup() {
   done
   rm -f "${SETUP_RC}" "${PROBE_RC}"
 }
-trap cleanup EXIT INT TERM
+# 中断（INT / TERM）は exit に変えるだけ。片付けは EXIT の 1 回で行い、片付けた
+# 後の fixture に本体が操作を投げ続けないようにする。
+trap cleanup EXIT
+trap 'exit 130' INT TERM
 
 body="$(call setup 'createLabel(fixture)' \
   'mutation($r: ID!, $n: String!) { createLabel(input: {repositoryId: $r, name: $n, color: "ededed"}) { label { id } } }' \
@@ -240,6 +240,12 @@ wait_label() {
       printf 'error'
       return 0
     }
+    # nodes が配列でない（null 等）は「読めなかった」であって「付いていない」ではない。
+    # 空に丸めると absent の待ちが黙って ok になる。
+    [ "$(jqr "${body}" '.data.node.labels.nodes | type')" = array ] || {
+      printf 'error'
+      return 0
+    }
     names=",$(jqr "${body}" '[.data.node.labels.nodes[].name] | join(",")'),"
     case "${names}" in *",${LABEL},"*) has=present ;; *) has=absent ;; esac
     if [ "${has}" = "${want}" ]; then
@@ -271,21 +277,31 @@ for target in issue pr; do
     ng "L-1 ${target}: API エラー"
   fi
 
+  attached=no
   if call probe 'L-2 addLabelsToLabelable' "${ADD_LABELS_MUTATION}" \
     "$(jq -cn --arg l "${ID}" --arg i "${LABEL_ID}" '{l:$l, ids:[$i]}')" >/dev/null; then
     case "$(wait_label "${ID}" present)" in
-    ok) ok "L-2 ${target}: 付与が読み戻しに反映" ;;
+    ok)
+      ok "L-2 ${target}: 付与が読み戻しに反映"
+      attached=yes
+      ;;
     *) ng "L-2 ${target}: 200 で通ったのに ${POLL_LIMIT_MS}ms 待っても付かない（黙殺）" ;;
     esac
   else
     ng "L-2 ${target}: API エラー"
-    # L-3 を測るために準備役で付けておく
+  fi
+  # L-3 は「付いている」状態からでないと測れない（付いていなければ、何もしない
+  # 除去でも「外れた」と読める）。L-2 で付かなかったら準備役で付けて確かめる。
+  if [ "${attached}" = no ] &&
     call setup 'addLabels(fixture)' "${ADD_LABELS_MUTATION}" \
-      "$(jq -cn --arg l "${ID}" --arg i "${LABEL_ID}" '{l:$l, ids:[$i]}')" >/dev/null || true
-    wait_label "${ID}" present >/dev/null
+      "$(jq -cn --arg l "${ID}" --arg i "${LABEL_ID}" '{l:$l, ids:[$i]}')" >/dev/null &&
+    [ "$(wait_label "${ID}" present)" = ok ]; then
+    attached=yes
   fi
 
-  if call probe 'L-3 removeLabelsFromLabelable' "${REMOVE_LABELS_MUTATION}" \
+  if [ "${attached}" = no ]; then
+    ng "L-3 ${target}: 準備役でもラベルを付けられず、除去を測れなかった"
+  elif call probe 'L-3 removeLabelsFromLabelable' "${REMOVE_LABELS_MUTATION}" \
     "$(jq -cn --arg l "${ID}" --arg i "${LABEL_ID}" '{l:$l, ids:[$i]}')" >/dev/null; then
     case "$(wait_label "${ID}" absent)" in
     ok) ok "L-3 ${target}: 除去が読み戻しに反映" ;;
