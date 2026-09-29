@@ -546,7 +546,17 @@ on_success = { status = "レビュー待ち" }
 /// labels-only `on_start` sends no `task/update_status` at all.
 #[tokio::test]
 async fn labels_are_written_back_after_the_status() {
-    let base = scratch("label_writeback");
+    labels_written_back(false).await;
+}
+
+/// A failed status write does not skip the labels of the same moment.
+#[tokio::test]
+async fn labels_are_written_back_even_when_the_status_write_fails() {
+    labels_written_back(true).await;
+}
+
+async fn labels_written_back(update_status_error: bool) {
+    let base = scratch(&format!("label_writeback_{update_status_error}"));
     let repo = setup_repo(&base);
     let source_log = base.join("source.ndjson");
     let notify_log = base.join("notify.ndjson");
@@ -555,7 +565,7 @@ async fn labels_are_written_back_after_the_status() {
     let plugins = plugin_set_with_source(
         json!([mock_task("lw1")]),
         json!({ "stream_states": ["running", "done"] }),
-        json!({ "label_writeback": true }),
+        json!({ "label_writeback": true, "update_status_error": update_status_error }),
         &source_log,
         &notify_log,
     )
