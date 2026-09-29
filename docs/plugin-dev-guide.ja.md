@@ -1,7 +1,7 @@
 > 🌐 [English](plugin-dev-guide.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:cbab4bbd1b95c04d30c8f2e77540c10b1d30de0a2c3c7e1b329fa4d21c2cfe7e -->
+<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:82d1c599701af61a6b7c3049e32a001c35f2f4554b149b3081d17eddd5ad2547 -->
 
 # プラグイン開発ガイド
 
@@ -93,6 +93,7 @@ Orchestrator は起動前に `protocol_version` の互換性を検査し、宣�
 |---|---|---|
 | `task/submit` | **P→O request** | 見つけたタスクを、**属する workflow を名指して** push する。受け取った workflow 群に対して first-match を走らせたのは自分なので既に分かっており、Orchestrator はその名前が実在して自分のものかだけを確かめる。Orchestrator は永続化してから応答する |
 | `task/update_status` | O→P | タスクの状態遷移を伝える。ソース側へ反映する |
+| `task/update_labels` | O→P | ソース側のタスクのラベルを付け外しする（`{task_id, add, remove, projects}`）。**capability `label_writeback` を宣言したときだけ送られる**。付いていないラベルの削除は成功として扱うこと |
 | `result/publish` | O→P | 成果物をソースへ書き戻す |
 
 `task/submit` の応答は次の 3 つのいずれかで、**すべて最終**である。これらを理由に同じタスクを再送してはならない。

@@ -88,6 +88,7 @@ Orchestrator は起動前に `protocol_version` の互換性を検査し（F-54�
 |---|---|---|
 | `task/submit` | **P→O request** | プラグインが見つけたタスクを Orchestrator へ push（persist-before-ack）。**`workflow` を必ず名指す**（0.6.0、#554）— 受け取った `workflows` に対して first-match を走らせるのはプラグインで、Orchestrator は名前が実在し、その workflow の `projects` の所有プラグインが自分かだけを検証する（#626）。応答は `accepted`（永続化）/ `duplicate`（冪等キー衝突、破棄してよい）/ `rejected`（恒久的に処理不能、reason 付き）のいずれかで**すべて最終**（同じタスクを reason で再送しない）。`NOT_ACCEPTING`/`SUBMIT_OVERLOADED`/`INTERNAL_ERROR` は再送可能（submit は冪等なのでバックオフ再送してよい） |
 | `task/update_status` | O→P | ソース側ステータス遷移（F-84） |
+| `task/update_labels` | O→P | ソース側のラベルを付け外しする（`{task_id, add, remove, projects}`、0.7.6、[ADR-0108](/decisions/adr-0108-label-writeback.md)）。**capability `label_writeback` を宣言したプラグインにだけ送られる**。付いていないラベルの削除は成功として扱うこと |
 | `result/publish` | O→P | 成果物をソースへ書き戻し（F-07） |
 
 ## agent_ide

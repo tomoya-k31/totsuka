@@ -17,7 +17,8 @@ use plugin_protocol::Capabilities;
 use plugin_protocol::jsonrpc::{Error, error_code};
 use plugin_protocol::methods::{
     ClaimedRepo, ConfigValidateParams, ConfigValidateResult, InitializeParams, InitializeResult,
-    ResultPublishParams, TaskClaimParams, TaskClaimResult, TaskUpdateStatusParams, WorkflowInfo,
+    ResultPublishParams, TaskClaimParams, TaskClaimResult, TaskUpdateLabelsParams,
+    TaskUpdateStatusParams, WorkflowInfo,
 };
 use plugin_sdk::{
     LineHandler, Reply, SubmitClient, TaskSourceHandler, check_assignee_triggers, not_initialized,
@@ -205,6 +206,7 @@ where
                 Err(errors) => return Ok(validate_result(errors)),
             };
         let mut errors = static_config_errors(&config);
+        let mut warnings = Vec::new();
         // Only ping the API if the config is otherwise well-formed (F-63).
         if errors.is_empty() {
             let transport = self
@@ -223,9 +225,21 @@ where
                         "ステータス列の検査ができなかった: {e} → 検査できていないので、通ったとは読まないこと"
                     )),
                 }
+                match client.validate_labels(&parsed.workflows).await {
+                    Ok((label_errors, label_warnings)) => {
+                        errors.extend(label_errors);
+                        warnings = label_warnings;
+                    }
+                    Err(e) => errors.push(format!(
+                        "書き戻しラベルの検査ができなかった: {e} → 検査できていないので、通ったとは読まないこと"
+                    )),
+                }
             }
         }
-        Ok(validate_result(errors))
+        Ok(ConfigValidateResult {
+            warnings,
+            ..validate_result(errors)
+        })
     }
 
     /// `task/claim` (#556): delegate to
@@ -239,6 +253,18 @@ where
             .client
             .claim(&parsed.task_id)
             .await
+            .map_err(rpc_error)
+    }
+
+    /// `task/update_labels` (ADR-0108): delegate to
+    /// [`GithubClient::update_labels`](crate::client::GithubClient::update_labels).
+    async fn update_labels(&mut self, parsed: TaskUpdateLabelsParams) -> Result<Value, Error> {
+        let session = self.session.as_ref().ok_or_else(not_initialized)?;
+        session
+            .client
+            .update_labels(&parsed.task_id, &parsed.add, &parsed.remove)
+            .await
+            .map(|()| Value::Null)
             .map_err(rpc_error)
     }
 
@@ -298,6 +324,8 @@ fn capabilities_result(claimed_repos: Vec<ClaimedRepo>) -> InitializeResult {
         // writes to an Issue rather than a Project.
         capabilities: Capabilities {
             task_claim: true,
+            // ADR-0108: `task/update_labels` on the task's issue / PR.
+            label_writeback: true,
             ..Capabilities::default()
         },
     }

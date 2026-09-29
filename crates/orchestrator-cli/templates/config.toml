@@ -171,6 +171,9 @@
 # on_success = { status = "In review" }     # …on success
 # on_failure = { status = "Needs attention" }   # …on failure. Set this whenever on_start is set,
 #                                           #   or a failed task leaves the board saying "running"
+#                                           # Each on_* also takes `labels` (github only): "+name" adds,
+#                                           #   "-name" removes, a bare name is an error. With or without
+#                                           #   `status`: on_failure = { labels = ["-ai:running"] }
 # timeout_secs = 1800                       # silence limit since the last hook signal, then escalate.
 #                                           #   Default `0` = no sweep. A pending permission prompt
 #                                           #   does not count as silence

@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](plugin-dev-guide.ja.md)
 
-<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:cbab4bbd1b95c04d30c8f2e77540c10b1d30de0a2c3c7e1b329fa4d21c2cfe7e -->
+<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:82d1c599701af61a6b7c3049e32a001c35f2f4554b149b3081d17eddd5ad2547 -->
 
 # Plugin development guide
 
@@ -90,6 +90,7 @@ How often a polling source fetches is its own business: put `poll_interval_secs`
 |---|---|---|
 | `task/submit` | **P→O request** | Pushes a task you found, **naming the workflow it belongs to**. You ran first-match over the workflows you were given, so you already know; the orchestrator only checks that the name exists and is yours. The orchestrator persists before acknowledging |
 | `task/update_status` | O→P | Tells you the task moved, so you can reflect it in the source |
+| `task/update_labels` | O→P | Add / remove labels on the source task (`{task_id, add, remove, projects}`). **Sent only if you declare the `label_writeback` capability.** Treat removing a label that is not there as success |
 | `result/publish` | O→P | Hands you the result to write back to the source |
 
 `task/submit` answers with one of three **final** outcomes, and you must not resend the same task because of any of them:

@@ -4,7 +4,7 @@ title: 設定リファレンス（config.toml）
 description: "config.toml の全キー・デフォルト値・意味の一覧。設定ファイルは 1 本で、プラグイン個別設定もトップレベルの [<name>] テーブルに入る。シークレット参照、設定スキーマのバージョニング方針、[[projects]] の domain 宣言とワークフローからの参照、プラグインが定義する追加プロパティ、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-github の [github]、task-source-notion の [notion]、task-source-slack の [slack]、agent-ide-herdr の [herdr] を含む。"
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
 tags: [config, reference, toml, secrets, workflow, worktree, github, notion, slack, hooks, versioning]
-generated: { by: claude-code/opus-5.5, at: 2026-09-27T10:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-09-30T14:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -218,9 +218,10 @@ project = "tomo-prj"
 | `mode` | enum | `profile` が無ければ必須 | `plan`（設計・起案。worktree は作るが push・PR は**想定していない** — F-82。ただし**強制はされていない**、下記）/ `implement` |
 | `agent` | string | 必須 | agent_ide インスタンス名 |
 | `output` | enum | `profile` が無ければ必須 | `source` / `none`。**`pull_request` は廃止** — push と PR 作成はエージェントの責務になった（F-86、[ADR-0026](/decisions/adr-0026-agent-owned-branch-and-push.md)）。残っていると起動時に `unknown variant` で落ちるので `source` に変更し、PR 作成手順はリポジトリの規約に書く |
-| `on_start` | `{ status = "..." }`? | なし | dispatch 直前にソース側ステータスを更新（#556、[ADR-0059](/decisions/adr-0059-task-claim-exclusion.md)）。ボードが「実行中」を映し、多人数運用では `in_progress_statuses` による取り込み除外の第 2 防御線になる。**未設定なら何も書かない**（従来挙動）。**使うなら `on_failure` も設定すること** — 失敗時に列が実行中のまま残り、ボードと実態が食い違う。**`on_start` / `on_success` / `on_failure` の未知キーは起動時エラーになる**（#574、有効キーは `status` のみ）。`trigger` と違いこれは core が読むテーブルなので、検査も `config validate`（`run` が共有する）の側にある。検査が要るのは壊れ方が無言だからで、`set_stauts` と書くと**タスクは成功したのにボードだけ動かない** |
-| `on_success` | `{ status = "..." }`? | なし | 成功時にソース側ステータスを更新（F-84） |
-| `on_failure` | `{ status = "..." }`? | なし | 失敗時にソース側ステータスを更新（publish 失敗など retry 可能な失敗では書き戻さない） |
+| `on_start` | `{ status?, labels? }`? | なし | dispatch 直前にソース側ステータスを更新（#556、[ADR-0059](/decisions/adr-0059-task-claim-exclusion.md)）。ボードが「実行中」を映し、多人数運用では `in_progress_statuses` による取り込み除外の第 2 防御線になる。**未設定なら何も書かない**（従来挙動）。**使うなら `on_failure` も設定すること** — 失敗時に列が実行中のまま残り、ボードと実態が食い違う。**`on_start` / `on_success` / `on_failure` の未知キーは起動時エラーになる**（#574、有効キーは `status` と `labels`）。`trigger` と違いこれは core が読むテーブルなので、検査も `config validate`（`run` が共有する）の側にある。検査が要るのは壊れ方が無言だからで、`set_stauts` と書くと**タスクは成功したのにボードだけ動かない** |
+| `on_success` | `{ status?, labels? }`? | なし | 成功時にソース側ステータスを更新（F-84） |
+| `on_failure` | `{ status?, labels? }`? | なし | 失敗時にソース側ステータスを更新（publish 失敗など retry 可能な失敗では書き戻さない） |
+| `on_*.labels` | string 配列? | なし | タスクのラベルを付け外しする（[ADR-0108](/decisions/adr-0108-label-writeback.md)）。各要素は `"+name"`（付ける）か `"-name"`（外す）で、**接頭辞の無い要素・空の名前・配列でない値は起動時エラー**。`status` と併記しても単独でもよい（`on_failure = { labels = ["-ai:running"] }`）。送る順は status → labels で互いに独立、失敗は status と同じく warn ログのみ。付いていないラベルを外すのは成功扱い。**`label_writeback` を宣言するソース（現状 github のみ）でしか書けず**、他のソースの workflow に書くと起動時エラー。github では Project カードに紐づく Issue / PR のリポジトリに書き、付けるラベルが無ければ既定色で作る。**再実行のループにはならない** —— 配送キーは status セルの更新時刻から作られ、ラベルの変化では再配送されない。例: `on_start = { status = "In progress", labels = ["+ai:running"] }` / `on_success = { status = "In review", labels = ["+ai:needs-human", "-ai:running"] }` と `trigger.exclude = { label = "ai:needs-human" }` を組み合わせると、人に渡したタスクを二度と拾わない |
 | `verification` | enum | `llm` | 完了自己申告の検収方式（D-01）: `llm`（prompt 型 Stop フックで in-session 検収）/ `human`（`totsuka task verify` 待ち。有効な notifier が無いと警告）/ `none`（検収なし）。`profile` 指定時は書けない |
 | `timeout_secs` | int? | 0 | 最終フックシグナルからの無応答上限秒。超過でエスカレーション（D-03）。**`0`（既定）はこのワークフローを掃引の対象外にする**（#439、[ADR-0042](/decisions/adr-0042-timeout-zero-opt-out.md)、[ADR-0086](/decisions/adr-0086-timeout-default-off.md)）。止まったエージェントも検知されなくなるので、無人ワークフローには値を明示すること。権限 / idle プロンプト待ち（`Notification`）の間は数えない |
 | `rubric` | string? | なし | llm 検収の判定基準文（prompt 型フックに埋め込む）。`verification != "llm"` に設定すると警告。**唯一のプロンプト上書き面**（下記）で、profile の既定より強い |
@@ -454,6 +455,7 @@ on_success = { status = "設計済み" }
 | `profile` 無し + `mode` / `output` の欠落 | **エラー**。`profile` を書くか、両方を明示するか |
 | `profile` + `rubric` / `tool` / `timeout_secs` / `on_start` / `on_success` / `on_failure` | 可 |
 | ボードに存在しない `status` を名指す | **エラー**（#626）。`trigger.status` と `on_start` / `on_success` / `on_failure`、および `[[projects]].triage_status` を、名指した各 domain の実際の option と突き合わせる。**`config validate` のオンライン部と `doctor` だけ**で走り、`initialize` では落とさない（ボードから列を 1 つ消しただけで無関係なワークフローまで止めないため）。ネットワークが要るので **`--offline` では走らない**。検査するのは workflow が名指した domain だけで、1 domain 1 クエリ。列の値を名指すキーのうち `in_progress_statuses` は対象外である（`[github]` / `[notion]` の全 domain 共通なので、あるボードに無い値が正しく存在しうる）。**この検査が無いと、綴り違いは「無言で 0 件」のまま残る** —— `projects` で走査範囲を絞っても、存在しない列名は「一致しない」だけで、エラーも警告もログも出ない |
+| 存在しない `on_*.labels` のラベルを名指す | **エラー**（ADR-0108）。付ける側も外す側も、workflow が名指したボードに紐づく各 `[[repositories]]` で存在を確かめる（綴り違いの `-name` は何にも一致せず黙って成功するので、`+name` と同じだけ危ない）。走るのは status の検査と同じく **`config validate` のオンライン部と `doctor` だけ**。`[[repositories]]` は owner を持たないので**ボードの owner の下**で探し、見つからないリポジトリは検査できなかったとして**警告**にする（ボードと owner が違うリポジトリでは設定が正しくてもそうなる） |
 | `status`（`on_start` / `on_success` / `on_failure`）が作る**列の閉路** | **エラー**（#556 → #565 で一般化）。列を節点・書き戻しを辺とするグラフに閉路があると、**人間が 1 人も挟まらないまま永久に再実行され続ける**（毎周エージェントが起動して実費が出る）。自分のトリガー列へ書き戻す構成はその長さ 1 の場合。エラー文は実際の経路を名指しする。直し方は「どのワークフローもトリガーにしていない列を 1 hop 挟む」（人がそこからカードを動かす）。検査は**同一 `[[projects]]` エントリ内・字面の一致のみ** — 列名がたまたま同じだけの別のボードは閉路ではなく、グラフが domain ごとに分かれている（#626、[ADR-0069](/decisions/adr-0069-workflow-projects.md)）。**#626 より前はこの分割が `source` 単位で、同一プラグインの 2 枚のボードは同じ節点になっていた** —— ボード A の `Done` とボード B の `Done` が繋がり、走らない閉路が報告されえた。ボード跨ぎのカード移動は人間が動かすので毎周人手が要り、この検査の対象ではない。`projects` に複数書いた workflow は各 domain に辺を張るが、報告は 1 グループ 1 件で（直す構造は 1 つなので）、メッセージが到達したボードを名指す |
 
 `profile` は必須ではない。4 原型で表せない組み合わせ（例: `verification = "human"` — 4 原型はいずれも `llm` に解決する）は明示記法で書く。
