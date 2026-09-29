@@ -242,10 +242,12 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     }
 
     /// Apply the workflow's `on_start`/`on_success`/`on_failure` status
-    /// transition on the source (F-84, #556). Failures are logged, never
-    /// fatal: for the terminal moments the task outcome is already decided,
-    /// and at start a missed write-back must not cost the dispatch itself —
-    /// the status column is a mirror of the run, not a precondition for it.
+    /// transition on the source (F-84, #556), then its label edits
+    /// (ADR-0108). Failures are logged, never fatal: for the terminal moments
+    /// the task outcome is already decided, and at start a missed write-back
+    /// must not cost the dispatch itself — the status column is a mirror of
+    /// the run, not a precondition for it. The two writes are independent: a
+    /// failed status write does not skip the labels.
     pub(super) async fn write_back_status(&self, record: &domain::Task, moment: StatusMoment) {
         let workflows = workflows_by_name(&self.settings.workflows);
         let Some(wf) = workflows.get(record.workflow.as_str()) else {
@@ -256,9 +258,12 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             StatusMoment::Success => wf.on_success.as_ref(),
             StatusMoment::Failure => wf.on_failure.as_ref(),
         };
-        let Some(status) = action.and_then(|a| a.status.clone()) else {
+        let Some(action) = action else {
             return;
         };
+        if action.status.is_none() && !action.has_labels() {
+            return;
+        }
         let Some(source) = self.plugins.sources.get(&record.source) else {
             tracing::warn!(
                 task_id = record.id.0,
@@ -266,20 +271,47 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
             );
             return;
         };
-        let params = TaskUpdateStatusParams {
-            task_id: record.source_task_id.0.clone(),
-            status: status.clone(),
-            // Scope the write to the domains this workflow draws from (#626).
-            // The source cannot derive it: `task/update_status` names a task,
-            // and an issue can sit on several of the plugin's boards.
-            projects: wf.projects.clone(),
-        };
-        match source.request::<rpc::TaskUpdateStatus>(&params).await {
-            Ok(_) => {
-                tracing::info!(task_id = record.id.0, status = %status, "source status updated (F-84)");
+        if let Some(status) = &action.status {
+            let params = TaskUpdateStatusParams {
+                task_id: record.source_task_id.0.clone(),
+                status: status.clone(),
+                // Scope the write to the domains this workflow draws from (#626).
+                // The source cannot derive it: `task/update_status` names a task,
+                // and an issue can sit on several of the plugin's boards.
+                projects: wf.projects.clone(),
+            };
+            match source.request::<rpc::TaskUpdateStatus>(&params).await {
+                Ok(_) => {
+                    tracing::info!(task_id = record.id.0, status = %status, "source status updated (F-84)");
+                }
+                Err(e) => {
+                    tracing::warn!(task_id = record.id.0, "task/update_status failed: {e}");
+                }
             }
-            Err(e) => {
-                tracing::warn!(task_id = record.id.0, "task/update_status failed: {e}");
+        }
+        // `config validate` refuses `labels` on a source without the
+        // capability (from its manifest); this guards `initialize` then
+        // declaring otherwise — said out loud, since skipping is silent.
+        if action.has_labels() && !source.capabilities().label_writeback {
+            tracing::warn!(
+                task_id = record.id.0,
+                "labels not written back: source `{}` did not declare `label_writeback` at initialize",
+                record.source
+            );
+        } else if action.has_labels() {
+            let params = TaskUpdateLabelsParams {
+                task_id: record.source_task_id.0.clone(),
+                add: action.add_labels.clone(),
+                remove: action.remove_labels.clone(),
+                projects: wf.projects.clone(),
+            };
+            match source.request::<rpc::TaskUpdateLabels>(&params).await {
+                Ok(_) => {
+                    tracing::info!(task_id = record.id.0, add = ?params.add, remove = ?params.remove, "source labels updated");
+                }
+                Err(e) => {
+                    tracing::warn!(task_id = record.id.0, "task/update_labels failed: {e}");
+                }
             }
         }
     }

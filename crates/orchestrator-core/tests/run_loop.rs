@@ -541,6 +541,106 @@ on_success = { status = "レビュー待ち" }
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// Label write-back (ADR-0108): `labels` travel as `task/update_labels`,
+/// after the status write of the same moment and independently of it — a
+/// labels-only `on_start` sends no `task/update_status` at all.
+#[tokio::test]
+async fn labels_are_written_back_after_the_status() {
+    labels_written_back(false).await;
+}
+
+/// A failed status write does not skip the labels of the same moment.
+#[tokio::test]
+async fn labels_are_written_back_even_when_the_status_write_fails() {
+    labels_written_back(true).await;
+}
+
+async fn labels_written_back(update_status_error: bool) {
+    let base = scratch(&format!("label_writeback_{update_status_error}"));
+    let repo = setup_repo(&base);
+    let source_log = base.join("source.ndjson");
+    let notify_log = base.join("notify.ndjson");
+    let db_path = base.join("state.db");
+
+    let plugins = plugin_set_with_source(
+        json!([mock_task("lw1")]),
+        json!({ "stream_states": ["running", "done"] }),
+        json!({ "label_writeback": true, "update_status_error": update_status_error }),
+        &source_log,
+        &notify_log,
+    )
+    .await;
+    let mut settings = engine_settings(&repo);
+    let cfg = RootConfig::from_toml_str(
+        r#"
+[[projects]]
+name = "mock_src"
+source = "mock_src"
+
+[[workflows]]
+name = "wf"
+projects = ["mock_src"]
+trigger = {}
+mode = "implement"
+agent = "mock_agent"
+output = "none"
+on_start = { labels = ["+ai:running"] }
+on_success = { status = "レビュー待ち", labels = ["+ai:needs-human", "-ai:running"] }
+"#,
+    )
+    .unwrap();
+    settings.workflows = cfg.domain_workflows();
+    let mut engine = Engine::new(
+        StateDb::open(&db_path).unwrap(),
+        settings,
+        plugins,
+        SystemGitRunner::default(),
+        no_llm(),
+    )
+    .await;
+
+    let db_probe = db_path.clone();
+    run_watch_until(&mut engine, move || {
+        StateDb::open(&db_probe)
+            .unwrap()
+            .find_by_source("mock_src", &SourceTaskId("lw1".into()))
+            .unwrap()
+            .is_some_and(|t| t.state == TaskState::Done)
+    })
+    .await;
+    engine.shutdown(Duration::from_secs(5)).await;
+
+    let writes: Vec<_> = read_log(&source_log)
+        .into_iter()
+        .filter(|c| c["method"] == "task/update_status" || c["method"] == "task/update_labels")
+        .map(|c| (c["method"].clone(), c["params"].clone()))
+        .collect();
+    assert_eq!(
+        writes,
+        vec![
+            (
+                json!("task/update_labels"),
+                json!({ "task_id": "lw1", "add": ["ai:running"], "projects": ["mock_src"] })
+            ),
+            (
+                json!("task/update_status"),
+                json!({ "task_id": "lw1", "status": "レビュー待ち", "projects": ["mock_src"] })
+            ),
+            (
+                json!("task/update_labels"),
+                json!({
+                    "task_id": "lw1",
+                    "add": ["ai:needs-human"],
+                    "remove": ["ai:running"],
+                    "projects": ["mock_src"]
+                })
+            ),
+        ]
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// Claim lost (#556): the task steps aside — terminal `Skipped`, no worktree,
 /// and **no status write-back of any kind**, because the board belongs to
 /// whoever actually holds the task.

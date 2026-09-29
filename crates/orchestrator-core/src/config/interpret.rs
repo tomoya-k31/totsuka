@@ -21,8 +21,9 @@ use super::schema::{CleanupPolicyConfig, CleanupPolicyName, RootConfig, Workflow
 ///
 /// The key is spelled the same as the `trigger` one it pairs with (#575): both
 /// name the source's status column, and the surrounding table says which
-/// direction it is read in.
-pub const OUTCOME_ACTION_KEYS: &[&str] = &["status"];
+/// direction it is read in. `labels` (ADR-0108) is plural where the trigger's
+/// `label` is not, because its entries are edits (`+a` / `-b`), not a match.
+pub const OUTCOME_ACTION_KEYS: &[&str] = &["status", "labels"];
 
 /// Interpret an `on_start`/`on_success`/`on_failure` table.
 ///
@@ -32,13 +33,26 @@ pub const OUTCOME_ACTION_KEYS: &[&str] = &["status"];
 /// into the table itself (#626). [`OUTCOME_ACTION_KEYS`] beside it is what
 /// makes the vocabulary true, and a second reader would be able to drift
 /// from it silently.
+///
+/// A `labels` entry without a `+` / `-` prefix is skipped here: `config
+/// validate` refuses it, so no running config carries one.
 pub(crate) fn outcome_action(table: &toml::Table) -> OutcomeAction {
-    OutcomeAction {
+    let mut action = OutcomeAction {
         status: table
             .get("status")
             .and_then(|v| v.as_str())
             .map(str::to_string),
+        ..OutcomeAction::default()
+    };
+    let entries = table.get("labels").and_then(|v| v.as_array());
+    for entry in entries.into_iter().flatten().filter_map(|v| v.as_str()) {
+        if let Some(name) = entry.strip_prefix('+') {
+            action.add_labels.push(name.to_string());
+        } else if let Some(name) = entry.strip_prefix('-') {
+            action.remove_labels.push(name.to_string());
+        }
     }
+    action
 }
 
 /// The `keep_*` presets (#210) desugar to `RetentionDays` here —

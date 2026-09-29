@@ -254,7 +254,25 @@ fn main() {
                     },
                 )
             }
-            "task/update_status" | "result/publish" => {
+            // `"update_status_error": true` fails every status write, for the
+            // test that labels are still sent after it (ADR-0108).
+            "task/update_status"
+                if config
+                    .get("update_status_error")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false) =>
+            {
+                record(&config, method, &params);
+                Response::error(
+                    request_id(&id),
+                    Error {
+                        code: error_code::INTERNAL_ERROR,
+                        message: "mock refused to update status".to_string(),
+                        data: None,
+                    },
+                )
+            }
+            "task/update_status" | "task/update_labels" | "result/publish" => {
                 record(&config, method, &params);
                 Response::result(request_id(&id), Value::Null)
             }
