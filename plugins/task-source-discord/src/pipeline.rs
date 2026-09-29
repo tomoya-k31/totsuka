@@ -458,6 +458,7 @@ mod tests {
             workflow: "clip".into(),
             projects: vec![],
             status_writebacks: vec![],
+            label_writebacks: vec![],
             trigger,
             instructions_kind: None,
             task_id_prefix: None,

@@ -1,5 +1,11 @@
 # Bundle Update Log
 
+## 2026-09-30
+
+* **Decision**: [ADR-0108 on_* でラベルを付け外しする](/decisions/adr-0108-label-writeback.md) — `labels = ["+a", "-b"]`、新メソッド `task/update_labels` と capability `label_writeback`、閉路検査を拡張しない理由
+* **Update**: [plugin-protocol](/components/plugin-protocol.md) — 0.7.6 で `task/update_labels`・`Capabilities.label_writeback`・`WorkflowInfo.label_writebacks`
+* **Update**: [plugin-sdk](/components/plugin-sdk.md) / [プラグイン開発ガイド](/development/plugin-dev-guide.md) — `TaskSourceHandler::update_labels`（既定 `METHOD_NOT_FOUND`、`label_writeback` でゲート）
+
 ## 2026-09-27
 
 * **Update**: [orchestrator-core](/components/orchestrator-core.md) — タスクを `domain::Task` にし、`TaskRecord` を削除した。時刻は `OffsetDateTime` で持ち、文字列化は `ports::clock` の 1 組に集めた（#765 の 3 層目）

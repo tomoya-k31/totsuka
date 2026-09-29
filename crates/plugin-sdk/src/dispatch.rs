@@ -7,7 +7,8 @@
 use plugin_protocol::jsonrpc::{Error, Response, error_code};
 use plugin_protocol::methods::{
     ConfigValidateParams, ConfigValidateResult, InitializeParams, InitializeResult,
-    ResultPublishParams, TaskClaimParams, TaskClaimResult, TaskUpdateStatusParams,
+    ResultPublishParams, TaskClaimParams, TaskClaimResult, TaskUpdateLabelsParams,
+    TaskUpdateStatusParams,
 };
 use plugin_protocol::{RequestId, method};
 use serde::Serialize;
@@ -134,6 +135,25 @@ pub trait TaskSourceHandler: Send {
             ))
         }
     }
+
+    /// `task/update_labels` (0.7.6): add / remove labels on the source task.
+    /// Return value is ignored by the host, as for `update_status`.
+    ///
+    /// Defaulted to `METHOD_NOT_FOUND` for the same reason as
+    /// [`task_claim`](Self::task_claim), gated on the `label_writeback`
+    /// capability.
+    fn update_labels(
+        &mut self,
+        params: TaskUpdateLabelsParams,
+    ) -> impl Future<Output = Result<Value, Error>> + Send {
+        let _ = params;
+        async {
+            Err(Error::new(
+                error_code::METHOD_NOT_FOUND,
+                "task/update_labels is not supported by this plugin → do not declare the `label_writeback` capability",
+            ))
+        }
+    }
 }
 
 /// The error for a method that needs `initialize` first — the same code and
@@ -243,6 +263,7 @@ pub async fn handle_line<H: TaskSourceHandler>(handler: &mut H, line: &str) -> R
         method::INITIALIZE => call!(InitializeParams, initialize),
         method::CONFIG_VALIDATE => call!(ConfigValidateParams, config_validate),
         method::TASK_UPDATE_STATUS => call!(TaskUpdateStatusParams, update_status),
+        method::TASK_UPDATE_LABELS => call!(TaskUpdateLabelsParams, update_labels),
         method::TASK_CLAIM => call!(TaskClaimParams, task_claim),
         method::RESULT_PUBLISH => call!(ResultPublishParams, result_publish),
         method::SHUTDOWN => Reply::shutdown_ack(id),
@@ -305,5 +326,22 @@ mod tests {
             err.message
         );
         assert!(err.message.contains("task_claim"), "{}", err.message);
+    }
+
+    /// Same contract for the default `update_labels`.
+    #[tokio::test]
+    async fn default_update_labels_refuses_with_a_clean_message() {
+        let err = Bare
+            .update_labels(TaskUpdateLabelsParams {
+                task_id: "x".into(),
+                add: vec!["a".into()],
+                remove: vec![],
+                projects: vec![],
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, error_code::METHOD_NOT_FOUND);
+        assert!(!err.message.contains("  "), "{:?}", err.message);
+        assert!(err.message.contains("label_writeback"), "{}", err.message);
     }
 }

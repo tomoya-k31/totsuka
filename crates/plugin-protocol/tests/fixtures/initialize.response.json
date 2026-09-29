@@ -9,7 +9,8 @@
       "hook_completion": true,
       "diagnostics_snapshot": true,
       "outputs": [],
-      "task_claim": false
+      "task_claim": false,
+      "label_writeback": false
     },
     "claimed_repos": [
       {

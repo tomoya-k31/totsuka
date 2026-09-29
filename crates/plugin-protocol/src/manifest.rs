@@ -65,6 +65,13 @@ pub struct Capabilities {
     /// whose tasks cannot race (Slack mentions addressed to one person) has
     /// nothing to claim.
     pub task_claim: bool,
+    /// Answers `task/update_labels` — adding and removing labels on the
+    /// source task from an `on_*` table's `labels` (task_source, 0.7.6).
+    ///
+    /// Undeclared means the source has no labels to write, and the
+    /// Orchestrator refuses a workflow that names `labels` on it at startup
+    /// instead of silently never sending them.
+    pub label_writeback: bool,
     /// Output policies this (task source) plugin can fulfil.
     pub outputs: Vec<OutputCapability>,
 }
