@@ -456,7 +456,7 @@ async fn config_validate_checks_writeback_labels_exist() {
     let params = validate(
         &shared,
         json!({ "data": { "repository": null },
-                "errors": [{ "message": "Could not resolve to a Repository" }] }),
+                "errors": [{ "type": "NOT_FOUND", "message": "Could not resolve to a Repository" }] }),
     );
     let result = call(&mut srv, 1, "config/validate", params)
         .await
@@ -465,6 +465,24 @@ async fn config_validate_checks_writeback_labels_exist() {
     assert_eq!(result["valid"], true, "{result}");
     let warning = result["warnings"][0].as_str().unwrap();
     assert!(warning.contains("me/totsuka"), "{warning}");
+
+    // Any other error is not "could not check" — it fails the validation.
+    let shared = Shared::default();
+    let mut srv = server(&shared);
+    let params = validate(
+        &shared,
+        json!({ "data": null,
+                "errors": [{ "type": "FORBIDDEN", "message": "Resource not accessible" }] }),
+    );
+    let result = call(&mut srv, 1, "config/validate", params)
+        .await
+        .result
+        .unwrap();
+    assert_eq!(result["valid"], false, "{result}");
+    assert!(
+        result["warnings"].as_array().is_none_or(Vec::is_empty),
+        "{result}"
+    );
 }
 
 // ---------------------------------------------------------------------------

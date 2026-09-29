@@ -984,16 +984,23 @@ impl<T: GithubTransport> GithubClient<T> {
                         "variables": { "owner": project.owner, "repo": repo, "name": label },
                     });
                     let resp = self.transport.post_graphql(body, true).await?;
+                    // Only a repository that does not resolve is "could not
+                    // check"; any other error (permissions, a query-wide
+                    // failure) must fail the validation, not pass it quietly.
+                    let not_found = resp["errors"].as_array().is_some_and(|errors| {
+                        !errors.is_empty() && errors.iter().all(|e| e["type"] == "NOT_FOUND")
+                    });
+                    if !not_found {
+                        check_errors(&resp)?;
+                    }
                     let found = &resp["data"]["repository"];
                     if found.is_null() {
                         warnings.push(format!(
-                            "リポジトリ `{}/{repo}` が見つからず、ラベルを検査できなかった（{}） → ボードの owner と違う owner のリポジトリなら、ラベルが存在することを手で確かめること",
+                            "リポジトリ `{}/{repo}` が見つからず、ラベルを検査できなかった → ボードの owner と違う owner のリポジトリなら、ラベルが存在することを手で確かめること",
                             project.owner,
-                            check_errors(&resp).err().map_or_else(String::new, |e| e.to_string()),
                         ));
                         continue 'repos;
                     }
-                    check_errors(&resp)?;
                     if found["label"].is_null() {
                         errors.push(format!(
                             "workflow `{workflow}` の書き戻しのラベル \"{label}\" はリポジトリ `{}/{repo}` に存在しない → ラベルを作るか、名前を直す",
