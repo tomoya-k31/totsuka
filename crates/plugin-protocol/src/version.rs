@@ -397,7 +397,27 @@ use semver::{Version, VersionReq};
 /// github's floor moves to `>=0.7.5` — a floor states a dependency, and this
 /// is one. As with 0.7.2, this is a **source** break for code that builds
 /// `Task` with a struct literal.
-pub const PROTOCOL_VERSION: &str = "0.7.5";
+///
+/// 0.7.6: label write-back from `on_start` / `on_success` / `on_failure`.
+///
+/// - [`method::TASK_UPDATE_LABELS`](crate::method::TASK_UPDATE_LABELS) (O→P)
+///   with [`TaskUpdateLabelsParams`](crate::methods::TaskUpdateLabelsParams):
+///   add and remove labels on the source task, sent after
+///   `task/update_status` for the same moment. A separate method rather than
+///   new fields on `task/update_status`, because a labels-only write-back has
+///   no status to send and `TaskUpdateStatusParams::status` is required —
+///   making it optional would be the wire break this avoids.
+/// - [`Capabilities::label_writeback`](crate::Capabilities::label_writeback)
+///   gates it, as `task_claim` gates `task/claim`.
+/// - [`WorkflowInfo::label_writebacks`](crate::methods::WorkflowInfo::label_writebacks)
+///   carries the names, so `config/validate` can check they exist.
+///
+/// **Patch, for the 0.6.1 reason**: `Capabilities` deserializes with
+/// defaults and the Orchestrator only calls what was declared, so no manifest
+/// has to move. As with 0.7.3, adding the capability field is a **source**
+/// break for code that builds `Capabilities` with a struct literal and no
+/// `..Default::default()`.
+pub const PROTOCOL_VERSION: &str = "0.7.6";
 
 /// [`PROTOCOL_VERSION`] parsed into a [`Version`].
 pub fn protocol_version() -> Version {
@@ -421,7 +441,7 @@ mod tests {
 
     #[test]
     fn current_version_parses() {
-        assert_eq!(protocol_version(), Version::new(0, 7, 5));
+        assert_eq!(protocol_version(), Version::new(0, 7, 6));
     }
 
     #[test]

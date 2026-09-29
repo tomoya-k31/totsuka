@@ -42,7 +42,7 @@ use plugin_protocol::methods::{
     SessionReleaseParams, SessionReleaseResult, StateNotification, StateSubscribeParams,
     TaskCancelParams, TaskClaimOutcome, TaskClaimParams, TaskClaimResult, TaskDispatchParams,
     TaskDispatchResult, TaskLookupParams, TaskLookupResult, TaskSubmitParams, TaskSubmitResult,
-    TaskSubmitStatus, TaskUpdateStatusParams,
+    TaskSubmitStatus, TaskUpdateLabelsParams, TaskUpdateStatusParams,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -273,6 +273,15 @@ fn task_update_status_wire() {
         method::TASK_UPDATE_STATUS,
     );
     check_ack_response("task_update_status.response.json");
+}
+
+#[test]
+fn task_update_labels_wire() {
+    check_request::<TaskUpdateLabelsParams>(
+        "task_update_labels.request.json",
+        method::TASK_UPDATE_LABELS,
+    );
+    check_ack_response("task_update_labels.response.json");
 }
 
 #[test]

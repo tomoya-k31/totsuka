@@ -202,6 +202,7 @@ fn main() {
                             hook_completion: flag("hook_completion") || flag("resume_session"),
                             diagnostics_snapshot: flag("diagnostics_snapshot"),
                             task_claim: flag("task_claim"),
+                            label_writeback: flag("label_writeback"),
                             outputs: vec![OutputCapability::Source],
                             // No `..Default::default()`: removing
                             // `design_preview` in 0.4.0 (#411) made this

@@ -169,6 +169,8 @@ pub fn workflow_infos(cfg: &RootConfig, name: &str, is_source: bool) -> Vec<Work
             } else {
                 Vec::new()
             },
+            // Filled in once core reads `labels` from the `on_*` tables.
+            label_writebacks: Vec::new(),
             // Which of this plugin's domains the workflow watches (#626).
             // Sent as written, so a plugin scans the boards it was pointed at
             // and no others; an old plugin that ignored this field would scan

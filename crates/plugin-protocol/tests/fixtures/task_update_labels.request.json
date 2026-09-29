@@ -1,0 +1,10 @@
+{
+  "jsonrpc": "2.0",
+  "id": 4,
+  "method": "task/update_labels",
+  "params": {
+    "task_id": "42",
+    "add": ["ai:needs-human"],
+    "remove": ["ai:running"]
+  }
+}

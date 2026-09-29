@@ -43,6 +43,12 @@ pub mod method {
     pub const TASK_LOOKUP: &str = "task/lookup";
     /// Transition source-side status (O→P, F-84).
     pub const TASK_UPDATE_STATUS: &str = "task/update_status";
+    /// Add / remove labels on the source task (O→P, 0.7.6). Only sent to
+    /// plugins whose [`Capabilities`] declare
+    /// [`label_writeback`](crate::Capabilities::label_writeback).
+    ///
+    /// [`Capabilities`]: crate::Capabilities
+    pub const TASK_UPDATE_LABELS: &str = "task/update_labels";
     /// Claim a task for exclusive execution before dispatching it
     /// (O→P, 0.6.1, #556). Only sent to plugins whose [`Capabilities`]
     /// declare [`task_claim`](crate::Capabilities::task_claim).
@@ -114,6 +120,11 @@ pub const HOST_REQUESTS: &[HostRequest] = &[
         method: method::TASK_UPDATE_STATUS,
         kind: PluginKind::TaskSource,
         sent_to: |_| true,
+    },
+    HostRequest {
+        method: method::TASK_UPDATE_LABELS,
+        kind: PluginKind::TaskSource,
+        sent_to: |caps| caps.label_writeback,
     },
     HostRequest {
         method: method::TASK_CLAIM,
@@ -256,6 +267,21 @@ pub struct WorkflowInfo {
     /// has nothing to check.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub status_writebacks: Vec<String>,
+    /// The label names this workflow **adds or removes** through
+    /// `task/update_labels`, derived by the Orchestrator from the `labels` of
+    /// `on_start` / `on_success` / `on_failure` in that order, prefix
+    /// stripped, deduplicated (0.7.6).
+    ///
+    /// Sent for the same reason as
+    /// [`status_writebacks`](Self::status_writebacks): so a source can check
+    /// them against what really exists while validating. Removals are listed
+    /// too — a misspelt `-label` is as silent as a misspelt `+label`, it just
+    /// never matches anything.
+    ///
+    /// Empty for an agent plugin, for a workflow that writes no labels, and
+    /// from an older Orchestrator.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub label_writebacks: Vec<String>,
     /// Trigger condition; plugin-defined shape, sent **verbatim** from
     /// `[[workflows]].trigger`. An empty object for a plugin named as the
     /// workflow's `agent` — triggers select tasks, which is the source's
@@ -637,6 +663,34 @@ pub struct TaskUpdateStatusParams {
     /// behaviour (search everything): that is what an older Orchestrator
     /// sends, and refusing the write would be worse than the imprecision it
     /// replaces.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub projects: Vec<String>,
+}
+
+/// `task/update_labels` params (O→P, 0.7.6): add and remove labels on the
+/// source task, from the `labels` of the workflow's `on_*` table.
+///
+/// Sent after `task/update_status` for the same moment, as a separate call —
+/// a workflow may write labels without a status (`on_failure = { labels =
+/// ["-ai:running"] }`), and `TaskUpdateStatusParams::status` is required.
+/// The Orchestrator treats a failure exactly as it treats a failed status
+/// write: logged, never fatal to the task.
+///
+/// Both lists are applied as sets. Removing a label the task does not carry
+/// is success, not an error: the write-back states the end state it wants,
+/// and a task that is already there has nothing to do.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TaskUpdateLabelsParams {
+    /// Source task id.
+    pub task_id: String,
+    /// Label names to add.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub add: Vec<String>,
+    /// Label names to remove.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub remove: Vec<String>,
+    /// The workflow's domains, as in
+    /// [`TaskUpdateStatusParams::projects`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub projects: Vec<String>,
 }
@@ -1139,6 +1193,7 @@ mod tests {
                 workflow: "design".into(),
                 projects: vec!["board-a".into()],
                 status_writebacks: vec![],
+                label_writebacks: vec!["ai:needs-human".into()],
                 trigger: serde_json::json!({"status": "設計待ち"}),
                 instructions_kind: Some("design".into()),
                 task_id_prefix: None,

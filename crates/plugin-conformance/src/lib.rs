@@ -294,6 +294,7 @@ fn sample_params(method_name: &str) -> Value {
     let session = json!({"session_id": "w1:p1|conformance"});
     match method_name {
         method::TASK_UPDATE_STATUS => json!({"task_id": "42", "status": "done"}),
+        method::TASK_UPDATE_LABELS => json!({"task_id": "42", "add": ["ai:needs-human"]}),
         method::TASK_CLAIM => json!({"task_id": "42"}),
         method::RESULT_PUBLISH => json!({"task_id": "42", "content": "x", "format": "markdown"}),
         method::TASK_DISPATCH => json!({
@@ -430,6 +431,7 @@ mod tests {
     #[test]
     fn sample_params_are_well_formed() {
         parses::<rpc::TaskUpdateStatus>();
+        parses::<rpc::TaskUpdateLabels>();
         parses::<rpc::TaskClaim>();
         parses::<rpc::ResultPublish>();
         parses::<rpc::TaskDispatch>();
