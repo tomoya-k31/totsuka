@@ -157,6 +157,20 @@ issue にエージェントを走らせる。
 対象は **public GitHub のみ**（プラグインの `api_url` 上書き = GitHub Enterprise には非対応）。
 `--write` の非破壊性は「実行中に他の actor が同じ item の Status を変えない」ことが前提。
 
+**ラベル書き戻し（`on_*.labels`）の権限**は別スクリプトで測る（#840）:
+
+```bash
+bash .claude/skills/live-e2e-herdr/scripts/github-label-probe.sh probe        # E2E_GH_TOKEN だけで一周
+GH_PROBE_TOKEN="$(pbpaste)" bash .../github-label-probe.sh probe              # 測りたいトークン
+```
+
+トークンは 2 役に分かれる。**準備役 `E2E_GH_TOKEN`** が probe 用の Issue・PR（ブランチ +
+コミット）・ラベルを作って読み戻し、最後に片付ける。**測定役 `GH_PROBE_TOKEN`** は
+プラグインが投げる 5 操作（ラベル解決 / 付与 / 除去 / 作成 / 存在検査）**だけ**を投げる ——
+PR を作るための権限を測定結果に混ぜないため。mutation の成否は準備役の読み戻しで判定する
+ので、「200 で黙殺」も FAIL として出る。**トークンはエージェントに渡さず、`!` を付けて
+自分で実行すること**（出力は PASS / FAIL だけで、トークンは表示しない）。
+
 ## 3. 結果を報告する
 
 ```bash
