@@ -3,7 +3,7 @@ type: Spec
 title: totsuka — Local AI-Agent Orchestrator Requirements (v1)
 description: Requirements specification for the totsuka orchestrator CLI — task-source/agent-IDE/notifier plugins, git-worktree lifecycle, workflows, parallel execution control, and v1 scope.
 tags: [orchestrator, requirements, plugin, worktree, cli, rust]
-generated: { by: claude-code/opus-5.5, at: 2026-09-26T23:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-09-30T14:00:00+09:00 }
 status: draft
 owner: tomoya-k31
 ---
@@ -419,6 +419,7 @@ Define a glossary (Task / Source / Agent / worktree / dispatch, etc.) and use it
 | `config/validate` | O→P | common | Validate plugin-specific config (F-59) |
 | `task/submit` | **P→O request** | task_source | Push a task the plugin found (persist-before-ack, protocol 0.1.6). Replaces the removed `tasks/fetch` as of protocol 0.2.0 — every task_source is push-only |
 | `task/update_status` | O→P | task_source | Source-side status transition (F-84) |
+| `task/update_labels` | O→P | task_source | Add / remove labels on the source task from `on_*.labels` (protocol 0.7.6, ADR-0108). Sent only to plugins declaring `label_writeback` |
 | `result/publish` | O→P | task_source | Write the artifact back, for the sources that implement it (F-07) |
 | `task/dispatch` | O→P | agent_ide | Pass worktree, task, and mode; start execution. Returns a session ID |
 | `task/cancel` | O→P | agent_ide | Cancel execution |

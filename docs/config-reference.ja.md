@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:8537fe16d96fbac565fe705946bcee4882d660ea1f634ff4cc7fc86c59e262db -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:02517202674fc77719d3ed1d26ee18f9be578f91b5808a8af1106e25e3613a9e -->
 
 # 設定リファレンス
 
@@ -191,9 +191,10 @@ project = "tomo-prj"
 | `mode` | enum | `profile` が無ければ必須 | `plan` / `implement` |
 | `agent` | string | 必須 | agent_ide のインスタンス名 |
 | `output` | enum | `profile` が無ければ必須 | `source` / `none` |
-| `on_start` | `{ status = "..." }`? | なし | タスクをエージェントへ渡す直前にソース側のステータスを更新する。実行中であることがボードに映り、多人数運用では `in_progress_statuses` により他メンバーのインスタンスがそのタスクを取り込まなくなる。未設定なら何も書かない。**設定するなら `on_failure` も設定すること** — 失敗時に列が実行中のまま残り、ボードと実態が食い違う。**`on_start` / `on_success` / `on_failure` の未知キーは起動時エラーになる**（有効キーは `status` のみ）。検査が要るのは壊れ方が無言だからで、`set_stauts` と書くと**タスクは成功したのにボードだけ動かない** |
-| `on_success` | `{ status = "..." }`? | なし | 成功時にソース側のステータスを更新する |
-| `on_failure` | `{ status = "..." }`? | なし | 失敗時にソース側のステータスを更新する。再試行可能な失敗では書き戻さない |
+| `on_start` | `{ status?, labels? }`? | なし | タスクをエージェントへ渡す直前にソース側のステータスを更新する。実行中であることがボードに映り、多人数運用では `in_progress_statuses` により他メンバーのインスタンスがそのタスクを取り込まなくなる。未設定なら何も書かない。**設定するなら `on_failure` も設定すること** — 失敗時に列が実行中のまま残り、ボードと実態が食い違う。**`on_start` / `on_success` / `on_failure` の未知キーは起動時エラーになる**（有効キーは `status` と `labels`）。検査が要るのは壊れ方が無言だからで、`set_stauts` と書くと**タスクは成功したのにボードだけ動かない** |
+| `on_success` | `{ status?, labels? }`? | なし | 成功時にソース側のステータスを更新する |
+| `on_failure` | `{ status?, labels? }`? | なし | 失敗時にソース側のステータスを更新する。再試行可能な失敗では書き戻さない |
+| `on_*.labels` | string 配列? | なし | タスクのラベルを付け外しする。各要素は `"+name"`（付ける）か `"-name"`（外す）で、**接頭辞の無い要素・空の名前・配列でない値は起動時エラー**。`status` と併記しても単独でもよい（`on_failure = { labels = ["-ai:running"] }`）。status → labels の順に互いに独立して書き、失敗は status と同じく警告ログのみ。付いていないラベルを外すのは成功扱い。**ラベルの書き戻しに対応するソース（現状 github のみ）でしか書けず**、他のソースで書くと起動時エラー。github では Project カードに紐づく Issue / PR に書き、付けるラベルがリポジトリに無ければ既定色で作る。**再実行のループにはならない** —— タスクが再配送されるのはステータス列が変わったときだけで、ラベルの変化では再配送されない。例: `on_start = { status = "In progress", labels = ["+ai:running"] }` / `on_success = { status = "In review", labels = ["+ai:needs-human", "-ai:running"] }` と `trigger.exclude = { label = "ai:needs-human" }` を組み合わせると、人に渡したタスクを二度と拾わない |
 | `verification` | enum | `llm` | 完了申告の検収方式。`llm`（セッション内で検収）/ `human`（`totsuka task verify` を待つ）/ `none`。`profile` とは併記できない |
 | `timeout_secs` | int? | 0 | 最後のシグナルから無応答が続いてエスカレートするまでの秒数。**`0`（既定）はこのワークフローを掃引の対象外にする**。権限 / idle プロンプトへの応答待ちの時間は無応答に数えない |
 | `rubric` | string? | なし | `llm` 検収で使う判定基準。**唯一のプロンプト上書き面**（下記）で、profile の既定より強い |
@@ -430,6 +431,7 @@ on_success = { status = "設計済み" }
 | `profile` 無しで `mode` / `output` が欠けている | **エラー。** profile を書くか、両方を明示する |
 | `profile` + `rubric` / `tool` / `timeout_secs` / `on_start` / `on_success` / `on_failure` | 可 |
 | ボードに存在しない `status` を名指す | **エラー**。`trigger.status` と `on_start` / `on_success` / `on_failure` の書き戻し、各 `[[projects]].triage_status` を、ボードの実際の option と突き合わせる。走るのは **`config validate` のオンライン部と `doctor`** で、起動時ではない（ボードから列を 1 つ消しただけで無関係なワークフローまで止めないため）。ネットワークが要るので `--offline` では走らない。検査するのは workflow が名指した domain だけで、1 domain 1 リクエスト。`in_progress_statuses` は対象外 —— そのソースの全 domain で共通の値なので、あるボードに無い値が正しいこともある。**この検査が無いと綴り違いは無言のまま**である —— ワークフローを 1 ボードに絞っても直らない。存在しない列名は単に一致しないだけで、エラーも警告もログも出ない |
+| 存在しない `on_*.labels` のラベルを名指す | **エラー**。付ける側も外す側も、workflow が名指したボードに紐づく各 `[[repositories]]` で存在を確かめる（綴り違いの `-name` は何にも一致せず黙って成功するので、`+name` と同じだけ危ない）。走るのは status の検査と同じく **`config validate` のオンライン部と `doctor` だけ**。`[[repositories]]` は owner を持たないので**ボードの owner の下**で探し、見つからないリポジトリは検査できなかったとして**警告**にする（ボードと owner が違うリポジトリでは設定が正しくてもそうなる） |
 | `status` の書き戻しが作る**列の閉路** | **エラー**。列を節点・書き戻しを辺とするグラフに閉路があると、**人間が 1 人も挟まらないまま永久に再実行**され、毎周エージェントが起動する。自分のトリガー列へ書き戻すのはその長さ 1 の場合。エラー文は実際の経路を名指しする。直し方は「どのワークフローもトリガーにしていない列を 1 hop 挟む」（人がそこからカードを動かす）。検査は `[[projects]]` エントリごと・字面の一致のみ — 列名がたまたま同じだけの別のボードは閉路ではなく、グラフが domain ごとに分かれている。ボード間のカード移動は実在するが動かすのは人間で、毎周人手が要るのでこの検査の対象ではない。複数の domain を名指したワークフローは各 domain に書き戻しの辺を張るが、絡み合った 1 グループは 1 件として報告され、検査が到達したボードを名指す |
 
 profile は必須ではない。4 原型で表せない組み合わせ（たとえば `verification = "human"` — 4 原型はいずれも `llm` に解決する）は明示記法で書く。

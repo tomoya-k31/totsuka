@@ -872,6 +872,140 @@ impl<T: GithubTransport> GithubClient<T> {
         Ok(())
     }
 
+    /// Add and remove labels on `task_id` — an issue or pull request node id
+    /// (ADR-0108, `task/update_labels`).
+    ///
+    /// The node id is global, so no board is involved: the labels belong to
+    /// the task's repository. A label to add that the repository does not
+    /// have is created (`config validate` reports it first; this covers one
+    /// deleted after the check). A label to remove that the repository does
+    /// not have is nothing to do.
+    pub async fn update_labels(
+        &self,
+        task_id: &str,
+        add: &[String],
+        remove: &[String],
+    ) -> Result<(), GithubError> {
+        let mut add_ids = Vec::new();
+        for name in add {
+            let (repo_id, label_id) = self.task_label(task_id, name).await?;
+            add_ids.push(match label_id {
+                Some(id) => id,
+                None => self.create_label(&repo_id, name).await?,
+            });
+        }
+        let mut remove_ids = Vec::new();
+        for name in remove {
+            if let (_, Some(id)) = self.task_label(task_id, name).await? {
+                remove_ids.push(id);
+            }
+        }
+        for (mutation, ids) in [
+            (ADD_LABELS_MUTATION, add_ids),
+            (REMOVE_LABELS_MUTATION, remove_ids),
+        ] {
+            if ids.is_empty() {
+                continue;
+            }
+            let body = json!({ "query": mutation, "variables": { "l": task_id, "ids": ids } });
+            // Idempotent: adding a label already there and removing one that
+            // is not are both no-ops on GitHub's side.
+            let resp = self.transport.post_graphql(body, true).await?;
+            check_errors(&resp)?;
+        }
+        Ok(())
+    }
+
+    /// The task's repository id and, if the repository has it, the label's id.
+    async fn task_label(
+        &self,
+        task_id: &str,
+        name: &str,
+    ) -> Result<(String, Option<String>), GithubError> {
+        let body =
+            json!({ "query": TASK_LABEL_QUERY, "variables": { "id": task_id, "name": name } });
+        let resp = self.transport.post_graphql(body, true).await?;
+        let repo = &check_errors(&resp)?["node"]["repository"];
+        let repo_id = repo["id"].as_str().ok_or_else(|| {
+            GithubError::NotFound(format!(
+                "`{task_id}` is not an issue or pull request this token can see → labels can only be written on those"
+            ))
+        })?;
+        Ok((
+            repo_id.to_string(),
+            repo["label"]["id"].as_str().map(str::to_string),
+        ))
+    }
+
+    /// Create `name` in the repository, in GitHub's default grey.
+    async fn create_label(&self, repo_id: &str, name: &str) -> Result<String, GithubError> {
+        let body = json!({
+            "query": CREATE_LABEL_MUTATION,
+            "variables": { "repo": repo_id, "name": name },
+        });
+        // Not idempotent: a replay after a timed-out success fails with
+        // "already exists" rather than creating a second label.
+        let resp = self.transport.post_graphql(body, false).await?;
+        check_errors(&resp)?["createLabel"]["label"]["id"]
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| GithubError::InvalidResponse("createLabel returned no id".into()))
+    }
+
+    /// Check that every label a workflow writes back exists in the
+    /// repositories bound to the boards it names (ADR-0108).
+    ///
+    /// Returns `(errors, warnings)`. A repository is looked up under its
+    /// board's owner, because `[[repositories]]` carries a name and no owner;
+    /// one that is not found there could not be checked, which is a warning —
+    /// not an error, since the config may well be right.
+    pub async fn validate_labels(
+        &self,
+        workflows: &[plugin_protocol::methods::WorkflowInfo],
+    ) -> Result<(Vec<String>, Vec<String>), GithubError> {
+        let (mut errors, mut warnings) = (Vec::new(), Vec::new());
+        for project in &self.config.projects {
+            let wanted: Vec<(&str, &str)> = workflows
+                .iter()
+                .filter(|wf| wf.projects.iter().any(|n| n == &project.name))
+                .flat_map(|wf| {
+                    wf.label_writebacks
+                        .iter()
+                        .map(|l| (l.as_str(), wf.workflow.as_str()))
+                })
+                .collect();
+            if wanted.is_empty() {
+                continue;
+            }
+            'repos: for repo in &project.repos {
+                for (label, workflow) in &wanted {
+                    let body = json!({
+                        "query": REPO_LABEL_QUERY,
+                        "variables": { "owner": project.owner, "repo": repo, "name": label },
+                    });
+                    let resp = self.transport.post_graphql(body, true).await?;
+                    let found = &resp["data"]["repository"];
+                    if found.is_null() {
+                        warnings.push(format!(
+                            "リポジトリ `{}/{repo}` が見つからず、ラベルを検査できなかった（{}） → ボードの owner と違う owner のリポジトリなら、ラベルが存在することを手で確かめること",
+                            project.owner,
+                            check_errors(&resp).err().map_or_else(String::new, |e| e.to_string()),
+                        ));
+                        continue 'repos;
+                    }
+                    check_errors(&resp)?;
+                    if found["label"].is_null() {
+                        errors.push(format!(
+                            "workflow `{workflow}` の書き戻しのラベル \"{label}\" はリポジトリ `{}/{repo}` に存在しない → ラベルを作るか、名前を直す",
+                            project.owner
+                        ));
+                    }
+                }
+            }
+        }
+        Ok((errors, warnings))
+    }
+
     /// Confirm the token works by reading `viewer.login` (F-59). Static config
     /// problems are reported separately by [`static_config_errors`].
     pub async fn validate(&self) -> Result<(), GithubError> {
@@ -1167,6 +1301,31 @@ fn status_options_query(root: &str) -> String {
 }}"#
     )
 }
+
+/// A task's repository and one of its labels by name (ADR-0108). Both
+/// fragments: a task is a pull request as readily as an issue (#734).
+const TASK_LABEL_QUERY: &str = r#"query($id: ID!, $name: String!) {
+  node(id: $id) {
+    ... on Issue { repository { id label(name: $name) { id } } }
+    ... on PullRequest { repository { id label(name: $name) { id } } }
+  }
+}"#;
+
+const REPO_LABEL_QUERY: &str = r#"query($owner: String!, $repo: String!, $name: String!) {
+  repository(owner: $owner, name: $repo) { label(name: $name) { id } }
+}"#;
+
+const CREATE_LABEL_MUTATION: &str = r#"mutation($repo: ID!, $name: String!) {
+  createLabel(input: {repositoryId: $repo, name: $name, color: "ededed"}) { label { id } }
+}"#;
+
+const ADD_LABELS_MUTATION: &str = r#"mutation($l: ID!, $ids: [ID!]!) {
+  addLabelsToLabelable(input: {labelableId: $l, labelIds: $ids}) { clientMutationId }
+}"#;
+
+const REMOVE_LABELS_MUTATION: &str = r#"mutation($l: ID!, $ids: [ID!]!) {
+  removeLabelsFromLabelable(input: {labelableId: $l, labelIds: $ids}) { clientMutationId }
+}"#;
 
 const UPDATE_STATUS_MUTATION: &str = r#"mutation($project: ID!, $item: ID!, $field: ID!, $option: String!) {
   updateProjectV2ItemFieldValue(input: {

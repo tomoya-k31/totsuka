@@ -334,6 +334,139 @@ async fn update_status_finds_a_pull_request_item() {
     );
 }
 
+/// `task/update_labels` (ADR-0108) on a pull request: each name is resolved
+/// on the task's own repository, a missing add is created, a missing remove
+/// is nothing to do, and each list goes in one mutation on the node id.
+#[tokio::test]
+async fn update_labels_resolves_creates_and_skips_on_a_pull_request() {
+    let shared = Shared::default();
+    let mut srv = server(&shared);
+    let resp = call(&mut srv, 1, "initialize", init_params()).await;
+    assert_eq!(
+        resp.result.unwrap()["capabilities"]["label_writeback"],
+        true
+    );
+
+    let label = |id: Option<&str>| {
+        Canned::Data(json!({ "data": { "node": { "repository": {
+            "id": "R_1", "label": id.map(|id| json!({ "id": id }))
+        } } } }))
+    };
+    shared.push(label(Some("L_human"))); // +ai:needs-human exists
+    shared.push(label(None)); // +ai:new does not…
+    shared.push(Canned::Data(
+        json!({ "data": { "createLabel": { "label": { "id": "L_new" } } } }),
+    )); // …so it is created
+    shared.push(label(Some("L_running"))); // -ai:running exists
+    shared.push(label(None)); // -ai:gone does not: nothing to remove
+    shared.push(Canned::Data(
+        json!({ "data": { "addLabelsToLabelable": {} } }),
+    ));
+    shared.push(Canned::Data(
+        json!({ "data": { "removeLabelsFromLabelable": {} } }),
+    ));
+
+    let resp = call(
+        &mut srv,
+        2,
+        "task/update_labels",
+        json!({ "task_id": "PR_1",
+                "add": ["ai:needs-human", "ai:new"],
+                "remove": ["ai:running", "ai:gone"] }),
+    )
+    .await;
+    assert!(resp.error.is_none(), "update failed: {:?}", resp.error);
+
+    let requests = shared.all_requests();
+    assert_eq!(requests.len(), 7, "{requests:#?}");
+    let lookup = requests[0]["query"].as_str().unwrap();
+    assert!(
+        lookup.contains("... on Issue") && lookup.contains("... on PullRequest"),
+        "the lookup must read both content types: {lookup}"
+    );
+    assert_eq!(
+        requests[2]["variables"],
+        json!({ "repo": "R_1", "name": "ai:new" })
+    );
+    assert_eq!(
+        requests[5]["variables"],
+        json!({ "l": "PR_1", "ids": ["L_human", "L_new"] })
+    );
+    assert!(
+        requests[5]["query"]
+            .as_str()
+            .unwrap()
+            .contains("addLabelsToLabelable")
+    );
+    assert_eq!(
+        requests[6]["variables"],
+        json!({ "l": "PR_1", "ids": ["L_running"] })
+    );
+    assert!(
+        requests[6]["query"]
+            .as_str()
+            .unwrap()
+            .contains("removeLabelsFromLabelable")
+    );
+}
+
+/// A write-back label the repository does not have is an error at
+/// `config/validate` (ADR-0108); a repository not found under the board's
+/// owner could not be checked, which is a warning.
+#[tokio::test]
+async fn config_validate_checks_writeback_labels_exist() {
+    let validate = |shared: &Shared, repo: Value| {
+        shared.push(Canned::Data(
+            json!({ "data": { "viewer": { "login": "me" } } }),
+        ));
+        shared.push(Canned::Data(repo));
+        json!({
+            "config": init_config(),
+            "projects": one_board().0,
+            "repositories": one_board().1,
+            "workflows": [
+                { "workflow": "impl", "projects": ["board-1"], "trigger": {},
+                  "label_writebacks": ["ai:typo"] }
+            ],
+        })
+    };
+
+    let shared = Shared::default();
+    let mut srv = server(&shared);
+    let params = validate(
+        &shared,
+        json!({ "data": { "repository": { "label": null } } }),
+    );
+    let result = call(&mut srv, 1, "config/validate", params)
+        .await
+        .result
+        .unwrap();
+    assert_eq!(result["valid"], false, "{result}");
+    let error = result["errors"][0].as_str().unwrap();
+    for needle in ["impl", "ai:typo", "me/totsuka"] {
+        assert!(error.contains(needle), "must name `{needle}`: {error}");
+    }
+    assert_eq!(
+        shared.last_request()["variables"],
+        json!({ "owner": "me", "repo": "totsuka", "name": "ai:typo" })
+    );
+
+    let shared = Shared::default();
+    let mut srv = server(&shared);
+    let params = validate(
+        &shared,
+        json!({ "data": { "repository": null },
+                "errors": [{ "message": "Could not resolve to a Repository" }] }),
+    );
+    let result = call(&mut srv, 1, "config/validate", params)
+        .await
+        .result
+        .unwrap();
+    assert_eq!(result["valid"], true, "{result}");
+    let warning = result["warnings"][0].as_str().unwrap();
+    assert!(warning.contains("me/totsuka"), "{warning}");
+}
+
 // ---------------------------------------------------------------------------
 // task/claim (#556, ADR-0059)
 // ---------------------------------------------------------------------------

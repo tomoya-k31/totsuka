@@ -1,10 +1,10 @@
 ---
 type: Component
 title: task-source-github プラグイン
-description: GitHub Issues / ProjectsV2 をタスクソースとして接続する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。GraphQL で fetch→正規化、ProjectsV2 ステータス書き戻し、task/claim（Issue / PullRequest への self-assign + AssignedEvent 先着裁定による楽観排他）を行う。ボード上の OPEN な PullRequest も Issue と同じくタスクになる（#734）。Issue / PullRequest への書き込みは claim の assignee 操作だけ。呼び出す 8 つの GraphQL 操作と、トークン権限（十分条件は実測済み・最小値は未実測。fine-grained PAT が user 所有ボードに使えない理由を含む）を扱う。
+description: GitHub Issues / ProjectsV2 をタスクソースとして接続する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。GraphQL で fetch→正規化、ProjectsV2 ステータス書き戻し、task/claim（Issue / PullRequest への self-assign + AssignedEvent 先着裁定による楽観排他）を行う。ボード上の OPEN な PullRequest も Issue と同じくタスクになる（#734）。Issue / PullRequest への書き込みは claim の assignee 操作と、on_*.labels のラベル付け外し（ADR-0108）。呼び出す 13 の GraphQL 操作と、トークン権限（十分条件は実測済み・最小値は未実測。fine-grained PAT が user 所有ボードに使えない理由を含む）を扱う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-github
 tags: [rust, crate, plugin, task-source, github, graphql, projectsv2]
-generated: { by: claude-code/opus-5, at: 2026-09-21T18:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-09-30T14:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -100,7 +100,7 @@ manifest（`plugins/task-source-github/plugin.toml`、`protocol_version = ">=0.7
 
 ## 実際に呼んでいるもの
 
-全て `https://api.github.com/graphql` への単一 POST に bearer トークンを載せる形で、操作は **8 つ**である。REST も Contents API も使わない。書き込みは **Project のカード移動**と、#556 で加わった **claim の assignee 操作（自分の追加・除去）**の 2 系統 — 成果物のコメントは書かない（#398 で `addComment` ごと消えた。「Issue へは何も書かない」はそのとき正しかったが、claim が assignee 操作を持ち込んだので**もう正しくない**）。
+全て `https://api.github.com/graphql` への単一 POST に bearer トークンを載せる形で、操作は **13**である。REST も Contents API も使わない。書き込みは **Project のカード移動**、#556 で加わった **claim の assignee 操作（自分の追加・除去）**、[ADR-0108](/decisions/adr-0108-label-writeback.md) の **ラベルの付け外し（と、無いラベルの作成）**の 3 系統 — 成果物のコメントは書かない（#398 で `addComment` ごと消えた。「Issue へは何も書かない」はそのとき正しかったが、claim が assignee 操作を持ち込んだので**もう正しくない**）。
 
 | 操作 | 触るもの |
 |---|---|
@@ -112,6 +112,10 @@ manifest（`plugins/task-source-github/plugin.toml`、`protocol_version = ">=0.7
 | user id 解決（#556） | `user(login:) { id }`。プロセス内キャッシュ |
 | self-assign（#556） | `addAssigneesToAssignable`。**Issue / PullRequest の node id = task_id を直接使う**のでボード逆引き不要（`Assignable` は両方を含む） |
 | 自己除去（#556） | `removeAssigneesFromAssignable`。**自分の分だけ** — 他人の assignee には決して触れない |
+| ラベル解決（ADR-0108） | `node(id:)` → Issue / PullRequest の `repository { id label(name:) { id } }`。ラベル 1 つにつき 1 回 |
+| ラベル作成（ADR-0108） | `createLabel`（色は `ededed`）。付けるラベルがリポジトリに無いときだけ。**冪等ではない**ので再送しない |
+| ラベル付与 / 除去（ADR-0108） | `addLabelsToLabelable` / `removeLabelsFromLabelable`。task_id（node id）を直接使う。どちらも冪等 |
+| ラベル存在確認（ADR-0108、`config/validate`） | `repository(owner:, name:) { label(name:) { id } }`。owner は**ボードの owner**（`[[repositories]]` は owner を持たない）。見つからないリポジトリは検査できなかったとして警告 |
 
 ## 実測できたこと（2026-08-23）
 
@@ -155,12 +159,12 @@ present/null を判定しているのはこのためで、`assignees` / `labels`
 | 種別 | 権限 | なぜ |
 |---|---|---|
 | Repository | **Metadata: Read** | 必須（他の Repository 権限の前提） |
-| Repository | **Issues: Read** | Project アイテム経由で読む Issue の本文・ラベル・アサイニー。**write は不要**（#398 で `addComment` が消えた） |
+| Repository | **Issues: Read**（`on_*.labels` を使うなら **Read and write**） | Project アイテム経由で読む Issue の本文・ラベル・アサイニー。write は `on_*.labels` のラベル付け外しと作成でだけ要る（[ADR-0108](/decisions/adr-0108-label-writeback.md)。#398 で `addComment` が消えてから、それ以外に write の理由は無い）。**PR のラベルに Pull requests: write も要るかは未実測** |
 | Organization | **Projects: Read and write** | ProjectsV2 の読み取りと `updateProjectV2ItemFieldValue`。**Organization permissions にしか無い** — user 所有ボード向けの Account permissions は存在しないので、その場合は classic PAT を使う（上節） |
 
 **Contents は不要**である。このトークンでリポジトリの中身を読み書きすることはない。
 
-**scope ベースのトークン**（classic PAT、または `gh auth token` の OAuth トークン。user 所有ボードではこちら。最小値は未実測）: `project`（ProjectsV2 の読み書き）と、`repo`（private リポジトリを含む場合）または `public_repo`。private org のボードでは `organization(login:)` の解決に `read:org` も要りうる。
+**scope ベースのトークン**（classic PAT、または `gh auth token` の OAuth トークン。user 所有ボードではこちら。最小値は未実測）: `project`（ProjectsV2 の読み書き）と、`repo`（private リポジトリを含む場合）または `public_repo`。`on_*.labels` を使うなら `repo` / `public_repo` は**必須**（ラベルの書き込みは Project の外、リポジトリ側の操作なので `project` では足りない。導出・未実測）。private org のボードでは `organization(login:)` の解決に `read:org` も要りうる。
 
 **未解決の問い**: Issue の本文・ラベル・アサイニーは `projectV2` のアイテム経由でしか読んでおらず、Issues エンドポイントを直接は叩かない。**`project` scope だけでこれらが返るなら `repo` は要らない**。どちらなのかは `project` だけの classic PAT を切って上のスクリプトを回せば 1 回で分かる（#514 手順 2）。
 

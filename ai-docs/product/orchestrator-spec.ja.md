@@ -3,7 +3,7 @@ type: Spec
 title: totsuka — ローカルAIエージェント Orchestrator 要件定義（v1）
 description: totsuka Orchestrator CLI の要件定義 — タスクソース/Agent IDE/Notifier プラグイン、git worktree ライフサイクル、ワークフロー、並列実行制御、v1 スコープ。
 tags: [orchestrator, requirements, plugin, worktree, cli, rust]
-generated: { by: claude-code/opus-5.5, at: 2026-09-26T12:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-09-30T14:00:00+09:00 }
 status: draft
 owner: tomoya-k31
 ---
@@ -422,6 +422,7 @@ macOS のメニューバーのように**常時視界に入る面**へ状態を�
 | `config/validate` | O→P | 共通 | 固有設定の検証(F-59) |
 | `task/submit` | **P→O request** | task_source | プラグインが見つけたタスクを push(persist-before-ack、protocol 0.1.6)。protocol 0.2.0 で削除された `tasks/fetch` の後継 — task_source は全て push 専用 |
 | `task/update_status` | O→P | task_source | ソース側ステータス遷移(F-84) |
+| `task/update_labels` | O→P | task_source | `on_*.labels` によるソース側ラベルの付け外し(プロトコル 0.7.6、ADR-0108)。`label_writeback` を宣言したプラグインにだけ送る |
 | `result/publish` | O→P | task_source | 成果物の書き戻し。実装するソースのみ(F-07) |
 | `task/dispatch` | O→P | agent_ide | worktree・タスク・mode を渡し実行開始。セッション ID を返す |
 | `task/cancel` | O→P | agent_ide | 実行キャンセル |

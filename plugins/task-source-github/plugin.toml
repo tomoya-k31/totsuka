@@ -20,6 +20,8 @@ protocol_version = ">=0.7.5, <0.8"
 # No `[capabilities] outputs`: the deliverable is the agent's to write
 # itself, so this plugin publishes nothing. `task_claim` (#556): answers
 # `task/claim` by self-assigning the issue and adjudicating races via
-# AssignedEvent order.
+# AssignedEvent order. `label_writeback` (ADR-0108): answers
+# `task/update_labels` on the task's issue / PR.
 [capabilities]
 task_claim = true
+label_writeback = true
