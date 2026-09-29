@@ -21,7 +21,7 @@ stable。プロトコル（0.7.6）→ core → github プラグインの 3 層�
 
 # Decision
 
-1. **書式は `labels = ["+a", "-b"]`**。`+` が追加、`-` が削除。接頭辞の無い要素は起動時エラー（追加のつもりか削除のつもりかを必ず書かせる）。先頭が `+` / `-` のラベル名は `++x` / `-+x` と書けば曖昧さは残らない。`status` と併記しても、`labels` 単独でもよい。
+1. **書式は `labels = ["+a", "-b"]`**。`+` が追加、`-` が削除。接頭辞の無い要素は起動時エラー（追加のつもりか削除のつもりかを必ず書かせる）。先頭が `+` / `-` のラベル名は `++x` / `-+x` と書けば曖昧さは残らない。1 つのテーブルで同じ名前を `+x` と `-x` の両方に書くのも起動時エラー —— どちらが勝つかを決めずに済むよう、`task/update_labels` の `add` と `remove` は常に交わらない。`status` と併記しても、`labels` 単独でもよい。
 2. **新メソッド `task/update_labels { task_id, add, remove, projects }`** で送る。`task/update_status` を拡張しなかったのは、ラベルだけの書き戻しに送る status が無く、`TaskUpdateStatusParams::status` を Option にするとワイヤ互換が壊れるから。送る順は status → labels で、互いに独立。
 3. **capability `label_writeback` で申告させる**（`task_claim` と同じ形）。宣言の無いソース（Notion / Slack / Discord）の workflow に `labels` があれば起動時エラー —— 黙って送らないより、書いた設定が効かないことを最初に知らせる。
 4. **存在しないラベルは `config validate` のオンライン部と `doctor` がエラーにする**。status の列名検査（[ADR-0062](/decisions/adr-0062-status-vocabulary.md)）と同じ扱いで、`WorkflowInfo.label_writebacks` が名前を運ぶ。追加だけでなく削除側も検査する —— 綴り違いの `-label` は何にも一致しないまま黙って成功するので、`+label` と同じだけ危ない。`[[repositories]]` は owner を持たないので、github はリポジトリを**ボードの owner の下**で探し、見つからなければ検査できなかったとして**警告**にする（ボードと owner が違うリポジトリでは設定が正しくてもそうなるので、エラーにはしない）。

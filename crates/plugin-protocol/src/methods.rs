@@ -676,9 +676,12 @@ pub struct TaskUpdateStatusParams {
 /// The Orchestrator treats a failure exactly as it treats a failed status
 /// write: logged, never fatal to the task.
 ///
-/// Both lists are applied as sets. Removing a label the task does not carry
-/// is success, not an error: the write-back states the end state it wants,
-/// and a task that is already there has nothing to do.
+/// Both lists are applied as sets and are **disjoint**: the Orchestrator
+/// never sends a name in both (`config validate` refuses a workflow that
+/// writes `+x` and `-x` in one table), so no plugin has to pick an order.
+/// Removing a label the task does not carry is success, not an error: the
+/// write-back states the end state it wants, and a task that is already there
+/// has nothing to do.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TaskUpdateLabelsParams {
     /// Source task id.

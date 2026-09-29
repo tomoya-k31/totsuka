@@ -7,7 +7,7 @@ use plugin_protocol::Task;
 use plugin_protocol::jsonrpc::{Error, error_code};
 use plugin_protocol::methods::{
     ConfigValidateParams, ConfigValidateResult, InitializeParams, InitializeResult,
-    ResultPublishParams, TaskUpdateStatusParams, WorkflowInfo,
+    ResultPublishParams, TaskUpdateLabelsParams, TaskUpdateStatusParams, WorkflowInfo,
 };
 use plugin_sdk::{
     LineHandler, Lookup, LookupClient, SubmitClient, SubmitOutcome, Submitter, TaskSourceHandler,
@@ -77,6 +77,15 @@ impl TaskSourceHandler for Recording {
         self.calls.push("result_publish");
         Err(Error::new(error_code::INTERNAL_ERROR, "publish broke"))
     }
+
+    async fn update_labels(&mut self, params: TaskUpdateLabelsParams) -> Result<Value, Error> {
+        assert_eq!(
+            (params.add, params.remove),
+            (vec!["a".into()], vec!["b".into()])
+        );
+        self.calls.push("update_labels");
+        Ok(Value::Null)
+    }
 }
 
 fn line(v: Value) -> String {
@@ -106,6 +115,16 @@ async fn typed_dispatch_covers_the_wire_protocol() {
         .await;
     let response: Value = serde_json::from_str(&reply.line.unwrap()).unwrap();
     assert_eq!(response["error"]["code"], error_code::INTERNAL_ERROR);
+
+    // task/update_labels → routed to the typed handler, acked with null.
+    let reply = server
+        .handle_line(&line(json!({
+            "jsonrpc": "2.0", "id": 4, "method": "task/update_labels",
+            "params": { "task_id": "42", "add": ["a"], "remove": ["b"] }
+        })))
+        .await;
+    let response: Value = serde_json::from_str(&reply.line.unwrap()).unwrap();
+    assert_eq!(response["result"], Value::Null, "{response}");
 
     // Invalid params never reach the handler.
     let reply = server
@@ -144,7 +163,10 @@ async fn typed_dispatch_covers_the_wire_protocol() {
     assert!(reply.shutdown);
 
     // Invalid params never reached the handler, so `update_status` is absent.
-    assert_eq!(server.0.calls, vec!["initialize", "result_publish"]);
+    assert_eq!(
+        server.0.calls,
+        vec!["initialize", "result_publish", "update_labels"]
+    );
 }
 
 // ---------------------------------------------------------------------------
