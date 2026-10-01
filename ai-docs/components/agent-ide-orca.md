@@ -4,7 +4,7 @@ title: agent-ide-orca プラグイン
 description: orca を Agent IDE として接続する公式 agent_ide プラグイン。herdr プラグインと同じ契約（tool_launch をそのまま起動・hook で完了報告・exit の deadman・pane_control・diagnostics_snapshot）を、orca CLI（--json）の端末操作で実現する。セッションは Orchestrator の worktree に開いた orca 端末。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/agent-ide-orca
 tags: [rust, crate, plugin, agent-ide, orca, cli, terminal, hooks]
-generated: { by: claude-code/opus-5, at: 2026-09-26T16:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-01T23:10:00+09:00 }
 stale_after: 2027-03-19
 status: stable
 owner: tomoya-k31
@@ -81,3 +81,7 @@ herdr と同じ `pane_control` / `state_stream` / `hook_completion` / `diagnosti
 - [orca CLI 制御サーフェス / エージェント capability（外部一次情報ミラー）](/references/orca-cli-control.md)
 - [plugin-protocol](/components/plugin-protocol.md)
 - [Spec §4.3 Agent IDE 連携 / F-30〜F-38](/product/orchestrator-spec.ja.md)
+
+# 設定スキーマ（`config/schema`、[ADR-0109](/decisions/adr-0109-native-menubar-app.md)）
+
+マニフェストで `config_schema = true` を宣言し、`initialize` より前の `config/schema` に `[orca]` のスキーマ（`plugin_sdk::config_schema::of::<OrcaConfig>()`）で答える。実装はSDK の `AgentIdeHandler::config_schema`。スキーマは serde が読む `OrcaConfig` から schemars で導出するので、受け付けないキーは載らない。全キー（入れ子を含む）に `x-title` / `x-help`（英語・日本語）があることを `config.rs` の `schema_tests` が、`initialize` 前に答えることを適合キットの検査 10 が確かめる。`x-secret` を付けたフィールド: なし。

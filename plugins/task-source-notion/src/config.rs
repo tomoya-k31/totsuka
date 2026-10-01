@@ -55,17 +55,29 @@ struct EmbeddedPrompts {
 /// Built-in values live in the embedded `defaults.toml`, not in Rust string
 /// literals, so rewording is a data edit. Field names are the config keys under
 /// `[notion.prompts]` in config.toml.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct NotionPrompts {
     /// Sent when the workflow's profile is `triage`.
     #[serde(default = "default_triage_instructions")]
+    #[schemars(extend(
+        "x-title" = {"en": "Triage", "ja": "triage"},
+        "x-help" = {"en": "Instructions for triage workflows. Leave empty for the built-in text.", "ja": "triage のワークフローへの指示。 空なら組み込みの文。"}
+    ))]
     pub triage_instructions: String,
     /// Sent when the workflow's profile is `design`.
     #[serde(default = "default_design_instructions")]
+    #[schemars(extend(
+        "x-title" = {"en": "Design", "ja": "design"},
+        "x-help" = {"en": "Instructions for design workflows. Leave empty for the built-in text.", "ja": "design のワークフローへの指示。 空なら組み込みの文。"}
+    ))]
     pub design_instructions: String,
     /// Sent when the workflow's profile is `implement`.
     #[serde(default = "default_implement_instructions")]
+    #[schemars(extend(
+        "x-title" = {"en": "Implement", "ja": "implement"},
+        "x-help" = {"en": "Instructions for implement workflows. Leave empty for the built-in text.", "ja": "implement のワークフローへの指示。 空なら組み込みの文。"}
+    ))]
     pub implement_instructions: String,
 }
 
@@ -132,7 +144,7 @@ impl OwnerType {
 
 /// The Notion property type backing the status column. The write-back body
 /// (F-84) and option lookup differ between the two.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum StatusKind {
     /// A `status` property (the dedicated Notion status type).
@@ -153,7 +165,7 @@ impl StatusKind {
 }
 
 /// Where a task's body text comes from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum BodySource {
     /// No body is ingested.
@@ -169,32 +181,60 @@ pub enum BodySource {
 /// Maps the shared [`Task`](plugin_protocol::Task) fields onto this database's
 /// Notion property names (F-03). Only [`title`](Self::title) is mandatory;
 /// unset optional fields are simply not extracted.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PropertyMap {
     /// The `title` property (Notion's default is `Name`).
     #[serde(default = "default_title_prop")]
+    #[schemars(extend(
+        "x-title" = {"en": "Title", "ja": "タイトル"},
+        "x-help" = {"en": "The title property. Default \"Name\".", "ja": "タイトルのプロパティ。既定は \"Name\"。"}
+    ))]
     pub title: String,
     /// The status property (`status` or `select`, see [`status_kind`]).
     ///
     /// [`status_kind`]: Self::status_kind
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Status", "ja": "ステータス"},
+        "x-help" = {"en": "The status property.", "ja": "ステータスのプロパティ。"}
+    ))]
     pub status: Option<String>,
     /// The Notion property type backing [`status`](Self::status).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Status type", "ja": "ステータスの型"},
+        "x-help" = {"en": "Whether the status property is a status or a select.", "ja": "ステータスのプロパティが status 型か select 型か。"}
+    ))]
     pub status_kind: StatusKind,
     /// A `people` property holding assignees (F-08).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Assignee", "ja": "担当者"},
+        "x-help" = {"en": "A people property holding assignees.", "ja": "担当者を持つ people 型のプロパティ。"}
+    ))]
     pub assignee: Option<String>,
     /// A `number`/`select`/`status` property holding priority.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Priority", "ja": "優先度"},
+        "x-help" = {"en": "A number, select or status property holding priority.", "ja": "優先度を持つ number・select・status 型のプロパティ。"}
+    ))]
     pub priority: Option<String>,
     /// A property carrying a repository hint (`rich_text`/`select`/`url`, F-10).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Repository hint", "ja": "リポジトリの手がかり"},
+        "x-help" = {"en": "A property naming the task's repository.", "ja": "タスクのリポジトリを示すプロパティ。"}
+    ))]
     pub repo_hint: Option<String>,
     /// A `rich_text` property carrying the body, when
     /// [`body_source`](NotionConfig::body_source) is `property`.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Body", "ja": "本文"},
+        "x-help" = {"en": "A rich_text property holding the body, when the body comes from a property.", "ja": "本文をプロパティから取るときの、本文を持つ rich_text 型のプロパティ。"}
+    ))]
     pub body: Option<String>,
 }
 
@@ -322,11 +362,17 @@ impl DatabaseConfig {
 }
 
 /// Notion task-source settings.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-category" = {"en": "Notion", "ja": "Notion"}))]
 #[serde(deny_unknown_fields)]
 pub struct NotionConfig {
     /// Integration token (resolved by the orchestrator, F-65). Never touched by
     /// us beyond sending it as a bearer token.
+    #[schemars(extend(
+        "x-title" = {"en": "Token", "ja": "トークン"},
+        "x-help" = {"en": "The Notion integration's token.", "ja": "Notion のインテグレーションのトークン。"},
+        "x-secret" = true
+    ))]
     pub token: String,
     /// The databases this plugin polls.
     ///
@@ -341,47 +387,95 @@ pub struct NotionConfig {
     /// (F-08). When unset, self-detection is disabled: only *unassigned* tasks
     /// are ingestable (any assigned task is treated as someone else's).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Your user ID", "ja": "あなたのユーザー ID"},
+        "x-help" = {"en": "Your own Notion user ID, to recognise tasks assigned to you. Empty: only unassigned tasks are picked up.", "ja": "あなたに割り当てられたタスクを見分けるための、あなた自身の Notion のユーザー ID。空なら未割り当てのタスクだけを拾う。"}
+    ))]
     pub notion_user_id: Option<String>,
     /// Property-name mapping onto the common schema (F-03).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Properties", "ja": "プロパティ"},
+        "x-help" = {"en": "Which database properties hold the title, status, assignee and so on.", "ja": "タイトル・ステータス・担当者などを、データベースのどのプロパティが持つか。"}
+    ))]
     pub property_map: PropertyMap,
     /// Where a task body comes from (F-03).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Body source", "ja": "本文の取り方"},
+        "x-help" = {"en": "Where a task's body comes from: the page content or a property.", "ja": "タスクの本文をどこから取るか。ページの中身か、プロパティか。"}
+    ))]
     pub body_source: BodySource,
     /// Status option names treated as "in progress" and therefore excluded from
     /// ingest (F-08).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "In-progress statuses", "ja": "作業中のステータス"},
+        "x-help" = {"en": "Statuses that mean someone is already working on it; such tasks are not picked up.", "ja": "誰かがすでに作業中であることを表すステータス。この状態のタスクは拾わない。"}
+    ))]
     pub in_progress_statuses: Vec<String>,
     /// Maps a priority option name (for `select`/`status` priority properties)
     /// to a numeric priority. Higher runs first. A `number` priority property is
     /// used directly and ignores this map.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Priority values", "ja": "優先度の値"},
+        "x-help" = {"en": "Numbers for priority options; higher runs first, e.g. High = 3.", "ja": "優先度の選択肢ごとの数値。大きいほど先に実行する。例: High = 3。"}
+    ))]
     pub priority_map: HashMap<String, i64>,
     /// The plugin instance name stamped onto each `Task.source`.
     #[serde(default = "default_source_name")]
+    #[schemars(extend(
+        "x-title" = {"en": "Source name", "ja": "ソース名"},
+        "x-help" = {"en": "This source's name on tasks. Change it only to run two of this plugin. Default \"notion\".", "ja": "タスクに付くこのソースの名前。このプラグインを 2 つ動かすときだけ変える。既定は \"notion\"。"}
+    ))]
     pub source_name: String,
     /// REST base URL (overridable for tests).
     #[serde(default = "default_api_url")]
+    #[schemars(extend(
+        "x-title" = {"en": "API URL", "ja": "API の URL"},
+        "x-help" = {"en": "The API's base URL. Default https://api.notion.com/v1.", "ja": "API のベース URL。既定は https://api.notion.com/v1。"}
+    ))]
     pub api_url: String,
     /// Pinned Notion API version header (`Notion-Version`).
     #[serde(default = "default_api_version")]
+    #[schemars(extend(
+        "x-title" = {"en": "API version", "ja": "API のバージョン"},
+        "x-help" = {"en": "The Notion-Version header. Default 2022-06-28.", "ja": "Notion-Version ヘッダー。既定は 2022-06-28。"}
+    ))]
     pub api_version: String,
     /// Max retry attempts for retryable API failures.
     #[serde(default = "default_max_retries")]
+    #[schemars(extend(
+        "x-title" = {"en": "Retries", "ja": "再試行回数"},
+        "x-help" = {"en": "How many times a failed API call that can be retried is retried. Default 3.", "ja": "再試行できる API の失敗を何回まで再試行するか。既定は 3。"}
+    ))]
     pub max_retries: u32,
     /// Internal fetch cadence of the poll loop, in seconds (F-06). Moved
     /// here from `[plugins.notion]` in 0.6.0 (#554): the Orchestrator only
     /// ever forwarded it, so it is this plugin's own key. `0` is treated as
     /// unset (busy-spin guard, applied in the server).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Poll interval (seconds)", "ja": "取得の間隔（秒）"},
+        "x-help" = {"en": "How often to look for new tasks. Empty means the default.", "ja": "新しいタスクを探しにいく間隔。空なら既定。"}
+    ))]
     pub poll_interval_secs: Option<u64>,
     /// Client-side request rate cap (requests/second) for the built-in
     /// throttle. Notion's public limit is ~3 rps.
     #[serde(default = "default_rate_limit")]
+    #[schemars(extend(
+        "x-title" = {"en": "Requests per second", "ja": "毎秒のリクエスト数"},
+        "x-help" = {"en": "The most requests per second. Default 3 (Notion's limit).", "ja": "1 秒あたりのリクエスト数の上限。既定は 3（Notion の制限）。"}
+    ))]
     pub rate_limit_rps: u32,
     /// Instruction text overrides (#398). Every key falls back to the embedded
     /// default when omitted.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Instructions", "ja": "指示文"},
+        "x-help" = {"en": "The instructions given to the agent, by profile.", "ja": "エージェントへ渡す指示文。プロファイルごと。"}
+    ))]
     pub prompts: NotionPrompts,
     /// Named lookups a `trigger.filter` may reference as `@<name>` (#606).
     ///
@@ -392,6 +486,10 @@ pub struct NotionConfig {
     /// that resolves to one page id per poll, so the config holds the *rule*
     /// instead of this fortnight's answer.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Dynamic lookups", "ja": "動的な参照"},
+        "x-help" = {"en": "Named lookups a trigger filter can use as @name, e.g. the current sprint.", "ja": "トリガーの filter から @名前 で使える、名前付きの参照。例: 現在のスプリント。"}
+    ))]
     pub dynamic: HashMap<String, DynamicRef>,
 }
 
@@ -402,16 +500,24 @@ pub struct NotionConfig {
 /// no knowledge of the property's type (`status` vs `select` vs `date`), so
 /// there is no type key here to keep in step with Notion's vocabulary — the
 /// operator writes the filter Notion documents.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DynamicRef {
     /// The database to look in. Need not be one of the polled `[[projects]]`
     /// databases — a sprint list usually is not — but the token must be able
     /// to read it.
+    #[schemars(extend(
+        "x-title" = {"en": "Database ID", "ja": "データベース ID"},
+        "x-help" = {"en": "The database to look in.", "ja": "参照するデータベース。"}
+    ))]
     pub database_id: String,
     /// The Notion filter that selects **exactly one** page. Zero and
     /// two-or-more are both errors: see `NotionClient::resolve_dynamic_ref`
     /// for why neither may degrade into "no condition".
+    #[schemars(extend(
+        "x-title" = {"en": "Filter", "ja": "フィルター"},
+        "x-help" = {"en": "A Notion filter that selects exactly one page.", "ja": "ページをちょうど 1 つ選ぶ Notion のフィルター。"}
+    ))]
     pub filter: Value,
 }
 
@@ -811,5 +917,18 @@ mod tests {
         }));
         assert_eq!(cfg.priority_value("High"), 10);
         assert_eq!(cfg.priority_value("Unknown"), 0);
+    }
+}
+
+#[cfg(test)]
+mod schema_tests {
+    /// Every key of `[notion]`, at any depth, carries an `x-title` and `x-help`
+    /// in English and Japanese for the settings window (ADR-0109).
+    #[test]
+    fn every_key_has_bilingual_help() {
+        let schema = plugin_sdk::config_schema::of::<super::NotionConfig>().schema;
+        let missing = plugin_sdk::config_schema::missing_help(&schema);
+        assert!(missing.is_empty(), "{}", missing.join("\n"));
+        assert!(schema["x-category"]["ja"].is_string(), "{schema}");
     }
 }

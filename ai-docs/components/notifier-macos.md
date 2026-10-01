@@ -4,7 +4,7 @@ title: notifier-macos プラグイン
 description: Orchestrator のイベント（waiting_input / done / failed / pending / escalated / verification_pending）を macOS 通知センターへ配送する公式 notifier プラグイン。バックエンド選択（osascript / terminal-notifier click-to-focus）、ワークフロー×イベント別フィルタ、fire-and-forget 配送。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/notifier-macos
 tags: [rust, crate, plugin, notifier, macos, osascript, terminal-notifier, click-to-focus, hook, escalation, verification]
-generated: { by: claude-code/opus-5, at: 2026-08-22T13:30:00Z }
+generated: { by: claude-code/opus-5.5, at: 2026-10-01T23:10:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -42,7 +42,7 @@ Claude Code フック完了判定（[F-100〜F-107](/product/orchestrator-spec.j
 
 # capabilities
 
-Notifier は機能 capability を宣言しない（`notify` を受けるのみ）。manifest（`plugins/notifier-macos/plugin.toml`）で `kind = notifier`。
+Notifier として宣言する機能 capability は無い（`notify` を受けるのみ）。宣言するのは全 kind 共通の `config_schema` だけ（下記）。manifest（`plugins/notifier-macos/plugin.toml`）で `kind = notifier`。
 
 # プロトコル変更（#62 / #131）
 
@@ -64,3 +64,7 @@ Notifier は機能 capability を宣言しない（`notify` を受けるのみ�
 - [Spec §4.10 通知 / F-90〜F-93・F-35・F-14](/product/orchestrator-spec.ja.md)
 - [フックシグナルフロー](/architecture/hook-signal-flow.md) / [フックのトラブルシューティング](/operations/hook-troubleshooting.md)
 - [ADR-0002 Rust workspace 構成と CI 品質ゲート](/decisions/adr-0002-rust-workspace-ci.md)
+
+# 設定スキーマ（`config/schema`、[ADR-0109](/decisions/adr-0109-native-menubar-app.md)）
+
+マニフェストで `config_schema = true` を宣言し、`initialize` より前の `config/schema` に `[macos]` のスキーマ（`plugin_sdk::config_schema::of::<NotifierConfig>()`）で答える。実装は手書きの `match` に `config/schema` の腕を足した（SDK の dispatch を使っていないため）。スキーマは serde が読む `NotifierConfig` から schemars で導出するので、受け付けないキーは載らない。全キー（入れ子を含む）に `x-title` / `x-help`（英語・日本語）があることを `config.rs` の `schema_tests` が、`initialize` 前に答えることを適合キットの検査 10 が確かめる。`x-secret` を付けたフィールド: なし。

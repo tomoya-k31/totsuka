@@ -4,7 +4,7 @@ title: task-source-github プラグイン
 description: GitHub Issues / ProjectsV2 をタスクソースとして接続する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。GraphQL で fetch→正規化、ProjectsV2 ステータス書き戻し、task/claim（Issue / PullRequest への self-assign + AssignedEvent 先着裁定による楽観排他）を行う。ボード上の OPEN な PullRequest も Issue と同じくタスクになる（#734）。Issue / PullRequest への書き込みは claim の assignee 操作と、on_*.labels のラベル付け外し（ADR-0108）。呼び出す 13 の GraphQL 操作と、トークン権限（十分条件は実測済み・最小値は未実測。fine-grained PAT が user 所有ボードに使えない理由を含む）を扱う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-github
 tags: [rust, crate, plugin, task-source, github, graphql, projectsv2]
-generated: { by: claude-code/opus-5.5, at: 2026-09-30T03:20:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-01T23:10:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -189,3 +189,7 @@ present/null を判定しているのはこのためで、`assignees` / `labels`
 - [ADR-0008 task/submit push 取り込み](/decisions/adr-0008-task-submit-push-ingestion.md)
 - [Spec §4.2 タスクソース / F-02・F-04・F-07・F-08・F-84](/product/orchestrator-spec.ja.md)
 - [ADR-0002 Rust workspace 構成と CI 品質ゲート](/decisions/adr-0002-rust-workspace-ci.md)
+
+# 設定スキーマ（`config/schema`、[ADR-0109](/decisions/adr-0109-native-menubar-app.md)）
+
+マニフェストで `config_schema = true` を宣言し、`initialize` より前の `config/schema` に `[github]` のスキーマ（`plugin_sdk::config_schema::of::<GithubConfig>()`）で答える。実装はSDK の `TaskSourceHandler::config_schema`。スキーマは serde が読む `GithubConfig` から schemars で導出するので、受け付けないキーは載らない。全キー（入れ子を含む）に `x-title` / `x-help`（英語・日本語）があることを `config.rs` の `schema_tests` が、`initialize` 前に答えることを適合キットの検査 10 が確かめる。`x-secret` を付けたフィールド: `token`。

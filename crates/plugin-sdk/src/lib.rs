@@ -44,6 +44,7 @@
 
 pub mod agent_ide;
 pub mod assignee;
+pub mod config_schema;
 pub mod dispatch;
 pub mod lookup;
 pub mod poll;

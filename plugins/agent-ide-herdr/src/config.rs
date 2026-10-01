@@ -7,23 +7,40 @@ use std::path::PathBuf;
 use serde::Deserialize;
 
 /// herdr agent_ide settings.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-category" = {"en": "herdr", "ja": "herdr"}))]
 #[serde(deny_unknown_fields)]
 pub struct HerdrConfig {
     /// Explicit socket path. Highest precedence when set.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Socket path", "ja": "ソケットのパス"},
+        "x-help" = {"en": "herdr's socket. Wins over the session when set.", "ja": "herdr のソケット。指定すると session より優先。"}
+    ))]
     pub socket_path: Option<String>,
     /// Named herdr session (resolves to
     /// `~/.config/herdr/sessions/<name>/herdr.sock`). Used when `socket_path`
     /// is unset.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Session", "ja": "セッション"},
+        "x-help" = {"en": "A named herdr session to use when no socket path is set.", "ja": "ソケットのパスが無いときに使う、名前付きの herdr セッション。"}
+    ))]
     pub session: Option<String>,
     /// How the dispatched task's panes are arranged (#356).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Layout", "ja": "レイアウト"},
+        "x-help" = {"en": "How the task's panes are arranged.", "ja": "タスクの pane の並べ方。"}
+    ))]
     pub layout: LayoutConfig,
     /// Whether dispatch tells herdr which repository and task a workspace is
     /// for (#417).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Workspace names", "ja": "ワークスペースの名前"},
+        "x-help" = {"en": "Whether herdr is told which repository and task a workspace is for.", "ja": "ワークスペースがどのリポジトリ・タスクのものかを herdr に伝えるか。"}
+    ))]
     pub identity: IdentityConfig,
     /// Overrides for the program-basename → herdr `kind` mapping
     /// ([ADR-0032](../../../ai-docs/decisions/adr-0032-herdr-protocol-17.md) D-1).
@@ -44,9 +61,17 @@ pub struct HerdrConfig {
     /// `agent.start`, and duplicating its 21-value enum in this crate would
     /// only give the two a chance to disagree.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Program → kind", "ja": "プログラム → kind"},
+        "x-help" = {"en": "Tells herdr which agent a wrapper script is, e.g. my-claude = \"claude\".", "ja": "ラッパースクリプトがどのエージェントかを herdr に伝える。例: my-claude = \"claude\"。"}
+    ))]
     pub kind_map: HashMap<String, String>,
     /// Per-request timeout (seconds) for herdr socket calls.
     #[serde(default = "default_request_timeout")]
+    #[schemars(extend(
+        "x-title" = {"en": "Request timeout (seconds)", "ja": "リクエストのタイムアウト（秒）"},
+        "x-help" = {"en": "How long one herdr call may take. Default 30.", "ja": "herdr への呼び出し 1 回にかけてよい秒数。既定は 30。"}
+    ))]
     pub request_timeout_secs: u64,
 }
 
@@ -56,16 +81,24 @@ pub struct HerdrConfig {
 /// leaked through: the agent got half the screen and the workspace's initial
 /// shell — which nobody asked for and which carried the hook environment — got
 /// the other half. These three knobs replace that accident with a choice.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct LayoutConfig {
     /// Whether a companion shell pane sits beside the agent. `false` gives the
     /// agent the whole workspace, and makes
     /// [`direction`](Self::direction)/[`ratio`](Self::ratio) irrelevant.
     #[serde(default = "default_layout_shell")]
+    #[schemars(extend(
+        "x-title" = {"en": "Shell pane", "ja": "シェルの pane"},
+        "x-help" = {"en": "Put a shell pane beside the agent. Default on.", "ja": "エージェントの横にシェルの pane を置く。既定はオン。"}
+    ))]
     pub shell: bool,
     /// Which way the workspace is split.
     #[serde(default = "default_layout_direction")]
+    #[schemars(extend(
+        "x-title" = {"en": "Split direction", "ja": "分割の向き"},
+        "x-help" = {"en": "down or right. Default down.", "ja": "down か right。既定は down。"}
+    ))]
     pub direction: SplitDirection,
     /// The **agent** side's share of the split (the shell gets the rest).
     ///
@@ -75,6 +108,10 @@ pub struct LayoutConfig {
     /// herdr refuses costs the shell pane, not the task — see
     /// [`HerdrAgent::dispatch`](crate::agent::HerdrAgent::dispatch).
     #[serde(default = "default_layout_ratio")]
+    #[schemars(extend(
+        "x-title" = {"en": "Agent share", "ja": "エージェントの割合"},
+        "x-help" = {"en": "The agent's share of the split, e.g. 0.8. Default 0.8.", "ja": "分割したときのエージェント側の割合。例: 0.8。既定は 0.8。"}
+    ))]
     pub ratio: f64,
 }
 
@@ -98,12 +135,16 @@ impl Default for LayoutConfig {
 /// `web: Fix the bug` while nothing carries `totsuka_task` is one where the
 /// sidebar looks right and `doctor`'s ownership check has lost its newest
 /// evidence.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct IdentityConfig {
     /// `false` restores the pre-#417 behaviour exactly: the machine label
     /// `totsuka {task.id}` and no tokens.
     #[serde(default = "default_identity_enabled")]
+    #[schemars(extend(
+        "x-title" = {"en": "Enabled", "ja": "有効"},
+        "x-help" = {"en": "Name workspaces after their repository and task. Default on.", "ja": "ワークスペースにリポジトリとタスクの名前を付ける。既定はオン。"}
+    ))]
     pub enabled: bool,
 }
 
@@ -126,7 +167,7 @@ fn default_identity_enabled() -> bool {
 /// can be: a closed two-value enum lets a typo fail loudly at `initialize`
 /// with "unknown variant `up`" instead of degrading a pane at dispatch time,
 /// hours later, into a warning nobody is watching.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum SplitDirection {
     /// Split below: the agent keeps the top `ratio`.
@@ -391,5 +432,18 @@ mod tests {
             serde_json::from_value::<HerdrConfig>(serde_json::json!({ "agent_command": "claude" }))
                 .unwrap_err();
         assert!(err.to_string().contains("agent_command"), "got {err}");
+    }
+}
+
+#[cfg(test)]
+mod schema_tests {
+    /// Every key of `[herdr]`, at any depth, carries an `x-title` and `x-help`
+    /// in English and Japanese for the settings window (ADR-0109).
+    #[test]
+    fn every_key_has_bilingual_help() {
+        let schema = plugin_sdk::config_schema::of::<super::HerdrConfig>().schema;
+        let missing = plugin_sdk::config_schema::missing_help(&schema);
+        assert!(missing.is_empty(), "{}", missing.join("\n"));
+        assert!(schema["x-category"]["ja"].is_string(), "{schema}");
     }
 }

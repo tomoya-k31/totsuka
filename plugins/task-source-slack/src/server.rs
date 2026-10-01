@@ -1004,6 +1004,15 @@ where
         Ok(claims)
     }
 
+    /// `config/schema` (ADR-0109): this plugin's table as the settings
+    /// window's schema. Answered before `initialize`; needs no state.
+    async fn config_schema(
+        &mut self,
+        _params: plugin_protocol::methods::ConfigSchemaParams,
+    ) -> Result<plugin_protocol::methods::ConfigSchemaResult, Error> {
+        Ok(plugin_sdk::config_schema::of::<SlackConfig>())
+    }
+
     /// `config/validate`: schema + static consistency checks only (F-59/F-63).
     /// Deliberately offline — live token verification is `initialize`'s
     /// TokenGuard — so `config validate` / `doctor` probes need no network.
@@ -1347,6 +1356,7 @@ fn capabilities_result(workflows: &[plugin_protocol::methods::WorkflowInfo]) -> 
         claimed_repos: Vec::new(),
         capabilities: Capabilities {
             outputs: vec![OutputCapability::Source],
+            config_schema: true,
             ..Capabilities::default()
         },
     }

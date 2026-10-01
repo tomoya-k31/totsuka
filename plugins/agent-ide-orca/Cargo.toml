@@ -31,6 +31,7 @@ plugin-protocol.workspace = true
 plugin-sdk.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+schemars.workspace = true
 semver = { workspace = true, features = ["serde"] }
 # `io-std` (stdin/stdout) on top of the workspace tokio feature set (which
 # already includes `process` for spawning the orca CLI).

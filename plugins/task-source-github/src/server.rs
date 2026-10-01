@@ -189,6 +189,15 @@ where
         Ok(capabilities_result(claims))
     }
 
+    /// `config/schema` (ADR-0109): this plugin's table as the settings
+    /// window's schema. Answered before `initialize`; needs no state.
+    async fn config_schema(
+        &mut self,
+        _params: plugin_protocol::methods::ConfigSchemaParams,
+    ) -> Result<plugin_protocol::methods::ConfigSchemaResult, Error> {
+        Ok(plugin_sdk::config_schema::of::<GithubConfig>())
+    }
+
     async fn config_validate(
         &mut self,
         parsed: ConfigValidateParams,
@@ -326,6 +335,7 @@ fn capabilities_result(claimed_repos: Vec<ClaimedRepo>) -> InitializeResult {
             task_claim: true,
             // ADR-0108: `task/update_labels` on the task's issue / PR.
             label_writeback: true,
+            config_schema: true,
             ..Capabilities::default()
         },
     }

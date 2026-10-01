@@ -4,7 +4,7 @@ title: task-source-slack プラグイン
 description: 自分宛の Slack メンションをタスク化し本人名義で代理返信する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。設定スキーマ・TokenGuard（auth.test + apps.connections.open + 任意の bot probe）・Web API / Socket Mode クライアント・メンション検知と Task 正規化・プラグイン内 3 段階リポジトリ解決・下書き提示・承認フロー・bot ナッジ DM 通知（#305）・チャンネル監視トリガと起動時バックフィル（#617）に加え、Event Gateway の契約モジュールと Pub/Sub 取り込み（#656・#657）・manifest 雛形 2 種（Socket Mode / Request URL）・CLI レベル E2E・運用ドキュメントまで完備。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-slack
 tags: [rust, crate, plugin, task-source, slack, socket-mode, token-guard, conversation-identity, conversation-continuity]
-generated: { by: claude-code/opus-5.5, at: 2026-10-03T23:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-01T23:10:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -123,3 +123,7 @@ manifest（`plugins/task-source-slack/plugin.toml`）と `initialize` 応答で 
 - [会話継続（conversation continuity）](/glossary/conversation-continuity.md)（会話 = スレッドという同一性の供給元。F-105）
 - [フックシグナルフロー](/architecture/hook-signal-flow.md)（メンション → dispatch → 完了 → 検収 → 返信の全体像）
 - [Spec §4.2 タスクソース / F-01・F-07・F-51・F-59・F-64・F-65・§4.11 F-105](/product/orchestrator-spec.ja.md)
+
+# 設定スキーマ（`config/schema`、[ADR-0113](/decisions/adr-0113-native-menubar-app.md)）
+
+マニフェストで `config_schema = true` を宣言し、`initialize` より前の `config/schema` に `[slack]` のスキーマ（`plugin_sdk::config_schema::of::<SlackConfig>()`）で答える。実装はSDK の `TaskSourceHandler::config_schema`。スキーマは serde が読む `SlackConfig` から schemars で導出するので、受け付けないキーは載らない（`llm` は `RawLlmConfig` の形で載る）。全キー（入れ子を含む）に `x-title` / `x-help`（英語・日本語）があることを `config.rs` の `schema_tests` が、`initialize` 前に答えることを適合キットの検査 10 が確かめる。`x-secret` を付けたフィールド: `app_token` / `user_token` / `bot_token` / `llm.api_key`。

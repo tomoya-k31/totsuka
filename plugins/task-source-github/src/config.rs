@@ -50,27 +50,47 @@ struct EmbeddedPrompts {
 /// Built-in values live in the embedded `defaults.toml`, not in Rust string
 /// literals, so rewording is a data edit. Field names are the config keys under
 /// `[github.prompts]` in config.toml.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct GithubPrompts {
     /// Sent when the workflow's profile is `triage`.
     #[serde(default = "default_triage_instructions")]
+    #[schemars(extend(
+        "x-title" = {"en": "Triage", "ja": "triage"},
+        "x-help" = {"en": "Instructions for triage workflows. Leave empty for the built-in text.", "ja": "triage のワークフローへの指示。 空なら組み込みの文。"}
+    ))]
     pub triage_instructions: String,
     /// Sent when the workflow's profile is `design`.
     #[serde(default = "default_design_instructions")]
+    #[schemars(extend(
+        "x-title" = {"en": "Design", "ja": "design"},
+        "x-help" = {"en": "Instructions for design workflows. Leave empty for the built-in text.", "ja": "design のワークフローへの指示。 空なら組み込みの文。"}
+    ))]
     pub design_instructions: String,
     /// Sent when the workflow's profile is `implement`.
     #[serde(default = "default_implement_instructions")]
+    #[schemars(extend(
+        "x-title" = {"en": "Implement", "ja": "implement"},
+        "x-help" = {"en": "Instructions for implement workflows. Leave empty for the built-in text.", "ja": "implement のワークフローへの指示。 空なら組み込みの文。"}
+    ))]
     pub implement_instructions: String,
     /// Sent instead of [`design_instructions`](Self::design_instructions) when
     /// the task **is a pull request** (#734).
     #[serde(default = "default_design_pr_instructions")]
+    #[schemars(extend(
+        "x-title" = {"en": "Design (pull request)", "ja": "design（プルリクエスト）"},
+        "x-help" = {"en": "Design instructions when the task is a pull request. Leave empty for the built-in text.", "ja": "タスクがプルリクエストのときの design の指示。 空なら組み込みの文。"}
+    ))]
     pub design_pr_instructions: String,
     /// Sent instead of
     /// [`implement_instructions`](Self::implement_instructions) when the task
     /// **is a pull request** (#734) — the issue text ends in "open a pull
     /// request", which on a pull request's own branch means a second one.
     #[serde(default = "default_implement_pr_instructions")]
+    #[schemars(extend(
+        "x-title" = {"en": "Implement (pull request)", "ja": "implement（プルリクエスト）"},
+        "x-help" = {"en": "Implement instructions when the task is a pull request. Leave empty for the built-in text.", "ja": "タスクがプルリクエストのときの implement の指示。 空なら組み込みの文。"}
+    ))]
     pub implement_pr_instructions: String,
 }
 
@@ -320,11 +340,17 @@ impl ProjectConfig {
 }
 
 /// GitHub task-source settings.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-category" = {"en": "GitHub", "ja": "GitHub"}))]
 #[serde(deny_unknown_fields)]
 pub struct GithubConfig {
     /// API token (resolved by the orchestrator, F-65). Never touched by us
     /// beyond sending it as a bearer token.
+    #[schemars(extend(
+        "x-title" = {"en": "Token", "ja": "トークン"},
+        "x-help" = {"en": "A GitHub token that can read and write the project boards and issues.", "ja": "Project のボードと Issue を読み書きできる GitHub のトークン。"},
+        "x-secret" = true
+    ))]
     pub token: String,
     /// The boards this plugin polls.
     ///
@@ -337,30 +363,58 @@ pub struct GithubConfig {
     pub projects: Vec<ProjectConfig>,
     /// SingleSelect field name holding the status column (F-02).
     #[serde(default = "default_status_field")]
+    #[schemars(extend(
+        "x-title" = {"en": "Status field", "ja": "ステータスのフィールド"},
+        "x-help" = {"en": "The board's single-select field holding the status. Default \"Status\".", "ja": "ボードでステータスを持つ単一選択フィールド。既定は \"Status\"。"}
+    ))]
     pub status_field: String,
     /// The operator's own login: detects self-assigned tasks (F-08) and is
     /// the login the claim self-assigns (#556). One login = one totsuka
     /// instance — assignees carry only the login, so two instances sharing
     /// one are indistinguishable to the adjudication (unsupported).
+    #[schemars(extend(
+        "x-title" = {"en": "Your login", "ja": "あなたのログイン名"},
+        "x-help" = {"en": "Your own GitHub login. Tasks are claimed by assigning them to it.", "ja": "あなた自身の GitHub のログイン名。タスクはこのユーザーに割り当てて確保する。"}
+    ))]
     pub github_login: String,
     /// Status names treated as "in progress" and therefore excluded from
     /// ingest (F-08).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "In-progress statuses", "ja": "作業中のステータス"},
+        "x-help" = {"en": "Statuses that mean someone is already working on it; such tasks are not picked up.", "ja": "誰かがすでに作業中であることを表すステータス。この状態のタスクは拾わない。"}
+    ))]
     pub in_progress_statuses: Vec<String>,
     /// The plugin instance name stamped onto each `Task.source`.
     #[serde(default = "default_source_name")]
+    #[schemars(extend(
+        "x-title" = {"en": "Source name", "ja": "ソース名"},
+        "x-help" = {"en": "This source's name on tasks. Change it only to run two of this plugin. Default \"github\".", "ja": "タスクに付くこのソースの名前。このプラグインを 2 つ動かすときだけ変える。既定は \"github\"。"}
+    ))]
     pub source_name: String,
     /// GraphQL endpoint (overridable for GitHub Enterprise / tests).
     #[serde(default = "default_api_url")]
+    #[schemars(extend(
+        "x-title" = {"en": "API URL", "ja": "API の URL"},
+        "x-help" = {"en": "The GraphQL endpoint. Default https://api.github.com/graphql; change it for GitHub Enterprise.", "ja": "GraphQL のエンドポイント。既定は https://api.github.com/graphql。GitHub Enterprise では変える。"}
+    ))]
     pub api_url: String,
     /// Max retry attempts for retryable API failures.
     #[serde(default = "default_max_retries")]
+    #[schemars(extend(
+        "x-title" = {"en": "Retries", "ja": "再試行回数"},
+        "x-help" = {"en": "How many times a failed API call that can be retried is retried. Default 3.", "ja": "再試行できる API の失敗を何回まで再試行するか。既定は 3。"}
+    ))]
     pub max_retries: u32,
     /// Internal fetch cadence of the poll loop, in seconds (F-06). Moved
     /// here from `[plugins.github]` in 0.6.0 (#554): the Orchestrator only
     /// ever forwarded it, so it is this plugin's own key. `0` is treated as
     /// unset (busy-spin guard, applied in the server).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Poll interval (seconds)", "ja": "取得の間隔（秒）"},
+        "x-help" = {"en": "How often to look for new tasks. Empty means the default.", "ja": "新しいタスクを探しにいく間隔。空なら既定。"}
+    ))]
     pub poll_interval_secs: Option<u64>,
     /// Milliseconds to wait between writing the exclusion claim and reading
     /// it back (#556). The read-back is what detects both the race and the
@@ -369,10 +423,18 @@ pub struct GithubConfig {
     /// Phase 0). `0` is honoured (no wait): useful for tests, harmless in
     /// production because a too-early read only costs one extra retry.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Claim check delay (ms)", "ja": "確保の確認までの待ち（ミリ秒）"},
+        "x-help" = {"en": "How long to wait before reading back a claim. Empty means the default.", "ja": "タスクを確保してから読み戻すまで待つ時間。空なら既定。"}
+    ))]
     pub claim_verify_delay_ms: Option<u64>,
     /// Instruction text overrides (#398). Every key falls back to the embedded
     /// default when omitted.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Instructions", "ja": "指示文"},
+        "x-help" = {"en": "The instructions given to the agent, by profile.", "ja": "エージェントへ渡す指示文。プロファイルごと。"}
+    ))]
     pub prompts: GithubPrompts,
 }
 
@@ -623,5 +685,18 @@ mod tests {
             "got {}",
             claims[2].destination
         );
+    }
+}
+
+#[cfg(test)]
+mod schema_tests {
+    /// Every key of `[github]`, at any depth, carries an `x-title` and `x-help`
+    /// in English and Japanese for the settings window (ADR-0109).
+    #[test]
+    fn every_key_has_bilingual_help() {
+        let schema = plugin_sdk::config_schema::of::<super::GithubConfig>().schema;
+        let missing = plugin_sdk::config_schema::missing_help(&schema);
+        assert!(missing.is_empty(), "{}", missing.join("\n"));
+        assert!(schema["x-category"]["ja"].is_string(), "{schema}");
     }
 }

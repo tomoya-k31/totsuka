@@ -25,6 +25,7 @@ plugin-sdk.workspace = true
 repo-classifier.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+schemars.workspace = true
 semver = { workspace = true, features = ["serde"] }
 reqwest.workspace = true
 # `io-std` (stdin/stdout) and `net` (Socket Mode WebSocket + local mock

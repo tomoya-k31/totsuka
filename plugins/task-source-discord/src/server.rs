@@ -220,6 +220,7 @@ where
             plugin_version: plugin_version(),
             capabilities: Capabilities {
                 outputs: vec![OutputCapability::Source],
+                config_schema: true,
                 ..Default::default()
             },
             claimed_repos: Vec::new(),
@@ -229,6 +230,15 @@ where
             // silence, which is the failure the handshake exists to remove.
             claimed_options: Vec::new(),
         })
+    }
+
+    /// `config/schema` (ADR-0109): this plugin's table as the settings
+    /// window's schema. Answered before `initialize`; needs no state.
+    async fn config_schema(
+        &mut self,
+        _params: plugin_protocol::methods::ConfigSchemaParams,
+    ) -> Result<plugin_protocol::methods::ConfigSchemaResult, Error> {
+        Ok(plugin_sdk::config_schema::of::<DiscordConfig>())
     }
 
     /// Schema + static checks only. Deliberately offline: live token

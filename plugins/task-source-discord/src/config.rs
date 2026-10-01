@@ -19,34 +19,64 @@ fn default_max_retries() -> u32 {
 }
 
 /// This plugin's settings.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-category" = {"en": "Discord", "ja": "Discord"}))]
 #[serde(deny_unknown_fields)]
 pub struct DiscordConfig {
     /// Bot token (`Bot <token>` is added by the transport). Required: Discord
     /// has no other supported identity for an app — automating a human
     /// account is forbidden by its Terms of Service, so there is deliberately
     /// no user-token option here.
+    #[schemars(extend(
+        "x-title" = {"en": "Bot token", "ja": "Bot トークン"},
+        "x-help" = {"en": "The Discord bot's token.", "ja": "Discord の Bot のトークン。"},
+        "x-secret" = true
+    ))]
     pub bot_token: String,
     /// The operator's own Discord user id (a snowflake). The author gate
     /// compares posts against this, and it is what makes "only my own posts
     /// trigger" the default.
+    #[schemars(extend(
+        "x-title" = {"en": "Your user ID", "ja": "あなたのユーザー ID"},
+        "x-help" = {"en": "Your own Discord user ID. Only your posts become tasks.", "ja": "あなた自身の Discord のユーザー ID。あなたの投稿だけがタスクになる。"}
+    ))]
     pub operator_user_id: String,
     /// REST base URL, overridable for tests.
     #[serde(default = "default_api_url")]
+    #[schemars(extend(
+        "x-title" = {"en": "API URL", "ja": "API の URL"},
+        "x-help" = {"en": "The API's base URL. Default https://discord.com/api/v10.", "ja": "API のベース URL。既定は https://discord.com/api/v10。"}
+    ))]
     pub api_url: String,
     /// This source instance's name, as used in `Task.source`.
     #[serde(default = "default_source_name")]
+    #[schemars(extend(
+        "x-title" = {"en": "Source name", "ja": "ソース名"},
+        "x-help" = {"en": "This source's name on tasks. Change it only to run two of this plugin. Default \"discord\".", "ja": "タスクに付くこのソースの名前。このプラグインを 2 つ動かすときだけ変える。既定は \"discord\"。"}
+    ))]
     pub source_name: String,
     /// Max retry attempts for retryable REST failures.
     #[serde(default = "default_max_retries")]
+    #[schemars(extend(
+        "x-title" = {"en": "Retries", "ja": "再試行回数"},
+        "x-help" = {"en": "How many times a failed API call that can be retried is retried. Default 3.", "ja": "再試行できる API の失敗を何回まで再試行するか。既定は 3。"}
+    ))]
     pub max_retries: u32,
     /// Most messages the startup backfill recovers per watched channel.
     /// Omitted means [`plugin_sdk::watch::DEFAULT_BACKFILL_COUNT`].
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Backfill limit", "ja": "取りこぼしの回収件数"},
+        "x-help" = {"en": "How many missed posts per watched channel are recovered on start. Empty means the default.", "ja": "起動時に、見張っているチャンネルごとに取りこぼした投稿を何件まで回収するか。空なら既定。"}
+    ))]
     pub watch_backfill_limit: Option<u32>,
     /// How old a missed post may be and still be recovered, in hours.
     /// Omitted means [`plugin_sdk::watch::DEFAULT_BACKFILL_MAX_AGE_HOURS`].
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Backfill age (hours)", "ja": "取りこぼしの回収期間（時間）"},
+        "x-help" = {"en": "How old a missed post may be and still be recovered. Empty means the default.", "ja": "取りこぼした投稿を何時間前のものまで回収するか。空なら既定。"}
+    ))]
     pub watch_backfill_max_age_hours: Option<u64>,
 }
 
@@ -129,5 +159,18 @@ mod tests {
         let value = json!({ "bot_token": "  ", "operator_user_id": "" });
         let errors = static_config_errors(&parse(value).unwrap());
         assert_eq!(errors.len(), 2, "got {errors:?}");
+    }
+}
+
+#[cfg(test)]
+mod schema_tests {
+    /// Every key of `[discord]`, at any depth, carries an `x-title` and `x-help`
+    /// in English and Japanese for the settings window (ADR-0109).
+    #[test]
+    fn every_key_has_bilingual_help() {
+        let schema = plugin_sdk::config_schema::of::<super::DiscordConfig>().schema;
+        let missing = plugin_sdk::config_schema::missing_help(&schema);
+        assert!(missing.is_empty(), "{}", missing.join("\n"));
+        assert!(schema["x-category"]["ja"].is_string(), "{schema}");
     }
 }

@@ -128,6 +128,15 @@ where
         Ok(capabilities_result())
     }
 
+    /// `config/schema` (ADR-0109): this plugin's table as the settings
+    /// window's schema. Answered before `initialize`; needs no state.
+    async fn config_schema(
+        &mut self,
+        _params: plugin_protocol::methods::ConfigSchemaParams,
+    ) -> Result<plugin_protocol::methods::ConfigSchemaResult, Error> {
+        Ok(plugin_sdk::config_schema::of::<OrcaConfig>())
+    }
+
     async fn config_validate(
         &mut self,
         params: ConfigValidateParams,
@@ -257,6 +266,7 @@ fn capabilities_result() -> InitializeResult {
             state_stream: true,
             hook_completion: true,
             diagnostics_snapshot: true,
+            config_schema: true,
             ..Capabilities::default()
         },
     }
