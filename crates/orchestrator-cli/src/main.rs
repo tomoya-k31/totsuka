@@ -112,8 +112,9 @@ enum Command {
         /// (the fields of a `notify` sent to notifier plugins) as tasks move,
         /// and `summary` (the `--json` summary) at the end. Notifier plugins
         /// are not started — the parent is the notifier. Refused together
-        /// with `--json`, whose stdout is a single document.
-        #[arg(long, conflicts_with = "json")]
+        /// with `--json`, whose stdout is a single document, and with
+        /// `--dry-run`, whose only output is a sentence on stdout.
+        #[arg(long, conflicts_with_all = ["json", "dry_run"])]
         events_jsonl: bool,
         #[command(flatten)]
         json: common::JsonFlag,
