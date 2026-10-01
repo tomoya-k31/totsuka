@@ -3,6 +3,12 @@
 #
 #   apps/macos/build-app.sh          # → apps/macos/build/Totsuka.app
 #   open apps/macos/build/Totsuka.app
+#   open --env XDG_CONFIG_HOME=… --env XDG_DATA_HOME=… … apps/macos/build/Totsuka.app
+#                                    # against an isolated environment
+#
+# The bundle ID is `io.github.tomoya-k31.totsuka.dev` ("Totsuka Dev"), so its
+# settings, notification permission and Keychain entry stay apart from the
+# installed app's.
 #
 # The shipped app is built by CI from project.yml (macos-app.yml); that needs
 # Xcode's `actool` for the asset catalog. This builds the same code with
@@ -33,9 +39,9 @@ cat > "${app}/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-<key>CFBundleIdentifier</key><string>io.github.tomoya-k31.totsuka</string>
-<key>CFBundleName</key><string>Totsuka</string>
-<key>CFBundleDisplayName</key><string>Totsuka</string>
+<key>CFBundleIdentifier</key><string>io.github.tomoya-k31.totsuka.dev</string>
+<key>CFBundleName</key><string>Totsuka Dev</string>
+<key>CFBundleDisplayName</key><string>Totsuka Dev</string>
 <key>CFBundleExecutable</key><string>Totsuka</string>
 <key>CFBundleIconFile</key><string>AppIcon</string>
 <key>CFBundlePackageType</key><string>APPL</string>

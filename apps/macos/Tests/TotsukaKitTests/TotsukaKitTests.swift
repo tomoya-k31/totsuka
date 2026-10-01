@@ -158,6 +158,17 @@ import Testing
         #expect(value.jsonText == #"{"n":4,"r":0.8}"#)
     }
 
+    /// `open --env` reaches `totsuka`: own XDG_/TOTSUKA_ variables win, other
+    /// own variables do not leak in.
+    @Test func ownXdgVariablesWinOverTheLoginShell() {
+        let env = runEnvironment(
+            login: ["PATH": "/login", "XDG_CONFIG_HOME": "/real"],
+            own: ["XDG_CONFIG_HOME": "/isolated", "TOTSUKA_LOG_LEVEL": "debug", "PATH": "/gui"])
+        #expect(env["XDG_CONFIG_HOME"] == "/isolated")
+        #expect(env["TOTSUKA_LOG_LEVEL"] == "debug")
+        #expect(env["PATH"] == "/login")
+    }
+
     @Test func parsesEnvOutput() {
         let env = parseEnv("PATH=/a:/b\nHOME=/h\nMULTI=line1\nline2\n=bad\n")
         #expect(env["PATH"] == "/a:/b")

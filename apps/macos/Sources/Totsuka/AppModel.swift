@@ -43,7 +43,9 @@ final class AppModel: ObservableObject {
     /// Set by `restartIntoUpdate`: open the new app once the child has exited,
     /// so the new instance does not find the old `run` still holding the lock.
     private var relaunchURL: URL?
-    let secrets = SecretStore()
+    /// One Keychain entry per bundle ID, so a development build
+    /// (`build-app.sh`, `….dev`) never reads or overwrites the real app's.
+    let secrets = SecretStore(service: Bundle.main.bundleIdentifier ?? "io.github.tomoya-k31.totsuka")
     private let defaults = UserDefaults.standard
 
     private static let logLimit = 500
@@ -64,7 +66,8 @@ final class AppModel: ObservableObject {
     func bootstrap() async {
         let pathOverride = defaults.string(forKey: "pathOverride") ?? ""
         let binaryOverride = defaults.string(forKey: "totsukaPath")
-        var env = await Task.detached { loginShellEnvironment() }.value
+        let login = await Task.detached { loginShellEnvironment() }.value
+        var env = runEnvironment(login: login, own: ProcessInfo.processInfo.environment)
         if !pathOverride.isEmpty { env["PATH"] = pathOverride }
         guard let binary = locateTotsuka(override: binaryOverride, environment: env) else {
             notice = L(

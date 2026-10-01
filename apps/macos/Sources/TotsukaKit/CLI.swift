@@ -121,6 +121,18 @@ public func loginShellEnvironment(timeout: TimeInterval = 10) -> [String: String
     return parsed["PATH"] == nil ? fallback : parsed
 }
 
+/// The login shell's environment with this process's own `XDG_*` and
+/// `TOTSUKA_*` variables laid over it: what `open --env XDG_CONFIG_HOME=… ` set
+/// for this app wins, so an isolated test environment reaches `totsuka` (the
+/// login shell knows nothing of it).
+public func runEnvironment(login: [String: String], own: [String: String]) -> [String: String] {
+    var env = login
+    for (key, value) in own where key.hasPrefix("XDG_") || key.hasPrefix("TOTSUKA_") {
+        env[key] = value
+    }
+    return env
+}
+
 /// `KEY=value` lines (`env` output) as a dictionary. A line without `=` (the
 /// tail of a multi-line value) is skipped.
 public func parseEnv(_ text: String) -> [String: String] {

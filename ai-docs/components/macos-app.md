@@ -22,7 +22,7 @@ owner: tomoya-k31
 | `Sources/Totsuka/` | SwiftUI: `AppModel`（状態と動作）、`SettingsView`（スキーマから組み立てるフォーム）、`TotsukaApp`（`MenuBarExtra`・`Settings`・ログの `Window`・通知クリックの受け口） |
 | `Resources/Assets.xcassets` | アプリアイコン（`AppIcon`）とメニューバーのテンプレート画像（`StatusBarTemplate`、18pt） |
 | `project.yml` | XcodeGen。出荷する `.app` のビルド定義（ad-hoc 署名、`LSUIElement`、`MARKETING_VERSION` は release-please が CLI と同じ版に上げ、`CFBundleShortVersionString` はそれを参照する。XcodeGen の既定の `1.0` のままだと版の照合と Keychain の事前案内が働かない） |
-| `build-app.sh` | Xcode 無しで `.app` を組み立てる（`apps/macos/build/Totsuka.app`）。SwiftPM でビルドし、アセットカタログの代わりに `iconutil` で `.icns` を作ってメニューバーの PNG をそのまま同梱し、ad-hoc 署名する。手元で試す用で、出荷物は CI の `macos-app.yml` がビルドする |
+| `build-app.sh` | Xcode 無しで `.app` を組み立てる（`apps/macos/build/Totsuka.app`、bundle ID は `io.github.tomoya-k31.totsuka.dev` で、設定・通知の許可・Keychain の項目が本番のアプリと分かれる）。`open --env XDG_CONFIG_HOME=…` で起動すると、その `XDG_*` / `TOTSUKA_*` がログインシェルの環境より優先されるので、隔離した環境で試せる。SwiftPM でビルドし、アセットカタログの代わりに `iconutil` で `.icns` を作ってメニューバーの PNG をそのまま同梱し、ad-hoc 署名する。手元で試す用で、出荷物は CI の `macos-app.yml` がビルドする |
 | `test.sh` | `swift test`。Command Line Tools だけの環境では swift-testing のフレームワークの場所を渡し、モジュールの無い `_Testing_Foundation` を避けるため cross-import overlay を切る |
 
 # 振る舞い
