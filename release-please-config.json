@@ -15,6 +15,10 @@
         {
           "type": "generic",
           "path": "services/slack-event-gateway/tofu/variables.tf"
+        },
+        {
+          "type": "generic",
+          "path": "apps/macos/project.yml"
         }
       ]
     }

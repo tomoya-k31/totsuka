@@ -4,7 +4,7 @@ title: ADR-0113 ネイティブ macOS メニューバーアプリが run を子�
 description: "SwiftBar 向けの `totsuka menu` だけでは届かない 2 つの要件（アプリ名義のネイティブ通知と、config.toml の GUI 編集）のため、SwiftUI のメニューバーアプリ（apps/macos/）を足す決定。run は `--secrets-stdin` 付きの子プロセスとして起動し終了コードで再起動を判断、通知は `run --events-jsonl` の stdout、設定画面は JSON Schema（core は schemars、プラグインは新メソッド config/schema）から生成し読み書きは CLI 経由。Developer Program に加入しないため ad-hoc 署名の .app を release tarball に同梱して formula で配る。ADR-0065 の「Swift アプリ」却下を部分的に覆す。"
 resource: https://github.com/tomoya-k31/totsuka/tree/main/apps/macos
 tags: [decision, macos, menubar, notifier, config, protocol, distribution, adr]
-generated: { by: claude-code/opus-5.5, at: 2026-10-01T22:56:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-01T23:32:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -39,6 +39,8 @@ Apple Developer Program には**加入しない**。それでも友人に配り�
 - **Swift + SwiftUI**（`MenuBarExtra`、`Settings` シーン、`UserNotifications`）、**macOS 15 以上**。CLI 本体の前提（macOS 14 以上、仕様 §3.3）は変えない
 - ソースは同じリポジトリの **`apps/macos/`**。CLI のフラグ・JSON の形・config スキーマと同じ PR で追従できるようにするため
 - プロジェクトは **XcodeGen（`project.yml`）**。`.xcodeproj` は生成物としてコミットしない（pbxproj の衝突を避ける）
+- ロジックは SwiftPM のパッケージ（`apps/macos/Package.swift` の `TotsukaKit`）に置き、`swift test` で試す。Command Line Tools だけの環境でもテストとアプリ本体のビルドが通る（アセットカタログだけは Xcode の `actool` が要るので、出荷する `.app` は CI の `xcodebuild` がビルドする）
+- アプリ自身の文言も `{en, ja}` を OS の言語で選ぶ（`L(en, ja)`）。String Catalog は Command Line Tools でコンパイルできず、スキーマの `x-*` と同じ選び方にそろえた
 - 表示名 `Totsuka`、bundle ID `io.github.tomoya-k31.totsuka`。Dock に出さず（`LSUIElement`）、ログイン項目は `SMAppService.mainApp`
 
 ## 2. run の監督
@@ -53,7 +55,7 @@ Apple Developer Program には**加入しない**。それでも友人に配り�
 ## 3. 状態表示とメニュー
 
 - 状態は `totsuka menu --json`（`MenuModel`）を流用する。SwiftBar 版は残す（CLI だけで使う人の経路）
-- メニューの操作は focus・cancel（確認付き）・retry。UDS の `/focus`・`/task/cancel`・`/task/retry` に hook-token の Bearer で直接 POST する（ADR-0094 / [ADR-0099](/decisions/adr-0099-generated-hook-token.md)）。**`task verify` は置かない**（取り消せない操作なので ADR-0065 と同じ判断）
+- メニューの操作は focus・cancel（確認付き）・retry。**CLI の `totsuka focus` / `task cancel` / `task retry` を呼ぶ**（当初は UDS へ直接 POST する案だったが、CLI がソケットの場所と hook-token（[ADR-0099](/decisions/adr-0099-generated-hook-token.md)。#785 で機密の参照ではなくなった）をすでに解決するので、同じ処理を Swift に持たない。ADR-0094 のエンドポイントは CLI の向こうで使われる）。**`task verify` は置かない**（取り消せない操作なので ADR-0065 と同じ判断）
 
 ## 4. 通知
 
@@ -61,7 +63,7 @@ Apple Developer Program には**加入しない**。それでも友人に配り�
 - `--events-jsonl` と `--json` は排他（`--json` の stdout は要約 1 文書という契約がある）
 - `--events-jsonl` のとき **notifier プラグインは起動しない**。親プロセスが通知者なので、残すと二重に出る
 - 絞り込み（workflow × イベント種別、F-92）は **`[macos]` の設定をアプリが読んで適用する**。core が `[macos]` を読むのはプラグインの所有物に触ることになる（[ADR-0058](/decisions/adr-0058-config-ownership-boundary.md)）
-- クリックは `task_id` を `userInfo` で受けて `/focus` に POST する
+- クリックは `task_id` を `userInfo` で受けて `totsuka focus <task_id>` を呼ぶ
 
 ## 5. 設定 GUI
 
@@ -78,7 +80,7 @@ Apple Developer Program には**加入しない**。それでも友人に配り�
 
 ## 6. 配布
 
-- CI（macOS ランナー）で `.app` をビルドし **ad-hoc 署名**、release の universal tarball に同梱する。formula は `prefix/"Totsuka.app"` に置く
+- CI（macOS ランナー）で `.app` をビルドし **ad-hoc 署名**、release の universal tarball に同梱する。formula は `prefix/"Totsuka.app"` に置く（tap リポジトリ側の変更、[Homebrew tap](/infrastructure/homebrew-tap.md)）
 - **formula が入れるファイルには quarantine が付かない**（Homebrew が quarantine を付けるのは cask だけ）。今の `totsuka` バイナリが公証なしで動いているのと同じ経路
 - **CLI と同じ版で同時にリリースする。** アプリは起動時に `totsuka --version` を見て、メジャーが違えば起動を止め、マイナー・パッチの違いは警告して `brew upgrade` を案内する
 - **更新のたびに Keychain の確認が 1 回出るのは受け入れる**（下の実測）。新しい版の初回起動で、確認が出る前に「次の確認で『常に許可』を」と案内する

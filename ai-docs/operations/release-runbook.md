@@ -4,7 +4,7 @@ title: リリース手順（release-please / ユニバーサルバイナリ / Gi
 description: "totsuka のリリース運用。release-please による Release PR、macOS ユニバーサルバイナリと同梱プラグインの自動ビルド・署名・GitHub Releases 配布、リリースごとの Homebrew tap 自動 bump と 2 本のトークン運用、Release PR の CI/ブランチ保護を通すトークン運用（GitHub App / PAT / admin）、Gatekeeper（ad-hoc 署名）の扱い。"
 resource: https://github.com/tomoya-k31/totsuka/tree/main/.github/workflows
 tags: [release, ci, distribution, homebrew, gatekeeper, semver, github-app, pat, branch-protection]
-generated: { by: claude-code/opus-5, at: 2026-09-14T00:37:53+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-01T23:32:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -146,9 +146,12 @@ Packages → slack-event-gateway → Package settings → Change visibility → 
   totsuka-vX.Y.Z-macos-universal/
   ├── totsuka
   ├── plugins/<name>/{<name>, plugin.toml}
+  ├── Totsuka.app        # メニューバーアプリ（ADR-0109）
   ├── README.md
   └── LICENSE
   ```
+
+  `Totsuka.app` は同じジョブが XcodeGen + `xcodebuild` で arm64 / x86_64 の両方を含めてビルドし、ad-hoc 署名する（[macOS アプリ](/components/macos-app.md)）。版は release-please が `apps/macos/project.yml` の `MARKETING_VERSION` を CLI と同じに上げる。
 
   利用者はツリーごと `/usr/local/lib/totsuka` へ置き、`/usr/local/bin` から symlink する（README のインストール手順）。バイナリだけを移すと同梱プラグインが置き去りになる。プラグインは `totsuka plugin install --bundled <name>` で入れる（#345）。
 

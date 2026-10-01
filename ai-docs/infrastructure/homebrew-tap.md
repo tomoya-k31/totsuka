@@ -4,7 +4,7 @@ title: Homebrew tap（tomoya-k31/homebrew-tap）
 description: "totsuka を brew install で配れるようにするための tap リポジトリ。formula のインストールレイアウトがなぜ bundled plugins の探索順と一致するのか、リリースジョブが何を書き換えるのか、HOMEBREW_TAP_TOKEN のスコープ、bump が失敗したときの復旧、そして public 化までステップを止めている可視性ゲート。"
 resource: https://github.com/tomoya-k31/homebrew-tap
 tags: [infrastructure, homebrew, distribution, release, token]
-generated: { by: claude-code/opus-5, at: 2026-08-22T00:00:00Z }
+generated: { by: claude-code/opus-5.5, at: 2026-10-01T23:32:00+09:00 }
 status: stable
 owner: tomoya-k31
 sources:
@@ -161,3 +161,26 @@ Homebrew の formula は `url` を**素の `curl`（GitHub 認証なし）**で�
   sudo rm -f /usr/local/bin/totsuka
   sudo rm -rf /usr/local/lib/totsuka
   ```
+
+# メニューバーアプリ（ADR-0109）
+
+tarball の最上位に `Totsuka.app` が入る（[release runbook](/operations/release-runbook.md)）。formula がこれを `prefix` に置くと、**formula の入れたファイルには quarantine が付かない**ので、公証していない ad-hoc 署名のアプリでも Gatekeeper に止められずに開く（cask は 2026-09-01 以降この経路を持たない）。
+
+formula に足すもの（tap リポジトリ側の変更。本リポジトリの PR では入らない）:
+
+```ruby
+prefix.install "Totsuka.app" if File.exist?("Totsuka.app")
+```
+
+```ruby
+def caveats
+  <<~CAVEATS
+    The menu bar app is at #{opt_prefix}/Totsuka.app. To open it from
+    Spotlight and Launchpad:
+      ln -sf #{opt_prefix}/Totsuka.app ~/Applications/Totsuka.app
+  CAVEATS
+end
+```
+
+- `opt_prefix` を指すリンクにするのは、Cellar のパスが版ごとに変わるため。ログイン項目は登録時のパス（リンクを辿った先の Cellar）を覚えるが、アプリは起動のたびに登録し直して新しい場所へ移す
+- `if File.exist?` は、アプリを含まない古い tarball を指す formula でも install が壊れないようにするため

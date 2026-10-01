@@ -28,6 +28,10 @@
 * **Update**: [orchestrator-cli](/components/orchestrator-cli.md) — `config schema` / `get` / `set` / `unset`。
 * **Update**: [ADR-0113](/decisions/adr-0113-native-menubar-app.md) — 5 層に分けたこと、`x-raw` / `x-schema-error`、書き込みの拒否条件、プラグイン所有の project / workflow キーを `x-by-source` / `x-by-agent` で要素のスキーマに添えること、`on_*` を `status` / `labels` として載せること。
 * **Update**: [config CLI 契約](/apis/config-cli.md) / [ADR-0113](/decisions/adr-0113-native-menubar-app.md) — 使えない申告スキーマを捨てた理由はどこにも出ないことを正しく書き、CLI が付ける拡張キーワードに `x-by-source` / `x-by-agent` を足した。
+* **Creation**: [Totsuka.app（macOS メニューバーアプリ）](/components/macos-app.md) — `apps/macos/` の SwiftUI アプリ。run の監督・通知・スキーマから組み立てる設定画面。
+* **Update**: [ADR-0109](/decisions/adr-0109-native-menubar-app.md) — タスク操作は CLI 経由、SwiftPM と XcodeGen の分担、アプリの文言の選び方。
+* **Update**: [release runbook](/operations/release-runbook.md) / [Homebrew tap](/infrastructure/homebrew-tap.md) — tarball に `Totsuka.app` が入り、formula 側で入れる変更（tap リポジトリで行う）。
+* **Update**: [テスト戦略](/quality/test-strategy.md) — CI の `macos app` ジョブ。
 * **Update**: [plugin-sdk](/components/plugin-sdk.md) — `config_schema` モジュール（`of::<T>()` と `missing_help`、project / workflow のスキーマを組む `schema_for` / `workflow` と trigger の共通部品）。
 * **Update**: [agent-ide-herdr](/components/agent-ide-herdr.md) / [agent-ide-orca](/components/agent-ide-orca.md) / [notifier-macos](/components/notifier-macos.md) / [task-source-discord](/components/task-source-discord.md) / [task-source-github](/components/task-source-github.md) / [task-source-notion](/components/task-source-notion.md) / [task-source-slack](/components/task-source-slack.md) — 同梱 7 プラグインが `config_schema` を宣言し、全キーにラベルとヘルプ（英語）を付けたスキーマで `config/schema` に答える。
 * **Update**: [task-source-github](/components/task-source-github.md) / [task-source-notion](/components/task-source-notion.md) / [task-source-slack](/components/task-source-slack.md) / [task-source-discord](/components/task-source-discord.md) — `config/schema` の答えに `[[projects]]` 要素のキーと `[[workflows]]` の `trigger`・オプションのキーも載せる。trigger のスキーマは `TRIGGER_KEYS` とキーが一致することをテストで検査する。

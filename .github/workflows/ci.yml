@@ -332,6 +332,62 @@ jobs:
           tofu init -backend=false -input=false
           tofu validate
 
+  # The menu bar app (apps/macos/, ADR-0109). Detection runs on a cheap
+  # runner and the build only when the app changed: a macOS minute is billed
+  # at ten Linux ones, and most PRs do not touch Swift. Same `gh pr diff`
+  # detection as `gateway`, for the same reasons (no action to pin, no shallow
+  # checkout silently answering "unchanged").
+  macos-app-changes:
+    name: macos app (changes)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      app: ${{ steps.changed.outputs.app }}
+    steps:
+      - name: Did this PR touch the app?
+        id: changed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          files=$(gh pr diff "${PR}" --name-only)
+          test -n "${files}"
+          if grep -q '^apps/macos/' <<< "${files}"; then
+            echo "app=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "app=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+  macos-app:
+    name: macos app
+    needs: macos-app-changes
+    if: needs.macos-app-changes.outputs.app == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: apps/macos
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Test TotsukaKit
+        run: swift test
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      # Ad-hoc signed exactly as the release job builds it, so a project that
+      # only fails to sign or to compile its asset catalog fails here.
+      - name: Build Totsuka.app
+        run: |
+          xcodegen generate
+          xcodebuild -project Totsuka.xcodeproj -scheme Totsuka -configuration Release \
+            -derivedDataPath build build
+          test -d build/Build/Products/Release/Totsuka.app
+
   # cargo-audit / cargo-deny moved to audit.yml (daily cron + dependency-file
   # PRs): advisories change with time, not with PR content.
 
