@@ -57,21 +57,21 @@ pub struct GithubPrompts {
     #[serde(default = "default_triage_instructions")]
     #[schemars(extend(
         "x-title" = {"en": "Triage", "ja": "triage"},
-        "x-help" = {"en": "Instructions for triage workflows. Leave empty for the built-in text.", "ja": "triage のワークフローへの指示。 空なら組み込みの文。"}
+        "x-help" = {"en": "Instructions for triage workflows. Remove the key to use the built-in text (an empty value is used as is).", "ja": "triage のワークフローへの指示。キーを消すと組み込みの文になる（空の値はそのまま使われる）。"}
     ))]
     pub triage_instructions: String,
     /// Sent when the workflow's profile is `design`.
     #[serde(default = "default_design_instructions")]
     #[schemars(extend(
         "x-title" = {"en": "Design", "ja": "design"},
-        "x-help" = {"en": "Instructions for design workflows. Leave empty for the built-in text.", "ja": "design のワークフローへの指示。 空なら組み込みの文。"}
+        "x-help" = {"en": "Instructions for design workflows. Remove the key to use the built-in text (an empty value is used as is).", "ja": "design のワークフローへの指示。キーを消すと組み込みの文になる（空の値はそのまま使われる）。"}
     ))]
     pub design_instructions: String,
     /// Sent when the workflow's profile is `implement`.
     #[serde(default = "default_implement_instructions")]
     #[schemars(extend(
         "x-title" = {"en": "Implement", "ja": "implement"},
-        "x-help" = {"en": "Instructions for implement workflows. Leave empty for the built-in text.", "ja": "implement のワークフローへの指示。 空なら組み込みの文。"}
+        "x-help" = {"en": "Instructions for implement workflows. Remove the key to use the built-in text (an empty value is used as is).", "ja": "implement のワークフローへの指示。キーを消すと組み込みの文になる（空の値はそのまま使われる）。"}
     ))]
     pub implement_instructions: String,
     /// Sent instead of [`design_instructions`](Self::design_instructions) when
@@ -79,7 +79,7 @@ pub struct GithubPrompts {
     #[serde(default = "default_design_pr_instructions")]
     #[schemars(extend(
         "x-title" = {"en": "Design (pull request)", "ja": "design（プルリクエスト）"},
-        "x-help" = {"en": "Design instructions when the task is a pull request. Leave empty for the built-in text.", "ja": "タスクがプルリクエストのときの design の指示。 空なら組み込みの文。"}
+        "x-help" = {"en": "Design instructions when the task is a pull request. Remove the key to use the built-in text (an empty value is used as is).", "ja": "タスクがプルリクエストのときの design の指示。キーを消すと組み込みの文になる（空の値はそのまま使われる）。"}
     ))]
     pub design_pr_instructions: String,
     /// Sent instead of
@@ -89,7 +89,7 @@ pub struct GithubPrompts {
     #[serde(default = "default_implement_pr_instructions")]
     #[schemars(extend(
         "x-title" = {"en": "Implement (pull request)", "ja": "implement（プルリクエスト）"},
-        "x-help" = {"en": "Implement instructions when the task is a pull request. Leave empty for the built-in text.", "ja": "タスクがプルリクエストのときの implement の指示。 空なら組み込みの文。"}
+        "x-help" = {"en": "Implement instructions when the task is a pull request. Remove the key to use the built-in text (an empty value is used as is).", "ja": "タスクがプルリクエストのときの implement の指示。キーを消すと組み込みの文になる（空の値はそのまま使われる）。"}
     ))]
     pub implement_pr_instructions: String,
 }

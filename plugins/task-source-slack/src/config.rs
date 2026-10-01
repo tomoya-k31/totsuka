@@ -376,7 +376,7 @@ pub struct SlackPrompts {
     #[serde(default = "default_reply_instructions")]
     #[schemars(extend(
         "x-title" = {"en": "Reply instructions", "ja": "返信の指示"},
-        "x-help" = {"en": "Instructions for drafting a reply. Leave empty for the built-in text.", "ja": "返信を下書きするときの指示。 空なら組み込みの文。"}
+        "x-help" = {"en": "Instructions for drafting a reply. Remove the key to use the built-in text (an empty value is used as is).", "ja": "返信を下書きするときの指示。キーを消すと組み込みの文になる（空の値はそのまま使われる）。"}
     ))]
     pub reply_instructions: String,
     /// Sent instead of [`reply_instructions`](Self::reply_instructions) when
@@ -384,7 +384,7 @@ pub struct SlackPrompts {
     #[serde(default = "default_implement_instructions")]
     #[schemars(extend(
         "x-title" = {"en": "Implement", "ja": "implement"},
-        "x-help" = {"en": "Instructions for implement workflows. Leave empty for the built-in text.", "ja": "implement のワークフローへの指示。 空なら組み込みの文。"}
+        "x-help" = {"en": "Instructions for implement workflows. Remove the key to use the built-in text (an empty value is used as is).", "ja": "implement のワークフローへの指示。キーを消すと組み込みの文になる（空の値はそのまま使われる）。"}
     ))]
     pub implement_instructions: String,
     /// Sent instead of [`reply_instructions`](Self::reply_instructions) when
@@ -393,7 +393,7 @@ pub struct SlackPrompts {
     #[serde(default = "default_triage_instructions")]
     #[schemars(extend(
         "x-title" = {"en": "Triage", "ja": "triage"},
-        "x-help" = {"en": "Instructions for triage workflows. Leave empty for the built-in text.", "ja": "triage のワークフローへの指示。 空なら組み込みの文。"}
+        "x-help" = {"en": "Instructions for triage workflows. Remove the key to use the built-in text (an empty value is used as is).", "ja": "triage のワークフローへの指示。キーを消すと組み込みの文になる（空の値はそのまま使われる）。"}
     ))]
     pub triage_instructions: String,
     /// Appended to [`reply_instructions`](Self::reply_instructions) only when
@@ -401,14 +401,14 @@ pub struct SlackPrompts {
     #[serde(default = "default_reply_style_suffix")]
     #[schemars(extend(
         "x-title" = {"en": "Reply style text", "ja": "返信の文体の文"},
-        "x-help" = {"en": "Added when a reply style is set; {style} is replaced. Leave empty for the built-in text.", "ja": "返信の文体を指定したときに足す文。{style} は置き換えられる。 空なら組み込みの文。"}
+        "x-help" = {"en": "Added when a reply style is set; {style} is replaced. Remove the key to use the built-in text (an empty value is used as is).", "ja": "返信の文体を指定したときに足す文。{style} は置き換えられる。キーを消すと組み込みの文になる（空の値はそのまま使われる）。"}
     ))]
     pub reply_style_suffix: String,
     /// The visible task body. Placeholders: `{sender}` `{channel}` `{text}`.
     #[serde(default = "default_body_template")]
     #[schemars(extend(
         "x-title" = {"en": "Task body", "ja": "タスクの本文"},
-        "x-help" = {"en": "The task's body; {sender} {channel} {text} are replaced. Leave empty for the built-in text.", "ja": "タスクの本文。{sender} {channel} {text} は置き換えられる。 空なら組み込みの文。"}
+        "x-help" = {"en": "The task's body; {sender} {channel} {text} are replaced. Remove the key to use the built-in text (an empty value is used as is).", "ja": "タスクの本文。{sender} {channel} {text} は置き換えられる。キーを消すと組み込みの文になる（空の値はそのまま使われる）。"}
     ))]
     pub body_template: String,
     /// Attachment-section header, emitted only when the message carried
@@ -417,7 +417,7 @@ pub struct SlackPrompts {
     #[serde(default = "default_body_attachment_header")]
     #[schemars(extend(
         "x-title" = {"en": "Attachments header", "ja": "添付の見出し"},
-        "x-help" = {"en": "Heads the attachment list; {count} is replaced. Leave empty for the built-in text.", "ja": "添付の一覧の見出し。{count} は置き換えられる。 空なら組み込みの文。"}
+        "x-help" = {"en": "Heads the attachment list; {count} is replaced. Remove the key to use the built-in text (an empty value is used as is).", "ja": "添付の一覧の見出し。{count} は置き換えられる。キーを消すと組み込みの文になる（空の値はそのまま使われる）。"}
     ))]
     pub body_attachment_header: String,
     /// One attachment line. Placeholder: `{file}` (name, MIME type, size and
@@ -425,7 +425,7 @@ pub struct SlackPrompts {
     #[serde(default = "default_body_attachment_line")]
     #[schemars(extend(
         "x-title" = {"en": "Attachment line", "ja": "添付の行"},
-        "x-help" = {"en": "One attachment; {file} is replaced. Leave empty for the built-in text.", "ja": "添付 1 件。{file} は置き換えられる。 空なら組み込みの文。"}
+        "x-help" = {"en": "One attachment; {file} is replaced. Remove the key to use the built-in text (an empty value is used as is).", "ja": "添付 1 件。{file} は置き換えられる。キーを消すと組み込みの文になる（空の値はそのまま使われる）。"}
     ))]
     pub body_attachment_line: String,
     /// The parent thread's permalink section, emitted only when the mention
@@ -433,35 +433,35 @@ pub struct SlackPrompts {
     #[serde(default = "default_body_thread_permalink")]
     #[schemars(extend(
         "x-title" = {"en": "Thread link", "ja": "スレッドのリンク"},
-        "x-help" = {"en": "The parent thread's link; {url} is replaced. Leave empty for the built-in text.", "ja": "親スレッドのリンク。{url} は置き換えられる。 空なら組み込みの文。"}
+        "x-help" = {"en": "The parent thread's link; {url} is replaced. Remove the key to use the built-in text (an empty value is used as is).", "ja": "親スレッドのリンク。{url} は置き換えられる。キーを消すと組み込みの文になる（空の値はそのまま使われる）。"}
     ))]
     pub body_thread_permalink: String,
     /// Thread-context section header. Placeholder: `{count}`.
     #[serde(default = "default_body_thread_header")]
     #[schemars(extend(
         "x-title" = {"en": "Thread header", "ja": "スレッドの見出し"},
-        "x-help" = {"en": "Heads the thread context; {count} is replaced. Leave empty for the built-in text.", "ja": "スレッドの文脈の見出し。{count} は置き換えられる。 空なら組み込みの文。"}
+        "x-help" = {"en": "Heads the thread context; {count} is replaced. Remove the key to use the built-in text (an empty value is used as is).", "ja": "スレッドの文脈の見出し。{count} は置き換えられる。キーを消すと組み込みの文になる（空の値はそのまま使われる）。"}
     ))]
     pub body_thread_header: String,
     /// One thread-context line. Placeholder: `{line}`.
     #[serde(default = "default_body_thread_line")]
     #[schemars(extend(
         "x-title" = {"en": "Thread line", "ja": "スレッドの行"},
-        "x-help" = {"en": "One thread message; {line} is replaced. Leave empty for the built-in text.", "ja": "スレッドのメッセージ 1 件。{line} は置き換えられる。 空なら組み込みの文。"}
+        "x-help" = {"en": "One thread message; {line} is replaced. Remove the key to use the built-in text (an empty value is used as is).", "ja": "スレッドのメッセージ 1 件。{line} は置き換えられる。キーを消すと組み込みの文になる（空の値はそのまま使われる）。"}
     ))]
     pub body_thread_line: String,
     /// Emitted instead of the thread-context section when the fetch failed.
     #[serde(default = "default_body_thread_unavailable")]
     #[schemars(extend(
         "x-title" = {"en": "Thread unavailable", "ja": "スレッドが読めないとき"},
-        "x-help" = {"en": "Shown when the thread could not be read. Leave empty for the built-in text.", "ja": "スレッドを読めなかったときに出す文。 空なら組み込みの文。"}
+        "x-help" = {"en": "Shown when the thread could not be read. Remove the key to use the built-in text (an empty value is used as is).", "ja": "スレッドを読めなかったときに出す文。キーを消すと組み込みの文になる（空の値はそのまま使われる）。"}
     ))]
     pub body_thread_unavailable: String,
     /// Classifier system prompt. Placeholder: `{repo_names}`.
     #[serde(default = "default_classifier_system")]
     #[schemars(extend(
         "x-title" = {"en": "Classifier system prompt", "ja": "分類器のシステムプロンプト"},
-        "x-help" = {"en": "The classifier's system prompt; {repo_names} is replaced. Leave empty for the built-in text.", "ja": "分類器のシステムプロンプト。{repo_names} は置き換えられる。 空なら組み込みの文。"}
+        "x-help" = {"en": "The classifier's system prompt; {repo_names} is replaced. Remove the key to use the built-in text (an empty value is used as is).", "ja": "分類器のシステムプロンプト。{repo_names} は置き換えられる。キーを消すと組み込みの文になる（空の値はそのまま使われる）。"}
     ))]
     pub classifier_system: String,
     /// Classifier user message. Placeholders: `{mention_text}`
@@ -469,14 +469,14 @@ pub struct SlackPrompts {
     #[serde(default = "default_classifier_user")]
     #[schemars(extend(
         "x-title" = {"en": "Classifier message", "ja": "分類器へのメッセージ"},
-        "x-help" = {"en": "The classifier's message; {mention_text} {thread_context} {catalog} are replaced. Leave empty for the built-in text.", "ja": "分類器へのメッセージ。{mention_text} {thread_context} {catalog} は置き換えられる。 空なら組み込みの文。"}
+        "x-help" = {"en": "The classifier's message; {mention_text} {thread_context} {catalog} are replaced. Remove the key to use the built-in text (an empty value is used as is).", "ja": "分類器へのメッセージ。{mention_text} {thread_context} {catalog} は置き換えられる。キーを消すと組み込みの文になる（空の値はそのまま使われる）。"}
     ))]
     pub classifier_user: String,
     /// Retry turn after a malformed answer.
     #[serde(default = "default_classifier_correction")]
     #[schemars(extend(
         "x-title" = {"en": "Classifier retry", "ja": "分類器への再依頼"},
-        "x-help" = {"en": "Sent when the classifier's answer could not be read. Leave empty for the built-in text.", "ja": "分類器の答えが読めなかったときに送る文。 空なら組み込みの文。"}
+        "x-help" = {"en": "Sent when the classifier's answer could not be read. Remove the key to use the built-in text (an empty value is used as is).", "ja": "分類器の答えが読めなかったときに送る文。キーを消すと組み込みの文になる（空の値はそのまま使われる）。"}
     ))]
     pub classifier_correction: String,
 }
