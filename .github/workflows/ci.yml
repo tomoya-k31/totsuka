@@ -387,6 +387,17 @@ jobs:
           xcodebuild -project Totsuka.xcodeproj -scheme Totsuka -configuration Release \
             -derivedDataPath build build
           test -d build/Build/Products/Release/Totsuka.app
+      # Kept for trying a PR's app on a real Mac (Keychain, notifications and
+      # the login item have no tests). `ditto` keeps the bundle's symlinks,
+      # modes and signature, which the artifact zip alone would not.
+      - name: Package Totsuka.app
+        run: ditto -c -k --keepParent build/Build/Products/Release/Totsuka.app Totsuka.app.zip
+      - name: Upload Totsuka.app
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: Totsuka.app
+          path: apps/macos/Totsuka.app.zip
+          retention-days: 7
 
   # cargo-audit / cargo-deny moved to audit.yml (daily cron + dependency-file
   # PRs): advisories change with time, not with PR content.

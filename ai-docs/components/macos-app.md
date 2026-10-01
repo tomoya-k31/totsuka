@@ -37,7 +37,7 @@ owner: tomoya-k31
 # テスト
 
 - `apps/macos/test.sh`（`TotsukaKit` の swift-testing。終了コードの方針、版の比較、イベントの解釈、通知フィルタ、スキーマの分類、機密の名前、整数の往復）
-- CI の `macos app` ジョブ（`apps/macos/` を触った PR だけ）: `swift test` と、XcodeGen + `xcodebuild` での `.app` のビルド
+- CI の `macos app` ジョブ（`apps/macos/` を触った PR だけ）: `swift test` と、XcodeGen + `xcodebuild` での `.app` のビルド。ビルドした `.app` は `ditto` で zip にして artifact `Totsuka.app`（7 日）に残す —— 実機で試すにはこれを `~/Applications` に展開する（`/tmp` に置くと通知が許可されない）
 - UI と、実機の Keychain・通知・ログイン項目の挙動はテストが無い。ADR-0109 の「実測」がプロトタイプでの確認の記録
 
 # 関連
