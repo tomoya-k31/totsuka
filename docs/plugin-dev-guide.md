@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](plugin-dev-guide.ja.md)
 
-<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:bf8bbb1c8c221b6d7d3e12b9fe51b9b9fef700cad1f01a20468183de17350499 -->
+<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:61078d0f0e64a3df1977a2279c3de1bc62e0d20370f74ed823e2248faa341a21 -->
 
 # Plugin development guide
 
@@ -72,7 +72,7 @@ The cases that *don't* line up show the rule better. In 0.4.0 only the herdr plu
 |---|---|---|
 | `initialize` | O→P | Passes resolved config and the protocol version; you return your version and capabilities |
 | `config/validate` | O→P | Validates your plugin's configuration. The same workflows, projects and repositories from `initialize` come with it, so you validate what you are being asked about rather than what you remembered. **`warnings` is the channel for "the config is fine, but you should know this"**: it does not affect `valid`, `totsuka doctor` renders it as an advisory check, and it appears in `--json`. Write it in the same "cause → next action" shape as `errors` — a warning nobody can act on is noise, and noise is how a diagnostic stops being read. It is optional, so a plugin that sends none produces exactly the `doctor` output it always did |
-| `config/schema` | O→P | Returns your own config table as a JSON Schema (draft 2020-12): `{}` → `{ schema }`. **Answer it before `initialize`** — the menu bar app's settings window asks while no secret exists yet. Sent only if your manifest declares `config_schema = true`; without it, the settings window shows your table as raw TOML (not an error). Put `x-title`, `x-help` and `x-category` (each `{"en": "…", "ja": "…"}`) on each property, and `x-secret: true` on fields that hold a secret reference: the settings window uses them for labels, help, grouping and password fields |
+| `config/schema` | O→P | Returns your own config table as a JSON Schema (draft 2020-12): `{}` → `{ schema }`. **Write every subschema inline — no `$ref`**: your answer is embedded in a larger document, where a reference such as `#/$defs/…` would resolve against the wrong root, so a schema with `$ref` is shown as raw TOML. **Answer it before `initialize`** — the menu bar app's settings window asks while no secret exists yet. Sent only if your manifest declares `config_schema = true`; without it, the settings window shows your table as raw TOML (not an error). Put `x-title`, `x-help` and `x-category` (each `{"en": "…", "ja": "…"}`) on each property, and `x-secret: true` on fields that hold a secret reference: the settings window uses them for labels, help, grouping and password fields |
 | `shutdown` | O→P | Asks you to exit, with a grace period |
 
 `initialize` also hands a `task_source` several things it would otherwise have to configure twice. All are optional — ignore what you do not use.

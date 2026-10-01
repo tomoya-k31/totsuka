@@ -560,6 +560,11 @@ pub struct ConfigSchemaResult {
     /// A JSON Schema (draft 2020-12) for the plugin's own `[<name>]` table —
     /// the value `initialize` and `config/validate` receive as `config`.
     ///
+    /// **Every subschema inline — no `$ref`.** The host embeds the answer
+    /// under the plugin's name in a larger document, where a local reference
+    /// such as `#/$defs/Field` would resolve against the wrong root; a schema
+    /// that uses `$ref` is shown as raw TOML instead of a form.
+    ///
     /// Besides the standard keywords, the settings GUI reads four extension
     /// keywords on any property (ADR-0109): `x-title` and `x-help` (objects
     /// with `en` and `ja` strings), `x-category` (a group label, also
