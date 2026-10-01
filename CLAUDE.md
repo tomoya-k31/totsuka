@@ -32,8 +32,9 @@ for navigation, the same way as rust-analyzer above (`goToDefinition`,
 `findReferences`, `hover`, `documentSymbol`, …), and check LSP diagnostics
 after editing Swift files.
 
-- `apps/macos/Package.swift` is a SwiftPM package (`TotsukaKit` + the `Totsuka`
-  app target), which sourcekit-lsp indexes directly — run `swift build` there
+- `apps/macos/Package.swift` is a SwiftPM package (`TotsukaKit` + the
+  `TotsukaApp` executable built from `Sources/Totsuka`), which sourcekit-lsp
+  indexes directly — run `swift build` there
   once so cross-file results resolve.
 - The shipped `.app` is built from `apps/macos/project.yml` (XcodeGen; the
   `.xcodeproj` is generated and not committed). sourcekit-lsp does not read

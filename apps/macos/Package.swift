@@ -13,7 +13,10 @@ let package = Package(
     products: [.library(name: "TotsukaKit", targets: ["TotsukaKit"])],
     targets: [
         .target(name: "TotsukaKit"),
-        .executableTarget(name: "Totsuka", dependencies: ["TotsukaKit"]),
+        // Not named `Totsuka`: the Xcode project's app target is, and a package
+        // scheme of the same name would win `xcodebuild -scheme Totsuka`,
+        // building a bare binary instead of the `.app`.
+        .executableTarget(name: "TotsukaApp", dependencies: ["TotsukaKit"], path: "Sources/Totsuka"),
         .testTarget(name: "TotsukaKitTests", dependencies: ["TotsukaKit"]),
     ],
     // Swift 5 mode: `Process` / `FileHandle` callbacks are not `Sendable`, and

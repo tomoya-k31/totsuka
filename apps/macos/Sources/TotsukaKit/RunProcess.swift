@@ -31,15 +31,20 @@ public final class RunProcess {
         process.standardInput = stdin
         process.standardOutput = stdout
         process.standardError = stderr
-        Self.readLines(stdout) { line in
+        // `onExit` waits for both pipes to reach EOF, so the last stderr lines
+        // (the reason for an exit 4) are delivered before the exit is.
+        let drained = DispatchGroup()
+        drained.enter()
+        drained.enter()
+        Self.readLines(stdout, done: { drained.leave() }) { line in
             if let event = RunEvent.parse(line) { onEvent(event) } else { onLog(line) }
         }
-        Self.readLines(stderr, onLog)
+        Self.readLines(stderr, done: { drained.leave() }, onLog)
         process.terminationHandler = { process in
-            onExit(
-                Termination(
-                    status: process.terminationStatus,
-                    bySignal: process.terminationReason == .uncaughtSignal))
+            let termination = Termination(
+                status: process.terminationStatus,
+                bySignal: process.terminationReason == .uncaughtSignal)
+            drained.notify(queue: .global()) { onExit(termination) }
         }
     }
 
@@ -66,7 +71,9 @@ public final class RunProcess {
     public var isRunning: Bool { process.isRunning }
 
     /// Split a pipe into lines as they arrive.
-    private static func readLines(_ pipe: Pipe, _ handle: @escaping (String) -> Void) {
+    private static func readLines(
+        _ pipe: Pipe, done: @escaping () -> Void, _ handle: @escaping (String) -> Void
+    ) {
         var buffer = Data()
         let lock = NSLock()
         pipe.fileHandleForReading.readabilityHandler = { file in
@@ -77,6 +84,7 @@ public final class RunProcess {
                 file.readabilityHandler = nil
                 if !buffer.isEmpty { handle(String(decoding: buffer, as: UTF8.self)) }
                 buffer.removeAll()
+                done()
                 return
             }
             buffer.append(chunk)

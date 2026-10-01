@@ -24,6 +24,10 @@ targets:
       path: Generated/Info.plist
       properties:
         CFBundleDisplayName: Totsuka
+        # Without these XcodeGen writes "1.0", which the CLI version check
+        # cannot parse and which never changes across updates.
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSUIElement: true
         LSMinimumSystemVersion: "15.0"
     settings:

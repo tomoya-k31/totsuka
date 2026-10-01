@@ -19,6 +19,7 @@ final class SettingsModel: ObservableObject {
     }
 
     func reload() async {
+        error = nil
         guard let cli = app.cli else {
             error = L("totsuka was not found", "totsuka が見つからない")
             return
@@ -58,7 +59,7 @@ final class SettingsModel: ObservableObject {
         guard let cli = app.cli else { return }
         do {
             let r = try await cli.run(arguments)
-            if r.status != 0 { error = r.errorMessage }
+            error = r.status == 0 ? nil : r.errorMessage
             try await reloadConfig()
         } catch {
             self.error = String(describing: error)
@@ -233,7 +234,7 @@ struct FieldEditor: View {
         switch fieldKind(schema) {
         case .bool:
             Toggle(isOn: Binding(
-                get: { value?.bool ?? false },
+                get: { value?.bool ?? node["default"]?.bool ?? false },
                 set: { new in Task { await model.set(segments, .bool(new)) } })
             ) { label }
         case .integer, .number, .string:

@@ -40,6 +40,9 @@ final class AppModel: ObservableObject {
     private var restartTimer: Timer?
     private var macosConfig: JSONValue?
     private var versionBlocked = false
+    /// Set by `restartIntoUpdate`: open the new app once the child has exited,
+    /// so the new instance does not find the old `run` still holding the lock.
+    private var relaunchURL: URL?
     let secrets = SecretStore()
     private let defaults = UserDefaults.standard
 
@@ -112,6 +115,8 @@ final class AppModel: ObservableObject {
         // The start gate (ADR-0109 §2): nothing runs until the config passes.
         let check = try? await cli.run(
             ["config", "validate", "--secrets-stdin"], stdin: secretsLine(secretMap))
+        // A stop pressed while the check ran wins (`stop` left `.starting`).
+        guard runState == .starting else { return }
         guard let check, check.status == 0 else {
             let output = [check?.stdoutText, check?.stderrText].compactMap { $0 }.joined()
             fail(L("The configuration does not pass → open Settings", "設定が通らない → 設定を開く")
@@ -123,6 +128,7 @@ final class AppModel: ObservableObject {
         {
             macosConfig = doc.config["macos"]
         }
+        guard runState == .starting else { return }
         let child = RunProcess(
             cli: cli,
             onEvent: { [weak self] event in Task { @MainActor in self?.handle(event) } },
@@ -165,6 +171,10 @@ final class AppModel: ObservableObject {
     private func exited(_ exit: RunProcess.Termination) {
         process = nil
         killTimer?.invalidate()
+        if let relaunchURL {
+            openAndQuit(relaunchURL)
+            return
+        }
         // A run that stayed up a minute was healthy: the next failure starts
         // the backoff over.
         if Date().timeIntervalSince(startedAt) > 60 { failures = 0 }
@@ -282,19 +292,34 @@ final class AppModel: ObservableObject {
     func refreshMenu() async {
         guard let cli, let result = try? await cli.run(["menu", "--json"]) else { return }
         menu = try? MenuModel.decode(result.stdout)
+        // The outside `run` (exit 5) has let go of the lock: take over if this
+        // app was meant to be running it.
+        if runState == .external, menu?.availability == "down" {
+            runState = .stopped
+            if defaults.bool(forKey: "wasRunning") { await start() }
+        }
     }
 
     /// The task actions go through the CLI, which already knows the socket and
     /// its token (ADR-0094 / ADR-0099).
     func focus(_ id: String) {
-        Task { _ = try? await cli?.run(["focus", id]) }
+        Task { await act(["focus", id]) }
     }
 
     func retry(_ id: Int64) {
-        Task {
-            _ = try? await cli?.run(["task", "retry", String(id)])
-            await refreshMenu()
+        Task { await act(["task", "retry", String(id)]) }
+    }
+
+    /// Run a task action and show its error, if any, above the menu.
+    private func act(_ arguments: [String]) async {
+        guard let cli else { return }
+        do {
+            let r = try await cli.run(arguments)
+            notice = r.status == 0 ? nil : r.errorMessage
+        } catch {
+            notice = String(describing: error)
         }
+        await refreshMenu()
     }
 
     func cancel(_ row: MenuRow) {
@@ -305,10 +330,7 @@ final class AppModel: ObservableObject {
         alert.addButton(withTitle: L("Keep", "やめる"))
         NSApp.activate()
         guard alert.runModal() == .alertFirstButtonReturn else { return }
-        Task {
-            _ = try? await cli?.run(["task", "cancel", String(row.taskId)])
-            await refreshMenu()
-        }
+        Task { await act(["task", "cancel", String(row.taskId)]) }
     }
 
     // MARK: - updates and login item
@@ -325,9 +347,19 @@ final class AppModel: ObservableObject {
         let app = cli.binary.resolvingSymlinksInPath()
             .deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("Totsuka.app")
+        guard let process else {
+            openAndQuit(app)
+            return
+        }
+        relaunchURL = app
+        requestedStop = true
+        runState = .stopping
+        process.terminate()
+    }
+
+    private func openAndQuit(_ app: URL) {
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.createsNewApplicationInstance = true
-        process?.terminate()
         NSWorkspace.shared.openApplication(at: app, configuration: configuration) { _, _ in
             Task { @MainActor in NSApp.terminate(nil) }
         }

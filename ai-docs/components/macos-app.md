@@ -17,17 +17,18 @@ owner: tomoya-k31
 
 | 場所 | 中身 |
 |---|---|
-| `Package.swift` | SwiftPM パッケージ。`TotsukaKit`（ライブラリ）・`Totsuka`（アプリ本体の実行ターゲット）・`TotsukaKitTests`。Swift 5 言語モード（`Process` のコールバックを actor に隔離する手間に見合う挙動が無いため） |
+| `Package.swift` | SwiftPM パッケージ。`TotsukaKit`（ライブラリ）・`TotsukaApp`（アプリ本体の実行ターゲット。ソースは `Sources/Totsuka`。Xcode プロジェクトのアプリターゲット `Totsuka` と同名にすると `xcodebuild -scheme Totsuka` がパッケージ側を選んで素のバイナリを作るので、名前を分けている）・`TotsukaKitTests`。Swift 5 言語モード（`Process` のコールバックを actor に隔離する手間に見合う挙動が無いため） |
 | `Sources/TotsukaKit/` | ウィンドウ無しで試せるものすべて: `CLI`（`totsuka` の実行、ログインシェルの環境 `$SHELL -lic env`、バイナリの探索、`$XDG_STATE_HOME`）、`Contracts`（`MenuModel` / `RunEvent` / `SchemaDocument` / `ConfigDocument` / JSON Pointer）、`Policy`（終了コードの方針、版の比較、`[macos]` の通知フィルタ、機密の名前）、`RunProcess`（子プロセスの監督）、`SecretStore`（Keychain の 1 項目の JSON マップ）、`Schema`（スキーマの節点から編集方法を決める `fieldKind`、追加時の初期値 `newValue`） |
 | `Sources/Totsuka/` | SwiftUI: `AppModel`（状態と動作）、`SettingsView`（スキーマから組み立てるフォーム）、`TotsukaApp`（`MenuBarExtra`・`Settings`・ログの `Window`・通知クリックの受け口） |
 | `Resources/Assets.xcassets` | アプリアイコン（`AppIcon`）とメニューバーのテンプレート画像（`StatusBarTemplate`、18pt） |
-| `project.yml` | XcodeGen。出荷する `.app` のビルド定義（ad-hoc 署名、`LSUIElement`、`MARKETING_VERSION` は release-please が CLI と同じ版に上げる） |
+| `project.yml` | XcodeGen。出荷する `.app` のビルド定義（ad-hoc 署名、`LSUIElement`、`MARKETING_VERSION` は release-please が CLI と同じ版に上げ、`CFBundleShortVersionString` はそれを参照する。XcodeGen の既定の `1.0` のままだと版の照合と Keychain の事前案内が働かない） |
 | `test.sh` | `swift test`。Command Line Tools だけの環境では swift-testing のフレームワークの場所を渡し、モジュールの無い `_Testing_Foundation` を避けるため cross-import overlay を切る |
 
 # 振る舞い
 
 - **起動**: Keychain のマップを読み（新しい版での初回は「次の確認で『常に許可』を」と先に言う）、`config validate --secrets-stdin` が通ったら `run` を子プロセスとして起動し、stdin の 1 行目にマップを書いて開けたままにする。終了コードは `exitDecision`: 0 は停止、1 とシグナルは 2 秒から倍々で最大 5 分のバックオフ再起動（1 分以上健全に動いたら数え直す）、2 と 4 は止めて表示、5 は外部の `run` として監視だけ
-- **停止**: SIGTERM、300 秒待っても終わらなければ SIGKILL（メニューの「すぐに停止」でも）
+- **停止**: SIGTERM、300 秒待っても終わらなければ SIGKILL（メニューの「すぐに停止」でも）。起動中（設定の検証を待っている間）やバックオフ待ちの停止も効く。終了の通知は stdout / stderr の両方が EOF になってから出すので、exit 4 の理由の行が先に届く
+- **外部の run**: exit 5 の後は `menu --json` がロックの解放（`down`）を見たところで引き継ぐ
 - **通知**: `run` の stdout の `notify` 行を、`config get` で読んだ `[macos]` のフィルタ（ワークフロー別 → 全体 → 既定オン）に通してから `UserNotifications` で出す。クリックは `totsuka focus <task_id>`
 - **メニュー**: 10 秒ごとと通知のたびに `menu --json`。要対応・作業中の各行に focus / retry / cancel（確認付き）。verify は置かない
 - **設定**: `config schema` の `x-category` ごとに並べ、節点の種類（`fieldKind`）でフォームを作る。入力は 1 キーずつ `config set` / `unset`（JSON Pointer）。`x-secret` は Keychain に保存して `secret:<名前>` を書く。`x-raw` や型の決まらないテーブルは JSON で編集する。「確認」で `config validate --secrets-stdin` を流す

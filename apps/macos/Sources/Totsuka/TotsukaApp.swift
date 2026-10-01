@@ -88,9 +88,9 @@ struct MenuContent: View {
         ForEach(app.menu?.degraded ?? [], id: \.self) { Text("⚠ " + $0) }
 
         switch app.runState {
-        case .stopped, .failed, .restarting:
+        case .stopped, .failed:
             Button(L("Start", "起動")) { Task { await app.start() } }
-        case .running, .starting:
+        case .running, .starting, .restarting:
             Button(L("Stop", "停止")) { app.stop() }
         case .stopping:
             Button(L("Stop now", "すぐに停止")) { app.forceStop() }

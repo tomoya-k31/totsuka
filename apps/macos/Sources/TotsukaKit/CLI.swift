@@ -87,8 +87,9 @@ public struct TotsukaCLI: Sendable {
 
 /// The environment a login shell would give a terminal (`$SHELL -lic env`), so
 /// a GUI-launched `run` finds the same tools. Falls back to this process's own
-/// environment when the shell cannot be run.
-public func loginShellEnvironment() -> [String: String] {
+/// environment when the shell cannot be run or takes longer than `timeout`
+/// (an rc file waiting for input must not hang the app).
+public func loginShellEnvironment(timeout: TimeInterval = 10) -> [String: String] {
     let fallback = ProcessInfo.processInfo.environment
     let shell = fallback["SHELL"] ?? "/bin/zsh"
     let process = Process()
@@ -98,9 +99,20 @@ public func loginShellEnvironment() -> [String: String] {
     process.standardOutput = out
     process.standardError = FileHandle.nullDevice
     process.standardInput = FileHandle.nullDevice
+    let exited = DispatchSemaphore(value: 0)
+    process.terminationHandler = { _ in exited.signal() }
     guard (try? process.run()) != nil else { return fallback }
-    let data = out.fileHandleForReading.readDataToEndOfFile()
-    process.waitUntilExit()
+    var data = Data()
+    let read = DispatchSemaphore(value: 0)
+    DispatchQueue.global().async {
+        data = out.fileHandleForReading.readDataToEndOfFile()
+        read.signal()
+    }
+    guard exited.wait(timeout: .now() + timeout) == .success else {
+        process.terminate()
+        return fallback
+    }
+    read.wait()
     let parsed = parseEnv(String(decoding: data, as: UTF8.self))
     return parsed["PATH"] == nil ? fallback : parsed
 }

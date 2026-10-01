@@ -36,7 +36,9 @@ public struct SecretStore: Sendable {
         guard status == errSecSuccess, let data = out as? Data else {
             throw KeychainError(status: status)
         }
-        return (try? JSONDecoder().decode([String: String].self, from: data)) ?? [:]
+        // A map that does not decode is an error, not an empty map: saving
+        // over it would erase every stored secret.
+        return try JSONDecoder().decode([String: String].self, from: data)
     }
 
     /// Replace the map.
