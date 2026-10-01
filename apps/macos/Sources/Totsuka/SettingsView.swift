@@ -55,7 +55,22 @@ final class SettingsModel: ObservableObject {
         await write(["config", "unset", JSONPointer.join(segments)])
     }
 
+    /// The writes run one at a time, in the order they were made: each is a
+    /// read-modify-write of the whole file, and two at once would let the later
+    /// one drop the earlier one's edit.
+    private var lastWrite: Task<Void, Never>?
+
     private func write(_ arguments: [String]) async {
+        let previous = lastWrite
+        let task = Task { @MainActor in
+            await previous?.value
+            await self.perform(arguments)
+        }
+        lastWrite = task
+        await task.value
+    }
+
+    private func perform(_ arguments: [String]) async {
         guard let cli = app.cli else { return }
         do {
             let r = try await cli.run(arguments)

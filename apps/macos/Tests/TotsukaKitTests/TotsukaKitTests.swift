@@ -143,7 +143,13 @@ import Testing
 
     @Test func secretNamesAndPointers() {
         #expect(secretName(for: ["github", "token"]) == "github.token")
-        #expect(secretName(for: ["tools", "a/b c"]) == "tools.a_b_c")
+        #expect(secretName(for: ["slack", "bot_token"]) == "slack.bot_5Ftoken")
+        // One-to-one (Copilot on #849): neither `/` vs `_` nor a dot inside a
+        // segment vs a segment boundary may collide.
+        #expect(secretName(for: ["t", "a/b"]) != secretName(for: ["t", "a_b"]))
+        #expect(secretName(for: ["a.b"]) != secretName(for: ["a", "b"]))
+        let allowed = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-")
+        #expect(secretName(for: ["tools", "日本 語/x"]).allSatisfy { allowed.contains($0) })
         #expect(JSONPointer.join(["tools", "my.tool", "a/b"]) == "/tools/my.tool/a~1b")
     }
 

@@ -79,10 +79,17 @@ public func shouldNotify(_ event: NotifyEvent, macos: JSONValue?) -> Bool {
 }
 
 /// The `secret:<name>` name for a config field, from its JSON Pointer
-/// segments: `["github", "token"]` → `github.token`. Characters the CLI
-/// refuses in a name (`[A-Za-z0-9_.-]` is the set) become `_`.
+/// segments: `["github", "token"]` → `github.token`. The CLI allows only
+/// `[A-Za-z0-9_.-]` in a name, and tool or plugin names may hold anything, so
+/// every other byte — and `_` and `.` themselves — is written as `_XX` (hex)
+/// inside a segment. That keeps the mapping one-to-one: `a/b` and `a_b`, or
+/// `["a.b"]` and `["a", "b"]`, can never share a Keychain entry.
 public func secretName(for segments: [String]) -> String {
     segments.map { segment in
-        String(segment.map { $0.isASCII && ($0.isLetter || $0.isNumber || "_-".contains($0)) ? $0 : "_" })
+        segment.utf8.map { byte -> String in
+            let c = Character(UnicodeScalar(byte))
+            if byte < 0x80, c.isLetter || c.isNumber || c == "-" { return String(c) }
+            return String(format: "_%02X", byte)
+        }.joined()
     }.joined(separator: ".")
 }

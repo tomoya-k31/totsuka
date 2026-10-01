@@ -76,7 +76,7 @@ Apple Developer Program には**加入しない**。それでも友人に配り�
   - `config schema` — core とプラグインのスキーマを 1 つのルートスキーマにまとめて返す
   - `config get` — 実際に読むファイル（`--config` / `hosts/<host>.toml` / `config.toml`、[ADR-0106](/decisions/adr-0106-per-host-config-file.md)）のパスと中身を JSON で返す
   - `config set <path> <json>` / `config unset <path>` — キーパスは JSON Pointer（ツール名・プラグイン名に `.` を含められるため。数字は既存の配列でだけ添字、`-` は追加）。`toml_edit` でコメントを保ったまま 1 キーずつ書き換える。**読めていたファイルを読めなくする書き込みは拒否する**が、1 キーずつなので途中の状態が `config validate` を通るとは限らない（起動の条件は別に `config validate` で見る）。シンボリックリンクは辿った先に書く（dotfiles の Stow を壊さない）
-- `x-secret` のフィールドは、保存すると config に **`secret:<ドット区切りのパス>`** が自動で書かれ、値は Keychain の 1 項目（JSON マップ）に入る。既存の `op://` などの参照は `--secrets-stdin` の下では拒否されるので、設定画面で「要入力」として出し、入力されたら `secret:` に置き換える
+- `x-secret` のフィールドは、保存すると config に **`secret:<キーパスから作った名前>`** が自動で書かれ（セグメントを `.` でつなぎ、`[A-Za-z0-9-]` 以外のバイトは `_` と 16 進 2 桁にする。`_` と `.` も逃がすので、別のキーが同じ名前になることはない）、値は Keychain の 1 項目（JSON マップ）に入る。既存の `op://` などの参照は `--secrets-stdin` の下では拒否されるので、設定画面で「要入力」として出し、入力されたら `secret:` に置き換える
 
 ## 6. 配布
 

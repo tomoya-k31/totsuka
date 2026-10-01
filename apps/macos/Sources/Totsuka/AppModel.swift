@@ -155,6 +155,11 @@ final class AppModel: ObservableObject {
             runState = .stopped
             return
         }
+        terminateGracefully(process)
+    }
+
+    /// SIGTERM, then SIGKILL if `run` has not exited within `stopGrace`.
+    private func terminateGracefully(_ process: RunProcess) {
         requestedStop = true
         runState = .stopping
         process.terminate()
@@ -352,9 +357,7 @@ final class AppModel: ObservableObject {
             return
         }
         relaunchURL = app
-        requestedStop = true
-        runState = .stopping
-        process.terminate()
+        terminateGracefully(process)
     }
 
     private func openAndQuit(_ app: URL) {

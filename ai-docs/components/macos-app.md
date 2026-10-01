@@ -31,7 +31,7 @@ owner: tomoya-k31
 - **外部の run**: exit 5 の後は `menu --json` がロックの解放（`down`）を見たところで引き継ぐ
 - **通知**: `run` の stdout の `notify` 行を、`config get` で読んだ `[macos]` のフィルタ（ワークフロー別 → 全体 → 既定オン）に通してから `UserNotifications` で出す。クリックは `totsuka focus <task_id>`
 - **メニュー**: 10 秒ごとと通知のたびに `menu --json`。要対応・作業中の各行に focus / retry / cancel（確認付き）。verify は置かない
-- **設定**: `config schema` の `x-category` ごとに並べ、節点の種類（`fieldKind`）でフォームを作る。入力は 1 キーずつ `config set` / `unset`（JSON Pointer）。`x-secret` は Keychain に保存して `secret:<名前>` を書く。`x-raw` や型の決まらないテーブルは JSON で編集する。「確認」で `config validate --secrets-stdin` を流す
+- **設定**: `config schema` の `x-category` ごとに並べ、節点の種類（`fieldKind`）でフォームを作る。入力は 1 キーずつ `config set` / `unset`（JSON Pointer）。`x-secret` は Keychain に保存して `secret:<名前>` を書く（名前は `secretName`: キーパスのセグメントを `.` でつなぎ、`[A-Za-z0-9-]` 以外は `_XX` に逃がす一対一の符号化）。設定の書き込みは 1 本ずつ順に流す（同時に走ると、後の書き込みが先の編集を消すため）。`x-raw` や型の決まらないテーブルは JSON で編集する。「確認」で `config validate --secrets-stdin` を流す
 - **更新**: 自分のバンドルが消えたら（`brew upgrade` と cleanup）メニューに「更新済み・再起動」を出し、CLI の隣の `Totsuka.app` を開いて自分は終わる。起動時に、ログイン項目が有効なら登録し直して新しい場所へ移す
 
 # テスト

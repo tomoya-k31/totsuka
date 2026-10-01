@@ -108,11 +108,15 @@ public func loginShellEnvironment(timeout: TimeInterval = 10) -> [String: String
         data = out.fileHandleForReading.readDataToEndOfFile()
         read.signal()
     }
-    guard exited.wait(timeout: .now() + timeout) == .success else {
+    let deadline = DispatchTime.now() + timeout
+    // Both under the one deadline: a background job started by an rc file
+    // can keep stdout open after the shell itself has exited.
+    guard exited.wait(timeout: deadline) == .success, read.wait(timeout: deadline) == .success
+    else {
         process.terminate()
+        try? out.fileHandleForReading.close()
         return fallback
     }
-    read.wait()
     let parsed = parseEnv(String(decoding: data, as: UTF8.self))
     return parsed["PATH"] == nil ? fallback : parsed
 }
