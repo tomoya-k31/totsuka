@@ -1,7 +1,7 @@
 > 🌐 [English](orchestrator-spec.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/product/orchestrator-spec.ja.md sha256:0e893fb174c1a08c757fac3789dadab9d3ecdf83f74a49f24bc0a593e5b5b0be -->
+<!-- generated-from: ai-docs/product/orchestrator-spec.ja.md sha256:16efc290936cd7c61936a57c4f9d99598801e8695789a02638445277b8cab2a5 -->
 
 # totsuka とは
 
@@ -92,6 +92,7 @@ worktree の置き場所は設定でき、ディレクトリ名はブランチ�
 |---|---|
 | `setup` | 初期セットアップ: 選んだプラグインを導入し、全設定をコメントで書いた設定ファイルを生成する |
 | `run [--watch] [--json]` | 取り込みからディスパッチまでのメインループ。`--watch` は止めるまで常駐する |
+| `run --events-jsonl` | `run` を起動するメニューバーアプリ向け。stdout の各行が JSON 1 つになり、通知（`type: "notify"`）と最後の要約（`type: "summary"`）が流れる。通知はアプリが出すので notifier プラグインは起動しない。`--json` とは併用できない |
 | `status [--json]` | 実行中・待機中・入力待ちのタスクと worktree の一覧、および動作中の totsuka が今できていないこと |
 | `menu [--json]` | メニューバー向けの表示。可用性と、自分の対応を待っている件数 |
 | `task list / show <id> / cancel <id> / retry <id>` | 個別のタスク操作 |

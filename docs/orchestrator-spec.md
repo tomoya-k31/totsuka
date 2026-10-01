@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](orchestrator-spec.ja.md)
 
-<!-- generated-from: ai-docs/product/orchestrator-spec.md sha256:5ae6cf24331fbbfa6858e32824e9dcaad43b9e0d27899ad33ec35c1f8c5c557d -->
+<!-- generated-from: ai-docs/product/orchestrator-spec.md sha256:d5235287257b926bf88a7b156db719f7f1cb9c04b998b6ef8bfaa20e073eeb5f -->
 
 # What totsuka is
 
@@ -91,6 +91,7 @@ A single binary, run in the foreground.
 |---|---|
 | `setup` | First-time setup: install the plugins you pick and write a configuration with every setting in it, commented out |
 | `run [--watch] [--json]` | The main loop, from intake to dispatch. `--watch` stays up until you stop it |
+| `run --events-jsonl` | For the menu bar app that starts `run` for you: every line on stdout is one JSON object — each notification (`type: "notify"`) and the final summary (`type: "summary"`). Notifier plugins are not started, because the app shows the notifications. Cannot be combined with `--json` |
 | `status [--json]` | Running, queued, and waiting tasks, plus worktrees, and anything the running orchestrator cannot currently do |
 | `menu [--json]` | The menu-bar view: availability, plus how many tasks are waiting on you |
 | `task list / show <id> / cancel <id> / retry <id>` | Working with individual tasks |

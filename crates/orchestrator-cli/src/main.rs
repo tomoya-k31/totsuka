@@ -105,6 +105,16 @@ enum Command {
         /// first line is read.
         #[arg(long)]
         secrets_stdin: bool,
+        /// Write each notification to stdout as one JSON line, for the
+        /// process that launched this one (the menu bar app, ADR-0109).
+        ///
+        /// Every stdout line is then one JSON object with a `type`: `notify`
+        /// (the fields of a `notify` sent to notifier plugins) as tasks move,
+        /// and `summary` (the `--json` summary) at the end. Notifier plugins
+        /// are not started — the parent is the notifier. Refused together
+        /// with `--json`, whose stdout is a single document.
+        #[arg(long, conflicts_with = "json")]
+        events_jsonl: bool,
         #[command(flatten)]
         json: common::JsonFlag,
     },
@@ -311,6 +321,7 @@ fn execute(
             dry_run,
             one_shot_grace_ms,
             secrets_stdin,
+            events_jsonl,
             json,
         } => run_cmd::run(
             &cx,
@@ -320,6 +331,7 @@ fn execute(
                 debug,
                 one_shot_grace_ms,
                 secrets_stdin,
+                events_jsonl,
                 json: json.json,
             },
         ),

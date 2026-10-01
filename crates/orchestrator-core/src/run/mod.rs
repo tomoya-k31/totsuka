@@ -1072,9 +1072,43 @@ fn notify_all(
     deliver_notification(notifiers, &params);
 }
 
-/// Deliver one already-built [`NotifyParams`] to every notifier (F-90).
-/// Fire-and-forget: delivery failures never affect task execution (F-93).
+/// Whether `run --events-jsonl` is on (ADR-0109): every notification is also
+/// written to stdout as one JSON line, for the menu bar app that launched this
+/// process.
+///
+/// Process-wide rather than a field threaded through the engine, for the
+/// reason `platform::supplied` gives (ADR-0100): [`deliver_notification`] is
+/// the one place every notification passes, it is called from 18 sites, and a
+/// flag carried as an argument is a flag some new call site forgets.
+static EVENTS_JSONL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Turn on `run --events-jsonl` for this process (ADR-0109).
+pub fn emit_events_jsonl() {
+    EVENTS_JSONL.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Write one `run --events-jsonl` line: `payload`'s fields plus
+/// `"type": <kind>`, flushed at once so the parent sees it as it happens.
+/// A no-op unless [`emit_events_jsonl`] was called. A failed write is
+/// ignored: the parent being gone must not affect task execution (F-93).
+pub fn write_event_line(kind: &str, payload: &impl serde::Serialize) {
+    use std::io::Write;
+    if !EVENTS_JSONL.load(std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    let Ok(Value::Object(mut line)) = serde_json::to_value(payload) else {
+        return;
+    };
+    line.insert("type".into(), Value::String(kind.into()));
+    let mut out = std::io::stdout().lock();
+    let _ = writeln!(out, "{}", Value::Object(line)).and_then(|()| out.flush());
+}
+
+/// Deliver one already-built [`NotifyParams`] to every notifier (F-90), and
+/// to stdout under `run --events-jsonl`. Fire-and-forget: delivery failures
+/// never affect task execution (F-93).
 fn deliver_notification(notifiers: &HashMap<String, Plugin>, params: &NotifyParams) {
+    write_event_line("notify", params);
     for plugin in notifiers.values() {
         if let Err(e) = plugin.notify(method::NOTIFY, params) {
             tracing::warn!(plugin = %plugin.name(), "notify delivery failed (ignored, F-93): {e}");
