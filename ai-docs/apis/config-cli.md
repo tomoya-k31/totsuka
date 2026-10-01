@@ -1,10 +1,10 @@
 ---
 type: API Endpoint
 title: totsuka config schema / get / set / unset（設定画面向けの CLI 契約）
-description: メニューバーアプリの設定画面が config.toml を読み書きするための CLI 契約（ADR-0109）。schema は core（schemars）と各プラグイン（config/schema）のスキーマを 1 つのルートスキーマにまとめ、get はファイルの中身を JSON で返し、set / unset はドット区切りのキーパスで 1 キーずつコメントを保ったまま書き換える。読めていたファイルを読めなくする書き込みは拒否し、シンボリックリンクは辿って書く。
+description: メニューバーアプリの設定画面が config.toml を読み書きするための CLI 契約（ADR-0109）。schema は core（schemars）と各プラグイン（config/schema）のスキーマを 1 つのルートスキーマにまとめ、get はファイルの中身を JSON で返し、set / unset は JSON Pointer のキーパスで 1 キーずつコメントを保ったまま書き換える。読めていたファイルを読めなくする書き込みは拒否し、シンボリックリンクは辿って書く。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-cli/src/config_cmd.rs
 tags: [api, cli, config, json-schema, menubar, macos]
-generated: { by: claude-code/opus-5.5, at: 2026-10-01T22:19:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-01T22:56:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -26,6 +26,10 @@ owner: tomoya-k31
 - `schema` は JSON Schema（draft 2020-12）。**`$ref` は使わず全部インライン**、doc コメント由来の `title` / `description` は落としてある（開発者向けの文なので）
 - core のキーは schemars で `RootConfig` から導出する（`config::json_schema::core_schema`）。serde が読む構造体そのものから作るので、ローダが受け付けないキーは載らない
 - **インストール済みの各プラグイン**のテーブルを、その名前のプロパティとして足す。マニフェストで `config_schema` を宣言したプラグインだけを起動し、`initialize` を送らずに `config/schema` を尋ねる（`plugins::plugin_schemas`）。設定ファイルは読まないので、機密が無くても、未設定・未有効でも答えが返る
+- プラグインには**並行して**尋ね、1 つあたり 10 秒で打ち切る。止まったプラグインがあっても、待つのは全体で 10 秒程度
+- マニフェストが壊れたプラグインは、そのプラグインだけが `x-raw` + `x-schema-error` になる
+- **core のキーと同じ名前のプラグイン**（`log` など）は足さない。core の設定を上書きさせないため（その名前は設定の検証でも拒否される）
+- **`$ref` を含む答えは `x-raw`** になる。プロトコルはサブスキーマをインラインで書くことを求めている（埋め込むとローカル参照が別の根に対して解決されるため）
 - 拡張キーワード:
 
 | キーワード | 型 | 意味 |
@@ -48,9 +52,10 @@ owner: tomoya-k31
 
 ## `totsuka config set <path> <json>` / `totsuka config unset <path>`
 
-- `path` はドット区切り。**数字のセグメントは配列の添字**（`repositories.0.tool`）、テーブルの上では普通のキー。長さと同じ添字は末尾への追加
+- `path` は **JSON Pointer**（RFC 6901）: `/log/level`、`/repositories/0/tool`、`/tools/my.tool/kind`。キーの中の `/` は `~1`、`~` は `~0` と書く。ドット区切りにしなかったのは、ツール名やプラグイン名に `.` を含められるため
+- **数字のセグメントが添字になるのは、そこがすでに配列のときだけ**。テーブルの上では普通のキー（`/tools/123/kind` は `[tools.123]`）。**`-` は配列の末尾への追加**
 - `json` は値の JSON（`'"debug"'`、`4`、`true`、`{"name":"a","path":"/x"}`）。`null` は拒否（消すのは `unset`）
-- 途中のテーブルが無ければ作る。次のセグメントが添字なら配列（`[[…]]`）を作る
+- 途中のテーブルが無ければ作る。**配列を作るのは次のセグメントが `-` のときだけ**（`/repositories/-` で `[[repositories]]` を作る）。数字から配列を推測しないのは、テーブルの数字キーと区別できないため
 - オブジェクトは `[table]`、オブジェクトの配列は `[[array of tables]]` になる。置き換える値がインラインで書かれていればインラインのまま
 - 書き換えは `toml_edit`（`config::set_path` / `config::unset_path`）で、ほかの行のコメント・順序・空白は保つ。値を置き換えたキーの行末コメントも残る
 - `unset` で無いものを消そうとしても成功（ファイルはすでに頼まれた状態）

@@ -49,14 +49,15 @@ pub enum ConfigCommand {
     Get,
     /// Set one key, keeping the file's comments and layout.
     Set {
-        /// Dotted key path; a number indexes an array (`repositories.0.tool`).
+        /// Key path as a JSON Pointer: `/log/level`, `/repositories/0/tool`;
+        /// `-` appends to an array, `~1` is `/` inside a key.
         path: String,
         /// The value as JSON (`'"debug"'`, `4`, `true`, `{"name":"a"}`).
         value: String,
     },
     /// Remove one key or array element.
     Unset {
-        /// Dotted key path, as for `set`.
+        /// Key path as a JSON Pointer, as for `set`.
         path: String,
     },
 }
@@ -101,8 +102,12 @@ pub fn run(cx: &Cx, command: ConfigCommand) -> Result<(), CliError> {
 /// in under its name. A plugin that does not declare `config_schema`, or whose
 /// answer is unusable, gets `x-raw: true` (edit as TOML) instead of failing the
 /// command — one broken plugin must not take the whole settings window down.
+///
+/// A plugin named like a core key (`log`, `workflows`, …) is left out rather
+/// than allowed to replace that key's schema: config validation refuses the
+/// name anyway, and the core settings must stay editable meanwhile.
 fn schema(cx: &Cx) -> Result<(), CliError> {
-    use orchestrator_core::plugins::{PluginSchema, plugin_schemas};
+    use orchestrator_core::plugins::plugin_schemas;
     use serde_json::json;
 
     let mut schema = config::json_schema::core_schema();
@@ -111,28 +116,47 @@ fn schema(cx: &Cx) -> Result<(), CliError> {
         .as_object_mut()
         .expect("the core schema is an object schema");
     for (name, answer) in answers {
-        let category = json!({ "en": name, "ja": name });
-        let raw = |error: Option<String>| {
-            let mut entry = json!({ "type": "object", "x-category": category, "x-raw": true });
-            if let Some(error) = error {
-                entry["x-schema-error"] = json!(error);
-            }
-            entry
-        };
-        let entry = match answer {
-            PluginSchema::Schema(mut s) if s["type"] == "object" => {
-                if s.get("x-category").is_none() {
-                    s["x-category"] = category.clone();
-                }
-                s
-            }
-            PluginSchema::Schema(_) => raw(Some("the answer is not an object schema".into())),
-            PluginSchema::Undeclared => raw(None),
-            PluginSchema::Failed(e) => raw(Some(e)),
-        };
-        properties.insert(name, entry);
+        if !properties.contains_key(&name) {
+            let entry = plugin_property(&name, answer);
+            properties.insert(name, entry);
+        }
     }
     crate::common::print_json(&json!({ "config_path": cx.config_path, "schema": schema }))
+}
+
+/// The schema property for one plugin's table: its answer, or `x-raw` (with
+/// the reason in `x-schema-error`) when there is no usable answer.
+fn plugin_property(
+    name: &str,
+    answer: orchestrator_core::plugins::PluginSchema,
+) -> serde_json::Value {
+    use orchestrator_core::plugins::PluginSchema;
+    use serde_json::json;
+
+    let category = json!({ "en": name, "ja": name });
+    let raw = |error: Option<String>| {
+        let mut entry = json!({ "type": "object", "x-category": category, "x-raw": true });
+        if let Some(error) = error {
+            entry["x-schema-error"] = json!(error);
+        }
+        entry
+    };
+    match answer {
+        // Embedded under `properties.<name>`, a local `$ref` would resolve
+        // against the wrong root; the protocol asks for inline subschemas.
+        PluginSchema::Schema(s) if s.to_string().contains("\"$ref\"") => raw(Some(
+            "the schema uses $ref → answer with every subschema inline".into(),
+        )),
+        PluginSchema::Schema(mut s) if s["type"] == "object" => {
+            if s.get("x-category").is_none() {
+                s["x-category"] = category.clone();
+            }
+            s
+        }
+        PluginSchema::Schema(_) => raw(Some("the answer is not an object schema".into())),
+        PluginSchema::Undeclared => raw(None),
+        PluginSchema::Failed(e) => raw(Some(e)),
+    }
 }
 
 /// `config get`: the file as written (no `TOTSUKA_*` overrides folded in — the
@@ -492,6 +516,25 @@ fn redact_table(table: &mut toml::Table) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A plugin's local `$ref` would point into the wrong document once
+    /// embedded, so such an answer is shown raw (Copilot on #845).
+    #[test]
+    fn a_plugin_schema_with_ref_is_shown_raw() {
+        use orchestrator_core::plugins::PluginSchema;
+        let with_ref = serde_json::json!({
+            "type": "object",
+            "properties": { "a": { "$ref": "#/$defs/A" } },
+            "$defs": { "A": { "type": "string" } },
+        });
+        let entry = plugin_property("p", PluginSchema::Schema(with_ref));
+        assert_eq!(entry["x-raw"], true);
+        assert!(entry["x-schema-error"].as_str().unwrap().contains("$ref"));
+        let inline = serde_json::json!({ "type": "object", "properties": {} });
+        let entry = plugin_property("p", PluginSchema::Schema(inline));
+        assert!(entry.get("x-raw").is_none());
+        assert_eq!(entry["x-category"]["en"], "p");
+    }
 
     #[test]
     fn redacts_secret_keys_recursively() {

@@ -2274,6 +2274,25 @@ fn config_schema_merges_plugin_tables() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// One broken plugin does not take the schema down, and a plugin named like a
+/// core key cannot replace that key's schema (Copilot on #845).
+#[test]
+fn config_schema_survives_a_broken_manifest_and_a_reserved_name() {
+    let base = scratch("config-schema-broken");
+    install_mock(&base, "log", true);
+    let broken = base.join("data/totsuka/plugins/broken");
+    std::fs::create_dir_all(&broken).unwrap();
+    std::fs::write(broken.join("plugin.toml"), "not toml {{{\n").unwrap();
+    let out = run(&base, &["config", "schema"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let doc: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
+    let props = &doc["schema"]["properties"];
+    assert_eq!(props["log"]["x-category"]["ja"], "ログ", "core `log` kept");
+    assert_eq!(props["broken"]["x-raw"], true);
+    assert!(props["broken"]["x-schema-error"].is_string());
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// set → get → unset round trip on a file that does not exist yet, keeping a
 /// comment, and refusing an edit that would make the file unloadable.
 #[test]
@@ -2287,7 +2306,7 @@ fn config_set_get_unset_round_trip() {
     let got: serde_json::Value = serde_json::from_str(&ok(&["config", "get"])).unwrap();
     assert_eq!(got["exists"], false);
 
-    ok(&["config", "set", "log.level", r#""debug""#]);
+    ok(&["config", "set", "/log/level", r#""debug""#]);
     let path = base.join("cfg/totsuka/config.toml");
     let text = std::fs::read_to_string(&path).unwrap();
     // Attached to `version`, which stays (a comment above `[log]` would
@@ -2296,10 +2315,10 @@ fn config_set_get_unset_round_trip() {
     ok(&[
         "config",
         "set",
-        "repositories.0",
+        "/repositories/-",
         r#"{"name":"a","path":"/tmp"}"#,
     ]);
-    ok(&["config", "unset", "log"]);
+    ok(&["config", "unset", "/log"]);
 
     let got: serde_json::Value = serde_json::from_str(&ok(&["config", "get"])).unwrap();
     assert_eq!(got["exists"], true);
@@ -2313,7 +2332,7 @@ fn config_set_get_unset_round_trip() {
 
     // A type error is refused with the JSON envelope, and nothing is written.
     let before = std::fs::read_to_string(&path).unwrap();
-    let out = run(&base, &["config", "set", "max_concurrency", r#""many""#]);
+    let out = run(&base, &["config", "set", "/max_concurrency", r#""many""#]);
     assert!(!out.status.success());
     let envelope: serde_json::Value = serde_json::from_str(stderr(&out).trim()).unwrap();
     assert!(envelope["error"]["message"].is_string(), "{envelope}");
@@ -2333,7 +2352,7 @@ fn config_set_writes_through_a_symlink() {
     std::fs::create_dir_all(link.parent().unwrap()).unwrap();
     std::os::unix::fs::symlink(&real, &link).unwrap();
 
-    let out = run(&base, &["config", "set", "max_concurrency", "2"]);
+    let out = run(&base, &["config", "set", "/max_concurrency", "2"]);
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
     assert!(
@@ -2344,7 +2363,7 @@ fn config_set_writes_through_a_symlink() {
 
     // A dangling link is followed too: the file is created where it points.
     std::fs::remove_file(&real).unwrap();
-    let out = run(&base, &["config", "set", "max_concurrency", "3"]);
+    let out = run(&base, &["config", "set", "/max_concurrency", "3"]);
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
     assert!(
@@ -2359,7 +2378,7 @@ fn config_set_writes_through_a_symlink() {
 #[test]
 fn config_unset_without_a_file_creates_nothing() {
     let base = scratch("config-unset-none");
-    let out = run(&base, &["config", "unset", "log.level"]);
+    let out = run(&base, &["config", "unset", "/log/level"]);
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(!base.join("cfg/totsuka/config.toml").exists());
     let _ = std::fs::remove_dir_all(&base);

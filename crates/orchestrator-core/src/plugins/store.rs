@@ -385,6 +385,26 @@ impl PluginStore {
         Ok(Some(Manifest::from_toml_str(&fs::read_to_string(path)?)?))
     }
 
+    /// The names of the store's plugin directories, sorted, without reading
+    /// any manifest — for a caller that must report a broken one per plugin
+    /// instead of failing the whole listing as [`list`](Self::list) does.
+    pub fn installed_names(&self) -> Result<Vec<String>, StoreError> {
+        let mut names = Vec::new();
+        if !self.root.exists() {
+            return Ok(names);
+        }
+        for entry in fs::read_dir(&self.root)? {
+            let entry = entry?;
+            if entry.file_type()?.is_dir()
+                && let Some(name) = entry.file_name().to_str()
+            {
+                names.push(name.to_string());
+            }
+        }
+        names.sort();
+        Ok(names)
+    }
+
     /// List installed plugins (directories containing a valid manifest).
     pub fn list(&self) -> Result<Vec<InstalledPlugin>, StoreError> {
         let mut plugins = Vec::new();

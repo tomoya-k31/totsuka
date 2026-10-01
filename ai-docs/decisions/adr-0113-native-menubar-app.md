@@ -4,7 +4,7 @@ title: ADR-0113 ネイティブ macOS メニューバーアプリが run を子�
 description: "SwiftBar 向けの `totsuka menu` だけでは届かない 2 つの要件（アプリ名義のネイティブ通知と、config.toml の GUI 編集）のため、SwiftUI のメニューバーアプリ（apps/macos/）を足す決定。run は `--secrets-stdin` 付きの子プロセスとして起動し終了コードで再起動を判断、通知は `run --events-jsonl` の stdout、設定画面は JSON Schema（core は schemars、プラグインは新メソッド config/schema）から生成し読み書きは CLI 経由。Developer Program に加入しないため ad-hoc 署名の .app を release tarball に同梱して formula で配る。ADR-0065 の「Swift アプリ」却下を部分的に覆す。"
 resource: https://github.com/tomoya-k31/totsuka/tree/main/apps/macos
 tags: [decision, macos, menubar, notifier, config, protocol, distribution, adr]
-generated: { by: claude-code/opus-5.5, at: 2026-10-01T22:19:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-01T22:56:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -73,7 +73,7 @@ Apple Developer Program には**加入しない**。それでも友人に配り�
 - **読み書きは CLI 経由**（Swift 側で TOML を扱わない）:
   - `config schema` — core とプラグインのスキーマを 1 つのルートスキーマにまとめて返す
   - `config get` — 実際に読むファイル（`--config` / `hosts/<host>.toml` / `config.toml`、[ADR-0106](/decisions/adr-0106-per-host-config-file.md)）のパスと中身を JSON で返す
-  - `config set <path> <json>` / `config unset <path>` — `toml_edit` でコメントを保ったまま 1 キーずつ書き換える。**読めていたファイルを読めなくする書き込みは拒否する**が、1 キーずつなので途中の状態が `config validate` を通るとは限らない（起動の条件は別に `config validate` で見る）。シンボリックリンクは辿った先に書く（dotfiles の Stow を壊さない）
+  - `config set <path> <json>` / `config unset <path>` — キーパスは JSON Pointer（ツール名・プラグイン名に `.` を含められるため。数字は既存の配列でだけ添字、`-` は追加）。`toml_edit` でコメントを保ったまま 1 キーずつ書き換える。**読めていたファイルを読めなくする書き込みは拒否する**が、1 キーずつなので途中の状態が `config validate` を通るとは限らない（起動の条件は別に `config validate` で見る）。シンボリックリンクは辿った先に書く（dotfiles の Stow を壊さない）
 - `x-secret` のフィールドは、保存すると config に **`secret:<ドット区切りのパス>`** が自動で書かれ、値は Keychain の 1 項目（JSON マップ）に入る。既存の `op://` などの参照は `--secrets-stdin` の下では拒否されるので、設定画面で「要入力」として出し、入力されたら `secret:` に置き換える
 
 ## 6. 配布

@@ -113,20 +113,29 @@ pub enum PluginSchema {
     Failed(String),
 }
 
+/// How long one plugin may take to answer `config/schema`. The answer is a
+/// constant the plugin builds without I/O, so this is a bound on a hung
+/// process, not on real work.
+const SCHEMA_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Ask every installed plugin that declares `config_schema` for the schema of
 /// its config table (ADR-0109) — **without** `initialize` and without reading
 /// `config.toml`, so it works before any secret exists and before the plugin
 /// is configured or enabled. The capability is read from the manifest, which
 /// is why a plugin that does not declare it is never started.
+///
+/// Each plugin's outcome is its own: an unreadable manifest is that plugin's
+/// [`PluginSchema::Failed`], not the whole call's error. The plugins are asked
+/// concurrently, so a hung one costs `SCHEMA_TIMEOUT` once, not per plugin.
 pub async fn plugin_schemas(
     store: &PluginStore,
 ) -> Result<Vec<(String, PluginSchema)>, StoreError> {
+    let mut asks = tokio::task::JoinSet::new();
     let mut out = Vec::new();
-    for installed in store.list()? {
-        let name = installed.name;
-        let schema = match store.manifest_of(&name) {
+    for name in store.installed_names()? {
+        let spec = match store.manifest_of(&name) {
             Ok(Some(manifest)) if manifest.capabilities.config_schema => {
-                let spec = store.resolved_dir(&name).map(|dir| PluginSpec {
+                store.resolved_dir(&name).map(|dir| PluginSpec {
                     name: name.clone(),
                     program: dir.join(&manifest.name),
                     args: vec![],
@@ -136,21 +145,36 @@ pub async fn plugin_schemas(
                     projects: vec![],
                     llm: None,
                     workflows: vec![],
-                    timeout: DEFAULT_PLUGIN_TIMEOUT,
-                });
-                match spec {
-                    Ok(spec) => match crate::adapters::plugin_host::config_schema(spec).await {
+                    timeout: SCHEMA_TIMEOUT,
+                })
+            }
+            Ok(_) => {
+                out.push((name, PluginSchema::Undeclared));
+                continue;
+            }
+            Err(e) => Err(e),
+        };
+        match spec {
+            Ok(spec) => {
+                asks.spawn(async move {
+                    let answer = match crate::adapters::plugin_host::config_schema(spec).await {
                         Ok(schema) => PluginSchema::Schema(schema),
                         Err(e) => PluginSchema::Failed(e.to_string()),
-                    },
-                    Err(e) => PluginSchema::Failed(e.to_string()),
-                }
+                    };
+                    (name, answer)
+                });
             }
-            Ok(_) => PluginSchema::Undeclared,
-            Err(e) => PluginSchema::Failed(e.to_string()),
-        };
-        out.push((name, schema));
+            Err(e) => out.push((name, PluginSchema::Failed(e.to_string()))),
+        }
     }
+    while let Some(joined) = asks.join_next().await {
+        // A panicking probe has no name to report under; it cannot happen
+        // short of a bug in the host, so it is dropped rather than invented.
+        if let Ok(answer) = joined {
+            out.push(answer);
+        }
+    }
+    out.sort_by(|a, b| a.0.cmp(&b.0));
     Ok(out)
 }
 

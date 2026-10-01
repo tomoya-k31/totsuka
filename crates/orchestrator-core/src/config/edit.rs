@@ -44,7 +44,7 @@ pub enum EditError {
     /// A path expected to be an array of tables was something else.
     #[error("`{0}` is not an array of tables in config.toml → fix it by hand")]
     NotAnArrayOfTables(String),
-    /// A dotted key path did not lead anywhere ([`set_path`] / [`unset_path`]).
+    /// A key path did not lead anywhere ([`set_path`] / [`unset_path`]).
     #[error("`{path}`: {detail}")]
     Path {
         /// The path as given.
@@ -464,13 +464,15 @@ fn parse_fragment(
     }
 }
 
-/// Set the value at a dotted key path (`log.level`, `repositories.0.tool`),
-/// preserving the formatting of everything else — the per-key write behind
-/// `totsuka config set` (ADR-0109).
+/// Set the value at a key path, preserving the formatting of everything
+/// else — the per-key write behind `totsuka config set` (ADR-0109).
 ///
-/// A numeric segment indexes an array (an array of tables or an inline array);
-/// on a table it is an ordinary key. Missing tables on the way are created;
-/// an index equal to the array's length appends. A JSON object becomes a
+/// The path is a JSON Pointer (RFC 6901): `/log/level`,
+/// `/repositories/0/tool`, `/tools/my.tool/kind`; `~1` stands for `/` and
+/// `~0` for `~` inside a key. A numeric segment is an index only where the
+/// container already is an array — on a table it is an ordinary key — and `-`
+/// appends to an array. Missing tables on the way are created; a missing
+/// container followed by `-` is created as an array. A JSON object becomes a
 /// `[table]` (an inline table where the parent or the replaced value is
 /// inline), an array of objects becomes `[[array of tables]]`, and `null` is
 /// refused — removing a key is [`unset_path`]. Returns the edited document.
@@ -483,18 +485,20 @@ pub fn set_path(
     let (parents, last) = split_path(path)?;
     let mut node = Node::Table(doc.as_table_mut());
     for (depth, segment) in parents.iter().enumerate() {
-        // What to create when `segment` is missing: an array when the step
-        // after it is an index (`repositories.0` on a file without any).
-        let next = parents.get(depth + 1).copied().unwrap_or(last);
-        let create = if parse_index(next).is_some() {
+        // What to create when `segment` is missing: an array only when told
+        // so by an append (`/repositories/-`). A number is not enough — it is
+        // an ordinary key on a table (`/tools/123/kind`).
+        let next = parents.get(depth + 1).map(String::as_str).unwrap_or(&last);
+        let create = if next == APPEND {
             Create::Array
         } else {
             Create::Table
         };
         node = node
             .step(segment, create)
-            .ok_or_else(|| path_error(path, &parents[..=depth].join("."), "not found"))?;
+            .ok_or_else(|| path_error(path, &pointer(&parents[..=depth]), "not found"))?;
     }
+    let last = last.as_str();
     let err = |detail: String| path_error(path, path, &detail);
     match node {
         Node::Table(table) => {
@@ -507,7 +511,8 @@ pub fn set_path(
             }
         }
         Node::Tables(array) => {
-            let index = parse_index(last).ok_or_else(|| err("expected an index".into()))?;
+            let index = array_index(last, array.len())
+                .ok_or_else(|| err("expected an index or `-`".into()))?;
             let serde_json::Value::Object(map) = value else {
                 return Err(err("an array of tables holds only objects".into()));
             };
@@ -525,7 +530,8 @@ pub fn set_path(
             table.insert(last, json_value(value).map_err(err)?);
         }
         Node::Array(array) => {
-            let index = parse_index(last).ok_or_else(|| err("expected an index".into()))?;
+            let index = array_index(last, array.len())
+                .ok_or_else(|| err("expected an index or `-`".into()))?;
             let new = json_value(value).map_err(err)?;
             if index < array.len() {
                 array.replace(index, new);
@@ -539,7 +545,7 @@ pub fn set_path(
     Ok(doc.to_string())
 }
 
-/// Remove the key or array element at a dotted key path, the inverse of
+/// Remove the key or array element at a JSON Pointer, the inverse of
 /// [`set_path`] (`totsuka config unset`). Removing what is not there is not an
 /// error: the document already says what was asked.
 pub fn unset_path(config_toml: &str, path: &str) -> Result<String, EditError> {
@@ -552,13 +558,13 @@ pub fn unset_path(config_toml: &str, path: &str) -> Result<String, EditError> {
             None => return Ok(doc.to_string()),
         }
     }
-    let index = parse_index(last);
+    let index = parse_index(&last);
     match node {
         Node::Table(table) => {
-            table.remove(last);
+            table.remove(&last);
         }
         Node::Inline(table) => {
-            table.remove(last);
+            table.remove(&last);
         }
         Node::Tables(array) => {
             if let Some(i) = index.filter(|i| *i < array.len()) {
@@ -650,6 +656,9 @@ impl<'a> Node<'a> {
     }
 }
 
+/// The JSON Pointer segment that appends to an array (RFC 6901).
+const APPEND: &str = "-";
+
 fn path_error(path: &str, at: &str, detail: &str) -> EditError {
     EditError::Path {
         path: path.to_string(),
@@ -657,21 +666,47 @@ fn path_error(path: &str, at: &str, detail: &str) -> EditError {
     }
 }
 
-/// `a.b.c` → (`[a, b]`, `c`). Empty segments are refused.
-fn split_path(path: &str) -> Result<(Vec<&str>, &str), EditError> {
-    let segments: Vec<&str> = path.split('.').collect();
-    if segments.iter().any(|s| s.is_empty()) {
-        return Err(EditError::Path {
-            path: path.to_string(),
-            detail: "empty key segment → write keys separated by single dots".into(),
-        });
+/// `/a/b~1c/d` → (`[a, b/c]`, `d`): the segments of a JSON Pointer,
+/// unescaped. The empty pointer (the whole document) and empty segments are
+/// refused — neither names a key that can be set.
+fn split_path(path: &str) -> Result<(Vec<String>, String), EditError> {
+    let bad = |detail: &str| EditError::Path {
+        path: path.to_string(),
+        detail: detail.into(),
+    };
+    let rest = path
+        .strip_prefix('/')
+        .ok_or_else(|| bad("not a JSON Pointer → start with `/`, e.g. `/log/level`"))?;
+    let mut segments: Vec<String> = rest
+        .split('/')
+        .map(|s| s.replace("~1", "/").replace("~0", "~"))
+        .collect();
+    if segments.iter().any(String::is_empty) {
+        return Err(bad("empty key segment"));
     }
-    let (last, parents) = segments.split_last().expect("split yields at least one");
-    Ok((parents.to_vec(), last))
+    let last = segments.pop().expect("split yields at least one");
+    Ok((segments, last))
+}
+
+/// `segments` written back as a JSON Pointer, for error messages.
+fn pointer(segments: &[String]) -> String {
+    segments
+        .iter()
+        .map(|s| format!("/{}", s.replace('~', "~0").replace('/', "~1")))
+        .collect()
 }
 
 fn parse_index(segment: &str) -> Option<usize> {
     segment.parse().ok()
+}
+
+/// An array position: a number, or `-` for one past the end (append).
+fn array_index(segment: &str, len: usize) -> Option<usize> {
+    if segment == APPEND {
+        Some(len)
+    } else {
+        parse_index(segment)
+    }
 }
 
 /// A JSON value as a TOML item under a standard table: objects become
@@ -1328,14 +1363,14 @@ trigger = { status = "Todo" }
 
     #[test]
     fn set_path_replaces_a_scalar_and_keeps_its_comment() {
-        let out = set_path(DOC, "log.level", &serde_json::json!("debug")).unwrap();
+        let out = set_path(DOC, "/log/level", &serde_json::json!("debug")).unwrap();
         assert!(out.contains(r#"level = "debug" # keep me"#), "{out}");
         assert!(out.starts_with("# my config"), "{out}");
     }
 
     #[test]
     fn set_path_creates_missing_tables() {
-        let out = set_path(DOC, "worktree.git_timeout_secs", &serde_json::json!(60)).unwrap();
+        let out = set_path(DOC, "/worktree/git_timeout_secs", &serde_json::json!(60)).unwrap();
         let cfg = crate::config::RootConfig::from_toml_str(&out).unwrap();
         assert_eq!(cfg.worktree.git_timeout_secs, Some(60));
         assert!(out.contains("[worktree]"), "{out}");
@@ -1343,18 +1378,18 @@ trigger = { status = "Todo" }
 
     #[test]
     fn set_path_indexes_and_appends_arrays_of_tables() {
-        let out = set_path(DOC, "repositories.0.tool", &serde_json::json!("codex")).unwrap();
+        let out = set_path(DOC, "/repositories/0/tool", &serde_json::json!("codex")).unwrap();
         assert!(out.contains(r#"tool = "codex""#), "{out}");
         let out = set_path(
             &out,
-            "repositories.1",
+            "/repositories/-",
             &serde_json::json!({ "name": "b", "path": "/b" }),
         )
         .unwrap();
         let cfg = crate::config::RootConfig::from_toml_str(&out).unwrap();
         assert_eq!(cfg.repositories.len(), 2);
         assert_eq!(cfg.repositories[1].name, "b");
-        let err = set_path(&out, "repositories.5", &serde_json::json!({ "name": "c" }));
+        let err = set_path(&out, "/repositories/5", &serde_json::json!({ "name": "c" }));
         assert!(matches!(err, Err(EditError::Path { .. })), "{err:?}");
     }
 
@@ -1362,14 +1397,14 @@ trigger = { status = "Todo" }
     fn set_path_keeps_an_inline_table_inline() {
         let out = set_path(
             DOC,
-            "workflows.0.trigger",
+            "/workflows/0/trigger",
             &serde_json::json!({ "status": "Ready" }),
         )
         .unwrap();
         assert!(out.contains(r#"trigger = { status = "Ready" }"#), "{out}");
         let out = set_path(
             DOC,
-            "workflows.0.trigger.status",
+            "/workflows/0/trigger/status",
             &serde_json::json!("Doing"),
         )
         .unwrap();
@@ -1377,10 +1412,10 @@ trigger = { status = "Todo" }
     }
 
     #[test]
-    fn set_path_creates_a_missing_array_when_the_next_step_is_an_index() {
+    fn set_path_creates_a_missing_array_only_for_an_append() {
         let out = set_path(
             "version = 1\n",
-            "repositories.0",
+            "/repositories/-",
             &serde_json::json!({ "name": "a", "path": "/a" }),
         )
         .unwrap();
@@ -1389,19 +1424,38 @@ trigger = { status = "Todo" }
         assert_eq!(cfg.repositories[0].name, "a");
     }
 
+    /// A number is an ordinary key on a table, and `~1` / dots make any key
+    /// addressable — tool and plugin names may contain both (Copilot on #845).
+    #[test]
+    fn set_path_numbers_and_dots_are_keys_on_a_table() {
+        let out = set_path(
+            "version = 1\n",
+            "/tools/123/kind",
+            &serde_json::json!("claude"),
+        )
+        .unwrap();
+        let out = set_path(&out, "/tools/my.tool/kind", &serde_json::json!("codex")).unwrap();
+        let out = set_path(&out, "/tools/a~1b/kind", &serde_json::json!("opencode")).unwrap();
+        let cfg = crate::config::RootConfig::from_toml_str(&out).unwrap();
+        assert!(cfg.tools.contains_key("123"), "{out}");
+        assert!(cfg.tools.contains_key("my.tool"), "{out}");
+        assert!(cfg.tools.contains_key("a/b"), "{out}");
+    }
+
     #[test]
     fn set_path_refuses_null_and_empty_segments() {
-        assert!(set_path(DOC, "log.level", &serde_json::Value::Null).is_err());
-        assert!(set_path(DOC, "log..level", &serde_json::json!("x")).is_err());
+        assert!(set_path(DOC, "/log/level", &serde_json::Value::Null).is_err());
+        assert!(set_path(DOC, "/log//level", &serde_json::json!("x")).is_err());
+        assert!(set_path(DOC, "log/level", &serde_json::json!("x")).is_err());
     }
 
     #[test]
     fn unset_path_removes_keys_and_elements_and_ignores_absent_ones() {
-        let out = unset_path(DOC, "log.level").unwrap();
+        let out = unset_path(DOC, "/log/level").unwrap();
         assert!(!out.contains("level"), "{out}");
-        let out = unset_path(DOC, "repositories.0").unwrap();
+        let out = unset_path(DOC, "/repositories/0").unwrap();
         let cfg = crate::config::RootConfig::from_toml_str(&out).unwrap();
         assert!(cfg.repositories.is_empty());
-        assert_eq!(unset_path(DOC, "nope.deeper").unwrap(), DOC);
+        assert_eq!(unset_path(DOC, "/nope/deeper").unwrap(), DOC);
     }
 }
