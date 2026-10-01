@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](plugin-dev-guide.ja.md)
 
-<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:0064f7947c95c017d8b7f375863cded863b7dd7bf9e98aa2563523f5d231e400 -->
+<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:bf8bbb1c8c221b6d7d3e12b9fe51b9b9fef700cad1f01a20468183de17350499 -->
 
 # Plugin development guide
 
@@ -272,7 +272,7 @@ fn the_binary_conforms_to_the_protocol() {
 
 The kit never sends `init` as it is: a successful `initialize` would reach real services, so it only sends broken copies. Test what your plugin does after a successful `initialize` in your own tests.
 
-It checks the nine rules below and reports every violation at once. **If you write your plugin in another language, this is the list of rules to follow.**
+It checks the ten rules below and reports every violation at once. **If you write your plugin in another language, this is the list of rules to follow.**
 
 | # | Applies to | Rule |
 |---|---|---|

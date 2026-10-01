@@ -740,9 +740,9 @@ impl TaskSourceHandler for Uninitialized {
 
 /// Before `initialize`, a request whose params do not parse is told to
 /// initialize first — the code the hand-written servers answered, since they
-/// checked the session before reading params (#759). `initialize` and
-/// `config/validate` still report their params, and an unknown method is
-/// still unknown.
+/// checked the session before reading params (#759). `initialize`,
+/// `config/validate` and `config/schema` still report their params, and an
+/// unknown method is still unknown.
 #[tokio::test]
 async fn malformed_params_before_initialize_say_initialize_first() {
     let mut server = TaskSourceServer(Uninitialized);
@@ -763,6 +763,17 @@ async fn malformed_params_before_initialize_say_initialize_first() {
     assert_eq!(code("initialize").await, error_code::INVALID_PARAMS);
     assert_eq!(code("config/validate").await, error_code::INVALID_PARAMS);
     assert_eq!(code("nope").await, error_code::METHOD_NOT_FOUND);
+    drop(code);
+
+    // `config/schema` takes `{}`, so `{ "wrong": true }` parses; only params
+    // that are not an object reach the error path.
+    let reply = server
+        .handle_line(&line(json!({
+            "jsonrpc": "2.0", "id": 2, "method": "config/schema", "params": 5
+        })))
+        .await;
+    let response: Value = serde_json::from_str(&reply.line.unwrap()).unwrap();
+    assert_eq!(response["error"]["code"], error_code::INVALID_PARAMS);
 }
 
 /// A `state/subscribe` whose ACK cannot be written — the writer, and so the

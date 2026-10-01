@@ -4,7 +4,7 @@ title: plugin-sdk クレート
 description: task_source / agent_ide プラグイン作成用のヘルパークレート。単一 writer タスクの stdio ランタイム・JSON-RPC dispatch ボイラープレート（TaskSourceHandler / AgentIdeHandler）・{placeholder} 置換（template）とエージェント向けプロンプト組み立て（compose_prompt）・task/submit クライアント（バックオフ再送）・ポーリング型ソース向け poll_loop・trigger キーの未知検査・trigger.assignee 条件の解釈・チャンネル監視トリガ（trigger.channel）の解釈とバックフィル窓の定義を提供する。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/plugin-sdk
 tags: [rust, crate, plugin, sdk, task-source, agent-ide, push]
-generated: { by: claude-code/opus-5.5, at: 2026-10-01T22:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-01T21:40:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---

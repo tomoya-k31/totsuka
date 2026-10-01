@@ -4,7 +4,7 @@ title: プラグイン開発ガイド
 description: totsuka プラグインの作り方。plugin-protocol クレートの型、JSON-RPC(NDJSON/stdio) メソッド、plugin.toml マニフェスト、capability 宣言、開発ループ（plugin install --from-source）・適合テスト（plugin-conformance）とビルド手順（bin 名 = plugin.toml の name という不変条件）、install/enable の流れ、参照実装。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/plugin-protocol
 tags: [plugin, protocol, json-rpc, manifest, guide]
-generated: { by: claude-code/opus-5.5, at: 2026-10-01T22:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-01T21:40:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -237,7 +237,7 @@ fn the_binary_conforms_to_the_protocol() {
 
 キットは `init` をそのままは送らない。そのまま送って `initialize` が成功すると実際のサービスに触れてしまうので、壊した複製だけを送る。したがって `initialize` が成功した後の振る舞いは、各自のテストで確かめること。
 
-検査するのは次の 9 項目で、違反は全部まとめて返る。**Rust 以外で書く場合も、これがプロトコル上の約束事の一覧になる。**
+検査するのは次の 10 項目で、違反は全部まとめて返る。**Rust 以外で書く場合も、これがプロトコル上の約束事の一覧になる。**
 
 | # | 対象 | 約束事 |
 |---|---|---|

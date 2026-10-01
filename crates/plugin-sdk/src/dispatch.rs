@@ -80,7 +80,8 @@ pub fn parse_params<T: DeserializeOwned>(params: &Value) -> Result<T, Error> {
 pub trait TaskSourceHandler: Send {
     /// Whether `initialize` has succeeded. Read only when a request's params
     /// do not parse: while `false`, such a request to any method but
-    /// `initialize` / `config/validate` is answered [`not_initialized`]
+    /// `initialize` / `config/validate` / `config/schema` is answered
+    /// [`not_initialized`]
     /// instead of `INVALID_PARAMS` — "initialize first" before "fix the
     /// params", the order the hand-written plugin servers had (#759). A
     /// request whose params do parse reaches the handler, which refuses it

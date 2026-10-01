@@ -127,7 +127,7 @@ pub fn check(
     violations
 }
 
-/// Checks 1–7 and 9, in one process that is never initialized. An `Err` is
+/// Checks 1–7, 9 and 10, in one process that is never initialized. An `Err` is
 /// a lost conversation (no answer, or an answer to the wrong request), after
 /// which nothing further on this process can be read reliably.
 fn before_initialize(

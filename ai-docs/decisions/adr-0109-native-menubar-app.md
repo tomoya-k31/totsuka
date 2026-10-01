@@ -4,7 +4,7 @@ title: ADR-0109 ネイティブ macOS メニューバーアプリが run を子�
 description: "SwiftBar 向けの `totsuka menu` だけでは届かない 2 つの要件（アプリ名義のネイティブ通知と、config.toml の GUI 編集）のため、SwiftUI のメニューバーアプリ（apps/macos/）を足す決定。run は `--secrets-stdin` 付きの子プロセスとして起動し終了コードで再起動を判断、通知は `run --events-jsonl` の stdout、設定画面は JSON Schema（core は schemars、プラグインは新メソッド config/schema）から生成し読み書きは CLI 経由。Developer Program に加入しないため ad-hoc 署名の .app を release tarball に同梱して formula で配る。ADR-0065 の「Swift アプリ」却下を部分的に覆す。"
 resource: https://github.com/tomoya-k31/totsuka/tree/main/apps/macos
 tags: [decision, macos, menubar, notifier, config, protocol, distribution, adr]
-generated: { by: claude-code/opus-5.5, at: 2026-10-01T22:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-01T21:40:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---

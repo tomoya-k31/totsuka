@@ -4,7 +4,7 @@ title: plugin-protocol クレート
 description: プラグイン開発者向けに公開する型定義クレート。JSON-RPC 2.0（NDJSON）エンベロープ・plugin.toml マニフェスト・capabilities・§11 メソッド型・Task 共通スキーマ・プロトコルバージョニングを提供する、プラグイン境界の単一の正。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/plugin-protocol
 tags: [rust, crate, plugin, protocol, json-rpc]
-generated: { by: claude-code/opus-5.5, at: 2026-10-01T22:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-01T21:40:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---

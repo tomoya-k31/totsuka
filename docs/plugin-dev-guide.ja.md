@@ -1,7 +1,7 @@
 > 🌐 [English](plugin-dev-guide.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:0064f7947c95c017d8b7f375863cded863b7dd7bf9e98aa2563523f5d231e400 -->
+<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:bf8bbb1c8c221b6d7d3e12b9fe51b9b9fef700cad1f01a20468183de17350499 -->
 
 # プラグイン開発ガイド
 
@@ -266,7 +266,7 @@ fn the_binary_conforms_to_the_protocol() {
 
 キットは `init` をそのままは送らない。そのまま送って `initialize` が成功すると実際のサービスに触れてしまうので、壊した複製だけを送る。したがって `initialize` が成功した後の振る舞いは、各自のテストで確かめること。
 
-検査するのは次の 9 項目で、違反は全部まとめて返る。**Rust 以外で書く場合も、これがプロトコル上の約束事の一覧になる。**
+検査するのは次の 10 項目で、違反は全部まとめて返る。**Rust 以外で書く場合も、これがプロトコル上の約束事の一覧になる。**
 
 | # | 対象 | 約束事 |
 |---|---|---|

@@ -4,7 +4,7 @@ title: plugin-conformance
 description: プラグインのバイナリを起動して stdio の NDJSON で話し、全プラグイン共通のプロトコルの約束事（initialize 前の拒否・PARSE_ERROR・METHOD_NOT_FOUND・空行と通知への無応答・INVALID_PARAMS・config/validate の未知キー・shutdown と EOF での終了・task_source の未知トリガーキー・config_schema を宣言したプラグインの initialize 前の config/schema）への違反を全部返す黒箱の適合キット。公式プラグインの tests/conformance.rs と、外部のプラグイン開発者が使う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/plugin-conformance
 tags: [rust, crate, plugin, protocol, testing, conformance]
-generated: { by: claude-code/opus-5.5, at: 2026-10-01T22:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-01T21:40:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---

@@ -31,9 +31,10 @@ use crate::runtime::{LineHandler, Writer};
 /// The typed surface an agent_ide plugin implements; [`AgentIdeServer`]
 /// turns it into a [`LineHandler`].
 ///
-/// Methods the host calls unconditionally are required. The four gated on a
+/// Methods the host calls unconditionally are required. The five gated on a
 /// capability — `session/focus`, `session/release` and `session/list` on
-/// `pane_control`, `diagnostics/snapshot` on `diagnostics_snapshot` — default
+/// `pane_control`, `diagnostics/snapshot` on `diagnostics_snapshot`,
+/// `config/schema` on `config_schema` — default
 /// to a
 /// `METHOD_NOT_FOUND` refusal, the same rule as
 /// [`TaskSourceHandler::task_claim`](crate::TaskSourceHandler::task_claim): a
