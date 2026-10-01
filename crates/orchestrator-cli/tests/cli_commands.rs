@@ -2341,5 +2341,26 @@ fn config_set_writes_through_a_symlink() {
             .unwrap()
             .contains("max_concurrency = 2")
     );
+
+    // A dangling link is followed too: the file is created where it points.
+    std::fs::remove_file(&real).unwrap();
+    let out = run(&base, &["config", "set", "max_concurrency", "3"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
+    assert!(
+        std::fs::read_to_string(&real)
+            .unwrap()
+            .contains("max_concurrency = 3")
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// `unset` with no config file is a no-op, not an empty file.
+#[test]
+fn config_unset_without_a_file_creates_nothing() {
+    let base = scratch("config-unset-none");
+    let out = run(&base, &["config", "unset", "log.level"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(!base.join("cfg/totsuka/config.toml").exists());
     let _ = std::fs::remove_dir_all(&base);
 }

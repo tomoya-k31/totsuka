@@ -3,7 +3,7 @@ type: Spec
 title: totsuka — ローカルAIエージェント Orchestrator 要件定義（v1）
 description: totsuka Orchestrator CLI の要件定義 — タスクソース/Agent IDE/Notifier プラグイン、git worktree ライフサイクル、ワークフロー、並列実行制御、v1 スコープ。
 tags: [orchestrator, requirements, plugin, worktree, cli, rust]
-generated: { by: claude-code/opus-5.5, at: 2026-10-01T21:40:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-01T22:32:00+09:00 }
 status: draft
 owner: tomoya-k31
 ---
@@ -301,6 +301,7 @@ macOS のメニューバーのように**常時視界に入る面**へ状態を�
 | `task export [--since <event_id>] [--task <id>] [--no-detail]` | 監査ログ（`events`）を NDJSON で標準出力へ。状態の正本は SQLite なので、他のツールが読める形で持ち出す口（追記専用テーブルなので `--since` が完全な差分カーソルになる） |
 | `plugin list / install / uninstall / enable / disable` | プラグイン管理 |
 | `config validate / show [--redacted]` | 設定検証・表示(シークレットはマスク) |
+| `config schema / get / set <path> <json> / unset <path>` | メニューバーアプリの設定画面向けの JSON での設定ファイルの扱い: core のキーとプラグインのテーブルのスキーマ、ファイルの JSON 表現、コメントを保った 1 キーずつの書き換え(ADR-0109) |
 | `doctor` | 環境診断(git バージョン、孤児 worktree、プラグイン疎通、API キー疎通) |
 | `logs [-f] [--task <id>]` | ログ閲覧・追尾 |
 | `completion <shell>` | シェル補完生成 |

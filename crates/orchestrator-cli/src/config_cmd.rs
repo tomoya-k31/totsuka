@@ -171,7 +171,10 @@ fn read_config_text(path: &std::path::Path) -> Result<Option<String>, CliError> 
 /// still be edited — refusing would lock the user out of fixing it.
 ///
 /// Written through a symlink rather than over it (dotfiles are often Stow
-/// links), via a temporary file in the target's directory and a rename.
+/// links) — a dangling one included, so the link is never replaced by a plain
+/// file — via a temporary file in the target's directory and a rename. An edit
+/// that changes nothing writes nothing (`unset` on a missing file creates no
+/// file).
 fn write_edit(
     cx: &Cx,
     edit: impl FnOnce(&str) -> Result<String, config::EditError>,
@@ -179,31 +182,60 @@ fn write_edit(
     let path = &cx.config_path;
     let before = read_config_text(path)?;
     let after = edit(before.as_deref().unwrap_or(""))?;
+    if after == before.as_deref().unwrap_or("") {
+        return Ok(());
+    }
     let loaded = |text: &str| config::RootConfig::from_toml_str(text);
     if before.as_deref().is_none_or(|t| loaded(t).is_ok())
         && let Err(e) = loaded(&after)
     {
         return Err(format!("{e} → the file was left unchanged").into());
     }
-    let target = if before.is_some() {
-        std::fs::canonicalize(path)?
-    } else {
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        path.clone()
-    };
+    let target = write_target(path)?;
+    if let Some(dir) = target.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
     let file_name = target
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("config.toml");
     let tmp = target.with_file_name(format!(".{file_name}.{}.tmp", std::process::id()));
-    std::fs::write(&tmp, &after)?;
-    if before.is_some() {
-        std::fs::set_permissions(&tmp, std::fs::metadata(&target)?.permissions())?;
+    let written = (|| {
+        std::fs::write(&tmp, &after)?;
+        if let Ok(meta) = std::fs::metadata(&target) {
+            std::fs::set_permissions(&tmp, meta.permissions())?;
+        }
+        std::fs::rename(&tmp, &target)
+    })();
+    if written.is_err() {
+        let _ = std::fs::remove_file(&tmp);
     }
-    std::fs::rename(&tmp, &target)?;
-    Ok(())
+    Ok(written?)
+}
+
+/// The file a write to `path` must land in: the end of its symlink chain,
+/// followed even when the last link dangles.
+fn write_target(path: &std::path::Path) -> io::Result<std::path::PathBuf> {
+    let mut target = path.to_path_buf();
+    // A bound, not a policy: a cycle would otherwise loop forever.
+    for _ in 0..40 {
+        match std::fs::symlink_metadata(&target) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                let link = std::fs::read_link(&target)?;
+                target = match target.parent() {
+                    Some(dir) => dir.join(link),
+                    None => link,
+                };
+            }
+            Ok(_) => return Ok(target),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(target),
+            Err(e) => return Err(e),
+        }
+    }
+    Err(io::Error::other(format!(
+        "too many symlinks at {}",
+        path.display()
+    )))
 }
 
 /// Whether validating plugin `name` online would resolve a `secret:`
