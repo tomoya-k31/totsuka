@@ -6,8 +6,9 @@ use std::time::Duration;
 use plugin_protocol::Task;
 use plugin_protocol::jsonrpc::{Error, error_code};
 use plugin_protocol::methods::{
-    ConfigValidateParams, ConfigValidateResult, InitializeParams, InitializeResult,
-    ResultPublishParams, TaskUpdateLabelsParams, TaskUpdateStatusParams, WorkflowInfo,
+    ConfigSchemaParams, ConfigSchemaResult, ConfigValidateParams, ConfigValidateResult,
+    InitializeParams, InitializeResult, ResultPublishParams, TaskUpdateLabelsParams,
+    TaskUpdateStatusParams, WorkflowInfo,
 };
 use plugin_sdk::{
     LineHandler, Lookup, LookupClient, SubmitClient, SubmitOutcome, Submitter, TaskSourceHandler,
@@ -86,6 +87,16 @@ impl TaskSourceHandler for Recording {
         self.calls.push("update_labels");
         Ok(Value::Null)
     }
+
+    async fn config_schema(
+        &mut self,
+        _params: ConfigSchemaParams,
+    ) -> Result<ConfigSchemaResult, Error> {
+        self.calls.push("config_schema");
+        Ok(ConfigSchemaResult {
+            schema: json!({ "type": "object" }),
+        })
+    }
 }
 
 fn line(v: Value) -> String {
@@ -126,6 +137,15 @@ async fn typed_dispatch_covers_the_wire_protocol() {
     let response: Value = serde_json::from_str(&reply.line.unwrap()).unwrap();
     assert_eq!(response["result"], Value::Null, "{response}");
 
+    // config/schema → routed to the typed handler.
+    let reply = server
+        .handle_line(&line(json!({
+            "jsonrpc": "2.0", "id": 7, "method": "config/schema", "params": {}
+        })))
+        .await;
+    let response: Value = serde_json::from_str(&reply.line.unwrap()).unwrap();
+    assert_eq!(response["result"]["schema"]["type"], "object", "{response}");
+
     // Invalid params never reach the handler.
     let reply = server
         .handle_line(&line(json!({
@@ -165,7 +185,12 @@ async fn typed_dispatch_covers_the_wire_protocol() {
     // Invalid params never reached the handler, so `update_status` is absent.
     assert_eq!(
         server.0.calls,
-        vec!["initialize", "result_publish", "update_labels"]
+        vec![
+            "initialize",
+            "result_publish",
+            "update_labels",
+            "config_schema"
+        ]
     );
 }
 
@@ -624,6 +649,7 @@ mod agent_ide {
                 json!({ "session_id": "s" }),
                 "diagnostics_snapshot",
             ),
+            ("config/schema", json!({}), "config_schema"),
         ] {
             let reply = server
                 .handle_line(&line(json!({

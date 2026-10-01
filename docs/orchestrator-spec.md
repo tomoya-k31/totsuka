@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](orchestrator-spec.ja.md)
 
-<!-- generated-from: ai-docs/product/orchestrator-spec.md sha256:b8fd6e33d2d338a3c9ce9781114915993de5c59223b8a7eb88944c8483777701 -->
+<!-- generated-from: ai-docs/product/orchestrator-spec.md sha256:fb60d039278b39b768c42c21f5f4224c8ff4f20de02ac1b1732c3c84549ab668 -->
 
 # What totsuka is
 
@@ -8,7 +8,7 @@ totsuka is a command-line orchestrator that connects your task tracker to AI cod
 
 It reads tasks from sources like GitHub Issues and Projects or Notion, decides which repository each one belongs to, creates a git worktree for it, and hands the work to an agent such as herdr or orca. Detailed design and implementation are the agent's job; totsuka handles everything around them.
 
-It is a local, single-machine tool. There is no server, no event bus, and no resident daemon — you run it from a terminal and it exits when you stop it.
+It is a local, single-machine tool. There is no server and no event bus. You run it from a terminal — or let the macOS menu bar app start it for you — and it exits when you stop it.
 
 - Platform: macOS 14 or newer, git 2.40 or newer
 - Written in Rust, run as a single binary from the terminal
@@ -155,7 +155,7 @@ Read-only commands like `status` start in under a second.
 | A web dashboard or cloud UI | State stays local. Text for a local menu bar is supported; the drawing is the host's job |
 | Pull request review, merge decisions, merge tracking | Human review territory. Nothing is tracked after the pull request is opened |
 | Guaranteed Linux and Windows support | The abstractions are there; the implementation and testing are not |
-| A resident daemon or server | The lifecycle is bounded by the process you launched |
+| A resident daemon or server | The lifecycle is bounded by the process you launched. What stays resident is the macOS menu bar app, which starts `run` as its child process — still a local launch, never a system service or a remote server |
 | Cloud sync or shared state across a team | State is local. Sharing is delegated to GitHub and Notion |
 | The agents themselves | Code generation is entirely the agent's |
 | Cloning repositories or managing git credentials | Repositories are assumed already cloned, and git uses your existing authentication |

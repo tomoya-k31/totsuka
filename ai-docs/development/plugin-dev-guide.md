@@ -4,7 +4,7 @@ title: プラグイン開発ガイド
 description: totsuka プラグインの作り方。plugin-protocol クレートの型、JSON-RPC(NDJSON/stdio) メソッド、plugin.toml マニフェスト、capability 宣言、開発ループ（plugin install --from-source）・適合テスト（plugin-conformance）とビルド手順（bin 名 = plugin.toml の name という不変条件）、install/enable の流れ、参照実装。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/plugin-protocol
 tags: [plugin, protocol, json-rpc, manifest, guide]
-generated: { by: claude-code/opus-5.5, at: 2026-09-30T15:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-01T22:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -42,6 +42,7 @@ hook_completion = true          # agent: 完了をツールのフック経由で
 diagnostics_snapshot = true     # agent: diagnostics/snapshot に応答する
 outputs = ["source"]            # result/publish に対応するなら宣言する(F-83)
                                # 宣言しなければ output = "source" の workflow は弾かれる
+config_schema = true            # 全 kind: config/schema に答える(0.7.7、ADR-0109)
 ```
 
 **宣言できるのは、Orchestrator が実際に読む鍵だけである。** `Capabilities` の
@@ -78,6 +79,7 @@ Orchestrator は起動前に `protocol_version` の互換性を検査し（F-54�
 |---|---|---|
 | `initialize` | O→P | 解決済み config + プロトコル版を渡す。plugin_version + capabilities を返す（F-65）。**task_source には orchestrator の `[[repositories]]` も `repositories: [{name, summary?, path?}]` として供給される**（0.1.1、#109。任意フィールド — 使わなければ無視してよい。ソース側でリポジトリ解決するプラグインは自前設定の重複を省ける）。**同じく orchestrator の `[llm]` も `llm: {api?, base_url, endpoint?, model, api_key?}` として供給される**（0.1.2、#119。api_key は解決済み。**0.7.4（#723）で `api` / `endpoint`**: `api` が無いか `"chat"` なら `base_url` の OpenAI 互換 API、`"decisions"` なら `endpoint` の Decisions API で、そのとき `base_url` は**空文字**になる。`api` を知らない古いプラグインが空の `base_url` を「供給なし」として扱うための意図的な値なので、`base_url` が空の `LlmInfo` は使わないこと。未知の `api` 値も使わない。プラグイン自身の LLM 設定があればそちらを優先する default + override を推奨）。**そのプラグインを名指す `[[workflows]]` が `workflows: [{workflow, trigger, options}]`（定義順）として供給される**（0.6.0 で `triggers` から改名、#554）。`source` と `agent` の**両方**に届き、`trigger` はソースにだけ意味がある（agent には空オブジェクト）。`options` は Orchestrator が解釈しない余りキーで、消費するものを `claimed_options` で申告する。**task_source にはさらに `projects: [{name, options}]`**（`[[projects]]` のうち `source` が自分のもの、#554）。`trigger` は運用者の書いたテーブルの**素通し**で、profile 由来の `instructions_kind` / `task_id_prefix` は `workflows` 要素の**専用フィールド**として届く（0.6.0 までは trigger に焼き込まれていた）。fetch 周期 `poll_interval_secs` は自分の `[<name>]` のキーで、`config` の中に入って届く（0.6.0 / #554 で `InitializeParams` から削除）。**`trigger` の未知キーは `initialize` で拒否すること**（#574） —— 素通しということは、読み手が居ないキーは黙って捨てられるということで、タイポはトリガーを狭めず**広げる**。`plugin_sdk::unknown_trigger_keys(&init.workflows, TRIGGER_KEYS)` が有効キーを列挙したメッセージを返すので、空でなければ `CONFIG_INVALID` で落とす。**assignee 条件を持つソースは `plugin_sdk::AssigneeFilter` を使うこと**（#572） —— `@me` / `@none` / `@any` / 名前 / 配列の語彙と照合を共有し、何と突き合わせるか（誰が「自分」か・どのプロパティを読むか）だけを自分で持つ。同じモジュールの `check_assignee_triggers` が `initialize` 用で、評価不能な条件（identity 未設定の `@me` 等）を起動時に落とし、`status` を伴わない単独トリガーに警告を返す（警告を出すかは `status_mints_lane_identity` で申告する —— lane identity を刻まないソースに「`status` を足せ」と言っても直らないため）|
 | `config/validate` | O→P | プラグイン設定を検証（F-59）。`initialize` と同じ `workflows` / `projects` / `repositories` も届く（0.6.0）— 記憶ではなく「今聞かれているもの」を検証させるため。**`warnings` は「設定は正しいが伝えたいこと」の口**（0.7.3、[ADR-0073](/decisions/adr-0073-plugin-config-warnings.md)）。`valid` に影響せず、`doctor` が黄色のチェックとして描き `--json` にも出る。`errors` と同じ「原因 → 次のアクション」の形にすること —— 行動できない警告は雑音で、雑音は診断が読まれなくなる経路そのものである。省略可能なので、送らないプラグインの `doctor` 出力は 1 バイトも変わらない |
+| `config/schema` | O→P | 自分の設定テーブルを JSON Schema（draft 2020-12）で返す（`{}` → `{ schema }`、0.7.7、[ADR-0109](/decisions/adr-0109-native-menubar-app.md)）。**`initialize` より前に答えること** —— メニューバーアプリの設定画面は、機密がまだ無い状態で尋ねる。マニフェストで `config_schema = true` を宣言したプラグインにだけ送られ、宣言しなければそのテーブルは設定画面で生の TOML 欄になる（エラーにはならない）。各プロパティに `x-title` / `x-help` / `x-category`（いずれも `{"en": "…", "ja": "…"}`）と、機密の参照を持つフィールドには `x-secret: true` を付けると、設定画面がラベル・ヘルプ・カテゴリ分け・パスワード入力欄に使う |
 | `shutdown` | O→P | 猶予付き終了要求 |
 
 ## task_source
@@ -146,11 +148,11 @@ JSON-RPC の行処理（パースエラー、notification への無応答、`shu
 
 | kind | 実装する trait | stdio に載せる形 |
 |---|---|---|
-| `task_source` | `TaskSourceHandler`（initialize / config_validate / update_status / result_publish、任意で task_claim / update_labels） | `serve(TaskSourceServer(handler), &stdio)`。server 自身が handler を兼ねるなら、`LineHandler` を `plugin_sdk::dispatch::handle_line(self, line)` で実装する |
-| `agent_ide` | `AgentIdeHandler`（initialize / config_validate / task_dispatch / session_attach / task_cancel / state_subscribe、任意で session_focus / session_release / session_list / diagnostics_snapshot） | `serve(AgentIdeServer::new(handler, stdio.writer.clone()), &stdio)` |
+| `task_source` | `TaskSourceHandler`（initialize / config_validate / update_status / result_publish、任意で task_claim / update_labels / config_schema） | `serve(TaskSourceServer(handler), &stdio)`。server 自身が handler を兼ねるなら、`LineHandler` を `plugin_sdk::dispatch::handle_line(self, line)` で実装する |
+| `agent_ide` | `AgentIdeHandler`（initialize / config_validate / task_dispatch / session_attach / task_cancel / state_subscribe、任意で session_focus / session_release / session_list / diagnostics_snapshot / config_schema） | `serve(AgentIdeServer::new(handler, stdio.writer.clone()), &stdio)` |
 
 - 各メソッドは params の型を受け取り、result の型か `plugin_protocol::jsonrpc::Error` を返す。`initialize` 前の呼び出しには `plugin_sdk::not_initialized()` を返す。 `initialized()` を上書きしておくと、`initialize` 前に params の壊れた request が来たときも `INVALID_PARAMS` でなく同じ「initialize が先」の応答になる。
-- **能力で守られたメソッドは既定で `METHOD_NOT_FOUND` を返す**（`task_claim`、`update_labels`（`label_writeback`）、`session_focus` / `session_release` / `session_list`、`diagnostics_snapshot`）。上書きするなら対応する capability を宣言し、宣言するなら上書きすること。
+- **能力で守られたメソッドは既定で `METHOD_NOT_FOUND` を返す**（`task_claim`、`update_labels`（`label_writeback`）、`session_focus` / `session_release` / `session_list`、`diagnostics_snapshot`、`config_schema`（`config_schema`））。上書きするなら対応する capability を宣言し、宣言するなら上書きすること。
 - **`state_subscribe` は状態変化の受信チャネルを返すだけでよい。** ACK を先に返してから `state/notification` を流す順序（F-38）は `AgentIdeServer` が保証する。
 - 設定可能なプロンプトや指示文の `{placeholder}` 置換には `plugin_sdk::template::render` を使う（単一パス。外部入力に書かれた `{…}` を展開しない）。agent_ide がエージェントへ渡すプロンプトは `plugin_sdk::compose_prompt` で組み立てられる。
 
@@ -248,6 +250,7 @@ fn the_binary_conforms_to_the_protocol() {
 | 7 | 全 kind | `shutdown` に result で応答し、終了コード 0 で終わる |
 | 8 | 全 kind | stdin が EOF になったら終わる |
 | 9 | task_source | trigger に未知のキーがある `initialize` は `CONFIG_INVALID`（-32003）で失敗させ、メッセージにそのキー名を含める |
+| 10 | `config_schema` を宣言したもの | initialize 前の `config/schema` に、`schema` が `"type": "object"` の JSON オブジェクトである result で答える |
 
 検査するのはエラーの**コード**だけで、メッセージの文言は見ない。例外は 6 と 9 のキー名で、運用者が設定を直すための唯一の手がかりなので要求する。
 

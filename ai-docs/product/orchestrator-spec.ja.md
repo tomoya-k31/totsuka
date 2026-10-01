@@ -3,7 +3,7 @@ type: Spec
 title: totsuka — ローカルAIエージェント Orchestrator 要件定義（v1）
 description: totsuka Orchestrator CLI の要件定義 — タスクソース/Agent IDE/Notifier プラグイン、git worktree ライフサイクル、ワークフロー、並列実行制御、v1 スコープ。
 tags: [orchestrator, requirements, plugin, worktree, cli, rust]
-generated: { by: claude-code/opus-5.5, at: 2026-09-30T14:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-01T22:00:00+09:00 }
 status: draft
 owner: tomoya-k31
 ---
@@ -63,7 +63,7 @@ Notion タスクや GitHub Projects に紐づく Issue などのタスク管理�
 | Web ダッシュボード / クラウド UI | 状態はローカル完結。ローカル GUI ホストへのテキスト出力は §3.1 のとおりスコープ内で、将来 TUI も P2 として検討 |
 | PR レビュー自動化・マージ判断・マージ追跡 | 人間のレビュー領域。PR 作成後の追跡は行わない |
 | Linux / Windows の動作保証 | 抽象化のみ実施、実装・テストは対象外 |
-| 常駐デーモン / サーバ運用 | ローカル起動のライフサイクルに限定 |
+| 常駐デーモン / サーバ運用 | ローカル起動のライフサイクルに限定。常駐するのは macOS のメニューバーアプリ（ADR-0109）で、`run` はその子プロセスとして起動される。これもローカル起動であり、システムサービスやリモートのサーバにはしない |
 | クラウド同期・チーム間の状態共有 | 状態はローカル完結。共有は GitHub / Notion 側に委ねる |
 | エージェント自体の実装(コード生成ロジック) | Agent IDE プラグインへ完全委譲 |
 | リポジトリの clone / 認証管理 | clone 済みが前提。git 認証は既存環境を利用 |
@@ -420,6 +420,7 @@ macOS のメニューバーのように**常時視界に入る面**へ状態を�
 | `initialize` | O→P | 共通 | 固有設定(解決済みシークレット含む)と capability の交換。`workflows`(その名前を `source` または `agent` として名指す `[[workflows]]`)は全 kind へ、`projects`/`repositories` は task_source へ渡す(0.6.0 で `triggers` から改名、#554。`poll_interval_secs` はプラグイン自身の `[<name>]` のキーへ移動) |
 | `shutdown` | O→P | 共通 | 終了要求 |
 | `config/validate` | O→P | 共通 | 固有設定の検証(F-59) |
+| `config/schema` | O→P | 共通 | プラグイン自身の設定テーブルを JSON Schema で返す。`initialize` より前に答える(プロトコル 0.7.7、ADR-0109)。マニフェストで `config_schema` を宣言したプラグインにだけ送る。メニューバーアプリの設定画面が使う |
 | `task/submit` | **P→O request** | task_source | プラグインが見つけたタスクを push(persist-before-ack、protocol 0.1.6)。protocol 0.2.0 で削除された `tasks/fetch` の後継 — task_source は全て push 専用 |
 | `task/update_status` | O→P | task_source | ソース側ステータス遷移(F-84) |
 | `task/update_labels` | O→P | task_source | `on_*.labels` によるソース側ラベルの付け外し(プロトコル 0.7.6、ADR-0108)。`label_writeback` を宣言したプラグインにだけ送る |

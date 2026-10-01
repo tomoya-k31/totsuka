@@ -3,7 +3,7 @@ type: Spec
 title: totsuka — Local AI-Agent Orchestrator Requirements (v1)
 description: Requirements specification for the totsuka orchestrator CLI — task-source/agent-IDE/notifier plugins, git-worktree lifecycle, workflows, parallel execution control, and v1 scope.
 tags: [orchestrator, requirements, plugin, worktree, cli, rust]
-generated: { by: claude-code/opus-5.5, at: 2026-09-30T14:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-01T22:00:00+09:00 }
 status: draft
 owner: tomoya-k31
 ---
@@ -62,7 +62,7 @@ As a basic principle it adopts the **1 task = 1 repo = 1 worktree** normalizatio
 | Web dashboard / cloud UI | State stays local. Text output for a local GUI host is in scope per §3.1; a TUI may still be considered later as P2 |
 | PR review automation, merge decisions, merge tracking | Human review territory. No tracking after PR creation |
 | Guaranteed Linux / Windows support | Abstraction only; implementation and testing are out of scope |
-| Resident daemon / server operation | Limited to a locally launched lifecycle |
+| Resident daemon / server operation | Limited to a locally launched lifecycle. The macOS menu bar app (ADR-0109) is what stays resident; it supervises `run` as its child process, which is still a local launch — no system service, no remote server |
 | Cloud sync / cross-team state sharing | State is local-only. Sharing is delegated to GitHub / Notion |
 | Implementing the agents themselves (code-generation logic) | Fully delegated to Agent IDE plugins |
 | Repository cloning / credential management | Repositories are assumed pre-cloned; git auth uses the existing environment |
@@ -417,6 +417,7 @@ Define a glossary (Task / Source / Agent / worktree / dispatch, etc.) and use it
 | `initialize` | O→P | common | Exchange plugin-specific config (including resolved secrets) and capabilities. `workflows` (the `[[workflows]]` naming this plugin as `source` or `agent`) goes to every kind; `projects` / `repositories` go to `task_source` (renamed from `triggers` in 0.6.0, #554; `poll_interval_secs` moved into the plugin's own `[<name>]` table) |
 | `shutdown` | O→P | common | Termination request |
 | `config/validate` | O→P | common | Validate plugin-specific config (F-59) |
+| `config/schema` | O→P | common | Describe the plugin's own config table as a JSON Schema, answered before `initialize` (protocol 0.7.7, ADR-0109). Sent only to plugins whose manifest declares `config_schema`; feeds the menu bar app's settings window |
 | `task/submit` | **P→O request** | task_source | Push a task the plugin found (persist-before-ack, protocol 0.1.6). Replaces the removed `tasks/fetch` as of protocol 0.2.0 — every task_source is push-only |
 | `task/update_status` | O→P | task_source | Source-side status transition (F-84) |
 | `task/update_labels` | O→P | task_source | Add / remove labels on the source task from `on_*.labels` (protocol 0.7.6, ADR-0108). Sent only to plugins declaring `label_writeback` |

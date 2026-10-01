@@ -6,9 +6,9 @@
 
 use plugin_protocol::jsonrpc::{Error, Response, error_code};
 use plugin_protocol::methods::{
-    ConfigValidateParams, ConfigValidateResult, InitializeParams, InitializeResult,
-    ResultPublishParams, TaskClaimParams, TaskClaimResult, TaskUpdateLabelsParams,
-    TaskUpdateStatusParams,
+    ConfigSchemaParams, ConfigSchemaResult, ConfigValidateParams, ConfigValidateResult,
+    InitializeParams, InitializeResult, ResultPublishParams, TaskClaimParams, TaskClaimResult,
+    TaskUpdateLabelsParams, TaskUpdateStatusParams,
 };
 use plugin_protocol::{RequestId, method};
 use serde::Serialize;
@@ -102,6 +102,20 @@ pub trait TaskSourceHandler: Send {
         &mut self,
         params: ConfigValidateParams,
     ) -> impl Future<Output = Result<ConfigValidateResult, Error>> + Send;
+
+    /// `config/schema` (0.7.7, ADR-0109): a JSON Schema of this plugin's own
+    /// config table, answered before `initialize`.
+    ///
+    /// Defaulted to `METHOD_NOT_FOUND`, gated on the `config_schema`
+    /// capability (declared in `plugin.toml`, since the host asks before
+    /// `initialize` returns any capabilities).
+    fn config_schema(
+        &mut self,
+        params: ConfigSchemaParams,
+    ) -> impl Future<Output = Result<ConfigSchemaResult, Error>> + Send {
+        let _ = params;
+        async { Err(config_schema_unsupported()) }
+    }
 
     /// `task/update_status` (F-84). Return value is ignored by the host;
     /// `Value::Null` is conventional.
@@ -217,11 +231,22 @@ pub(crate) fn respond<T: Serialize>(id: RequestId, outcome: Result<T, Error>) ->
     })
 }
 
+/// The default refusal of `config/schema`, shared by every handler trait.
+pub(crate) fn config_schema_unsupported() -> Error {
+    Error::new(
+        error_code::METHOD_NOT_FOUND,
+        "config/schema is not supported by this plugin → do not declare the `config_schema` capability",
+    )
+}
+
 /// The reply to params that did not parse: [`not_initialized`] when the
-/// handler is not initialized and `method` is not one of the two that need
-/// no `initialize`, `INVALID_PARAMS` otherwise.
+/// handler is not initialized and `method` is not one of those that need no
+/// `initialize`, `INVALID_PARAMS` otherwise.
 pub(crate) fn params_error(id: RequestId, method: &str, initialized: bool, error: Error) -> Reply {
-    let setup = matches!(method, method::INITIALIZE | method::CONFIG_VALIDATE);
+    let setup = matches!(
+        method,
+        method::INITIALIZE | method::CONFIG_VALIDATE | method::CONFIG_SCHEMA
+    );
     let error = if initialized || setup {
         error
     } else {
@@ -262,6 +287,7 @@ pub async fn handle_line<H: TaskSourceHandler>(handler: &mut H, line: &str) -> R
     match method.as_str() {
         method::INITIALIZE => call!(InitializeParams, initialize),
         method::CONFIG_VALIDATE => call!(ConfigValidateParams, config_validate),
+        method::CONFIG_SCHEMA => call!(ConfigSchemaParams, config_schema),
         method::TASK_UPDATE_STATUS => call!(TaskUpdateStatusParams, update_status),
         method::TASK_UPDATE_LABELS => call!(TaskUpdateLabelsParams, update_labels),
         method::TASK_CLAIM => call!(TaskClaimParams, task_claim),
@@ -343,5 +369,22 @@ mod tests {
         assert_eq!(err.code, error_code::METHOD_NOT_FOUND);
         assert!(!err.message.contains("  "), "{:?}", err.message);
         assert!(err.message.contains("label_writeback"), "{}", err.message);
+    }
+
+    /// Same contract for the default `config_schema`, and it is reachable
+    /// before `initialize` like `config/validate`.
+    #[tokio::test]
+    async fn default_config_schema_refuses_with_a_clean_message() {
+        let reply = handle_line(
+            &mut Bare,
+            r#"{"jsonrpc":"2.0","id":1,"method":"config/schema","params":{}}"#,
+        )
+        .await;
+        let line = reply.line.expect("a request is answered");
+        let response: Response = serde_json::from_str(&line).unwrap();
+        let err = response.error.expect("refused");
+        assert_eq!(err.code, error_code::METHOD_NOT_FOUND);
+        assert!(!err.message.contains("  "), "{:?}", err.message);
+        assert!(err.message.contains("config_schema"), "{}", err.message);
     }
 }

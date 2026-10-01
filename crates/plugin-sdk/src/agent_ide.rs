@@ -13,17 +13,18 @@
 use plugin_protocol::jsonrpc::{Error, Notification, Response, error_code, to_line};
 use plugin_protocol::method;
 use plugin_protocol::methods::{
-    ConfigValidateParams, ConfigValidateResult, DiagnosticsSnapshotParams,
-    DiagnosticsSnapshotResult, InitializeParams, InitializeResult, SessionAttachParams,
-    SessionAttachResult, SessionFocusParams, SessionFocusResult, SessionListResult,
-    SessionReleaseParams, SessionReleaseResult, StateNotification, StateSubscribeParams,
-    TaskCancelParams, TaskDispatchParams, TaskDispatchResult,
+    ConfigSchemaParams, ConfigSchemaResult, ConfigValidateParams, ConfigValidateResult,
+    DiagnosticsSnapshotParams, DiagnosticsSnapshotResult, InitializeParams, InitializeResult,
+    SessionAttachParams, SessionAttachResult, SessionFocusParams, SessionFocusResult,
+    SessionListResult, SessionReleaseParams, SessionReleaseResult, StateNotification,
+    StateSubscribeParams, TaskCancelParams, TaskDispatchParams, TaskDispatchResult,
 };
 use serde_json::Value;
 use tokio::sync::mpsc;
 
 use crate::dispatch::{
-    Reply, Request, params_error, parse_params, parse_request, respond, unknown_method,
+    Reply, Request, config_schema_unsupported, params_error, parse_params, parse_request, respond,
+    unknown_method,
 };
 use crate::runtime::{LineHandler, Writer};
 
@@ -56,6 +57,17 @@ pub trait AgentIdeHandler: Send {
         &mut self,
         params: ConfigValidateParams,
     ) -> impl Future<Output = Result<ConfigValidateResult, Error>> + Send;
+
+    /// `config/schema` (0.7.7, ADR-0109) — gated on the `config_schema`
+    /// capability; see
+    /// [`TaskSourceHandler::config_schema`](crate::TaskSourceHandler::config_schema).
+    fn config_schema(
+        &mut self,
+        params: ConfigSchemaParams,
+    ) -> impl Future<Output = Result<ConfigSchemaResult, Error>> + Send {
+        let _ = params;
+        async { Err(config_schema_unsupported()) }
+    }
 
     /// `task/dispatch`: start (or resume) the agent for a task.
     fn task_dispatch(
@@ -166,6 +178,7 @@ impl<H: AgentIdeHandler> LineHandler for AgentIdeServer<H> {
         match method.as_str() {
             method::INITIALIZE => call!(InitializeParams, initialize),
             method::CONFIG_VALIDATE => call!(ConfigValidateParams, config_validate),
+            method::CONFIG_SCHEMA => call!(ConfigSchemaParams, config_schema),
             method::TASK_DISPATCH => call!(TaskDispatchParams, task_dispatch),
             method::SESSION_ATTACH => call!(SessionAttachParams, session_attach),
             method::TASK_CANCEL => call!(TaskCancelParams, task_cancel),

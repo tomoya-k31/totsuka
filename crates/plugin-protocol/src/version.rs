@@ -417,7 +417,23 @@ use semver::{Version, VersionReq};
 /// has to move. As with 0.7.3, adding the capability field is a **source**
 /// break for code that builds `Capabilities` with a struct literal and no
 /// `..Default::default()`.
-pub const PROTOCOL_VERSION: &str = "0.7.6";
+///
+/// 0.7.7 (ADR-0109): [`method::CONFIG_SCHEMA`](crate::method::CONFIG_SCHEMA)
+/// (O→P) with [`ConfigSchemaParams`](crate::methods::ConfigSchemaParams) /
+/// [`ConfigSchemaResult`](crate::methods::ConfigSchemaResult): the plugin
+/// describes its own config table as a JSON Schema, so the menu bar app's
+/// settings window can render a form for it. Answered before `initialize`
+/// like `config/validate` — `initialize` resolves secrets and starts work, and
+/// a settings window must be able to ask before any secret exists.
+/// [`Capabilities::config_schema`](crate::Capabilities::config_schema) gates
+/// it.
+///
+/// **Patch, for the 0.6.1 reason**: `Capabilities` deserializes with
+/// defaults and the Orchestrator only calls what was declared, so no manifest
+/// has to move. As with 0.7.6, the new capability field is a **source** break
+/// for code that builds `Capabilities` with a struct literal and no
+/// `..Default::default()`.
+pub const PROTOCOL_VERSION: &str = "0.7.7";
 
 /// [`PROTOCOL_VERSION`] parsed into a [`Version`].
 pub fn protocol_version() -> Version {
@@ -441,7 +457,7 @@ mod tests {
 
     #[test]
     fn current_version_parses() {
-        assert_eq!(protocol_version(), Version::new(0, 7, 6));
+        assert_eq!(protocol_version(), Version::new(0, 7, 7));
     }
 
     #[test]

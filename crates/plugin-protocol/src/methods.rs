@@ -27,6 +27,13 @@ pub mod method {
     pub const SHUTDOWN: &str = "shutdown";
     /// Validate plugin-specific config (O→P, F-59).
     pub const CONFIG_VALIDATE: &str = "config/validate";
+    /// Describe the plugin's own config table as a JSON Schema (O→P, 0.7.7,
+    /// ADR-0109). Answered **before** `initialize`, like `config/validate`,
+    /// and only sent to plugins whose [`Capabilities`] declare
+    /// [`config_schema`](crate::Capabilities::config_schema).
+    ///
+    /// [`Capabilities`]: crate::Capabilities
+    pub const CONFIG_SCHEMA: &str = "config/schema";
 
     // task_source.
     /// Submit one task for ingestion (P→O request, 0.1.6). The Orchestrator
@@ -95,9 +102,9 @@ pub mod method {
 /// One kind-specific O→P request: which kind serves it, and whether the host
 /// sends it to a given plugin at all.
 ///
-/// The common three (`initialize`, `config/validate`, `shutdown`) are not
-/// here — every kind serves them, and the first two are the ones a plugin
-/// answers *before* `initialize`.
+/// The common requests (`initialize`, `config/validate`, `config/schema`,
+/// `shutdown`) are not here — they are not kind-specific, and all but
+/// `shutdown` are ones a plugin answers *before* `initialize`.
 #[derive(Debug, Clone, Copy)]
 pub struct HostRequest {
     /// The wire method name (one of the [`method`] constants).
@@ -539,6 +546,27 @@ pub struct ConfigValidateResult {
     /// cannot act on is noise, and noise is how a diagnostic stops being read.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
+}
+
+/// `config/schema` params (O→P, 0.7.7, ADR-0109). Empty: the schema describes
+/// the plugin's config *table*, not any particular value of it, so there is
+/// nothing to send.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConfigSchemaParams {}
+
+/// `config/schema` result (P→O, 0.7.7, ADR-0109).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConfigSchemaResult {
+    /// A JSON Schema (draft 2020-12) for the plugin's own `[<name>]` table —
+    /// the value `initialize` and `config/validate` receive as `config`.
+    ///
+    /// Besides the standard keywords, the settings GUI reads four extension
+    /// keywords on any property (ADR-0109): `x-title` and `x-help` (objects
+    /// with `en` and `ja` strings), `x-category` (a group label, also
+    /// `{en, ja}`), and `x-secret` (`true` for a value that is a secret
+    /// reference). Unknown keywords are ignored, so a schema without them is
+    /// still valid — the field is shown by its key with no help text.
+    pub schema: serde_json::Value,
 }
 
 // ---------------------------------------------------------------------------
@@ -1287,6 +1315,19 @@ mod tests {
                  Request URL in the Slack app"
                     .into(),
             ],
+        });
+        round_trip(&ConfigSchemaParams {});
+        round_trip(&ConfigSchemaResult {
+            schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "token": {
+                        "type": "string",
+                        "x-secret": true,
+                        "x-help": { "en": "API token", "ja": "API トークン" },
+                    },
+                },
+            }),
         });
     }
 

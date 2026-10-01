@@ -1,0 +1,23 @@
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "result": {
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "token": {
+          "type": "string",
+          "x-secret": true,
+          "x-category": { "en": "Authentication", "ja": "認証" },
+          "x-title": { "en": "API token", "ja": "API トークン" },
+          "x-help": {
+            "en": "A secret reference such as secret:github.token.",
+            "ja": "secret:github.token のような機密情報の参照。"
+          }
+        }
+      },
+      "required": ["token"]
+    }
+  }
+}

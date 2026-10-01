@@ -1,7 +1,7 @@
 > 🌐 [English](plugin-dev-guide.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:82d1c599701af61a6b7c3049e32a001c35f2f4554b149b3081d17eddd5ad2547 -->
+<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:0064f7947c95c017d8b7f375863cded863b7dd7bf9e98aa2563523f5d231e400 -->
 
 # プラグイン開発ガイド
 
@@ -44,6 +44,7 @@ diagnostics_snapshot = true         # agent: diagnostics/snapshot に応答す�
 outputs = ["source"]                # result/publish を実装するときだけ宣言する。
                                    # 宣言しないと output = "source" の
                                    # workflow は弾かれる
+config_schema = true                # 全 kind: config/schema に答える
 ```
 
 Orchestrator は起動前に `protocol_version` の互換性を検査し、宣言された capability だけを要求する。
@@ -74,6 +75,7 @@ Orchestrator は起動前に `protocol_version` の互換性を検査し、宣�
 |---|---|---|
 | `initialize` | O→P | 解決済みの設定とプロトコル版を渡す。プラグインは自分の版と capability を返す |
 | `config/validate` | O→P | プラグイン設定を検証する。`initialize` と同じ workflows / projects / repositories も一緒に届くので、記憶ではなく「今聞かれているもの」を検証する。**`warnings` は「設定は正しいが伝えたいこと」の口**で、`valid` には影響せず、`totsuka doctor` が黄色のチェックとして描き `--json` にも出る。`errors` と同じ「原因 → 次のアクション」の形で書くこと —— 行動できない警告は雑音で、雑音は診断が読まれなくなる原因そのものである。省略できるので、送らないプラグインの `doctor` 出力は 1 バイトも変わらない |
+| `config/schema` | O→P | 自分の設定テーブルを JSON Schema（draft 2020-12）で返す（`{}` → `{ schema }`）。**`initialize` より前に答えること** —— メニューバーアプリの設定画面は、機密がまだ無い状態で尋ねる。マニフェストで `config_schema = true` を宣言したときだけ送られ、宣言しなければそのテーブルは設定画面で生の TOML 欄になる（エラーにはならない）。各プロパティに `x-title` / `x-help` / `x-category`（いずれも `{"en": "…", "ja": "…"}`）と、機密の参照を持つフィールドには `x-secret: true` を付けると、設定画面がラベル・ヘルプ・カテゴリ分け・パスワード入力欄に使う |
 | `shutdown` | O→P | 猶予付きで終了を要求する |
 
 `initialize` は `task_source` に対して、二重に設定せずに済むものをいくつか渡す。いずれも任意なので、使わないなら無視してよい。
@@ -160,11 +162,11 @@ JSON-RPC の行処理（パースエラー、notification への無応答、`shu
 
 | kind | 実装する trait | stdio に載せる形 |
 |---|---|---|
-| `task_source` | `TaskSourceHandler`（initialize / config_validate / update_status / result_publish、任意で task_claim / update_labels） | `serve(TaskSourceServer(handler), &stdio)`。server 自身が handler を兼ねるなら、`LineHandler` を `plugin_sdk::dispatch::handle_line(self, line)` で実装する |
-| `agent_ide` | `AgentIdeHandler`（initialize / config_validate / task_dispatch / session_attach / task_cancel / state_subscribe、任意で session_focus / session_release / session_list / diagnostics_snapshot） | `serve(AgentIdeServer::new(handler, stdio.writer.clone()), &stdio)` |
+| `task_source` | `TaskSourceHandler`（initialize / config_validate / update_status / result_publish、任意で task_claim / update_labels / config_schema） | `serve(TaskSourceServer(handler), &stdio)`。server 自身が handler を兼ねるなら、`LineHandler` を `plugin_sdk::dispatch::handle_line(self, line)` で実装する |
+| `agent_ide` | `AgentIdeHandler`（initialize / config_validate / task_dispatch / session_attach / task_cancel / state_subscribe、任意で session_focus / session_release / session_list / diagnostics_snapshot / config_schema） | `serve(AgentIdeServer::new(handler, stdio.writer.clone()), &stdio)` |
 
 - 各メソッドは params の型を受け取り、result の型か `plugin_protocol::jsonrpc::Error` を返す。`initialize` 前の呼び出しには `plugin_sdk::not_initialized()` を返す。 `initialized()` を上書きしておくと、`initialize` 前に params の壊れた request が来たときも `INVALID_PARAMS` でなく同じ「initialize が先」の応答になる。
-- **能力で守られたメソッドは既定で `METHOD_NOT_FOUND` を返す**（`task_claim`、`update_labels`（`label_writeback`）、`session_focus` / `session_release` / `session_list`、`diagnostics_snapshot`）。上書きするなら対応する capability を宣言し、宣言するなら上書きすること。
+- **能力で守られたメソッドは既定で `METHOD_NOT_FOUND` を返す**（`task_claim`、`update_labels`（`label_writeback`）、`session_focus` / `session_release` / `session_list`、`diagnostics_snapshot`、`config_schema`（`config_schema`））。上書きするなら対応する capability を宣言し、宣言するなら上書きすること。
 - **`state_subscribe` は状態変化の受信チャネルを返すだけでよい。** 応答を先に返してから `state/notification` を流す順序は `AgentIdeServer` が保証する。
 - 設定可能なプロンプトや指示文の `{placeholder}` 置換には `plugin_sdk::template::render` を使う。単一パスで置換するので、外部の内容に書かれた `{…}` を展開しない。agent_ide がエージェントへ渡すプロンプトは `plugin_sdk::compose_prompt` で組み立てられる。
 
@@ -277,6 +279,7 @@ fn the_binary_conforms_to_the_protocol() {
 | 7 | 全 kind | `shutdown` に result で応答し、終了コード 0 で終わる |
 | 8 | 全 kind | stdin が EOF になったら終わる |
 | 9 | task_source | trigger に未知のキーがある `initialize` は `CONFIG_INVALID`（-32003）で失敗させ、メッセージにそのキー名を含める |
+| 10 | `config_schema` を宣言したもの | initialize 前の `config/schema` に、`schema` が `"type": "object"` の JSON オブジェクトである result で答える |
 
 検査するのはエラーの**コード**だけで、メッセージの文言は見ない。例外は 6 と 9 のキー名で、運用者が設定を直すための唯一の手がかりなので要求する。
 

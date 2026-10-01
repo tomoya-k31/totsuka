@@ -35,14 +35,14 @@ use plugin_protocol::jsonrpc::{Notification, Request, Response, error_code};
 use plugin_protocol::manifest::{OutputCapability, PluginKind};
 use plugin_protocol::method;
 use plugin_protocol::methods::{
-    AgentState, ConfigValidateParams, ConfigValidateResult, DiagnosticsSnapshotParams,
-    DiagnosticsSnapshotResult, ExecutionMode, InitializeParams, InitializeResult, NotifierEvent,
-    NotifyParams, ResultPublishParams, SessionAttachParams, SessionAttachResult,
-    SessionFocusParams, SessionFocusResult, SessionListParams, SessionListResult,
-    SessionReleaseParams, SessionReleaseResult, StateNotification, StateSubscribeParams,
-    TaskCancelParams, TaskClaimOutcome, TaskClaimParams, TaskClaimResult, TaskDispatchParams,
-    TaskDispatchResult, TaskLookupParams, TaskLookupResult, TaskSubmitParams, TaskSubmitResult,
-    TaskSubmitStatus, TaskUpdateLabelsParams, TaskUpdateStatusParams,
+    AgentState, ConfigSchemaParams, ConfigSchemaResult, ConfigValidateParams, ConfigValidateResult,
+    DiagnosticsSnapshotParams, DiagnosticsSnapshotResult, ExecutionMode, InitializeParams,
+    InitializeResult, NotifierEvent, NotifyParams, ResultPublishParams, SessionAttachParams,
+    SessionAttachResult, SessionFocusParams, SessionFocusResult, SessionListParams,
+    SessionListResult, SessionReleaseParams, SessionReleaseResult, StateNotification,
+    StateSubscribeParams, TaskCancelParams, TaskClaimOutcome, TaskClaimParams, TaskClaimResult,
+    TaskDispatchParams, TaskDispatchResult, TaskLookupParams, TaskLookupResult, TaskSubmitParams,
+    TaskSubmitResult, TaskSubmitStatus, TaskUpdateLabelsParams, TaskUpdateStatusParams,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -228,6 +228,12 @@ fn shutdown_wire() {
 fn config_validate_wire() {
     check_request::<ConfigValidateParams>("config_validate.request.json", method::CONFIG_VALIDATE);
     check_response::<ConfigValidateResult>("config_validate.response.json");
+}
+
+#[test]
+fn config_schema_wire() {
+    check_request::<ConfigSchemaParams>("config_schema.request.json", method::CONFIG_SCHEMA);
+    check_response::<ConfigSchemaResult>("config_schema.response.json");
 }
 
 // ---------------------------------------------------------------------------

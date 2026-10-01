@@ -30,7 +30,7 @@
 //!
 //! | Kind | Methods |
 //! |---|---|
-//! | common | [`initialize`](method::INITIALIZE), [`shutdown`](method::SHUTDOWN), [`config/validate`](method::CONFIG_VALIDATE) |
+//! | common | [`initialize`](method::INITIALIZE), [`shutdown`](method::SHUTDOWN), [`config/validate`](method::CONFIG_VALIDATE), [`config/schema`](method::CONFIG_SCHEMA) (0.7.7, capability-gated) |
 //! | `task_source` | [`task/submit`](method::TASK_SUBMIT) (P→O, 0.1.6), [`task/update_status`](method::TASK_UPDATE_STATUS), [`task/update_labels`](method::TASK_UPDATE_LABELS), [`result/publish`](method::RESULT_PUBLISH) |
 //! | `agent_ide` | [`task/dispatch`](method::TASK_DISPATCH), [`task/cancel`](method::TASK_CANCEL), [`session/attach`](method::SESSION_ATTACH), [`state/subscribe`](method::STATE_SUBSCRIBE) → [`state/notification`](method::STATE_NOTIFICATION), [`diagnostics/snapshot`](method::DIAGNOSTICS_SNAPSHOT) |
 //! | `notifier` | [`notify`](method::NOTIFY) |
@@ -109,12 +109,12 @@ pub use jsonrpc::{Error, Notification, Request, RequestId, Response, error_code}
 pub use manifest::{Capabilities, Manifest, ManifestError, OutputCapability, PluginKind};
 pub use methods::method;
 pub use methods::{
-    AgentState, ConfigValidateParams, ConfigValidateResult, DiagnosticsSnapshotParams,
-    DiagnosticsSnapshotResult, ExecutionMode, InitializeParams, InitializeResult, NotifierEvent,
-    NotifyParams, ProjectInfo, RepoInfo, ResultPublishParams, SessionAttachParams,
-    SessionAttachResult, StateNotification, StateSubscribeParams, TaskCancelParams,
-    TaskDispatchParams, TaskDispatchResult, TaskSubmitParams, TaskSubmitResult, TaskSubmitStatus,
-    TaskUpdateLabelsParams, TaskUpdateStatusParams, WorkflowInfo, WorkflowOption,
+    AgentState, ConfigSchemaParams, ConfigSchemaResult, ConfigValidateParams, ConfigValidateResult,
+    DiagnosticsSnapshotParams, DiagnosticsSnapshotResult, ExecutionMode, InitializeParams,
+    InitializeResult, NotifierEvent, NotifyParams, ProjectInfo, RepoInfo, ResultPublishParams,
+    SessionAttachParams, SessionAttachResult, StateNotification, StateSubscribeParams,
+    TaskCancelParams, TaskDispatchParams, TaskDispatchResult, TaskSubmitParams, TaskSubmitResult,
+    TaskSubmitStatus, TaskUpdateLabelsParams, TaskUpdateStatusParams, WorkflowInfo, WorkflowOption,
 };
 pub use task::Task;
 pub use version::{PROTOCOL_VERSION, is_compatible, is_compatible_with_current, protocol_version};

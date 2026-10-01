@@ -72,6 +72,14 @@ pub struct Capabilities {
     /// Orchestrator refuses a workflow that names `labels` on it at startup
     /// instead of silently never sending them.
     pub label_writeback: bool,
+    /// Answers `config/schema` with a JSON Schema of its own config table,
+    /// before `initialize` (any kind, 0.7.7, ADR-0109).
+    ///
+    /// Read from the manifest, so the host knows without launching the plugin
+    /// whether to ask. Undeclared means the settings GUI shows the plugin's
+    /// table as raw TOML instead of a form — never an error, since a schema
+    /// only helps a human edit the table and changes nothing at run time.
+    pub config_schema: bool,
     /// Output policies this (task source) plugin can fulfil.
     pub outputs: Vec<OutputCapability>,
 }
