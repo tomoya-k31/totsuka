@@ -22,6 +22,7 @@ owner: tomoya-k31
 | `Sources/Totsuka/` | SwiftUI: `AppModel`（状態と動作）、`SettingsView`（スキーマから組み立てるフォーム）、`TotsukaApp`（`MenuBarExtra`・`Settings`・ログの `Window`・通知クリックの受け口） |
 | `Resources/Assets.xcassets` | アプリアイコン（`AppIcon`）とメニューバーのテンプレート画像（`StatusBarTemplate`、18pt） |
 | `project.yml` | XcodeGen。出荷する `.app` のビルド定義（ad-hoc 署名、`LSUIElement`、`MARKETING_VERSION` は release-please が CLI と同じ版に上げ、`CFBundleShortVersionString` はそれを参照する。XcodeGen の既定の `1.0` のままだと版の照合と Keychain の事前案内が働かない） |
+| `build-app.sh` | Xcode 無しで `.app` を組み立てる（`apps/macos/build/Totsuka.app`）。SwiftPM でビルドし、アセットカタログの代わりに `iconutil` で `.icns` を作ってメニューバーの PNG をそのまま同梱し、ad-hoc 署名する。手元で試す用で、出荷物は CI の `macos-app.yml` がビルドする |
 | `test.sh` | `swift test`。Command Line Tools だけの環境では swift-testing のフレームワークの場所を渡し、モジュールの無い `_Testing_Foundation` を避けるため cross-import overlay を切る |
 
 # 振る舞い
@@ -37,7 +38,7 @@ owner: tomoya-k31
 # テスト
 
 - `apps/macos/test.sh`（`TotsukaKit` の swift-testing。終了コードの方針、版の比較、イベントの解釈、通知フィルタ、スキーマの分類、機密の名前、整数の往復）
-- CI の `macos app` ジョブ（`apps/macos/` を触った PR だけ）: `swift test` と、XcodeGen + `xcodebuild` での `.app` のビルド。ビルドした `.app` は `ditto` で zip にして artifact `Totsuka.app`（7 日）に残す —— 実機で試すにはこれを `~/Applications` に展開する（`/tmp` に置くと通知が許可されない）
+- CI の `macos-app.yml`（`apps/macos/**` を触った PR と手動実行だけ。`on: paths` はワークフロー単位でしか効かないので `ci.yml` とは分けた）: `swift test` と、XcodeGen + `xcodebuild` での `.app` のビルド。ビルドした `.app` は `ditto` で zip にして artifact `Totsuka.app`（7 日）に残す —— 実機で試すにはこれを `~/Applications` に展開する（`/tmp` に置くと通知が許可されない）
 - UI と、実機の Keychain・通知・ログイン項目の挙動はテストが無い。ADR-0109 の「実測」がプロトタイプでの確認の記録
 
 # 関連

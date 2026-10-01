@@ -1,0 +1,57 @@
+name: macos-app
+
+# The menu bar app (apps/macos/, ADR-0109): `swift test` and the `.app` build,
+# only when the app changed. A workflow of its own rather than jobs in ci.yml
+# because `on: paths` filters a whole workflow, not a job — the reason
+# warm-cache.yml is separate too — and a macOS minute is billed at ten Linux
+# ones, so a PR that does not touch Swift should not start a runner at all.
+# Not a required check, so a skipped run never leaves a PR waiting.
+on:
+  pull_request:
+    paths:
+      - apps/macos/**
+      - .github/workflows/macos-app.yml
+  # Build a `.app` from any branch by hand, to try it on a real Mac.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: macos app
+    runs-on: macos-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: apps/macos
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Test TotsukaKit
+        run: swift test
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      # Ad-hoc signed exactly as the release job builds it, so a project that
+      # only fails to sign or to compile its asset catalog fails here.
+      - name: Build Totsuka.app
+        run: |
+          xcodegen generate
+          xcodebuild -project Totsuka.xcodeproj -scheme Totsuka -configuration Release \
+            -derivedDataPath build build
+          test -d build/Build/Products/Release/Totsuka.app
+      # Kept for trying the app on a real Mac (Keychain, notifications and the
+      # login item have no tests). `ditto` keeps the bundle's symlinks, modes
+      # and signature, which the artifact zip alone would not.
+      - name: Package Totsuka.app
+        run: ditto -c -k --keepParent build/Build/Products/Release/Totsuka.app Totsuka.app.zip
+      - name: Upload Totsuka.app
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: Totsuka.app
+          path: apps/macos/Totsuka.app.zip
+          retention-days: 7

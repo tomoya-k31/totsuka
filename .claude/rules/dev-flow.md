@@ -24,18 +24,20 @@ docs-only change cannot fail `cargo clippy`, so the Rust set is pointless there.
 | a prose `*.md` outside the OKF/vendored exclusions and outside `.claude/**` | update its `.ja.md` sibling (→ [documentation-i18n.md](documentation-i18n.md)) |
 | `crates/orchestrator-cli/templates/config.toml` and no `*.rs` | `bash scripts/config-template-lint.sh` alone — the rest of the Rust set cannot see a template-only edit |
 | `.github/workflows/**` | read the SHA-pin + `ubuntu-slim` rules, validate YAML (`yq . <file>`); if you changed `ci.yml`'s commands, also run the affected Rust set |
-| `apps/macos/**` (the menu bar app, ADR-0109) | `apps/macos/test.sh` (`swift test`; works on Command Line Tools alone) and `swift build` there. The `.app` itself (asset catalog, signing) is built only by CI's `macos app` job — it needs Xcode |
+| `apps/macos/**` (the menu bar app, ADR-0109) | `apps/macos/test.sh` (`swift test`; works on Command Line Tools alone) and `swift build` there. `apps/macos/build-app.sh` assembles a `.app` without Xcode for trying it locally; the shipped one (asset catalog via `actool`) is built by CI's `macos-app.yml` |
 | `.claude/**` (settings / hooks / rules) | validate JSON (`python3 -m json.tool .claude/settings.json`); no Rust, no `.ja.md` |
 | none of the above touch Rust/Cargo (docs-only, `.claude`-only, …) | **skip the Rust set entirely** |
 
 Note: on every PR, CI runs `clippy / rustfmt` + `test` + `machete (unused
 deps)` + `msrv` + `gateway (slack-event-gateway)` (`ci.yml`, no path filter;
-`gateway` builds the image only when `services/slack-event-gateway/` changed),
-`macos app` (only when `apps/macos/` changed, decided by `macos app
-(changes)`) and the `lint` check (`okf-lint.yml`)
+`gateway` builds the image only when `services/slack-event-gateway/` changed)
+and the `lint` check (`okf-lint.yml`)
 regardless of what changed. If `machete` fails, remove the unused dependency
 or suppress a false positive per
 [dependency-hygiene](../../ai-docs/development/dependency-hygiene.md).
+`macos app` (`macos-app.yml`) runs only on PRs touching `apps/macos/**` (a
+path-filtered workflow, so other PRs show no such check), and can be started
+by hand (`workflow_dispatch`) to get a `.app` artifact from any branch.
 `audit` (`audit.yml`) additionally runs on PRs touching `**/Cargo.toml` /
 `Cargo.lock` / `deny.toml` (plus a daily cron); `coverage` runs only on push
 to `main`. Scoping only changes what you run **locally** before pushing —

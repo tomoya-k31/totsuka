@@ -42,8 +42,9 @@ after editing Swift files.
   package, not the generated project, for navigation.
 - On a machine with Command Line Tools only, run the tests with
   `apps/macos/test.sh` (plain `swift test` cannot find swift-testing there).
-  The asset catalog needs Xcode's `actool`, so CI's `macos app` job
-  (`xcodebuild`) is the gate for the app build itself.
+  `apps/macos/build-app.sh` assembles a `.app` without Xcode for trying it;
+  the shipped one needs Xcode's `actool` for its asset catalog, so CI's
+  `macos-app.yml` (`xcodebuild`) is the gate for the app build itself.
 
 ## Documentation (`ai-docs/` = OKF Knowledge Bundle)
 
