@@ -518,7 +518,33 @@ impl std::fmt::Debug for Plugin {
 
 impl Plugin {
     /// Launch and initialize a plugin.
-    pub async fn launch(spec: PluginSpec) -> Result<Self, HostError> {
+    pub async fn launch(mut spec: PluginSpec) -> Result<Self, HostError> {
+        let init = InitializeParams {
+            protocol_version: version::protocol_version(),
+            config: std::mem::take(&mut spec.init_config),
+            repositories: std::mem::take(&mut spec.repositories),
+            projects: std::mem::take(&mut spec.projects),
+            llm: spec.llm.take(),
+            workflows: std::mem::take(&mut spec.workflows),
+        };
+        let plugin = Self::spawn(spec)?;
+
+        // 3. initialize (F-65: config already has secrets resolved).
+        let result = plugin.request::<rpc::Initialize>(&init).await?;
+
+        Ok(Self {
+            capabilities: result.capabilities,
+            plugin_version: result.plugin_version,
+            claimed_repos: result.claimed_repos,
+            claimed_options: result.claimed_options,
+            ..plugin
+        })
+    }
+
+    /// Steps 1–2 of [`launch`](Self::launch): the F-54 check and the spawn,
+    /// without `initialize` — for the requests a plugin answers before it
+    /// (`config/schema`, ADR-0109).
+    fn spawn(spec: PluginSpec) -> Result<Self, HostError> {
         // 1. Protocol compatibility (F-54) — fail fast before spawning.
         let orchestrator = version::protocol_version();
         if !spec.manifest.is_compatible_with(&orchestrator) {
@@ -571,7 +597,7 @@ impl Plugin {
         );
         spawn_stderr_logger(spec.name.clone(), stderr);
 
-        let plugin = Self {
+        Ok(Self {
             inner,
             child: Mutex::new(child),
             notifications: Mutex::new(Some(notif_rx)),
@@ -580,25 +606,6 @@ impl Plugin {
             plugin_version: semver::Version::new(0, 0, 0),
             claimed_repos: Vec::new(),
             claimed_options: Vec::new(),
-        };
-
-        // 3. initialize (F-65: config already has secrets resolved).
-        let init = InitializeParams {
-            protocol_version: orchestrator,
-            config: spec.init_config,
-            repositories: spec.repositories,
-            projects: spec.projects,
-            llm: spec.llm,
-            workflows: spec.workflows,
-        };
-        let result = plugin.request::<rpc::Initialize>(&init).await?;
-
-        Ok(Self {
-            capabilities: result.capabilities,
-            plugin_version: result.plugin_version,
-            claimed_repos: result.claimed_repos,
-            claimed_options: result.claimed_options,
-            ..plugin
         })
     }
 
@@ -767,6 +774,20 @@ pub fn launchable_plugin_names(config: &crate::config::RootConfig) -> Vec<String
         .filter(|(_, p)| p.enabled)
         .map(|(name, _)| name.clone())
         .collect()
+}
+
+/// Ask a plugin for the JSON Schema of its own config table (`config/schema`,
+/// ADR-0109) and shut it down — **without** `initialize`, so nothing is
+/// resolved and nothing is started. `spec.init_config` and the lists are not
+/// sent; the caller decides from the manifest's `config_schema` capability
+/// whether to ask at all.
+pub async fn config_schema(spec: PluginSpec) -> Result<Value, HostError> {
+    let plugin = Plugin::spawn(spec)?;
+    let result = plugin
+        .request::<rpc::ConfigSchema>(&plugin_protocol::methods::ConfigSchemaParams {})
+        .await;
+    let _ = plugin.shutdown(VALIDATE_SHUTDOWN_GRACE).await;
+    Ok(result?.schema)
 }
 
 /// Grace period for a config-validate probe's shutdown.

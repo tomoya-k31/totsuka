@@ -1,9 +1,12 @@
-//! `totsuka config ...` — validation and display (F-59/63, §5.1).
+//! `totsuka config ...` — validation, display and editing (F-59/63, §5.1).
 //!
 //! `validate` runs the offline checks (schema, static references, workflow
 //! semantics) and — unless `--offline` — briefly launches each enabled plugin
 //! to delegate `config/validate` (F-59). `show` prints the effective files,
 //! masking secret-looking values with `--redacted`.
+//!
+//! `schema` / `get` / `set` / `unset` are the menu bar app's settings window's
+//! view of the file (ADR-0109): JSON out, one key per write, comments kept.
 
 use std::collections::{BTreeMap, HashMap};
 use std::io;
@@ -39,6 +42,34 @@ pub enum ConfigCommand {
         #[arg(long)]
         redacted: bool,
     },
+    /// Print the JSON Schema of config.toml: the core keys plus each installed
+    /// plugin's table (asked through `config/schema`, without `initialize`).
+    Schema,
+    /// Print the config file's path and contents as JSON.
+    Get,
+    /// Set one key, keeping the file's comments and layout.
+    Set {
+        /// Dotted key path; a number indexes an array (`repositories.0.tool`).
+        path: String,
+        /// The value as JSON (`'"debug"'`, `4`, `true`, `{"name":"a"}`).
+        value: String,
+    },
+    /// Remove one key or array element.
+    Unset {
+        /// Dotted key path, as for `set`.
+        path: String,
+    },
+}
+
+impl ConfigCommand {
+    /// Whether errors go out as the JSON envelope: the app-facing commands
+    /// always (their output is JSON or nothing), `validate` / `show` never.
+    pub fn wants_json(&self) -> bool {
+        matches!(
+            self,
+            Self::Schema | Self::Get | Self::Set { .. } | Self::Unset { .. }
+        )
+    }
 }
 
 /// Dispatch a config subcommand.
@@ -54,7 +85,125 @@ pub fn run(cx: &Cx, command: ConfigCommand) -> Result<(), CliError> {
             validate(cx, offline)
         }
         ConfigCommand::Show { redacted } => show(cx, redacted),
+        ConfigCommand::Schema => schema(cx),
+        ConfigCommand::Get => get(cx),
+        ConfigCommand::Set { path, value } => {
+            let value: serde_json::Value = serde_json::from_str(&value).map_err(|e| {
+                format!("the value is not JSON ({e}) → quote a string as JSON, e.g. '\"debug\"'")
+            })?;
+            write_edit(cx, |text| config::set_path(text, &path, &value))
+        }
+        ConfigCommand::Unset { path } => write_edit(cx, |text| config::unset_path(text, &path)),
     }
+}
+
+/// `config schema`: the core schema with each installed plugin's table merged
+/// in under its name. A plugin that does not declare `config_schema`, or whose
+/// answer is unusable, gets `x-raw: true` (edit as TOML) instead of failing the
+/// command — one broken plugin must not take the whole settings window down.
+fn schema(cx: &Cx) -> Result<(), CliError> {
+    use orchestrator_core::plugins::{PluginSchema, plugin_schemas};
+    use serde_json::json;
+
+    let mut schema = config::json_schema::core_schema();
+    let answers = tokio::runtime::Runtime::new()?.block_on(plugin_schemas(&cx.store()))?;
+    let properties = schema["properties"]
+        .as_object_mut()
+        .expect("the core schema is an object schema");
+    for (name, answer) in answers {
+        let category = json!({ "en": name, "ja": name });
+        let raw = |error: Option<String>| {
+            let mut entry = json!({ "type": "object", "x-category": category, "x-raw": true });
+            if let Some(error) = error {
+                entry["x-schema-error"] = json!(error);
+            }
+            entry
+        };
+        let entry = match answer {
+            PluginSchema::Schema(mut s) if s["type"] == "object" => {
+                if s.get("x-category").is_none() {
+                    s["x-category"] = category.clone();
+                }
+                s
+            }
+            PluginSchema::Schema(_) => raw(Some("the answer is not an object schema".into())),
+            PluginSchema::Undeclared => raw(None),
+            PluginSchema::Failed(e) => raw(Some(e)),
+        };
+        properties.insert(name, entry);
+    }
+    crate::common::print_json(&json!({ "config_path": cx.config_path, "schema": schema }))
+}
+
+/// `config get`: the file as written (no `TOTSUKA_*` overrides folded in — the
+/// settings window edits the file), or `exists: false` before there is one.
+fn get(cx: &Cx) -> Result<(), CliError> {
+    let text = read_config_text(&cx.config_path)?;
+    let config = match &text {
+        Some(text) => serde_json::to_value(
+            text.parse::<toml::Table>()
+                .map_err(|e| format!("failed to parse TOML: {e}"))?,
+        )?,
+        None => serde_json::json!({}),
+    };
+    crate::common::print_json(&serde_json::json!({
+        "config_path": cx.config_path,
+        "exists": text.is_some(),
+        "config": config,
+    }))
+}
+
+/// The file's text, or `None` when there is none yet.
+fn read_config_text(path: &std::path::Path) -> Result<Option<String>, CliError> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(Some(text)),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Apply one edit to the config file and write it back atomically.
+///
+/// Refused when it turns a file that loaded into one that does not: one key
+/// at a time cannot always keep a config *valid* (a new workflow is missing
+/// keys until the next write), but it must never be the step that leaves
+/// `run` unable to read the file. A file that already failed to load can
+/// still be edited — refusing would lock the user out of fixing it.
+///
+/// Written through a symlink rather than over it (dotfiles are often Stow
+/// links), via a temporary file in the target's directory and a rename.
+fn write_edit(
+    cx: &Cx,
+    edit: impl FnOnce(&str) -> Result<String, config::EditError>,
+) -> Result<(), CliError> {
+    let path = &cx.config_path;
+    let before = read_config_text(path)?;
+    let after = edit(before.as_deref().unwrap_or(""))?;
+    let loaded = |text: &str| config::RootConfig::from_toml_str(text);
+    if before.as_deref().is_none_or(|t| loaded(t).is_ok())
+        && let Err(e) = loaded(&after)
+    {
+        return Err(format!("{e} → the file was left unchanged").into());
+    }
+    let target = if before.is_some() {
+        std::fs::canonicalize(path)?
+    } else {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        path.clone()
+    };
+    let file_name = target
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("config.toml");
+    let tmp = target.with_file_name(format!(".{file_name}.{}.tmp", std::process::id()));
+    std::fs::write(&tmp, &after)?;
+    if before.is_some() {
+        std::fs::set_permissions(&tmp, std::fs::metadata(&target)?.permissions())?;
+    }
+    std::fs::rename(&tmp, &target)?;
+    Ok(())
 }
 
 /// Whether validating plugin `name` online would resolve a `secret:`

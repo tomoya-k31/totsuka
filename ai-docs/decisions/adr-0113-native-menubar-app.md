@@ -4,19 +4,20 @@ title: ADR-0113 ネイティブ macOS メニューバーアプリが run を子�
 description: "SwiftBar 向けの `totsuka menu` だけでは届かない 2 つの要件（アプリ名義のネイティブ通知と、config.toml の GUI 編集）のため、SwiftUI のメニューバーアプリ（apps/macos/）を足す決定。run は `--secrets-stdin` 付きの子プロセスとして起動し終了コードで再起動を判断、通知は `run --events-jsonl` の stdout、設定画面は JSON Schema（core は schemars、プラグインは新メソッド config/schema）から生成し読み書きは CLI 経由。Developer Program に加入しないため ad-hoc 署名の .app を release tarball に同梱して formula で配る。ADR-0065 の「Swift アプリ」却下を部分的に覆す。"
 resource: https://github.com/tomoya-k31/totsuka/tree/main/apps/macos
 tags: [decision, macos, menubar, notifier, config, protocol, distribution, adr]
-generated: { by: claude-code/opus-5.5, at: 2026-10-01T21:40:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-01T22:19:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
 
 # Status
 
-stable。gh stack の 4 層で入れる。本 ADR は 1 層目（プロトコル 0.7.7 の `config/schema`）と同時に入り、残りの 3 層が同じ決定を実装する。
+stable。gh stack の 5 層で入れる。本 ADR は 1 層目（プロトコル 0.7.7 の `config/schema`）と同時に入り、残りの 4 層が同じ決定を実装する（当初は 4 層の計画だったが、2 層目が 400 行を大きく超えるため `run --events-jsonl` を独立させた）。
 
 1. プロトコル: `config/schema` と capability `config_schema`（0.7.7）
-2. core / CLI: `config schema` / `config get` / `config set` / `config unset`、`run --events-jsonl`
-3. 同梱 7 プラグイン: `config/schema` に答える
-4. `apps/macos/`（SwiftUI アプリ）、CI のビルドジョブ、release tarball への同梱と formula
+2. core / CLI: `config schema` / `config get` / `config set` / `config unset`（[config CLI 契約](/apis/config-cli.md)）
+3. core / CLI: `run --events-jsonl`
+4. 同梱 7 プラグイン: `config/schema` に答える
+5. `apps/macos/`（SwiftUI アプリ）、CI のビルドジョブ、release tarball への同梱と formula
 
 [ADR-0065](/decisions/adr-0065-menubar-status.md) の「却下した案」のうち **独立した Swift/AppKit `.app`** の行を覆す。SwiftBar 向けの `totsuka menu` はそのまま残し、アプリも状態の取得にその `--json` を使う。
 
@@ -68,11 +69,11 @@ Apple Developer Program には**加入しない**。それでも友人に配り�
 - `config/schema` は **`initialize` より前に答える**（`config/validate` と同じ）。`initialize` は機密を解決し、ポーリングや接続確認を始めるので、まだ機密が無い設定画面からは呼べない
 - task_source は答えに **`project`**（自分が source の `[[projects]]` 要素に読むキー）と **`workflow`**（`[[workflows]]` に読むキー: `trigger` と、claim する平置きのオプション）のスキーマも載せられる（どちらも任意）。agent プラグインは `workflow` に claim するオプションだけを載せる。どちらのテーブルも中身は source ごとに違い、core は解釈しないので、**選んだ source（と agent）のキーだけを出す**。全部を並べて使えない項目を無効にする案は採らない —— source ごとのキーはほとんど重ならず、灰色の行ばかりのフォームになり、別の source のキーが残っていると `deny_unknown_fields` で `initialize` が落ちるのに、その危険が見えなくなる
 - **capability `config_schema` で申告し、マニフェストから読む。** プラグインを起動せずに尋ねるべきかが分かる。未申告や失敗のプラグインのテーブルはフォームではなく生の TOML 欄に回す（エラーにしない。スキーマは人の編集を助けるだけで、実行時の挙動を何も変えない）
-- 拡張キーワードは 4 つ: **`x-title`** と **`x-help`**、**`x-category`**（カテゴリ）（どれも英語の文字列）、**`x-secret`**（機密の参照を持つフィールド）。未知のキーワードは無視されるので、これらの無いスキーマも有効
+- 拡張キーワードはプラグインが付ける 4 つと、CLI が付ける 2 つ。プラグインが付けるのは **`x-title`** と **`x-help`**、**`x-category`**（カテゴリ）（どれも英語の文字列）、**`x-secret`**（機密の参照を持つフィールド）。未知のキーワードは無視されるので、これらの無いスキーマも有効。CLI は、フォームにできないテーブルに **`x-raw: true`** と、その理由の **`x-schema-error`** を付ける
 - **読み書きは CLI 経由**（Swift 側で TOML を扱わない）:
   - `config schema` — core とプラグインのスキーマを 1 つのルートスキーマにまとめて返す
   - `config get` — 実際に読むファイル（`--config` / `hosts/<host>.toml` / `config.toml`、[ADR-0106](/decisions/adr-0106-per-host-config-file.md)）のパスと中身を JSON で返す
-  - `config set <path> <json>` / `config unset <path>` — `toml_edit` でコメントを保ったまま 1 キーずつ書き換え、構文と型が通るときだけ書き込む
+  - `config set <path> <json>` / `config unset <path>` — `toml_edit` でコメントを保ったまま 1 キーずつ書き換える。**読めていたファイルを読めなくする書き込みは拒否する**が、1 キーずつなので途中の状態が `config validate` を通るとは限らない（起動の条件は別に `config validate` で見る）。シンボリックリンクは辿った先に書く（dotfiles の Stow を壊さない）
 - `x-secret` のフィールドは、保存すると config に **`secret:<ドット区切りのパス>`** が自動で書かれ、値は Keychain の 1 項目（JSON マップ）に入る。既存の `op://` などの参照は `--secrets-stdin` の下では拒否されるので、設定画面で「要入力」として出し、入力されたら `secret:` に置き換える
 
 ## 6. 配布
@@ -119,4 +120,6 @@ Apple Developer Program には**加入しない**。それでも友人に配り�
 - プロトコルは 0.7.7 になる（加算的・patch。`Capabilities` を構造体リテラルで組むコードには source break）
 - リポジトリに Swift と XcodeGen が入り、CI に macOS ランナーのジョブが増える（`apps/macos/` を触った PR だけでビルドする）
 - 機密を `--secrets-stdin` で渡す構成では、ターミナルから単独で `doctor` などを叩くと `secret:` を解決できない（ADR-0100 の帰結のまま）
+- `[[projects]]` / `[[workflows]]` に書くプラグイン所有のキー（`owner`・`project_number`・`trigger` の中身など）は、プロトコルがスキーマを運ばないので設定画面ではフォームにならない。必要になったら `config/schema` の答えに `project` / `workflow` 用のスキーマを足す
+- schemars は proc-macro の依存として syn の 3 系を連れてくる（ワークスペースの他は 2 系）。ビルド時間は増えるが、実行時の依存は増えない
 - 未確認のまま残すもの: 更新後に一度も起動せずに再ログインしたときのログイン項目の挙動

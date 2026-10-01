@@ -45,7 +45,7 @@ pub const DEFAULT_WORKFLOW_TIMEOUT_SECS: u64 = 0;
 /// a leftover table is legitimate only when a plugin of that name is in the
 /// `[plugins.*]` roster, so `[worktre]` (a core-key typo) and `[slak]` (a
 /// plugin-name typo) both fail, where before only the first did.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct RootConfig {
     /// Schema version (§10.2). Startup validation rejects a mismatch; the
     /// config is never migrated automatically (#276).
@@ -57,43 +57,104 @@ pub struct RootConfig {
     /// default is a prerequisite for cutting v2; see the versioning policy in
     /// `ai-docs/development/config-reference.md`.
     #[serde(default = "default_version")]
+    #[schemars(extend(
+        "x-category" = {"en": "General", "ja": "一般"},
+        "x-title" = {"en": "Config format version", "ja": "設定の書式の版"},
+        "x-help" = {"en": "The version of this file's format. Leave it at 1.", "ja": "このファイルの書式の版。1 のままにする。"}
+    ))]
     pub version: u32,
     /// Global maximum concurrent tasks (F-40). Defaults to
     /// [`DEFAULT_GLOBAL_CONCURRENCY`] when omitted.
     #[serde(default)]
+    #[schemars(extend(
+        "x-category" = {"en": "General", "ja": "一般"},
+        "x-title" = {"en": "Concurrent tasks", "ja": "同時実行数"},
+        "x-help" = {"en": "How many tasks run at the same time, across all repositories. Default 4.", "ja": "全リポジトリを合わせて同時に実行するタスクの数。既定は 4。"}
+    ))]
     pub max_concurrency: Option<u32>,
     /// Registered local repositories (F-61).
     #[serde(default)]
+    #[schemars(extend(
+        "x-category" = {"en": "Repositories", "ja": "リポジトリ"},
+        "x-title" = {"en": "Repositories", "ja": "リポジトリ"},
+        "x-help" = {"en": "The local clones that tasks are worked on.", "ja": "タスクの作業対象になるローカルのクローン。"}
+    ))]
     pub repositories: Vec<RepositoryConfig>,
     /// Projects a repository can file into (#554): a GitHub Project, a Notion
     /// database, a Jira project.
     #[serde(default)]
+    #[schemars(extend(
+        "x-category" = {"en": "Projects", "ja": "プロジェクト"},
+        "x-title" = {"en": "Projects", "ja": "プロジェクト"},
+        "x-help" = {"en": "Named parts of a task source: a GitHub Project board, a Notion database, a Slack workspace. Workflows take tasks from them; repositories file new issues into them.", "ja": "タスクソースの中の、名前で指せる単位（GitHub Project のボード、Notion のデータベース、Slack のワークスペースなど）。ワークフローはここからタスクを引き、リポジトリはここへ新しい課題を起票する。"}
+    ))]
     pub projects: Vec<ProjectConfig>,
     /// Plugin roster + common fields, keyed by plugin instance name (F-56).
     #[serde(default)]
+    #[schemars(extend(
+        "x-category" = {"en": "Plugins", "ja": "プラグイン"},
+        "x-title" = {"en": "Plugins", "ja": "プラグイン"},
+        "x-help" = {"en": "Which installed plugins are used. Each plugin's own settings are in its own section.", "ja": "使うプラグインの一覧。各プラグイン自身の設定は、それぞれの節に書く。"}
+    ))]
     pub plugins: BTreeMap<String, PluginConfig>,
     /// Global default AI tool name when neither the workflow nor the selected
     /// repository picks one (#196). `None` means the built-in `"claude"`.
     #[serde(default)]
+    #[schemars(extend(
+        "x-category" = {"en": "AI tools", "ja": "AI ツール"},
+        "x-title" = {"en": "Default AI tool", "ja": "既定の AI ツール"},
+        "x-help" = {"en": "The AI tool used when neither the workflow nor the repository names one. Default \"claude\".", "ja": "ワークフローもリポジトリも指定しないときに使う AI ツール。既定は \"claude\"。"}
+    ))]
     pub default_tool: Option<String>,
     /// AI-tool registry, keyed by tool name (#196). Built-in defaults exist
     /// for `claude`; an entry overrides/extends them (e.g. a
     /// `[tools.claude-fast]` profile with a different model flag).
     #[serde(default)]
+    #[schemars(extend(
+        "x-category" = {"en": "AI tools", "ja": "AI ツール"},
+        "x-title" = {"en": "AI tools", "ja": "AI ツール"},
+        "x-help" = {"en": "The AI tool commands started in the agent's pane. claude, codex and opencode are built in; an entry with the same name overrides one.", "ja": "エージェントの pane で起動する AI ツールのコマンド。claude・codex・opencode は組み込みで、同じ名前のエントリで上書きできる。"}
+    ))]
     pub tools: BTreeMap<String, ToolConfig>,
     /// Named workflows (parsed structurally here; semantics validated in #54).
     #[serde(default)]
+    #[schemars(extend(
+        "x-category" = {"en": "Workflows", "ja": "ワークフロー"},
+        "x-title" = {"en": "Workflows", "ja": "ワークフロー"},
+        "x-help" = {"en": "Which tasks to pick up, and which agent works on them, how. The first workflow that matches a task wins.", "ja": "どのタスクを拾い、どのエージェントにどう作業させるか。タスクに最初に一致したワークフローが使われる。"}
+    ))]
     pub workflows: Vec<WorkflowConfig>,
     /// AI Gateway settings (F-12, F-13).
+    #[schemars(extend(
+        "x-category" = {"en": "Repository classification", "ja": "リポジトリ分類"},
+        "x-title" = {"en": "Repository classification", "ja": "リポジトリ分類"},
+        "x-help" = {"en": "An LLM that decides which repository a task belongs to when the task does not say. Without it, such tasks wait for a person to choose.", "ja": "タスクがどのリポジトリのものか書かれていないときに、それを判定する LLM。無ければ、そのようなタスクは人が選ぶまで待つ。"}
+    ))]
+    #[schemars(with = "Option<RawLlmConfig>")]
     pub llm: Option<LlmConfig>,
     /// worktree placement defaults (consumed by #53).
     #[serde(default)]
+    #[schemars(extend(
+        "x-category" = {"en": "Worktrees", "ja": "worktree"},
+        "x-title" = {"en": "Worktrees", "ja": "worktree"},
+        "x-help" = {"en": "Where each task's git worktree is created, and when it is removed.", "ja": "タスクごとの git worktree をどこに作り、いつ削除するか。"}
+    ))]
     pub worktree: WorktreeConfig,
     /// Logging settings (§5.2).
     #[serde(default)]
+    #[schemars(extend(
+        "x-category" = {"en": "Logging", "ja": "ログ"},
+        "x-title" = {"en": "Logging", "ja": "ログ"},
+        "x-help" = {"en": "Log level and how many daily log files to keep.", "ja": "ログのレベルと、日ごとのログファイルを何世代残すか。"}
+    ))]
     pub log: LogSettings,
     /// Claude Code hook-event ingestion settings (#131: E-03, D-02, E-07).
     #[serde(default)]
+    #[schemars(extend(
+        "x-category" = {"en": "Agent hooks", "ja": "エージェントのフック"},
+        "x-title" = {"en": "Agent hooks", "ja": "エージェントのフック"},
+        "x-help" = {"en": "Where completion signals from the AI tool are received. The defaults rarely need changing.", "ja": "AI ツールからの完了の知らせを受け取る場所。既定のままでよいことがほとんど。"}
+    ))]
     pub hooks: HooksConfig,
     /// `[prompts]` — **removed in #465** (an amend of ADR-0023). Prompt text is
     /// built-in only; the one surviving knob is [`WorkflowConfig::rubric`].
@@ -105,6 +166,7 @@ pub struct RootConfig {
     /// that it used to be a supported table, which is the worst outcome for an
     /// operator who wrote it on purpose (#465).
     #[serde(default)]
+    #[schemars(skip)]
     pub prompts: toml::Table,
     /// Every top-level table that is not one of the fields above: one
     /// plugin's own settings, held **uninterpreted** (#554).
@@ -118,6 +180,7 @@ pub struct RootConfig {
     /// A name in here that the `[plugins.*]` roster does not know is a
     /// validation error, which is what keeps a typo from being read as
     /// "settings for a plugin nobody enabled".
+    #[schemars(skip)]
     #[serde(flatten)]
     pub plugin_settings: BTreeMap<String, toml::Value>,
 }
@@ -126,7 +189,7 @@ pub struct RootConfig {
 ///
 /// All fields are optional: the consuming components (UDS server, hook
 /// rendering — later issues) apply the documented defaults.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct HooksConfig {
     /// Removed (#785): `totsuka run` generates the Bearer token itself
@@ -134,18 +197,31 @@ pub struct HooksConfig {
     /// fails with [`REMOVED_AUTH_TOKEN_REF`] instead of serde's generic
     /// "unknown field".
     #[serde(default, deserialize_with = "removed_auth_token_ref")]
+    #[schemars(skip)]
     pub auth_token_ref: (),
     /// Unix domain socket path the hook receiver listens on. `None` uses the
     /// built-in default path.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Socket path", "ja": "ソケットのパス"},
+        "x-help" = {"en": "The Unix socket that receives hook signals. Leave empty for the default.", "ja": "フックの知らせを受け取る Unix ソケット。空なら既定の場所。"}
+    ))]
     pub socket_path: Option<String>,
     /// Directory where hook events are spooled when the POST fails (E-07).
     /// `None` uses the built-in default path.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Spool directory", "ja": "退避先ディレクトリ"},
+        "x-help" = {"en": "Where hook signals are kept when they cannot be delivered. Leave empty for the default.", "ja": "フックの知らせを届けられなかったときに退避しておく場所。空なら既定の場所。"}
+    ))]
     pub spool_dir: Option<String>,
     /// Max consecutive Stop-hook block re-asks before escalation (D-02).
     /// Defaults to [`DEFAULT_BLOCK_RETRY_LIMIT`].
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Re-ask limit", "ja": "差し戻しの上限"},
+        "x-help" = {"en": "How many times in a row an agent may be asked to finish its work before the task is escalated to you. Default 3.", "ja": "エージェントに作業の完了を連続で求め直す回数の上限。超えるとあなたに知らせる。既定は 3。"}
+    ))]
     pub block_retry_limit: Option<u32>,
 }
 
@@ -162,26 +238,50 @@ fn default_version() -> u32 {
 }
 
 /// A registered repository (F-61).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RepositoryConfig {
     /// Stable identifier used in the worktree path, the logs and `totsuka
     /// status`. Not in branch names — the agent picks those (ADR-0026).
+    #[schemars(extend(
+        "x-title" = {"en": "Name", "ja": "名前"},
+        "x-help" = {"en": "A short, stable ID for the repository, used in logs and paths.", "ja": "リポジトリの短い安定した ID。ログやパスに使われる。"}
+    ))]
     pub name: String,
     /// Local clone path (may use `~` and `${ENV}`; expanded on validation).
+    #[schemars(extend(
+        "x-title" = {"en": "Path", "ja": "パス"},
+        "x-help" = {"en": "The path to the local clone. ~ and ${VAR} are expanded.", "ja": "ローカルのクローンのパス。~ と ${VAR} は展開される。"}
+    ))]
     pub path: PathBuf,
     /// Free-text summary used for LLM repo selection (F-11).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Summary", "ja": "説明"},
+        "x-help" = {"en": "What the repository is about. Repository classification reads it to choose a repository.", "ja": "このリポジトリが何のものか。リポジトリ分類が、どのリポジトリかを選ぶときに読む。"}
+    ))]
     pub summary: Option<String>,
     /// Default AI tool for tasks dispatched into this repo (#196). Overrides
     /// `default_tool`; overridden by an explicit `[[workflows]].tool` pin.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "AI tool", "ja": "AI ツール"},
+        "x-help" = {"en": "The AI tool for tasks in this repository, unless the workflow names one.", "ja": "このリポジトリのタスクで使う AI ツール。ワークフローが指定していればそちらが優先。"}
+    ))]
     pub tool: Option<String>,
     /// Per-repository concurrency cap (F-41).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Concurrent tasks", "ja": "同時実行数"},
+        "x-help" = {"en": "How many tasks run in this repository at the same time. Empty means no limit of its own.", "ja": "このリポジトリで同時に実行するタスクの数。空なら個別の上限なし。"}
+    ))]
     pub max_concurrency: Option<u32>,
     /// Overrides the global `[worktree].location` for this repo (F-22).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Worktree location", "ja": "worktree の場所"},
+        "x-help" = {"en": "Overrides the worktree location template for this repository.", "ja": "このリポジトリだけ worktree の配置テンプレートを上書きする。"}
+    ))]
     pub worktree_location: Option<String>,
     /// Which project this repository files into: the `name` of a
     /// `[[projects]]` entry (#554).
@@ -197,6 +297,10 @@ pub struct RepositoryConfig {
     /// where two plugins could name the same repository and the Orchestrator
     /// had machinery to detect and report that. Here it cannot be written.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Project", "ja": "プロジェクト"},
+        "x-help" = {"en": "The project new issues for this repository are filed into (a project name).", "ja": "このリポジトリの新しい課題を起票するプロジェクト（プロジェクトの名前）。"}
+    ))]
     pub project: Option<String>,
 }
 
@@ -213,23 +317,32 @@ pub struct RepositoryConfig {
 /// `[[repositories]].project` → `[[projects]].name` → `[plugins.<source>]`
 /// walkable **without launching a plugin**, so a broken reference is caught by
 /// `config validate --offline` and by anyone reading the file.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct ProjectConfig {
     /// Stable identifier `[[repositories]].project` points at.
+    #[schemars(extend(
+        "x-title" = {"en": "Name", "ja": "名前"},
+        "x-help" = {"en": "A stable ID that workflows and repositories refer to.", "ja": "ワークフローとリポジトリが参照する安定した ID。"}
+    ))]
     pub name: String,
     /// The task_source plugin that owns this project.
+    #[schemars(extend(
+        "x-title" = {"en": "Task source", "ja": "タスクソース"},
+        "x-help" = {"en": "The task source plugin this project belongs to (github, notion, slack, …). Its other keys are that plugin's.", "ja": "このプロジェクトが属するタスクソースのプラグイン（github・notion・slack など）。他のキーはそのプラグインのもの。"}
+    ))]
     pub source: String,
     /// Everything else on the entry, uninterpreted (#554).
     ///
     /// Unlike a workflow's options these need no claim handshake: an entry
     /// names exactly one plugin, so ownership is not in question and the
     /// plugin's own `deny_unknown_fields` is what rejects a typo.
+    #[schemars(skip)]
     #[serde(flatten)]
     pub options: toml::Table,
 }
 
 /// Plugin kind (F-50).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PluginKind {
     /// Task source (GitHub, Notion, ...).
@@ -252,19 +365,35 @@ impl PluginKind {
 }
 
 /// Common, Orchestrator-interpreted plugin fields from `[plugins.{name}]`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PluginConfig {
     /// Whether the plugin is active (F-56). Declarative roster flag.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Enabled", "ja": "有効"},
+        "x-help" = {"en": "Whether the plugin is started.", "ja": "プラグインを起動するか。"}
+    ))]
     pub enabled: bool,
     /// Plugin kind.
+    #[schemars(extend(
+        "x-title" = {"en": "Kind", "ja": "種類"},
+        "x-help" = {"en": "task_source, agent_ide or notifier. Must match the plugin.", "ja": "task_source・agent_ide・notifier のどれか。プラグインと一致させる。"}
+    ))]
     pub kind: PluginKind,
     /// Per-plugin concurrency cap (F-42).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Concurrent tasks", "ja": "同時実行数"},
+        "x-help" = {"en": "For an agent plugin: how many tasks it runs at the same time. Empty means no limit of its own.", "ja": "エージェントのプラグインで、同時に実行するタスクの数。空なら個別の上限なし。"}
+    ))]
     pub max_concurrency: Option<u32>,
     /// RPC timeout in seconds.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Call timeout (seconds)", "ja": "呼び出しのタイムアウト（秒）"},
+        "x-help" = {"en": "How long to wait for each answer from the plugin. Default 120.", "ja": "プラグインからの応答を待つ秒数。既定は 120。"}
+    ))]
     pub timeout_secs: Option<u64>,
     /// Whether a crash of this plugin is followed by a relaunch (#495).
     /// Defaults to `true`.
@@ -275,6 +404,10 @@ pub struct PluginConfig {
     /// relaunch is suppressed, which is what someone debugging a plugin by
     /// hand wants — a process that stays dead so they can see why.
     #[serde(default = "default_true")]
+    #[schemars(extend(
+        "x-title" = {"en": "Restart on crash", "ja": "落ちたら再起動"},
+        "x-help" = {"en": "Restart the plugin when it crashes (up to 5 times in 5 minutes). Default on.", "ja": "プラグインが落ちたら再起動する（5 分間に最大 5 回）。既定はオン。"}
+    ))]
     pub restart: bool,
 }
 
@@ -306,9 +439,13 @@ fn default_true() -> bool {
 /// The check moves to the plugins, which is the only place the answer exists.
 /// It is not weaker: a key **no** plugin claims is an error, so `profil` still
 /// fails — just at `initialize` rather than at parse.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct WorkflowConfig {
     /// Workflow name.
+    #[schemars(extend(
+        "x-title" = {"en": "Name", "ja": "名前"},
+        "x-help" = {"en": "The workflow's name.", "ja": "ワークフローの名前。"}
+    ))]
     pub name: String,
     /// The `[[projects]]` entries this workflow draws tasks from (#626), by
     /// `name`. Always a list, and never empty — validation rejects `[]`.
@@ -323,23 +460,48 @@ pub struct WorkflowConfig {
     /// All named entries must resolve to the same `source` — a workflow
     /// straddling two plugins has no single claimant for its unclaimed keys
     /// (see [`options`](Self::options)), so validation refuses it.
+    #[schemars(extend(
+        "x-title" = {"en": "Projects", "ja": "プロジェクト"},
+        "x-help" = {"en": "The projects this workflow takes tasks from (project names).", "ja": "このワークフローがタスクを引くプロジェクト（プロジェクトの名前）。"}
+    ))]
     pub projects: Vec<String>,
     /// Trigger condition; kept raw (interpreted in #54).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Trigger", "ja": "トリガー"},
+        "x-help" = {"en": "Which tasks this workflow picks up, for example { status = \"Todo\" }. The keys are the task source's.", "ja": "このワークフローが拾うタスクの条件。例: { status = \"Todo\" }。キーはタスクソースのもの。"}
+    ))]
+    #[schemars(with = "serde_json::Map<String, serde_json::Value>")]
     pub trigger: toml::Table,
     /// One of the four archetypes (#393 D5). Supplies all three of `mode`,
     /// `output` and `verification`. `mode` and `verification` must then not
     /// also be written out; `output` may, and an explicit one wins.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Profile", "ja": "プロファイル"},
+        "x-help" = {"en": "answer, triage, design or implement. Sets the mode, output and verification together.", "ja": "answer・triage・design・implement のどれか。モード・出力・検収をまとめて決める。"}
+    ))]
     pub profile: Option<Profile>,
     /// Execution mode. Required unless [`profile`](Self::profile) supplies it.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Mode", "ja": "モード"},
+        "x-help" = {"en": "plan (design only) or implement. Required when there is no profile.", "ja": "plan（設計のみ）か implement。プロファイルが無いときは必須。"}
+    ))]
     pub mode: Option<WorkflowMode>,
     /// Agent plugin instance name (must be an enabled `agent_ide`).
+    #[schemars(extend(
+        "x-title" = {"en": "Agent", "ja": "エージェント"},
+        "x-help" = {"en": "The agent plugin that runs the task (herdr, orca, …).", "ja": "タスクを実行するエージェントのプラグイン（herdr・orca など）。"}
+    ))]
     pub agent: String,
     /// Output policy. Required unless [`profile`](Self::profile) supplies it,
     /// and the one field a profile may be overridden on.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Output", "ja": "出力"},
+        "x-help" = {"en": "source (write the result back to the task source) or none. Required when there is no profile.", "ja": "source（結果をタスクソースに書き戻す）か none。プロファイルが無いときは必須。"}
+    ))]
     pub output: Option<OutputPolicy>,
     /// Source status transition when the task starts running (#556): applied
     /// right before dispatch. When the source supports an exclusion claim
@@ -348,18 +510,37 @@ pub struct WorkflowConfig {
     /// `None` writes nothing — exactly the pre-#556 behaviour — so existing
     /// configs are untouched.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "On start", "ja": "開始時"},
+        "x-help" = {"en": "What to change on the task when work starts: { status = \"…\", labels = [\"+a\", \"-b\"] }.", "ja": "作業を始めるときにタスクへ書き戻す内容。{ status = \"…\", labels = [\"+a\", \"-b\"] }。"}
+    ))]
+    #[schemars(with = "Option<serde_json::Map<String, serde_json::Value>>")]
     pub on_start: Option<toml::Table>,
     /// Source status transition on success; kept raw (interpreted in #54).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "On success", "ja": "成功時"},
+        "x-help" = {"en": "What to change on the task when the work succeeds.", "ja": "作業が成功したときにタスクへ書き戻す内容。"}
+    ))]
+    #[schemars(with = "Option<serde_json::Map<String, serde_json::Value>>")]
     pub on_success: Option<toml::Table>,
     /// Source status transition on failure; kept raw (interpreted in #54).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "On failure", "ja": "失敗時"},
+        "x-help" = {"en": "What to change on the task when the work fails.", "ja": "作業が失敗したときにタスクへ書き戻す内容。"}
+    ))]
+    #[schemars(with = "Option<serde_json::Map<String, serde_json::Value>>")]
     pub on_failure: Option<toml::Table>,
     /// How completion self-reports are verified (D-01). Omitted means `llm`,
     /// same as before profiles existed — the `Option` distinguishes "omitted"
     /// from "written out" so validation can reject writing it out *alongside* a
     /// profile. Both resolve to the same value.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Verification", "ja": "検収"},
+        "x-help" = {"en": "How finished work is checked: llm, human or none. Default llm.", "ja": "完了した作業の確かめ方。llm・human・none のどれか。既定は llm。"}
+    ))]
     pub verification: Option<VerificationMode>,
     /// Silence limit in seconds since the last hook signal before the task
     /// escalates (D-03). Defaults to [`DEFAULT_WORKFLOW_TIMEOUT_SECS`].
@@ -371,6 +552,10 @@ pub struct WorkflowConfig {
     /// `0` effectively escalated on the first sweep, which no config could
     /// have wanted.)
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Silence limit (seconds)", "ja": "無応答の上限（秒）"},
+        "x-help" = {"en": "Escalate when the agent has been silent this long. 0 (default) turns it off.", "ja": "エージェントがこの秒数黙っていたら知らせる。0（既定）でオフ。"}
+    ))]
     pub timeout_secs: Option<u64>,
     /// Criteria text embedded into the llm-verification prompt hook. Only
     /// meaningful with `verification = "llm"` (validation warns otherwise).
@@ -381,11 +566,16 @@ pub struct WorkflowConfig {
     /// set. It beats the profile's rubric, which is what makes it useful —
     /// see [`Prompts::resolve_for`](crate::prompts::Prompts::resolve_for).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Rubric", "ja": "検収基準"},
+        "x-help" = {"en": "The criteria the llm verification checks the work against.", "ja": "llm の検収が作業を判定するときの基準。"}
+    ))]
     pub rubric: Option<String>,
     /// `[[workflows]].prompts` — **removed in #465**, same treatment as
     /// [`RootConfig::prompts`]: parsed opaquely so validation can name each key
     /// instead of leaving a bare unknown-field error.
     #[serde(default)]
+    #[schemars(skip)]
     pub prompts: toml::Table,
     /// Explicit AI-tool pin for this workflow (#196) — the strongest level of
     /// the tool precedence (workflow > repo > `default_tool`). Use it when the
@@ -393,6 +583,10 @@ pub struct WorkflowConfig {
     /// needs Claude's prompt-type Stop hook). `None` falls through to the
     /// repository/global defaults.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "AI tool", "ja": "AI ツール"},
+        "x-help" = {"en": "Pin the AI tool for this workflow. Wins over the repository's and the default.", "ja": "このワークフローで使う AI ツールを固定する。リポジトリや既定より優先。"}
+    ))]
     pub tool: Option<String>,
     /// Extra instructions prepended to the task body the **first** time a
     /// conversation is started (#415).
@@ -406,6 +600,10 @@ pub struct WorkflowConfig {
     ///
     /// Empty or whitespace-only is treated as unset rather than rejected.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Initial prompt", "ja": "最初の指示"},
+        "x-help" = {"en": "Extra instructions given to the agent before the task, at the start of a new conversation.", "ja": "新しい会話の始めに、タスクの前にエージェントへ渡す追加の指示。"}
+    ))]
     pub initial_prompt: Option<String>,
     /// Worktree cleanup override for this workflow's tasks (#548, ADR-0057).
     ///
@@ -417,6 +615,10 @@ pub struct WorkflowConfig {
     /// operator changed the config, and persisting overrides elsewhere just
     /// to survive that is not worth a second source of truth.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Worktree cleanup", "ja": "worktree の掃除"},
+        "x-help" = {"en": "Overrides the worktree cleanup for this workflow's tasks.", "ja": "このワークフローのタスクの worktree の掃除を上書きする。"}
+    ))]
     pub cleanup: Option<CleanupPolicyConfig>,
     /// Every key on this workflow that is not one of the fields above: a
     /// plugin's own, held **uninterpreted** (#554).
@@ -435,6 +637,7 @@ pub struct WorkflowConfig {
     /// keys are its own (`InitializeResult::claimed_options`). **Exactly one**
     /// claimant is required — zero is a typo, two is an ambiguity the
     /// Orchestrator will not settle by picking.
+    #[schemars(skip)]
     #[serde(flatten)]
     pub options: toml::Table,
 }
@@ -486,27 +689,47 @@ impl WorkflowConfig {
 
 /// A `[tools.<name>]` registry entry (#196): how to launch one AI tool CLI.
 /// Interpreted into a [`ToolProfile`](crate::tool::ToolProfile).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ToolConfig {
     /// Adapter family (`claude` | `codex` | `opencode`) — determines argv
     /// assembly and completion detection.
+    #[schemars(extend(
+        "x-title" = {"en": "Kind", "ja": "種類"},
+        "x-help" = {"en": "claude, codex or opencode.", "ja": "claude・codex・opencode のどれか。"}
+    ))]
     pub kind: ToolKind,
     /// Whitespace-split command line (first token = program, rest = base
     /// args). `None` uses the kind's name as the program.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Command", "ja": "コマンド"},
+        "x-help" = {"en": "The command line to start, for example \"claude --model haiku\". Not run through a shell.", "ja": "起動するコマンドライン。例: \"claude --model haiku\"。シェルは通さない。"}
+    ))]
     pub command: Option<String>,
     /// Extra args appended in implement mode (overrides the kind default).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Implement arguments", "ja": "implement の引数"},
+        "x-help" = {"en": "Arguments added in implement mode.", "ja": "implement モードで足す引数。"}
+    ))]
     pub mode_args: Option<Vec<String>>,
     /// Extra args appended in plan mode (overrides the kind default).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Plan arguments", "ja": "plan の引数"},
+        "x-help" = {"en": "Arguments added in plan mode.", "ja": "plan モードで足す引数。"}
+    ))]
     pub plan_args: Option<Vec<String>>,
     /// A `KEY=value` file whose values are added to the env of every agent
     /// this tool launches (#744). `~` / `${VAR}` expand; the result must be
     /// absolute. Resolved once when `totsuka run` starts — see
     /// [`env_file`](crate::config::env_file).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Environment file", "ja": "環境変数ファイル"},
+        "x-help" = {"en": "A file of KEY=value lines, added to the agent's environment.", "ja": "KEY=value を並べたファイル。エージェントの環境変数に加わる。"}
+    ))]
     pub env_file: Option<String>,
 }
 
@@ -565,7 +788,7 @@ impl LlmApi {
 }
 
 /// `[llm].api` as written.
-#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 enum LlmApiKind {
     #[default]
@@ -574,23 +797,56 @@ enum LlmApiKind {
 }
 
 /// `[llm]` as written, before the per-API keys are checked.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct RawLlmConfig {
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "API", "ja": "API"},
+        "x-help" = {"en": "chat (an OpenAI-compatible chat API, default) or decisions (a model that only picks).", "ja": "chat（OpenAI 互換のチャット API、既定）か decisions（選ぶだけのモデル）。"}
+    ))]
     api: LlmApiKind,
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Base URL", "ja": "ベース URL"},
+        "x-help" = {"en": "For chat: the API's base URL, for example https://openrouter.ai/api/v1.", "ja": "chat の場合: API のベース URL。例: https://openrouter.ai/api/v1。"}
+    ))]
     base_url: Option<String>,
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Endpoint", "ja": "エンドポイント"},
+        "x-help" = {"en": "For decisions: the full URL of the Decisions API. Empty means OpenRouter's.", "ja": "decisions の場合: Decisions API の完全な URL。空なら OpenRouter のもの。"}
+    ))]
     endpoint: Option<String>,
+    #[schemars(extend(
+        "x-title" = {"en": "Model", "ja": "モデル"},
+        "x-help" = {"en": "The model name.", "ja": "モデル名。"}
+    ))]
     model: String,
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Max tokens", "ja": "最大トークン"},
+        "x-help" = {"en": "For chat: the maximum tokens per call. Empty means the provider's default.", "ja": "chat の場合: 1 回の呼び出しの最大トークン。空ならプロバイダの既定。"}
+    ))]
     max_tokens: Option<u32>,
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Timeout (seconds)", "ja": "タイムアウト（秒）"},
+        "x-help" = {"en": "How long to wait for an answer. Default 30.", "ja": "応答を待つ秒数。既定は 30。"}
+    ))]
     timeout_secs: Option<u64>,
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "API key", "ja": "API キー"},
+        "x-help" = {"en": "The API key.", "ja": "API キー。"},
+        "x-secret" = true
+    ))]
     api_key_ref: Option<String>,
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Confidence threshold", "ja": "確信度のしきい値"},
+        "x-help" = {"en": "Below this confidence (0.0–1.0) the task waits for a person instead. Default 0.6.", "ja": "確信度がこれ未満（0.0〜1.0）なら、タスクは人の判断を待つ。既定は 0.6。"}
+    ))]
     confidence_threshold: Option<f64>,
 }
 
@@ -643,29 +899,45 @@ impl TryFrom<RawLlmConfig> for LlmConfig {
 }
 
 /// worktree placement defaults (F-22) and cleanup policies (F-23, F-85).
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct WorktreeConfig {
     /// Global placement template; overridable per repo.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Location", "ja": "場所"},
+        "x-help" = {"en": "Where worktrees are created. A template with {repo_name}, {worktree_name} and others. Empty means the default.", "ja": "worktree を作る場所。{repo_name}・{worktree_name} などを含むテンプレート。空なら既定の場所。"}
+    ))]
     pub location: Option<String>,
     /// Cleanup policy for implement-mode worktrees (F-23). Defaults to
     /// `manual` (never lose committed-but-unpushed work).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Cleanup (implement)", "ja": "掃除（implement）"},
+        "x-help" = {"en": "When implement-mode worktrees are removed: manual (default), immediate, keep_7d, keep_28d or { retention_days = N }.", "ja": "implement モードの worktree をいつ削除するか。manual（既定）・immediate・keep_7d・keep_28d・{ retention_days = N }。"}
+    ))]
     pub cleanup: Option<CleanupPolicyConfig>,
     /// Cleanup policy for plan-mode worktrees (F-85). Defaults to `immediate`
     /// (design-only worktrees carry no unique work).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Cleanup (plan)", "ja": "掃除（plan）"},
+        "x-help" = {"en": "When plan-mode worktrees are removed. Default immediate.", "ja": "plan モードの worktree をいつ削除するか。既定は immediate。"}
+    ))]
     pub plan_cleanup: Option<CleanupPolicyConfig>,
     /// Seconds a single git command may run before it is killed (#764).
     /// Omitted: `DEFAULT_GIT_TIMEOUT` (300). `0`: no limit.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "git timeout (seconds)", "ja": "git のタイムアウト（秒）"},
+        "x-help" = {"en": "Stop a git command that runs longer than this. 0 means no limit. Default 300.", "ja": "これより長く動く git のコマンドを止める。0 で上限なし。既定は 300。"}
+    ))]
     pub git_timeout_secs: Option<u64>,
 }
 
 /// A worktree cleanup policy as written in config (F-23):
 /// `"immediate"`, `"manual"`, or `{ retention_days = 5 }`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
 #[serde(untagged)]
 pub enum CleanupPolicyConfig {
     /// A named policy (`immediate` / `manual`).
@@ -673,6 +945,10 @@ pub enum CleanupPolicyConfig {
     /// Keep for N days after the task finished, then remove.
     Retention {
         /// Days to keep a finished task's worktree.
+        #[schemars(extend(
+        "x-title" = {"en": "Days to keep", "ja": "保持する日数"},
+        "x-help" = {"en": "Days to keep a finished task's worktree.", "ja": "完了したタスクの worktree を残す日数。"}
+    ))]
         retention_days: u32,
     },
 }
@@ -685,7 +961,7 @@ pub enum CleanupPolicyConfig {
 /// `7d`/`28d` are exact where `week`/`month` would be ambiguous (28 days ≠ one
 /// month). NB the explicit `rename`s: `rename_all = "snake_case"` would turn
 /// `Keep7d` into `keep7d`, not `keep_7d`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum CleanupPolicyName {
     /// Remove as soon as the task finishes.
@@ -701,17 +977,29 @@ pub enum CleanupPolicyName {
 }
 
 /// Logging settings from `[log]` (§5.2).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct LogSettings {
     /// Minimum level name (`error`/`warn`/`info`/`debug`/`trace`).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Level", "ja": "レベル"},
+        "x-help" = {"en": "error, warn, info (default), debug or trace.", "ja": "error・warn・info（既定）・debug・trace のどれか。"}
+    ))]
     pub level: Option<String>,
     /// Whether prompt/RPC-payload fields are logged (debug+ only regardless).
     #[serde(default = "default_log_prompts")]
+    #[schemars(extend(
+        "x-title" = {"en": "Log prompts", "ja": "プロンプトを記録"},
+        "x-help" = {"en": "Record prompts and payloads (only written at debug level or above). Default on.", "ja": "プロンプトとペイロードを記録する（debug 以上のときだけ書かれる）。既定はオン。"}
+    ))]
     pub log_prompts: bool,
     /// Number of daily log files to keep.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = {"en": "Files to keep", "ja": "残すファイル数"},
+        "x-help" = {"en": "How many daily log files to keep. Default 7.", "ja": "日ごとのログファイルを何世代残すか。既定は 7。"}
+    ))]
     pub max_files: Option<usize>,
 }
 

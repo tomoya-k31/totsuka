@@ -100,6 +100,60 @@ pub fn plugin_spec(
     })
 }
 
+/// What one installed plugin said about its config table
+/// ([`plugin_schemas`]).
+#[derive(Debug)]
+pub enum PluginSchema {
+    /// The plugin's `config/schema` answer.
+    Schema(Value),
+    /// The manifest does not declare `config_schema`: the table is edited as
+    /// raw TOML. Not an error (ADR-0109).
+    Undeclared,
+    /// Declared, but asking failed (spawn, protocol, timeout, error reply).
+    Failed(String),
+}
+
+/// Ask every installed plugin that declares `config_schema` for the schema of
+/// its config table (ADR-0109) — **without** `initialize` and without reading
+/// `config.toml`, so it works before any secret exists and before the plugin
+/// is configured or enabled. The capability is read from the manifest, which
+/// is why a plugin that does not declare it is never started.
+pub async fn plugin_schemas(
+    store: &PluginStore,
+) -> Result<Vec<(String, PluginSchema)>, StoreError> {
+    let mut out = Vec::new();
+    for installed in store.list()? {
+        let name = installed.name;
+        let schema = match store.manifest_of(&name) {
+            Ok(Some(manifest)) if manifest.capabilities.config_schema => {
+                let spec = store.resolved_dir(&name).map(|dir| PluginSpec {
+                    name: name.clone(),
+                    program: dir.join(&manifest.name),
+                    args: vec![],
+                    manifest,
+                    init_config: Value::Null,
+                    repositories: vec![],
+                    projects: vec![],
+                    llm: None,
+                    workflows: vec![],
+                    timeout: DEFAULT_PLUGIN_TIMEOUT,
+                });
+                match spec {
+                    Ok(spec) => match crate::adapters::plugin_host::config_schema(spec).await {
+                        Ok(schema) => PluginSchema::Schema(schema),
+                        Err(e) => PluginSchema::Failed(e.to_string()),
+                    },
+                    Err(e) => PluginSchema::Failed(e.to_string()),
+                }
+            }
+            Ok(_) => PluginSchema::Undeclared,
+            Err(e) => PluginSchema::Failed(e.to_string()),
+        };
+        out.push((name, schema));
+    }
+    Ok(out)
+}
+
 /// The status columns a workflow writes back to, in `on_start` →
 /// `on_success` → `on_failure` order with duplicates dropped (#626).
 ///

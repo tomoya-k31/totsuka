@@ -223,6 +223,7 @@ fn wants_json(command: &Command) -> bool {
         }
         Command::Task { cmd } => cmd.wants_json(),
         Command::Plugin { cmd } => cmd.wants_json(),
+        Command::Config { cmd } => cmd.wants_json(),
         _ => false,
     }
 }

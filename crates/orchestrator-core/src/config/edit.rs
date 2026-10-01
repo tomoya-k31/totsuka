@@ -44,6 +44,14 @@ pub enum EditError {
     /// A path expected to be an array of tables was something else.
     #[error("`{0}` is not an array of tables in config.toml → fix it by hand")]
     NotAnArrayOfTables(String),
+    /// A dotted key path did not lead anywhere ([`set_path`] / [`unset_path`]).
+    #[error("`{path}`: {detail}")]
+    Path {
+        /// The path as given.
+        path: String,
+        /// What was wrong with it.
+        detail: String,
+    },
     /// An inline-table fragment supplied by the caller did not parse.
     #[error("`{field}` is not a valid TOML inline table: {detail} → e.g. `{{ key = \"value\" }}`")]
     BadFragment {
@@ -454,6 +462,273 @@ fn parse_fragment(
             detail: "parsed, but is not a table".to_string(),
         }),
     }
+}
+
+/// Set the value at a dotted key path (`log.level`, `repositories.0.tool`),
+/// preserving the formatting of everything else — the per-key write behind
+/// `totsuka config set` (ADR-0109).
+///
+/// A numeric segment indexes an array (an array of tables or an inline array);
+/// on a table it is an ordinary key. Missing tables on the way are created;
+/// an index equal to the array's length appends. A JSON object becomes a
+/// `[table]` (an inline table where the parent or the replaced value is
+/// inline), an array of objects becomes `[[array of tables]]`, and `null` is
+/// refused — removing a key is [`unset_path`]. Returns the edited document.
+pub fn set_path(
+    config_toml: &str,
+    path: &str,
+    value: &serde_json::Value,
+) -> Result<String, EditError> {
+    let mut doc: DocumentMut = config_toml.parse()?;
+    let (parents, last) = split_path(path)?;
+    let mut node = Node::Table(doc.as_table_mut());
+    for (depth, segment) in parents.iter().enumerate() {
+        // What to create when `segment` is missing: an array when the step
+        // after it is an index (`repositories.0` on a file without any).
+        let next = parents.get(depth + 1).copied().unwrap_or(last);
+        let create = if parse_index(next).is_some() {
+            Create::Array
+        } else {
+            Create::Table
+        };
+        node = node
+            .step(segment, create)
+            .ok_or_else(|| path_error(path, &parents[..=depth].join("."), "not found"))?;
+    }
+    let err = |detail: String| path_error(path, path, &detail);
+    match node {
+        Node::Table(table) => {
+            let inline = table.get(last).is_some_and(Item::is_value);
+            match json_item(value, inline).map_err(err)? {
+                Item::Value(v) => set_value(table, last, v),
+                other => {
+                    table.insert(last, other);
+                }
+            }
+        }
+        Node::Tables(array) => {
+            let index = parse_index(last).ok_or_else(|| err("expected an index".into()))?;
+            let serde_json::Value::Object(map) = value else {
+                return Err(err("an array of tables holds only objects".into()));
+            };
+            let table = json_table(map).map_err(err)?;
+            let len = array.len();
+            if index < len {
+                *array.get_mut(index).expect("index < len") = table;
+            } else if index == len {
+                array.push(table);
+            } else {
+                return Err(err("index out of range".into()));
+            }
+        }
+        Node::Inline(table) => {
+            table.insert(last, json_value(value).map_err(err)?);
+        }
+        Node::Array(array) => {
+            let index = parse_index(last).ok_or_else(|| err("expected an index".into()))?;
+            let new = json_value(value).map_err(err)?;
+            if index < array.len() {
+                array.replace(index, new);
+            } else if index == array.len() {
+                array.push(new);
+            } else {
+                return Err(err("index out of range".into()));
+            }
+        }
+    }
+    Ok(doc.to_string())
+}
+
+/// Remove the key or array element at a dotted key path, the inverse of
+/// [`set_path`] (`totsuka config unset`). Removing what is not there is not an
+/// error: the document already says what was asked.
+pub fn unset_path(config_toml: &str, path: &str) -> Result<String, EditError> {
+    let mut doc: DocumentMut = config_toml.parse()?;
+    let (parents, last) = split_path(path)?;
+    let mut node = Node::Table(doc.as_table_mut());
+    for segment in &parents {
+        match node.step(segment, Create::No) {
+            Some(next) => node = next,
+            None => return Ok(doc.to_string()),
+        }
+    }
+    let index = parse_index(last);
+    match node {
+        Node::Table(table) => {
+            table.remove(last);
+        }
+        Node::Inline(table) => {
+            table.remove(last);
+        }
+        Node::Tables(array) => {
+            if let Some(i) = index.filter(|i| *i < array.len()) {
+                array.remove(i);
+            }
+        }
+        Node::Array(array) => {
+            if let Some(i) = index.filter(|i| *i < array.len()) {
+                array.remove(i);
+            }
+        }
+    }
+    Ok(doc.to_string())
+}
+
+/// What [`Node::step`] creates for a missing key.
+#[derive(Clone, Copy)]
+enum Create {
+    No,
+    Table,
+    Array,
+}
+
+/// A container a key path can step through. `toml_edit` stores array-of-table
+/// entries as `Table`s and inline containers as `Value`s, so there is no single
+/// `&mut Item` to walk down.
+enum Node<'a> {
+    Table(&'a mut Table),
+    Inline(&'a mut InlineTable),
+    Tables(&'a mut ArrayOfTables),
+    Array(&'a mut toml_edit::Array),
+}
+
+impl<'a> Node<'a> {
+    fn of_item(item: &'a mut Item) -> Option<Self> {
+        match item {
+            Item::Table(t) => Some(Node::Table(t)),
+            Item::ArrayOfTables(a) => Some(Node::Tables(a)),
+            Item::Value(v) => Node::of_value(v),
+            Item::None => None,
+        }
+    }
+
+    fn of_value(value: &'a mut Value) -> Option<Self> {
+        match value {
+            Value::InlineTable(t) => Some(Node::Inline(t)),
+            Value::Array(a) => Some(Node::Array(a)),
+            _ => None,
+        }
+    }
+
+    /// One step down, creating a missing key under a table as `create` says
+    /// (inline forms under an inline parent).
+    fn step(self, segment: &str, create: Create) -> Option<Self> {
+        match self {
+            Node::Table(table) => {
+                if !table.contains_key(segment) {
+                    match create {
+                        Create::No => return None,
+                        Create::Table => {
+                            let mut new = Table::new();
+                            new.set_implicit(true);
+                            table.insert(segment, Item::Table(new));
+                        }
+                        Create::Array => {
+                            table.insert(segment, Item::ArrayOfTables(ArrayOfTables::new()));
+                        }
+                    }
+                }
+                Node::of_item(table.get_mut(segment)?)
+            }
+            Node::Inline(table) => {
+                if !table.contains_key(segment) {
+                    match create {
+                        Create::No => return None,
+                        Create::Table => {
+                            table.insert(segment, Value::InlineTable(InlineTable::new()));
+                        }
+                        Create::Array => {
+                            table.insert(segment, Value::Array(toml_edit::Array::new()));
+                        }
+                    }
+                }
+                Node::of_value(table.get_mut(segment)?)
+            }
+            Node::Tables(array) => Some(Node::Table(array.get_mut(parse_index(segment)?)?)),
+            Node::Array(array) => Node::of_value(array.get_mut(parse_index(segment)?)?),
+        }
+    }
+}
+
+fn path_error(path: &str, at: &str, detail: &str) -> EditError {
+    EditError::Path {
+        path: path.to_string(),
+        detail: format!("{detail} at `{at}`"),
+    }
+}
+
+/// `a.b.c` → (`[a, b]`, `c`). Empty segments are refused.
+fn split_path(path: &str) -> Result<(Vec<&str>, &str), EditError> {
+    let segments: Vec<&str> = path.split('.').collect();
+    if segments.iter().any(|s| s.is_empty()) {
+        return Err(EditError::Path {
+            path: path.to_string(),
+            detail: "empty key segment → write keys separated by single dots".into(),
+        });
+    }
+    let (last, parents) = segments.split_last().expect("split yields at least one");
+    Ok((parents.to_vec(), last))
+}
+
+fn parse_index(segment: &str) -> Option<usize> {
+    segment.parse().ok()
+}
+
+/// A JSON value as a TOML item under a standard table: objects become
+/// `[tables]` and arrays of objects `[[arrays of tables]]`, unless `inline`
+/// (the value being replaced was written inline), which keeps them inline.
+fn json_item(value: &serde_json::Value, inline: bool) -> Result<Item, String> {
+    match value {
+        serde_json::Value::Object(map) if !inline => Ok(Item::Table(json_table(map)?)),
+        serde_json::Value::Array(items)
+            if !inline && !items.is_empty() && items.iter().all(|v| v.is_object()) =>
+        {
+            let mut array = ArrayOfTables::new();
+            for item in items {
+                if let serde_json::Value::Object(map) = item {
+                    array.push(json_table(map)?);
+                }
+            }
+            Ok(Item::ArrayOfTables(array))
+        }
+        other => Ok(Item::Value(json_value(other)?)),
+    }
+}
+
+fn json_table(map: &serde_json::Map<String, serde_json::Value>) -> Result<Table, String> {
+    let mut table = Table::new();
+    for (key, value) in map {
+        table.insert(key, json_item(value, false)?);
+    }
+    Ok(table)
+}
+
+fn json_value(value: &serde_json::Value) -> Result<Value, String> {
+    Ok(match value {
+        serde_json::Value::Null => {
+            return Err("TOML has no null → remove the key with `config unset` instead".into());
+        }
+        serde_json::Value::Bool(b) => Value::from(*b),
+        serde_json::Value::Number(n) => match n.as_i64() {
+            Some(i) => Value::from(i),
+            None => Value::from(n.as_f64().ok_or("a number out of TOML's range")?),
+        },
+        serde_json::Value::String(s) => Value::from(s.as_str()),
+        serde_json::Value::Array(items) => {
+            let mut array = toml_edit::Array::new();
+            for item in items {
+                array.push(json_value(item)?);
+            }
+            Value::Array(array)
+        }
+        serde_json::Value::Object(map) => {
+            let mut table = InlineTable::new();
+            for (key, item) in map {
+                table.insert(key, json_value(item)?);
+            }
+            Value::InlineTable(table)
+        }
+    })
 }
 
 #[cfg(test)]
@@ -1031,5 +1306,102 @@ path = "/dotfiles"
             cfg.tools["my-claude"].command.as_deref(),
             Some("/usr/local/bin/claude")
         );
+    }
+
+    const DOC: &str = r#"# my config
+version = 1
+
+[log]
+level = "info" # keep me
+
+[[repositories]]
+name = "a"
+path = "/a"
+
+[[workflows]]
+name = "w"
+projects = ["p"]
+agent = "herdr"
+profile = "implement"
+trigger = { status = "Todo" }
+"#;
+
+    #[test]
+    fn set_path_replaces_a_scalar_and_keeps_its_comment() {
+        let out = set_path(DOC, "log.level", &serde_json::json!("debug")).unwrap();
+        assert!(out.contains(r#"level = "debug" # keep me"#), "{out}");
+        assert!(out.starts_with("# my config"), "{out}");
+    }
+
+    #[test]
+    fn set_path_creates_missing_tables() {
+        let out = set_path(DOC, "worktree.git_timeout_secs", &serde_json::json!(60)).unwrap();
+        let cfg = crate::config::RootConfig::from_toml_str(&out).unwrap();
+        assert_eq!(cfg.worktree.git_timeout_secs, Some(60));
+        assert!(out.contains("[worktree]"), "{out}");
+    }
+
+    #[test]
+    fn set_path_indexes_and_appends_arrays_of_tables() {
+        let out = set_path(DOC, "repositories.0.tool", &serde_json::json!("codex")).unwrap();
+        assert!(out.contains(r#"tool = "codex""#), "{out}");
+        let out = set_path(
+            &out,
+            "repositories.1",
+            &serde_json::json!({ "name": "b", "path": "/b" }),
+        )
+        .unwrap();
+        let cfg = crate::config::RootConfig::from_toml_str(&out).unwrap();
+        assert_eq!(cfg.repositories.len(), 2);
+        assert_eq!(cfg.repositories[1].name, "b");
+        let err = set_path(&out, "repositories.5", &serde_json::json!({ "name": "c" }));
+        assert!(matches!(err, Err(EditError::Path { .. })), "{err:?}");
+    }
+
+    #[test]
+    fn set_path_keeps_an_inline_table_inline() {
+        let out = set_path(
+            DOC,
+            "workflows.0.trigger",
+            &serde_json::json!({ "status": "Ready" }),
+        )
+        .unwrap();
+        assert!(out.contains(r#"trigger = { status = "Ready" }"#), "{out}");
+        let out = set_path(
+            DOC,
+            "workflows.0.trigger.status",
+            &serde_json::json!("Doing"),
+        )
+        .unwrap();
+        assert!(out.contains(r#"status = "Doing""#), "{out}");
+    }
+
+    #[test]
+    fn set_path_creates_a_missing_array_when_the_next_step_is_an_index() {
+        let out = set_path(
+            "version = 1\n",
+            "repositories.0",
+            &serde_json::json!({ "name": "a", "path": "/a" }),
+        )
+        .unwrap();
+        assert!(out.contains("[[repositories]]"), "{out}");
+        let cfg = crate::config::RootConfig::from_toml_str(&out).unwrap();
+        assert_eq!(cfg.repositories[0].name, "a");
+    }
+
+    #[test]
+    fn set_path_refuses_null_and_empty_segments() {
+        assert!(set_path(DOC, "log.level", &serde_json::Value::Null).is_err());
+        assert!(set_path(DOC, "log..level", &serde_json::json!("x")).is_err());
+    }
+
+    #[test]
+    fn unset_path_removes_keys_and_elements_and_ignores_absent_ones() {
+        let out = unset_path(DOC, "log.level").unwrap();
+        assert!(!out.contains("level"), "{out}");
+        let out = unset_path(DOC, "repositories.0").unwrap();
+        let cfg = crate::config::RootConfig::from_toml_str(&out).unwrap();
+        assert!(cfg.repositories.is_empty());
+        assert_eq!(unset_path(DOC, "nope.deeper").unwrap(), DOC);
     }
 }
