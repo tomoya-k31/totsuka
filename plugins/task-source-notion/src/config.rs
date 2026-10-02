@@ -188,7 +188,7 @@ pub struct PropertyMap {
     #[serde(default = "default_title_prop")]
     #[schemars(extend(
         "x-title" = {"en": "Title", "ja": "タイトル"},
-        "x-help" = {"en": "The title property. Default \"Name\".", "ja": "タイトルのプロパティ。既定は \"Name\"。"}
+        "x-help" = {"en": "The title property.", "ja": "タイトルのプロパティ。"}
     ))]
     pub title: String,
     /// The status property (`status` or `select`, see [`status_kind`]).
@@ -427,28 +427,28 @@ pub struct NotionConfig {
     #[serde(default = "default_source_name")]
     #[schemars(extend(
         "x-title" = {"en": "Source name", "ja": "ソース名"},
-        "x-help" = {"en": "This source's name on tasks. Change it only to run two of this plugin. Default \"notion\".", "ja": "タスクに付くこのソースの名前。このプラグインを 2 つ動かすときだけ変える。既定は \"notion\"。"}
+        "x-help" = {"en": "This source's name on tasks. Change it only to run two of this plugin.", "ja": "タスクに付くこのソースの名前。このプラグインを 2 つ動かすときだけ変える。"}
     ))]
     pub source_name: String,
     /// REST base URL (overridable for tests).
     #[serde(default = "default_api_url")]
     #[schemars(extend(
         "x-title" = {"en": "API URL", "ja": "API の URL"},
-        "x-help" = {"en": "The API's base URL. Default https://api.notion.com/v1.", "ja": "API のベース URL。既定は https://api.notion.com/v1。"}
+        "x-help" = {"en": "The API's base URL.", "ja": "API のベース URL。"}
     ))]
     pub api_url: String,
     /// Pinned Notion API version header (`Notion-Version`).
     #[serde(default = "default_api_version")]
     #[schemars(extend(
         "x-title" = {"en": "API version", "ja": "API のバージョン"},
-        "x-help" = {"en": "The Notion-Version header. Default 2022-06-28.", "ja": "Notion-Version ヘッダー。既定は 2022-06-28。"}
+        "x-help" = {"en": "The Notion-Version header.", "ja": "Notion-Version ヘッダー。"}
     ))]
     pub api_version: String,
     /// Max retry attempts for retryable API failures.
     #[serde(default = "default_max_retries")]
     #[schemars(extend(
         "x-title" = {"en": "Retries", "ja": "再試行回数"},
-        "x-help" = {"en": "How many times a failed API call that can be retried is retried. Default 3.", "ja": "再試行できる API の失敗を何回まで再試行するか。既定は 3。"}
+        "x-help" = {"en": "How many times a failed API call that can be retried is retried.", "ja": "再試行できる API の失敗を何回まで再試行するか。"}
     ))]
     pub max_retries: u32,
     /// Internal fetch cadence of the poll loop, in seconds (F-06). Moved
@@ -458,7 +458,8 @@ pub struct NotionConfig {
     #[serde(default)]
     #[schemars(extend(
         "x-title" = {"en": "Poll interval (seconds)", "ja": "取得の間隔（秒）"},
-        "x-help" = {"en": "How often to look for new tasks. Empty means the default.", "ja": "新しいタスクを探しにいく間隔。空なら既定。"}
+        "x-placeholder" = "60",
+        "x-help" = {"en": "How often to look for new tasks.", "ja": "新しいタスクを探しにいく間隔。"}
     ))]
     pub poll_interval_secs: Option<u64>,
     /// Client-side request rate cap (requests/second) for the built-in
@@ -466,7 +467,7 @@ pub struct NotionConfig {
     #[serde(default = "default_rate_limit")]
     #[schemars(extend(
         "x-title" = {"en": "Requests per second", "ja": "毎秒のリクエスト数"},
-        "x-help" = {"en": "The most requests per second. Default 3 (Notion's limit).", "ja": "1 秒あたりのリクエスト数の上限。既定は 3（Notion の制限）。"}
+        "x-help" = {"en": "The most requests per second (Notion allows about 3).", "ja": "1 秒あたりのリクエスト数の上限（Notion の制限は約 3）。"}
     ))]
     pub rate_limit_rps: u32,
     /// Instruction text overrides (#398). Every key falls back to the embedded
@@ -929,6 +930,8 @@ mod schema_tests {
         let schema = plugin_sdk::config_schema::of::<super::NotionConfig>().schema;
         let missing = plugin_sdk::config_schema::missing_help(&schema);
         assert!(missing.is_empty(), "{}", missing.join("\n"));
+        let stated = plugin_sdk::config_schema::help_stating_defaults(&schema);
+        assert!(stated.is_empty(), "help states a default: {stated:?}");
         assert!(schema["x-category"]["ja"].is_string(), "{schema}");
     }
 }

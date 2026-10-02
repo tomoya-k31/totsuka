@@ -102,7 +102,7 @@ struct RawLlmConfig {
     #[serde(default)]
     #[schemars(extend(
         "x-title" = {"en": "API", "ja": "API"},
-        "x-help" = {"en": "chat (an OpenAI-compatible chat API, default) or decisions.", "ja": "chat（OpenAI 互換のチャット API、既定）か decisions。"}
+        "x-help" = {"en": "chat (an OpenAI-compatible chat API) or decisions.", "ja": "chat（OpenAI 互換のチャット API）か decisions。"}
     ))]
     api: LlmApiKind,
     #[serde(default)]
@@ -131,7 +131,7 @@ struct RawLlmConfig {
     #[serde(default = "default_confidence_threshold")]
     #[schemars(extend(
         "x-title" = {"en": "Confidence threshold", "ja": "確信度のしきい値"},
-        "x-help" = {"en": "Below this, you are asked in the thread instead. Default 0.6.", "ja": "これ未満なら、代わりにスレッドで尋ねる。既定は 0.6。"}
+        "x-help" = {"en": "Below this, you are asked in the thread instead.", "ja": "これ未満なら、代わりにスレッドで尋ねる。"}
     ))]
     confidence_threshold: f64,
 }
@@ -670,7 +670,7 @@ pub struct GatewayConfig {
     #[serde(default = "default_pubsub_url")]
     #[schemars(extend(
         "x-title" = {"en": "Pub/Sub URL", "ja": "Pub/Sub の URL"},
-        "x-help" = {"en": "Default https://pubsub.googleapis.com.", "ja": "既定は https://pubsub.googleapis.com。"}
+        "x-help" = {"en": "The Pub/Sub API's base URL.", "ja": "Pub/Sub の API のベース URL。"}
     ))]
     pub pubsub_url: String,
     /// Messages requested per `pull`. Pub/Sub caps the response at this many;
@@ -678,7 +678,7 @@ pub struct GatewayConfig {
     #[serde(default = "default_pull_max_messages")]
     #[schemars(extend(
         "x-title" = {"en": "Messages per pull", "ja": "1 回の取得件数"},
-        "x-help" = {"en": "Messages requested per pull. Default 50.", "ja": "1 回の pull で求めるメッセージ数。既定は 50。"}
+        "x-help" = {"en": "Messages requested per pull.", "ja": "1 回の pull で求めるメッセージ数。"}
     ))]
     pub pull_max_messages: u32,
 }
@@ -750,7 +750,7 @@ pub struct SlackConfig {
     #[serde(default = "default_thread_context_limit")]
     #[schemars(extend(
         "x-title" = {"en": "Thread context", "ja": "スレッドの文脈"},
-        "x-help" = {"en": "How many recent thread messages are included. Default 6.", "ja": "含めるスレッドの直近のメッセージ数。既定は 6。"}
+        "x-help" = {"en": "How many recent thread messages are included.", "ja": "含めるスレッドの直近のメッセージ数。"}
     ))]
     pub thread_context_limit: u32,
     /// Optional tone/style instruction injected into the task body.
@@ -764,7 +764,7 @@ pub struct SlackConfig {
     #[serde(default = "default_source_name")]
     #[schemars(extend(
         "x-title" = {"en": "Source name", "ja": "ソース名"},
-        "x-help" = {"en": "This source's name on tasks. Change it only to run two of this plugin. Default \"slack\".", "ja": "タスクに付くこのソースの名前。このプラグインを 2 つ動かすときだけ変える。既定は \"slack\"。"}
+        "x-help" = {"en": "This source's name on tasks. Change it only to run two of this plugin.", "ja": "タスクに付くこのソースの名前。このプラグインを 2 つ動かすときだけ変える。"}
     ))]
     pub source_name: String,
     /// Repository-selection LLM. Required when more than one repository
@@ -821,7 +821,7 @@ pub struct SlackConfig {
     #[serde(default = "default_api_url")]
     #[schemars(extend(
         "x-title" = {"en": "API URL", "ja": "API の URL"},
-        "x-help" = {"en": "The API's base URL. Default https://slack.com/api.", "ja": "API のベース URL。既定は https://slack.com/api。"}
+        "x-help" = {"en": "The API's base URL.", "ja": "API のベース URL。"}
     ))]
     pub api_url: String,
     /// State-directory root for the persisted draft store (#122), replacing
@@ -836,7 +836,7 @@ pub struct SlackConfig {
     #[serde(default = "default_max_retries")]
     #[schemars(extend(
         "x-title" = {"en": "Retries", "ja": "再試行回数"},
-        "x-help" = {"en": "How many times a failed API call that can be retried is retried. Default 3.", "ja": "再試行できる API の失敗を何回まで再試行するか。既定は 3。"}
+        "x-help" = {"en": "How many times a failed API call that can be retried is retried.", "ja": "再試行できる API の失敗を何回まで再試行するか。"}
     ))]
     pub max_retries: u32,
     /// Most messages the startup backfill recovers per watched channel
@@ -844,7 +844,8 @@ pub struct SlackConfig {
     #[serde(default)]
     #[schemars(extend(
         "x-title" = {"en": "Backfill limit", "ja": "取りこぼしの回収件数"},
-        "x-help" = {"en": "How many missed posts per watched channel are recovered on start. Empty means the default.", "ja": "起動時に、見張っているチャンネルごとに取りこぼした投稿を何件まで回収するか。空なら既定。"}
+        "x-placeholder" = "100",
+        "x-help" = {"en": "How many missed posts per watched channel are recovered on start.", "ja": "起動時に、見張っているチャンネルごとに取りこぼした投稿を何件まで回収するか。"}
     ))]
     pub watch_backfill_limit: Option<u32>,
     /// How old a missed post may be and still be recovered, in hours (#617).
@@ -856,14 +857,15 @@ pub struct SlackConfig {
     #[serde(default)]
     #[schemars(extend(
         "x-title" = {"en": "Backfill age (hours)", "ja": "取りこぼしの回収期間（時間）"},
-        "x-help" = {"en": "How old a missed post may be and still be recovered. Empty means the default.", "ja": "取りこぼした投稿を何時間前のものまで回収するか。空なら既定。"}
+        "x-placeholder" = "24",
+        "x-help" = {"en": "How old a missed post may be and still be recovered.", "ja": "取りこぼした投稿を何時間前のものまで回収するか。"}
     ))]
     pub watch_backfill_max_age_hours: Option<u64>,
     /// Which transport delivers Slack events (#652). Default [`EventSource::Socket`].
     #[serde(default)]
     #[schemars(extend(
         "x-title" = {"en": "Event source", "ja": "イベントの受け取り方"},
-        "x-help" = {"en": "socket (Socket Mode, default) or gateway (the Event Gateway).", "ja": "socket（Socket Mode、既定）か gateway（Event Gateway）。"}
+        "x-help" = {"en": "socket (Socket Mode) or gateway (the Event Gateway).", "ja": "socket（Socket Mode）か gateway（Event Gateway）。"}
     ))]
     pub event_source: EventSource,
     /// Where the Event Gateway's Pub/Sub queues live. Required under
@@ -890,7 +892,8 @@ pub struct SlackConfig {
     #[serde(default)]
     #[schemars(extend(
         "x-title" = {"en": "Queue age (hours)", "ja": "キューの期限（時間）"},
-        "x-help" = {"en": "How old a queued event may be and still be filed. Empty means the default.", "ja": "キューのイベントを何時間前のものまで取り込むか。空なら既定。"}
+        "x-placeholder" = "24",
+        "x-help" = {"en": "How old a queued event may be and still be filed.", "ja": "キューのイベントを何時間前のものまで取り込むか。"}
     ))]
     pub drain_max_age_hours: Option<u64>,
     /// Most queued events filed per drain pass, `None` meaning
@@ -898,7 +901,8 @@ pub struct SlackConfig {
     #[serde(default)]
     #[schemars(extend(
         "x-title" = {"en": "Queue batch", "ja": "キューの取り込み件数"},
-        "x-help" = {"en": "The most queued events filed at a time. Empty means the default.", "ja": "キューのイベントを一度に何件まで取り込むか。空なら既定。"}
+        "x-placeholder" = "100",
+        "x-help" = {"en": "The most queued events filed at a time.", "ja": "キューのイベントを一度に何件まで取り込むか。"}
     ))]
     pub drain_limit: Option<u32>,
     /// Seconds between `conversations.history` polls of watched channels,
@@ -913,7 +917,8 @@ pub struct SlackConfig {
     #[serde(default)]
     #[schemars(extend(
         "x-title" = {"en": "Watch interval (seconds)", "ja": "見張りの間隔（秒）"},
-        "x-help" = {"en": "How often watched channels are checked. Empty means the default.", "ja": "見張っているチャンネルを確かめる間隔。空なら既定。"}
+        "x-placeholder" = "60",
+        "x-help" = {"en": "How often watched channels are checked.", "ja": "見張っているチャンネルを確かめる間隔。"}
     ))]
     pub watch_poll_interval_secs: Option<u64>,
     /// Prompt text overrides (#318). Every key falls back to the embedded
@@ -2012,6 +2017,8 @@ mod schema_tests {
         let schema = plugin_sdk::config_schema::of::<super::SlackConfig>().schema;
         let missing = plugin_sdk::config_schema::missing_help(&schema);
         assert!(missing.is_empty(), "{}", missing.join("\n"));
+        let stated = plugin_sdk::config_schema::help_stating_defaults(&schema);
+        assert!(stated.is_empty(), "help states a default: {stated:?}");
         assert!(schema["x-category"]["ja"].is_string(), "{schema}");
     }
 }

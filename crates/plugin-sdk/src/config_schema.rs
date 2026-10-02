@@ -51,6 +51,48 @@ pub fn missing_help(schema: &Value) -> Vec<String> {
     missing
 }
 
+/// Every `x-help` text that states a default value ("Default 3", "既定は 3")
+/// — for a plugin's own test. The default belongs in the schema's `default`
+/// (serde's, derived) or `x-placeholder`, where the settings window shows it
+/// in the empty field; a sentence in the help repeats it and goes stale.
+pub fn help_stating_defaults(schema: &Value) -> Vec<String> {
+    let mut found = Vec::new();
+    collect_help(schema, &mut found);
+    found
+        .into_iter()
+        .filter(|text| {
+            [
+                "Default ",
+                "既定は",
+                "(default)",
+                "（既定）",
+                ", default)",
+                "、既定）",
+            ]
+            .iter()
+            .any(|stated| text.contains(stated))
+        })
+        .collect()
+}
+
+fn collect_help(value: &Value, out: &mut Vec<String>) {
+    match value {
+        Value::Object(map) => {
+            for (key, child) in map {
+                if key == "x-help" {
+                    if let Some(texts) = child.as_object() {
+                        out.extend(texts.values().filter_map(Value::as_str).map(str::to_string));
+                    }
+                } else {
+                    collect_help(child, out);
+                }
+            }
+        }
+        Value::Array(items) => items.iter().for_each(|v| collect_help(v, out)),
+        _ => {}
+    }
+}
+
 fn walk(value: &Value, path: &str, missing: &mut Vec<String>) {
     match value {
         Value::Object(map) => {
@@ -120,6 +162,13 @@ mod tests {
         assert!(
             !missing.iter().any(|m| m.starts_with("/token:")),
             "{missing:?}"
+        );
+        assert!(help_stating_defaults(&schema).is_empty());
+        let stated =
+            serde_json::json!({"properties": {"a": {"x-help": {"en": "Default 3.", "ja": "x"}}}});
+        assert_eq!(
+            help_stating_defaults(&stated),
+            vec!["Default 3.".to_string()]
         );
     }
 }

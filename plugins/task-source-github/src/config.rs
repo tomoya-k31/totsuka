@@ -365,7 +365,7 @@ pub struct GithubConfig {
     #[serde(default = "default_status_field")]
     #[schemars(extend(
         "x-title" = {"en": "Status field", "ja": "ステータスのフィールド"},
-        "x-help" = {"en": "The board's single-select field holding the status. Default \"Status\".", "ja": "ボードでステータスを持つ単一選択フィールド。既定は \"Status\"。"}
+        "x-help" = {"en": "The board's single-select field holding the status.", "ja": "ボードでステータスを持つ単一選択フィールド。"}
     ))]
     pub status_field: String,
     /// The operator's own login: detects self-assigned tasks (F-08) and is
@@ -389,21 +389,21 @@ pub struct GithubConfig {
     #[serde(default = "default_source_name")]
     #[schemars(extend(
         "x-title" = {"en": "Source name", "ja": "ソース名"},
-        "x-help" = {"en": "This source's name on tasks. Change it only to run two of this plugin. Default \"github\".", "ja": "タスクに付くこのソースの名前。このプラグインを 2 つ動かすときだけ変える。既定は \"github\"。"}
+        "x-help" = {"en": "This source's name on tasks. Change it only to run two of this plugin.", "ja": "タスクに付くこのソースの名前。このプラグインを 2 つ動かすときだけ変える。"}
     ))]
     pub source_name: String,
     /// GraphQL endpoint (overridable for GitHub Enterprise / tests).
     #[serde(default = "default_api_url")]
     #[schemars(extend(
         "x-title" = {"en": "API URL", "ja": "API の URL"},
-        "x-help" = {"en": "The GraphQL endpoint. Default https://api.github.com/graphql; change it for GitHub Enterprise.", "ja": "GraphQL のエンドポイント。既定は https://api.github.com/graphql。GitHub Enterprise では変える。"}
+        "x-help" = {"en": "The GraphQL endpoint. Change it for GitHub Enterprise.", "ja": "GraphQL のエンドポイント。GitHub Enterprise では変える。"}
     ))]
     pub api_url: String,
     /// Max retry attempts for retryable API failures.
     #[serde(default = "default_max_retries")]
     #[schemars(extend(
         "x-title" = {"en": "Retries", "ja": "再試行回数"},
-        "x-help" = {"en": "How many times a failed API call that can be retried is retried. Default 3.", "ja": "再試行できる API の失敗を何回まで再試行するか。既定は 3。"}
+        "x-help" = {"en": "How many times a failed API call that can be retried is retried.", "ja": "再試行できる API の失敗を何回まで再試行するか。"}
     ))]
     pub max_retries: u32,
     /// Internal fetch cadence of the poll loop, in seconds (F-06). Moved
@@ -413,7 +413,8 @@ pub struct GithubConfig {
     #[serde(default)]
     #[schemars(extend(
         "x-title" = {"en": "Poll interval (seconds)", "ja": "取得の間隔（秒）"},
-        "x-help" = {"en": "How often to look for new tasks. Empty means the default.", "ja": "新しいタスクを探しにいく間隔。空なら既定。"}
+        "x-placeholder" = "60",
+        "x-help" = {"en": "How often to look for new tasks.", "ja": "新しいタスクを探しにいく間隔。"}
     ))]
     pub poll_interval_secs: Option<u64>,
     /// Milliseconds to wait between writing the exclusion claim and reading
@@ -425,7 +426,8 @@ pub struct GithubConfig {
     #[serde(default)]
     #[schemars(extend(
         "x-title" = {"en": "Claim check delay (ms)", "ja": "確保の確認までの待ち（ミリ秒）"},
-        "x-help" = {"en": "How long to wait before reading back a claim. Empty means the default.", "ja": "タスクを確保してから読み戻すまで待つ時間。空なら既定。"}
+        "x-placeholder" = "750",
+        "x-help" = {"en": "How long to wait before reading back a claim.", "ja": "タスクを確保してから読み戻すまで待つ時間。"}
     ))]
     pub claim_verify_delay_ms: Option<u64>,
     /// Instruction text overrides (#398). Every key falls back to the embedded
@@ -697,6 +699,8 @@ mod schema_tests {
         let schema = plugin_sdk::config_schema::of::<super::GithubConfig>().schema;
         let missing = plugin_sdk::config_schema::missing_help(&schema);
         assert!(missing.is_empty(), "{}", missing.join("\n"));
+        let stated = plugin_sdk::config_schema::help_stating_defaults(&schema);
+        assert!(stated.is_empty(), "help states a default: {stated:?}");
         assert!(schema["x-category"]["ja"].is_string(), "{schema}");
     }
 }

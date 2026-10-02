@@ -70,7 +70,7 @@ pub struct HerdrConfig {
     #[serde(default = "default_request_timeout")]
     #[schemars(extend(
         "x-title" = {"en": "Request timeout (seconds)", "ja": "リクエストのタイムアウト（秒）"},
-        "x-help" = {"en": "How long one herdr call may take. Default 30.", "ja": "herdr への呼び出し 1 回にかけてよい秒数。既定は 30。"}
+        "x-help" = {"en": "How long one herdr call may take.", "ja": "herdr への呼び出し 1 回にかけてよい秒数。"}
     ))]
     pub request_timeout_secs: u64,
 }
@@ -90,14 +90,14 @@ pub struct LayoutConfig {
     #[serde(default = "default_layout_shell")]
     #[schemars(extend(
         "x-title" = {"en": "Shell pane", "ja": "シェルの pane"},
-        "x-help" = {"en": "Put a shell pane beside the agent. Default on.", "ja": "エージェントの横にシェルの pane を置く。既定はオン。"}
+        "x-help" = {"en": "Put a shell pane beside the agent.", "ja": "エージェントの横にシェルの pane を置く。"}
     ))]
     pub shell: bool,
     /// Which way the workspace is split.
     #[serde(default = "default_layout_direction")]
     #[schemars(extend(
         "x-title" = {"en": "Split direction", "ja": "分割の向き"},
-        "x-help" = {"en": "down or right. Default down.", "ja": "down か right。既定は down。"}
+        "x-help" = {"en": "down or right.", "ja": "down か right。"}
     ))]
     pub direction: SplitDirection,
     /// The **agent** side's share of the split (the shell gets the rest).
@@ -110,7 +110,7 @@ pub struct LayoutConfig {
     #[serde(default = "default_layout_ratio")]
     #[schemars(extend(
         "x-title" = {"en": "Agent share", "ja": "エージェントの割合"},
-        "x-help" = {"en": "The agent's share of the split, e.g. 0.8. Default 0.8.", "ja": "分割したときのエージェント側の割合。例: 0.8。既定は 0.8。"}
+        "x-help" = {"en": "The agent's share of the split, e.g. 0.8.", "ja": "分割したときのエージェント側の割合。例: 0.8。"}
     ))]
     pub ratio: f64,
 }
@@ -143,7 +143,7 @@ pub struct IdentityConfig {
     #[serde(default = "default_identity_enabled")]
     #[schemars(extend(
         "x-title" = {"en": "Enabled", "ja": "有効"},
-        "x-help" = {"en": "Name workspaces after their repository and task. Default on.", "ja": "ワークスペースにリポジトリとタスクの名前を付ける。既定はオン。"}
+        "x-help" = {"en": "Name workspaces after their repository and task.", "ja": "ワークスペースにリポジトリとタスクの名前を付ける。"}
     ))]
     pub enabled: bool,
 }
@@ -444,6 +444,8 @@ mod schema_tests {
         let schema = plugin_sdk::config_schema::of::<super::HerdrConfig>().schema;
         let missing = plugin_sdk::config_schema::missing_help(&schema);
         assert!(missing.is_empty(), "{}", missing.join("\n"));
+        let stated = plugin_sdk::config_schema::help_stating_defaults(&schema);
+        assert!(stated.is_empty(), "help states a default: {stated:?}");
         assert!(schema["x-category"]["ja"].is_string(), "{schema}");
     }
 }

@@ -45,21 +45,21 @@ pub struct DiscordConfig {
     #[serde(default = "default_api_url")]
     #[schemars(extend(
         "x-title" = {"en": "API URL", "ja": "API の URL"},
-        "x-help" = {"en": "The API's base URL. Default https://discord.com/api/v10.", "ja": "API のベース URL。既定は https://discord.com/api/v10。"}
+        "x-help" = {"en": "The API's base URL.", "ja": "API のベース URL。"}
     ))]
     pub api_url: String,
     /// This source instance's name, as used in `Task.source`.
     #[serde(default = "default_source_name")]
     #[schemars(extend(
         "x-title" = {"en": "Source name", "ja": "ソース名"},
-        "x-help" = {"en": "This source's name on tasks. Change it only to run two of this plugin. Default \"discord\".", "ja": "タスクに付くこのソースの名前。このプラグインを 2 つ動かすときだけ変える。既定は \"discord\"。"}
+        "x-help" = {"en": "This source's name on tasks. Change it only to run two of this plugin.", "ja": "タスクに付くこのソースの名前。このプラグインを 2 つ動かすときだけ変える。"}
     ))]
     pub source_name: String,
     /// Max retry attempts for retryable REST failures.
     #[serde(default = "default_max_retries")]
     #[schemars(extend(
         "x-title" = {"en": "Retries", "ja": "再試行回数"},
-        "x-help" = {"en": "How many times a failed API call that can be retried is retried. Default 3.", "ja": "再試行できる API の失敗を何回まで再試行するか。既定は 3。"}
+        "x-help" = {"en": "How many times a failed API call that can be retried is retried.", "ja": "再試行できる API の失敗を何回まで再試行するか。"}
     ))]
     pub max_retries: u32,
     /// Most messages the startup backfill recovers per watched channel.
@@ -67,7 +67,8 @@ pub struct DiscordConfig {
     #[serde(default)]
     #[schemars(extend(
         "x-title" = {"en": "Backfill limit", "ja": "取りこぼしの回収件数"},
-        "x-help" = {"en": "How many missed posts per watched channel are recovered on start. Empty means the default.", "ja": "起動時に、見張っているチャンネルごとに取りこぼした投稿を何件まで回収するか。空なら既定。"}
+        "x-placeholder" = "100",
+        "x-help" = {"en": "How many missed posts per watched channel are recovered on start.", "ja": "起動時に、見張っているチャンネルごとに取りこぼした投稿を何件まで回収するか。"}
     ))]
     pub watch_backfill_limit: Option<u32>,
     /// How old a missed post may be and still be recovered, in hours.
@@ -75,7 +76,8 @@ pub struct DiscordConfig {
     #[serde(default)]
     #[schemars(extend(
         "x-title" = {"en": "Backfill age (hours)", "ja": "取りこぼしの回収期間（時間）"},
-        "x-help" = {"en": "How old a missed post may be and still be recovered. Empty means the default.", "ja": "取りこぼした投稿を何時間前のものまで回収するか。空なら既定。"}
+        "x-placeholder" = "24",
+        "x-help" = {"en": "How old a missed post may be and still be recovered.", "ja": "取りこぼした投稿を何時間前のものまで回収するか。"}
     ))]
     pub watch_backfill_max_age_hours: Option<u64>,
 }
@@ -171,6 +173,8 @@ mod schema_tests {
         let schema = plugin_sdk::config_schema::of::<super::DiscordConfig>().schema;
         let missing = plugin_sdk::config_schema::missing_help(&schema);
         assert!(missing.is_empty(), "{}", missing.join("\n"));
+        let stated = plugin_sdk::config_schema::help_stating_defaults(&schema);
+        assert!(stated.is_empty(), "help states a default: {stated:?}");
         assert!(schema["x-category"]["ja"].is_string(), "{schema}");
     }
 }

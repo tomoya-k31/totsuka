@@ -30,21 +30,21 @@ pub struct NotifierConfig {
     #[serde(default)]
     #[schemars(extend(
         "x-title" = {"en": "Backend", "ja": "通知の方法"},
-        "x-help" = {"en": "osascript (default) or terminal_notifier (needed for click-to-focus).", "ja": "osascript（既定）か terminal_notifier（クリックでフォーカスするのに必要）。"}
+        "x-help" = {"en": "osascript or terminal_notifier (needed for click-to-focus).", "ja": "osascript か terminal_notifier（クリックでフォーカスするのに必要）。"}
     ))]
     pub backend: Backend,
     /// The `osascript` executable (name on PATH or absolute path).
     #[serde(default = "default_osascript")]
     #[schemars(extend(
         "x-title" = {"en": "osascript command", "ja": "osascript のコマンド"},
-        "x-help" = {"en": "A name on PATH or an absolute path. Default \"osascript\".", "ja": "PATH 上の名前か絶対パス。既定は \"osascript\"。"}
+        "x-help" = {"en": "A name on PATH or an absolute path.", "ja": "PATH 上の名前か絶対パス。"}
     ))]
     pub osascript_bin: String,
     /// The `terminal-notifier` executable (name on PATH or absolute path).
     #[serde(default = "default_terminal_notifier")]
     #[schemars(extend(
         "x-title" = {"en": "terminal-notifier command", "ja": "terminal-notifier のコマンド"},
-        "x-help" = {"en": "A name on PATH or an absolute path. Default \"terminal-notifier\".", "ja": "PATH 上の名前か絶対パス。既定は \"terminal-notifier\"。"}
+        "x-help" = {"en": "A name on PATH or an absolute path.", "ja": "PATH 上の名前か絶対パス。"}
     ))]
     pub terminal_notifier_bin: String,
     /// Bundle id of the GUI app a click brings to the front (`-activate`),
@@ -62,7 +62,7 @@ pub struct NotifierConfig {
     #[serde(default = "default_click_command")]
     #[schemars(extend(
         "x-title" = {"en": "Click command", "ja": "クリック時のコマンド"},
-        "x-help" = {"en": "The command a click runs; {task_id} is replaced. Default \"totsuka focus {task_id}\". Empty runs nothing.", "ja": "クリックで実行するコマンド。{task_id} は置き換えられる。既定は \"totsuka focus {task_id}\"。空なら何もしない。"}
+        "x-help" = {"en": "The command a click runs; {task_id} is replaced.", "ja": "クリックで実行するコマンド。{task_id} は置き換えられる。"}
     ))]
     pub click_command: String,
     /// The delivery filter (F-92).
@@ -337,6 +337,8 @@ mod schema_tests {
         let schema = plugin_sdk::config_schema::of::<super::NotifierConfig>().schema;
         let missing = plugin_sdk::config_schema::missing_help(&schema);
         assert!(missing.is_empty(), "{}", missing.join("\n"));
+        let stated = plugin_sdk::config_schema::help_stating_defaults(&schema);
+        assert!(stated.is_empty(), "help states a default: {stated:?}");
         assert!(schema["x-category"]["ja"].is_string(), "{schema}");
     }
 }
