@@ -37,6 +37,7 @@ owner: tomoya-k31
 | `x-title` / `x-help` | `{en, ja}` | ラベルとヘルプ。core の全プロパティに付いている（テストで検査） |
 | `x-category` | `{en, ja}` | カテゴリ。core はトップレベルのプロパティに付く。プラグインのテーブルは、無ければプラグイン名が入る |
 | `x-secret` | `true` | 機密の参照を持つフィールド（core では `llm.api_key_ref`） |
+| `x-placeholder` | string | 未設定のときに入力欄へ薄く出す既定値（例: `max_concurrency` の `4`）。serde が知っている既定値はスキーマ標準の `default` に出るので、これはコードの側で決まる既定値のためにある。ヘルプには既定値を書かない（テストで検査） |
 | `x-raw` | `true` | フォームにせず生の TOML として編集する。`config_schema` を宣言していない、または答えが使えなかったプラグインのテーブル |
 | `x-schema-error` | string | `x-raw` になった理由（起動失敗・エラー応答・object でない答え） |
 

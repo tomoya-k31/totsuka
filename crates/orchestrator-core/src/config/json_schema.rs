@@ -87,6 +87,41 @@ mod tests {
         assert!(schema["properties"]["repositories"].is_object());
     }
 
+    /// A default value is the input's placeholder (`x-placeholder`, or the
+    /// schema's own `default`), not a sentence in the help: a help text that
+    /// says "Default 4" repeats the field and goes stale apart from it.
+    #[test]
+    fn help_does_not_state_default_values() {
+        fn helps(value: &Value, out: &mut Vec<String>) {
+            match value {
+                Value::Object(map) => {
+                    for (key, child) in map {
+                        if key == "x-help" {
+                            out.extend(child.as_object().into_iter().flat_map(|m| {
+                                m.values().filter_map(Value::as_str).map(str::to_string)
+                            }));
+                        } else {
+                            helps(child, out);
+                        }
+                    }
+                }
+                Value::Array(items) => items.iter().for_each(|v| helps(v, out)),
+                _ => {}
+            }
+        }
+        let mut texts = Vec::new();
+        helps(&core_schema(), &mut texts);
+        for text in &texts {
+            for stated in ["Default ", "既定は", "（既定）", ", default)", "(default)"] {
+                assert!(!text.contains(stated), "{text:?} states a default");
+            }
+        }
+        assert_eq!(
+            core_schema()["properties"]["max_concurrency"]["x-placeholder"],
+            "4"
+        );
+    }
+
     #[test]
     fn top_level_keys_have_a_category_and_secrets_are_marked() {
         let schema = core_schema();

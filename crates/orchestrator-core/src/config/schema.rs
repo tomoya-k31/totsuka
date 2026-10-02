@@ -69,7 +69,8 @@ pub struct RootConfig {
     #[schemars(extend(
         "x-category" = {"en": "General", "ja": "一般"},
         "x-title" = {"en": "Concurrent tasks", "ja": "同時実行数"},
-        "x-help" = {"en": "How many tasks run at the same time, across all repositories. Default 4.", "ja": "全リポジトリを合わせて同時に実行するタスクの数。既定は 4。"}
+        "x-placeholder" = "4",
+        "x-help" = {"en": "How many tasks run at the same time, across all repositories.", "ja": "全リポジトリを合わせて同時に実行するタスクの数。"}
     ))]
     pub max_concurrency: Option<u32>,
     /// Registered local repositories (F-61).
@@ -103,7 +104,8 @@ pub struct RootConfig {
     #[schemars(extend(
         "x-category" = {"en": "AI tools", "ja": "AI ツール"},
         "x-title" = {"en": "Default AI tool", "ja": "既定の AI ツール"},
-        "x-help" = {"en": "The AI tool used when neither the workflow nor the repository names one. Default \"claude\".", "ja": "ワークフローもリポジトリも指定しないときに使う AI ツール。既定は \"claude\"。"}
+        "x-placeholder" = "claude",
+        "x-help" = {"en": "The AI tool used when neither the workflow nor the repository names one.", "ja": "ワークフローもリポジトリも指定しないときに使う AI ツール。"}
     ))]
     pub default_tool: Option<String>,
     /// AI-tool registry, keyed by tool name (#196). Built-in defaults exist
@@ -220,7 +222,8 @@ pub struct HooksConfig {
     #[serde(default)]
     #[schemars(extend(
         "x-title" = {"en": "Re-ask limit", "ja": "差し戻しの上限"},
-        "x-help" = {"en": "How many times in a row an agent may be asked to finish its work before the task is escalated to you. Default 3.", "ja": "エージェントに作業の完了を連続で求め直す回数の上限。超えるとあなたに知らせる。既定は 3。"}
+        "x-placeholder" = "3",
+        "x-help" = {"en": "How many times in a row an agent may be asked to finish its work before the task is escalated to you.", "ja": "エージェントに作業の完了を連続で求め直す回数の上限。超えるとあなたに知らせる。"}
     ))]
     pub block_retry_limit: Option<u32>,
 }
@@ -392,7 +395,8 @@ pub struct PluginConfig {
     #[serde(default)]
     #[schemars(extend(
         "x-title" = {"en": "Call timeout (seconds)", "ja": "呼び出しのタイムアウト（秒）"},
-        "x-help" = {"en": "How long to wait for each answer from the plugin. Default 120.", "ja": "プラグインからの応答を待つ秒数。既定は 120。"}
+        "x-placeholder" = "120",
+        "x-help" = {"en": "How long to wait for each answer from the plugin.", "ja": "プラグインからの応答を待つ秒数。"}
     ))]
     pub timeout_secs: Option<u64>,
     /// Whether a crash of this plugin is followed by a relaunch (#495).
@@ -406,7 +410,7 @@ pub struct PluginConfig {
     #[serde(default = "default_true")]
     #[schemars(extend(
         "x-title" = {"en": "Restart on crash", "ja": "落ちたら再起動"},
-        "x-help" = {"en": "Restart the plugin when it crashes (up to 5 times in 5 minutes). Default on.", "ja": "プラグインが落ちたら再起動する（5 分間に最大 5 回）。既定はオン。"}
+        "x-help" = {"en": "Restart the plugin when it crashes (up to 5 times in 5 minutes).", "ja": "プラグインが落ちたら再起動する（5 分間に最大 5 回）。"}
     ))]
     pub restart: bool,
 }
@@ -539,7 +543,8 @@ pub struct WorkflowConfig {
     #[serde(default)]
     #[schemars(extend(
         "x-title" = {"en": "Verification", "ja": "検収"},
-        "x-help" = {"en": "How finished work is checked: llm, human or none. Default llm.", "ja": "完了した作業の確かめ方。llm・human・none のどれか。既定は llm。"}
+        "x-placeholder" = "llm",
+        "x-help" = {"en": "How finished work is checked: llm, human or none.", "ja": "完了した作業の確かめ方。llm・human・none のどれか。"}
     ))]
     pub verification: Option<VerificationMode>,
     /// Silence limit in seconds since the last hook signal before the task
@@ -554,7 +559,8 @@ pub struct WorkflowConfig {
     #[serde(default)]
     #[schemars(extend(
         "x-title" = {"en": "Silence limit (seconds)", "ja": "無応答の上限（秒）"},
-        "x-help" = {"en": "Escalate when the agent has been silent this long. 0 (default) turns it off.", "ja": "エージェントがこの秒数黙っていたら知らせる。0（既定）でオフ。"}
+        "x-placeholder" = "0",
+        "x-help" = {"en": "Escalate when the agent has been silent this long. 0 turns it off.", "ja": "エージェントがこの秒数黙っていたら知らせる。0 でオフ。"}
     ))]
     pub timeout_secs: Option<u64>,
     /// Criteria text embedded into the llm-verification prompt hook. Only
@@ -803,7 +809,8 @@ struct RawLlmConfig {
     #[serde(default)]
     #[schemars(extend(
         "x-title" = {"en": "API", "ja": "API"},
-        "x-help" = {"en": "chat (an OpenAI-compatible chat API, default) or decisions (a model that only picks).", "ja": "chat（OpenAI 互換のチャット API、既定）か decisions（選ぶだけのモデル）。"}
+        "x-placeholder" = "chat",
+        "x-help" = {"en": "chat (an OpenAI-compatible chat API) or decisions (a model that only picks).", "ja": "chat（OpenAI 互換のチャット API）か decisions（選ぶだけのモデル）。"}
     ))]
     api: LlmApiKind,
     #[serde(default)]
@@ -832,7 +839,8 @@ struct RawLlmConfig {
     #[serde(default)]
     #[schemars(extend(
         "x-title" = {"en": "Timeout (seconds)", "ja": "タイムアウト（秒）"},
-        "x-help" = {"en": "How long to wait for an answer. Default 30.", "ja": "応答を待つ秒数。既定は 30。"}
+        "x-placeholder" = "30",
+        "x-help" = {"en": "How long to wait for an answer.", "ja": "応答を待つ秒数。"}
     ))]
     timeout_secs: Option<u64>,
     #[serde(default)]
@@ -845,7 +853,8 @@ struct RawLlmConfig {
     #[serde(default)]
     #[schemars(extend(
         "x-title" = {"en": "Confidence threshold", "ja": "確信度のしきい値"},
-        "x-help" = {"en": "Below this confidence (0.0–1.0) the task waits for a person instead. Default 0.6.", "ja": "確信度がこれ未満（0.0〜1.0）なら、タスクは人の判断を待つ。既定は 0.6。"}
+        "x-placeholder" = "0.6",
+        "x-help" = {"en": "Below this confidence (0.0–1.0) the task waits for a person instead.", "ja": "確信度がこれ未満（0.0〜1.0）なら、タスクは人の判断を待つ。"}
     ))]
     confidence_threshold: Option<f64>,
 }
@@ -914,7 +923,8 @@ pub struct WorktreeConfig {
     #[serde(default)]
     #[schemars(extend(
         "x-title" = {"en": "Cleanup (implement)", "ja": "掃除（implement）"},
-        "x-help" = {"en": "When implement-mode worktrees are removed: manual (default), immediate, keep_7d, keep_28d or { retention_days = N }.", "ja": "implement モードの worktree をいつ削除するか。manual（既定）・immediate・keep_7d・keep_28d・{ retention_days = N }。"}
+        "x-placeholder" = "manual",
+        "x-help" = {"en": "When implement-mode worktrees are removed: manual, immediate, keep_7d, keep_28d, or after a number of days.", "ja": "implement モードの worktree をいつ削除するか。manual・immediate・keep_7d・keep_28d、または日数を指定。"}
     ))]
     pub cleanup: Option<CleanupPolicyConfig>,
     /// Cleanup policy for plan-mode worktrees (F-85). Defaults to `immediate`
@@ -922,7 +932,8 @@ pub struct WorktreeConfig {
     #[serde(default)]
     #[schemars(extend(
         "x-title" = {"en": "Cleanup (plan)", "ja": "掃除（plan）"},
-        "x-help" = {"en": "When plan-mode worktrees are removed. Default immediate.", "ja": "plan モードの worktree をいつ削除するか。既定は immediate。"}
+        "x-placeholder" = "immediate",
+        "x-help" = {"en": "When plan-mode worktrees are removed.", "ja": "plan モードの worktree をいつ削除するか。"}
     ))]
     pub plan_cleanup: Option<CleanupPolicyConfig>,
     /// Seconds a single git command may run before it is killed (#764).
@@ -930,7 +941,8 @@ pub struct WorktreeConfig {
     #[serde(default)]
     #[schemars(extend(
         "x-title" = {"en": "git timeout (seconds)", "ja": "git のタイムアウト（秒）"},
-        "x-help" = {"en": "Stop a git command that runs longer than this. 0 means no limit. Default 300.", "ja": "これより長く動く git のコマンドを止める。0 で上限なし。既定は 300。"}
+        "x-placeholder" = "300",
+        "x-help" = {"en": "Stop a git command that runs longer than this. 0 means no limit.", "ja": "これより長く動く git のコマンドを止める。0 で上限なし。"}
     ))]
     pub git_timeout_secs: Option<u64>,
 }
@@ -984,21 +996,23 @@ pub struct LogSettings {
     #[serde(default)]
     #[schemars(extend(
         "x-title" = {"en": "Level", "ja": "レベル"},
-        "x-help" = {"en": "error, warn, info (default), debug or trace.", "ja": "error・warn・info（既定）・debug・trace のどれか。"}
+        "x-placeholder" = "info",
+        "x-help" = {"en": "error, warn, info, debug or trace.", "ja": "error・warn・info・debug・trace のどれか。"}
     ))]
     pub level: Option<String>,
     /// Whether prompt/RPC-payload fields are logged (debug+ only regardless).
     #[serde(default = "default_log_prompts")]
     #[schemars(extend(
         "x-title" = {"en": "Log prompts", "ja": "プロンプトを記録"},
-        "x-help" = {"en": "Record prompts and payloads (only written at debug level or above). Default on.", "ja": "プロンプトとペイロードを記録する（debug 以上のときだけ書かれる）。既定はオン。"}
+        "x-help" = {"en": "Record prompts and payloads (only written at debug level or above).", "ja": "プロンプトとペイロードを記録する（debug 以上のときだけ書かれる）。"}
     ))]
     pub log_prompts: bool,
     /// Number of daily log files to keep.
     #[serde(default)]
     #[schemars(extend(
         "x-title" = {"en": "Files to keep", "ja": "残すファイル数"},
-        "x-help" = {"en": "How many daily log files to keep. Default 7.", "ja": "日ごとのログファイルを何世代残すか。既定は 7。"}
+        "x-placeholder" = "7",
+        "x-help" = {"en": "How many daily log files to keep.", "ja": "日ごとのログファイルを何世代残すか。"}
     ))]
     pub max_files: Option<usize>,
 }
