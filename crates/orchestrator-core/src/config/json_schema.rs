@@ -4,7 +4,7 @@
 //! Derived with schemars from the same structs serde reads, so it cannot
 //! describe a key the loader does not accept. Each property carries the
 //! settings window's extension keywords (`x-title` / `x-help` / `x-category`,
-//! each `{en, ja}`, and `x-secret`); the doc comments' `description`s are
+//! English strings, and `x-secret`); the doc comments' `description`s are
 //! stripped, being written for developers.
 //!
 //! Plugin tables are not here: the plugins describe them through
@@ -49,11 +49,10 @@ fn strip_docs(value: &mut Value, schemas: bool) {
 mod tests {
     use super::*;
 
-    /// Every property, at any depth, has `x-title` and `x-help` in both
-    /// languages — so a key added to the config without help text fails here
+    /// Every property, at any depth, has an `x-title` and an `x-help` — so a key added to the config without help text fails here
     /// instead of showing up in the settings window as a bare key name.
     #[test]
-    fn every_property_has_bilingual_title_and_help() {
+    fn every_property_has_a_title_and_help() {
         fn walk(value: &Value, path: &str, missing: &mut Vec<String>) {
             let Value::Object(map) = value else {
                 if let Value::Array(items) = value {
@@ -65,10 +64,8 @@ mod tests {
                 for (key, prop) in props {
                     let at = format!("{path}.{key}");
                     for kw in ["x-title", "x-help"] {
-                        for lang in ["en", "ja"] {
-                            if !prop[kw][lang].as_str().is_some_and(|s| !s.is_empty()) {
-                                missing.push(format!("{at}: {kw}.{lang}"));
-                            }
+                        if !prop[kw].as_str().is_some_and(|s| !s.is_empty()) {
+                            missing.push(format!("{at}: {kw}"));
                         }
                     }
                     walk(prop, &at, missing);
@@ -97,9 +94,7 @@ mod tests {
                 Value::Object(map) => {
                     for (key, child) in map {
                         if key == "x-help" {
-                            out.extend(child.as_object().into_iter().flat_map(|m| {
-                                m.values().filter_map(Value::as_str).map(str::to_string)
-                            }));
+                            out.extend(child.as_str().map(str::to_string));
                         } else {
                             helps(child, out);
                         }
@@ -126,7 +121,7 @@ mod tests {
     fn top_level_keys_have_a_category_and_secrets_are_marked() {
         let schema = core_schema();
         for (key, prop) in schema["properties"].as_object().unwrap() {
-            assert!(prop["x-category"]["ja"].is_string(), "{key}");
+            assert!(prop["x-category"].is_string(), "{key}");
         }
         let json = schema.to_string();
         assert!(!json.contains("\"$ref\""), "subschemas are inlined");

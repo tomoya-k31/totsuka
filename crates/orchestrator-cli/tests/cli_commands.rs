@@ -2258,12 +2258,12 @@ fn config_schema_merges_plugin_tables() {
     assert!(out.status.success(), "{}", stderr(&out));
     let doc: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
     let props = &doc["schema"]["properties"];
-    assert_eq!(props["workflows"]["x-category"]["ja"], "ワークフロー");
+    assert_eq!(props["workflows"]["x-category"], "Workflows");
     assert_eq!(
-        props["withschema"]["properties"]["greeting"]["x-title"]["ja"],
-        "挨拶"
+        props["withschema"]["properties"]["greeting"]["x-title"],
+        "Greeting"
     );
-    assert_eq!(props["withschema"]["x-category"]["en"], "withschema");
+    assert_eq!(props["withschema"]["x-category"], "withschema");
     assert_eq!(props["noschema"]["x-raw"], true);
     assert!(
         doc["config_path"]
@@ -2287,7 +2287,7 @@ fn config_schema_survives_a_broken_manifest_and_a_reserved_name() {
     assert!(out.status.success(), "{}", stderr(&out));
     let doc: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
     let props = &doc["schema"]["properties"];
-    assert_eq!(props["log"]["x-category"]["ja"], "ログ", "core `log` kept");
+    assert_eq!(props["log"]["x-category"], "Logging", "core `log` kept");
     assert_eq!(props["broken"]["x-raw"], true);
     assert!(props["broken"]["x-schema-error"].is_string());
     let _ = std::fs::remove_dir_all(&base);

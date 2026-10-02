@@ -24,7 +24,7 @@
 ## 2026-10-01
 
 * **Creation**: [totsuka config schema / get / set / unset](/apis/config-cli.md) — メニューバーアプリの設定画面が config.toml を JSON で読み書きする CLI 契約。キーパスは JSON Pointer、プラグインのスキーマは並行に取得し、壊れたマニフェスト・予約名・`$ref` は個別に `x-raw` へ逃がす。
-* **Update**: [orchestrator-core](/components/orchestrator-core.md) — `config::json_schema`（schemars による config の JSON Schema と 2 言語のヘルプ）、`config::set_path` / `unset_path`、`plugins::plugin_schemas`（initialize 前の `config/schema`）。
+* **Update**: [orchestrator-core](/components/orchestrator-core.md) — `config::json_schema`（schemars による config の JSON Schema とラベル・ヘルプ）、`config::set_path` / `unset_path`、`plugins::plugin_schemas`（initialize 前の `config/schema`）。
 * **Update**: [orchestrator-cli](/components/orchestrator-cli.md) — `config schema` / `get` / `set` / `unset`。
 * **Update**: [ADR-0109](/decisions/adr-0109-native-menubar-app.md) — 5 層に分けたこと、`x-raw` / `x-schema-error`、書き込みの拒否条件、プラグイン所有の project / workflow キーが未対応であること。
 * **Creation**: [ADR-0113 ネイティブ macOS メニューバーアプリが run を子プロセスとして監督し、通知と設定 GUI を持つ](/decisions/adr-0113-native-menubar-app.md) — SwiftUI のメニューバーアプリ（apps/macos/）の技術選定・監督方式・通知経路・設定 GUI・配布方式と、プロトタイプでの実測（Keychain の partition_id、/tmp の通知拒否、ログイン項目の追従）を記録。

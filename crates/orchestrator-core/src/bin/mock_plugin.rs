@@ -222,8 +222,8 @@ fn main() {
                     "type": "object",
                     "properties": { "greeting": {
                         "type": "string",
-                        "x-title": { "en": "Greeting", "ja": "挨拶" },
-                        "x-help": { "en": "Said on start.", "ja": "起動時に言う。" },
+                        "x-title": "Greeting",
+                        "x-help": "Said on start.",
                     } },
                 } }),
             ),

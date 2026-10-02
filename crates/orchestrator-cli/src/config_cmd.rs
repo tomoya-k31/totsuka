@@ -133,7 +133,7 @@ fn plugin_property(
     use orchestrator_core::plugins::PluginSchema;
     use serde_json::json;
 
-    let category = json!({ "en": name, "ja": name });
+    let category = json!(name);
     let raw = |error: Option<String>| {
         let mut entry = json!({ "type": "object", "x-category": category, "x-raw": true });
         if let Some(error) = error {
@@ -533,7 +533,7 @@ mod tests {
         let inline = serde_json::json!({ "type": "object", "properties": {} });
         let entry = plugin_property("p", PluginSchema::Schema(inline));
         assert!(entry.get("x-raw").is_none());
-        assert_eq!(entry["x-category"]["en"], "p");
+        assert_eq!(entry["x-category"], "p");
     }
 
     #[test]
