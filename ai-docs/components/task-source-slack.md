@@ -126,4 +126,4 @@ manifest（`plugins/task-source-slack/plugin.toml`）と `initialize` 応答で 
 
 # 設定スキーマ（`config/schema`、[ADR-0113](/decisions/adr-0113-native-menubar-app.md)）
 
-マニフェストで `config_schema = true` を宣言し、`initialize` より前の `config/schema` に `[slack]` のスキーマ（`plugin_sdk::config_schema::of::<SlackConfig>()`）で答える。実装はSDK の `TaskSourceHandler::config_schema`。スキーマは serde が読む `SlackConfig` から schemars で導出するので、受け付けないキーは載らない（`llm` は `RawLlmConfig` の形で載る）。全キー（入れ子を含む）に `x-title` / `x-help`（英語・日本語）があることを `config.rs` の `schema_tests` が、`initialize` 前に答えることを適合キットの検査 10 が確かめる。`x-secret` を付けたフィールド: `app_token` / `user_token` / `bot_token` / `llm.api_key`。
+マニフェストで `config_schema = true` を宣言し、`initialize` より前の `config/schema` に `[slack]` のスキーマ（`plugin_sdk::config_schema::of::<SlackConfig>()`）で答える。実装はSDK の `TaskSourceHandler::config_schema`。スキーマは serde が読む `SlackConfig` から schemars で導出するので、受け付けないキーは載らない（`llm` は `RawLlmConfig` の形で載る）。全キー（入れ子を含む）に `x-title` / `x-help` があり、ヘルプに既定値を書いていないことを `config.rs` の `schema_tests` が、`initialize` 前に答えることを適合キットの検査 10 が確かめる。`x-secret` を付けたフィールド: `app_token` / `user_token` / `bot_token` / `llm.api_key`。

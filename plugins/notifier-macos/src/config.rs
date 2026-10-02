@@ -22,29 +22,29 @@ pub enum Backend {
 
 /// macOS notifier settings.
 #[derive(Debug, Clone, Deserialize, Default, schemars::JsonSchema)]
-#[schemars(extend("x-category" = {"en": "Notifications (macOS)", "ja": "通知（macOS）"}))]
+#[schemars(extend("x-category" = "Notifications"))]
 #[serde(deny_unknown_fields)]
 pub struct NotifierConfig {
     /// Which delivery backend to use. Defaults to `osascript` for backward
     /// compatibility; set `terminal_notifier` for click-to-focus (F-94).
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "Backend", "ja": "通知の方法"},
-        "x-help" = {"en": "osascript or terminal_notifier (needed for click-to-focus).", "ja": "osascript か terminal_notifier（クリックでフォーカスするのに必要）。"}
+        "x-title" = "Backend",
+        "x-help" = "osascript or terminal_notifier (needed for click-to-focus)."
     ))]
     pub backend: Backend,
     /// The `osascript` executable (name on PATH or absolute path).
     #[serde(default = "default_osascript")]
     #[schemars(extend(
-        "x-title" = {"en": "osascript command", "ja": "osascript のコマンド"},
-        "x-help" = {"en": "A name on PATH or an absolute path.", "ja": "PATH 上の名前か絶対パス。"}
+        "x-title" = "osascript command",
+        "x-help" = "A name on PATH or an absolute path."
     ))]
     pub osascript_bin: String,
     /// The `terminal-notifier` executable (name on PATH or absolute path).
     #[serde(default = "default_terminal_notifier")]
     #[schemars(extend(
-        "x-title" = {"en": "terminal-notifier command", "ja": "terminal-notifier のコマンド"},
-        "x-help" = {"en": "A name on PATH or an absolute path.", "ja": "PATH 上の名前か絶対パス。"}
+        "x-title" = "terminal-notifier command",
+        "x-help" = "A name on PATH or an absolute path."
     ))]
     pub terminal_notifier_bin: String,
     /// Bundle id of the GUI app a click brings to the front (`-activate`),
@@ -52,8 +52,8 @@ pub struct NotifierConfig {
     /// (only the pane focus via `click_command` remains).
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "App to activate", "ja": "前面に出すアプリ"},
-        "x-help" = {"en": "Bundle id of the app a click brings to the front, e.g. org.alacritty.", "ja": "クリックで前面に出すアプリのバンドル ID。例: org.alacritty。"}
+        "x-title" = "App to activate",
+        "x-help" = "Bundle id of the app a click brings to the front, e.g. org.alacritty."
     ))]
     pub activate_bundle_id: Option<String>,
     /// Shell command template a click runs (`-execute`). `{task_id}` is
@@ -61,15 +61,15 @@ pub struct NotifierConfig {
     /// safety). Empty ⇒ no `-execute`.
     #[serde(default = "default_click_command")]
     #[schemars(extend(
-        "x-title" = {"en": "Click command", "ja": "クリック時のコマンド"},
-        "x-help" = {"en": "The command a click runs; {task_id} is replaced.", "ja": "クリックで実行するコマンド。{task_id} は置き換えられる。"}
+        "x-title" = "Click command",
+        "x-help" = "The command a click runs; {task_id} is replaced."
     ))]
     pub click_command: String,
     /// The delivery filter (F-92).
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "Filter", "ja": "絞り込み"},
-        "x-help" = {"en": "Which events are notified, for every workflow and per workflow.", "ja": "どの出来事を通知するか。全ワークフロー共通と、ワークフローごと。"}
+        "x-title" = "Filter",
+        "x-help" = "Which events are notified, for every workflow and per workflow."
     ))]
     pub filter: Filter,
 }
@@ -81,43 +81,43 @@ pub struct EventToggles {
     /// Toggle for `waiting_input` (F-35).
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "Notify: waits for input", "ja": "通知: 入力を待っている"},
-        "x-help" = {"en": "Whether to notify when a task waits for input. Empty means on.", "ja": "タスクが入力を待っているときに通知するか。空ならオン。"}
+        "x-title" = "Notify: waits for input",
+        "x-help" = "Whether to notify when a task waits for input. Empty means on."
     ))]
     pub waiting_input: Option<bool>,
     /// Toggle for `done`.
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "Notify: is done", "ja": "通知: 完了した"},
-        "x-help" = {"en": "Whether to notify when a task is done. Empty means on.", "ja": "タスクが完了したときに通知するか。空ならオン。"}
+        "x-title" = "Notify: is done",
+        "x-help" = "Whether to notify when a task is done. Empty means on."
     ))]
     pub done: Option<bool>,
     /// Toggle for `failed`.
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "Notify: fails", "ja": "通知: 失敗した"},
-        "x-help" = {"en": "Whether to notify when a task fails. Empty means on.", "ja": "タスクが失敗したときに通知するか。空ならオン。"}
+        "x-title" = "Notify: fails",
+        "x-help" = "Whether to notify when a task fails. Empty means on."
     ))]
     pub failed: Option<bool>,
     /// Toggle for `pending` (F-14).
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "Notify: waits for a repository choice", "ja": "通知: リポジトリの選択を待っている"},
-        "x-help" = {"en": "Whether to notify when a task waits for a repository choice. Empty means on.", "ja": "タスクがリポジトリの選択を待っているときに通知するか。空ならオン。"}
+        "x-title" = "Notify: waits for a repository choice",
+        "x-help" = "Whether to notify when a task waits for a repository choice. Empty means on."
     ))]
     pub pending: Option<bool>,
     /// Toggle for `escalated` (#131 D-02/D-03: a task handed to a human).
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "Notify: is handed to you", "ja": "通知: あなたに渡された"},
-        "x-help" = {"en": "Whether to notify when a task is handed to you. Empty means on.", "ja": "タスクがあなたに渡されたときに通知するか。空ならオン。"}
+        "x-title" = "Notify: is handed to you",
+        "x-help" = "Whether to notify when a task is handed to you. Empty means on."
     ))]
     pub escalated: Option<bool>,
     /// Toggle for `verification_pending` (#131 D-01: awaiting `task verify`).
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "Notify: waits for your verification", "ja": "通知: 検収を待っている"},
-        "x-help" = {"en": "Whether to notify when a task waits for your verification. Empty means on.", "ja": "タスクが検収を待っているときに通知するか。空ならオン。"}
+        "x-title" = "Notify: waits for your verification",
+        "x-help" = "Whether to notify when a task waits for your verification. Empty means on."
     ))]
     pub verification_pending: Option<bool>,
 }
@@ -144,15 +144,15 @@ pub struct Filter {
     /// Global per-event toggles applied to every workflow.
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "All workflows", "ja": "全ワークフロー"},
-        "x-help" = {"en": "The events notified for every workflow.", "ja": "全ワークフローで通知する出来事。"}
+        "x-title" = "All workflows",
+        "x-help" = "The events notified for every workflow."
     ))]
     pub events: EventToggles,
     /// Per-workflow overrides, keyed by workflow name.
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "Per workflow", "ja": "ワークフローごと"},
-        "x-help" = {"en": "Overrides keyed by workflow name.", "ja": "ワークフロー名ごとの上書き。"}
+        "x-title" = "Per workflow",
+        "x-help" = "Overrides keyed by workflow name."
     ))]
     pub workflows: HashMap<String, EventToggles>,
 }
@@ -331,14 +331,14 @@ mod tests {
 #[cfg(test)]
 mod schema_tests {
     /// Every key of `[macos]`, at any depth, carries an `x-title` and `x-help`
-    /// in English and Japanese for the settings window (ADR-0109).
+    /// for the settings window, and no help states a default (ADR-0109).
     #[test]
-    fn every_key_has_bilingual_help() {
+    fn every_key_has_title_and_help() {
         let schema = plugin_sdk::config_schema::of::<super::NotifierConfig>().schema;
         let missing = plugin_sdk::config_schema::missing_help(&schema);
         assert!(missing.is_empty(), "{}", missing.join("\n"));
         let stated = plugin_sdk::config_schema::help_stating_defaults(&schema);
         assert!(stated.is_empty(), "help states a default: {stated:?}");
-        assert!(schema["x-category"]["ja"].is_string(), "{schema}");
+        assert!(schema["x-category"].is_string(), "{schema}");
     }
 }

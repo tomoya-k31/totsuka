@@ -10,37 +10,37 @@ use serde::Deserialize;
 
 /// orca agent_ide settings.
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
-#[schemars(extend("x-category" = {"en": "orca", "ja": "orca"}))]
+#[schemars(extend("x-category" = "orca"))]
 #[serde(deny_unknown_fields)]
 pub struct OrcaConfig {
     /// The `orca` executable (name on PATH or absolute path).
     #[serde(default = "default_orca_bin")]
     #[schemars(extend(
-        "x-title" = {"en": "orca command", "ja": "orca のコマンド"},
-        "x-help" = {"en": "The orca executable: a name on PATH or an absolute path.", "ja": "orca の実行ファイル。PATH 上の名前か絶対パス。"}
+        "x-title" = "orca command",
+        "x-help" = "The orca executable: a name on PATH or an absolute path."
     ))]
     pub orca_bin: String,
     /// The longest a single `orca` invocation may run before it is killed. A
     /// `terminal wait` is given its own `--timeout-ms` on top of this.
     #[serde(default = "default_request_timeout")]
     #[schemars(extend(
-        "x-title" = {"en": "Request timeout (seconds)", "ja": "リクエストのタイムアウト（秒）"},
-        "x-help" = {"en": "How long one orca command may take.", "ja": "orca のコマンド 1 回にかけてよい秒数。"}
+        "x-title" = "Request timeout (seconds)",
+        "x-help" = "How long one orca command may take."
     ))]
     pub request_timeout_secs: u64,
     /// How the agent's terminal tab is arranged.
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "Layout", "ja": "レイアウト"},
-        "x-help" = {"en": "How the agent's terminal tab is arranged.", "ja": "エージェントのターミナルタブの並べ方。"}
+        "x-title" = "Layout",
+        "x-help" = "How the agent's terminal tab is arranged."
     ))]
     pub layout: LayoutConfig,
     /// Whether the dispatch names the worktree after the task in orca's
     /// sidebar.
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "Worktree names", "ja": "worktree の名前"},
-        "x-help" = {"en": "Whether the worktree is named after the task in orca's sidebar.", "ja": "orca のサイドバーで worktree にタスクの名前を付けるか。"}
+        "x-title" = "Worktree names",
+        "x-help" = "Whether the worktree is named after the task in orca's sidebar."
     ))]
     pub identity: IdentityConfig,
 }
@@ -58,8 +58,8 @@ pub struct LayoutConfig {
     /// one click away. The split also takes orca's focus into the new pane.
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "Shell split", "ja": "シェルの分割"},
-        "x-help" = {"en": "Split a shell off the agent's terminal.", "ja": "エージェントのターミナルからシェルを分割する。"}
+        "x-title" = "Shell split",
+        "x-help" = "Split a shell off the agent's terminal."
     ))]
     pub shell: bool,
     /// `terminal split --direction`. Unset leaves orca's default. A closed
@@ -67,8 +67,8 @@ pub struct LayoutConfig {
     /// unsplit (the split itself is best-effort).
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "Split direction", "ja": "分割の向き"},
-        "x-help" = {"en": "The split's direction. Empty leaves orca's default.", "ja": "分割の向き。空なら orca の既定。"}
+        "x-title" = "Split direction",
+        "x-help" = "The split's direction. Empty leaves orca's default."
     ))]
     pub direction: Option<SplitDirection>,
 }
@@ -102,8 +102,8 @@ pub struct IdentityConfig {
     /// dispatch.
     #[serde(default = "default_true")]
     #[schemars(extend(
-        "x-title" = {"en": "Enabled", "ja": "有効"},
-        "x-help" = {"en": "Show the worktree as \"repo: title\".", "ja": "worktree を「リポジトリ: タイトル」と表示する。"}
+        "x-title" = "Enabled",
+        "x-help" = "Show the worktree as \"repo: title\"."
     ))]
     pub enabled: bool,
 }
@@ -236,14 +236,14 @@ mod tests {
 #[cfg(test)]
 mod schema_tests {
     /// Every key of `[orca]`, at any depth, carries an `x-title` and `x-help`
-    /// in English and Japanese for the settings window (ADR-0109).
+    /// for the settings window, and no help states a default (ADR-0109).
     #[test]
-    fn every_key_has_bilingual_help() {
+    fn every_key_has_title_and_help() {
         let schema = plugin_sdk::config_schema::of::<super::OrcaConfig>().schema;
         let missing = plugin_sdk::config_schema::missing_help(&schema);
         assert!(missing.is_empty(), "{}", missing.join("\n"));
         let stated = plugin_sdk::config_schema::help_stating_defaults(&schema);
         assert!(stated.is_empty(), "help states a default: {stated:?}");
-        assert!(schema["x-category"]["ja"].is_string(), "{schema}");
+        assert!(schema["x-category"].is_string(), "{schema}");
     }
 }

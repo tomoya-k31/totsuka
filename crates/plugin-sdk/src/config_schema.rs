@@ -2,7 +2,7 @@
 //! as the JSON Schema the menu bar app's settings window renders.
 //!
 //! Derive `schemars::JsonSchema` on the struct `initialize` deserializes, put
-//! `x-title` / `x-help` (`{en, ja}`) on every field with
+//! `x-title` / `x-help` (English strings) on every field with
 //! `#[schemars(extend(...))]` (and `x-secret = true` on secret references),
 //! then answer with [`of`]. Deriving from the struct serde reads is what keeps
 //! the schema from describing a key the plugin does not accept.
@@ -42,8 +42,7 @@ fn strip_docs(value: &mut Value, schemas: bool) {
     }
 }
 
-/// Every property, at any depth, that lacks an `x-title` or `x-help` in `en`
-/// or `ja` — for a plugin's own test, so a key added without help text fails
+/// Every property, at any depth, that lacks an `x-title` or `x-help` — for a plugin's own test, so a key added without help text fails
 /// there instead of showing up in the settings window as a bare name.
 pub fn missing_help(schema: &Value) -> Vec<String> {
     let mut missing = Vec::new();
@@ -80,9 +79,7 @@ fn collect_help(value: &Value, out: &mut Vec<String>) {
         Value::Object(map) => {
             for (key, child) in map {
                 if key == "x-help" {
-                    if let Some(texts) = child.as_object() {
-                        out.extend(texts.values().filter_map(Value::as_str).map(str::to_string));
-                    }
+                    out.extend(child.as_str().map(str::to_string));
                 } else {
                     collect_help(child, out);
                 }
@@ -100,10 +97,8 @@ fn walk(value: &Value, path: &str, missing: &mut Vec<String>) {
                 for (key, prop) in props {
                     let at = format!("{path}/{key}");
                     for keyword in ["x-title", "x-help"] {
-                        for lang in ["en", "ja"] {
-                            if !prop[keyword][lang].as_str().is_some_and(|s| !s.is_empty()) {
-                                missing.push(format!("{at}: {keyword}.{lang}"));
-                            }
+                        if !prop[keyword].as_str().is_some_and(|s| !s.is_empty()) {
+                            missing.push(format!("{at}: {keyword}"));
                         }
                     }
                     walk(prop, &at, missing);
@@ -129,8 +124,8 @@ mod tests {
     struct Sample {
         /// Developer docs that must not reach the settings window.
         #[schemars(extend(
-            "x-title" = {"en": "Token", "ja": "トークン"},
-            "x-help" = {"en": "The token.", "ja": "トークン。"},
+            "x-title" = "Token",
+            "x-help" = "The token.",
             "x-secret" = true
         ))]
         token: String,
@@ -164,8 +159,7 @@ mod tests {
             "{missing:?}"
         );
         assert!(help_stating_defaults(&schema).is_empty());
-        let stated =
-            serde_json::json!({"properties": {"a": {"x-help": {"en": "Default 3.", "ja": "x"}}}});
+        let stated = serde_json::json!({"properties": {"a": {"x-help": "Default 3."}}});
         assert_eq!(
             help_stating_defaults(&stated),
             vec!["Default 3.".to_string()]

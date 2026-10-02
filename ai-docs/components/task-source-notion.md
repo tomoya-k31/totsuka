@@ -89,4 +89,4 @@ manifest（`plugins/task-source-notion/plugin.toml`、`protocol_version = ">=0.7
 
 # 設定スキーマ（`config/schema`、[ADR-0109](/decisions/adr-0109-native-menubar-app.md)）
 
-マニフェストで `config_schema = true` を宣言し、`initialize` より前の `config/schema` に `[notion]` のスキーマ（`plugin_sdk::config_schema::of::<NotionConfig>()`）で答える。実装はSDK の `TaskSourceHandler::config_schema`。スキーマは serde が読む `NotionConfig` から schemars で導出するので、受け付けないキーは載らない。全キー（入れ子を含む）に `x-title` / `x-help`（英語・日本語）があることを `config.rs` の `schema_tests` が、`initialize` 前に答えることを適合キットの検査 10 が確かめる。`x-secret` を付けたフィールド: `token`。
+マニフェストで `config_schema = true` を宣言し、`initialize` より前の `config/schema` に `[notion]` のスキーマ（`plugin_sdk::config_schema::of::<NotionConfig>()`）で答える。実装はSDK の `TaskSourceHandler::config_schema`。スキーマは serde が読む `NotionConfig` から schemars で導出するので、受け付けないキーは載らない。全キー（入れ子を含む）に `x-title` / `x-help` があり、ヘルプに既定値を書いていないことを `config.rs` の `schema_tests` が、`initialize` 前に答えることを適合キットの検査 10 が確かめる。`x-secret` を付けたフィールド: `token`。

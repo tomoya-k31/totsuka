@@ -61,22 +61,22 @@ pub struct NotionPrompts {
     /// Sent when the workflow's profile is `triage`.
     #[serde(default = "default_triage_instructions")]
     #[schemars(extend(
-        "x-title" = {"en": "Triage", "ja": "triage"},
-        "x-help" = {"en": "Instructions for triage workflows. Remove the key to use the built-in text (an empty value is used as is).", "ja": "triage のワークフローへの指示。キーを消すと組み込みの文になる（空の値はそのまま使われる）。"}
+        "x-title" = "Triage",
+        "x-help" = "Instructions for triage workflows. Remove the key to use the built-in text (an empty value is used as is)."
     ))]
     pub triage_instructions: String,
     /// Sent when the workflow's profile is `design`.
     #[serde(default = "default_design_instructions")]
     #[schemars(extend(
-        "x-title" = {"en": "Design", "ja": "design"},
-        "x-help" = {"en": "Instructions for design workflows. Remove the key to use the built-in text (an empty value is used as is).", "ja": "design のワークフローへの指示。キーを消すと組み込みの文になる（空の値はそのまま使われる）。"}
+        "x-title" = "Design",
+        "x-help" = "Instructions for design workflows. Remove the key to use the built-in text (an empty value is used as is)."
     ))]
     pub design_instructions: String,
     /// Sent when the workflow's profile is `implement`.
     #[serde(default = "default_implement_instructions")]
     #[schemars(extend(
-        "x-title" = {"en": "Implement", "ja": "implement"},
-        "x-help" = {"en": "Instructions for implement workflows. Remove the key to use the built-in text (an empty value is used as is).", "ja": "implement のワークフローへの指示。キーを消すと組み込みの文になる（空の値はそのまま使われる）。"}
+        "x-title" = "Implement",
+        "x-help" = "Instructions for implement workflows. Remove the key to use the built-in text (an empty value is used as is)."
     ))]
     pub implement_instructions: String,
 }
@@ -187,8 +187,8 @@ pub struct PropertyMap {
     /// The `title` property (Notion's default is `Name`).
     #[serde(default = "default_title_prop")]
     #[schemars(extend(
-        "x-title" = {"en": "Title", "ja": "タイトル"},
-        "x-help" = {"en": "The title property.", "ja": "タイトルのプロパティ。"}
+        "x-title" = "Title",
+        "x-help" = "The title property."
     ))]
     pub title: String,
     /// The status property (`status` or `select`, see [`status_kind`]).
@@ -196,44 +196,44 @@ pub struct PropertyMap {
     /// [`status_kind`]: Self::status_kind
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "Status", "ja": "ステータス"},
-        "x-help" = {"en": "The status property.", "ja": "ステータスのプロパティ。"}
+        "x-title" = "Status",
+        "x-help" = "The status property."
     ))]
     pub status: Option<String>,
     /// The Notion property type backing [`status`](Self::status).
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "Status type", "ja": "ステータスの型"},
-        "x-help" = {"en": "Whether the status property is a status or a select.", "ja": "ステータスのプロパティが status 型か select 型か。"}
+        "x-title" = "Status type",
+        "x-help" = "Whether the status property is a status or a select."
     ))]
     pub status_kind: StatusKind,
     /// A `people` property holding assignees (F-08).
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "Assignee", "ja": "担当者"},
-        "x-help" = {"en": "A people property holding assignees.", "ja": "担当者を持つ people 型のプロパティ。"}
+        "x-title" = "Assignee",
+        "x-help" = "A people property holding assignees."
     ))]
     pub assignee: Option<String>,
     /// A `number`/`select`/`status` property holding priority.
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "Priority", "ja": "優先度"},
-        "x-help" = {"en": "A number, select or status property holding priority.", "ja": "優先度を持つ number・select・status 型のプロパティ。"}
+        "x-title" = "Priority",
+        "x-help" = "A number, select or status property holding priority."
     ))]
     pub priority: Option<String>,
     /// A property carrying a repository hint (`rich_text`/`select`/`url`, F-10).
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "Repository hint", "ja": "リポジトリの手がかり"},
-        "x-help" = {"en": "A property naming the task's repository.", "ja": "タスクのリポジトリを示すプロパティ。"}
+        "x-title" = "Repository hint",
+        "x-help" = "A property naming the task's repository."
     ))]
     pub repo_hint: Option<String>,
     /// A `rich_text` property carrying the body, when
     /// [`body_source`](NotionConfig::body_source) is `property`.
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "Body", "ja": "本文"},
-        "x-help" = {"en": "A rich_text property holding the body, when the body comes from a property.", "ja": "本文をプロパティから取るときの、本文を持つ rich_text 型のプロパティ。"}
+        "x-title" = "Body",
+        "x-help" = "A rich_text property holding the body, when the body comes from a property."
     ))]
     pub body: Option<String>,
 }
@@ -363,14 +363,14 @@ impl DatabaseConfig {
 
 /// Notion task-source settings.
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
-#[schemars(extend("x-category" = {"en": "Notion", "ja": "Notion"}))]
+#[schemars(extend("x-category" = "Notion"))]
 #[serde(deny_unknown_fields)]
 pub struct NotionConfig {
     /// Integration token (resolved by the orchestrator, F-65). Never touched by
     /// us beyond sending it as a bearer token.
     #[schemars(extend(
-        "x-title" = {"en": "Token", "ja": "トークン"},
-        "x-help" = {"en": "The Notion integration's token.", "ja": "Notion のインテグレーションのトークン。"},
+        "x-title" = "Token",
+        "x-help" = "The Notion integration's token.",
         "x-secret" = true
     ))]
     pub token: String,
@@ -388,30 +388,30 @@ pub struct NotionConfig {
     /// are ingestable (any assigned task is treated as someone else's).
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "Your user ID", "ja": "あなたのユーザー ID"},
-        "x-help" = {"en": "Your own Notion user ID, to recognise tasks assigned to you. Empty: only unassigned tasks are picked up.", "ja": "あなたに割り当てられたタスクを見分けるための、あなた自身の Notion のユーザー ID。空なら未割り当てのタスクだけを拾う。"}
+        "x-title" = "Your user ID",
+        "x-help" = "Your own Notion user ID, to recognise tasks assigned to you. Empty: only unassigned tasks are picked up."
     ))]
     pub notion_user_id: Option<String>,
     /// Property-name mapping onto the common schema (F-03).
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "Properties", "ja": "プロパティ"},
-        "x-help" = {"en": "Which database properties hold the title, status, assignee and so on.", "ja": "タイトル・ステータス・担当者などを、データベースのどのプロパティが持つか。"}
+        "x-title" = "Properties",
+        "x-help" = "Which database properties hold the title, status, assignee and so on."
     ))]
     pub property_map: PropertyMap,
     /// Where a task body comes from (F-03).
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "Body source", "ja": "本文の取り方"},
-        "x-help" = {"en": "Where a task's body comes from: the page content or a property.", "ja": "タスクの本文をどこから取るか。ページの中身か、プロパティか。"}
+        "x-title" = "Body source",
+        "x-help" = "Where a task's body comes from: the page content or a property."
     ))]
     pub body_source: BodySource,
     /// Status option names treated as "in progress" and therefore excluded from
     /// ingest (F-08).
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "In-progress statuses", "ja": "作業中のステータス"},
-        "x-help" = {"en": "Statuses that mean someone is already working on it; such tasks are not picked up.", "ja": "誰かがすでに作業中であることを表すステータス。この状態のタスクは拾わない。"}
+        "x-title" = "In-progress statuses",
+        "x-help" = "Statuses that mean someone is already working on it; such tasks are not picked up."
     ))]
     pub in_progress_statuses: Vec<String>,
     /// Maps a priority option name (for `select`/`status` priority properties)
@@ -419,36 +419,36 @@ pub struct NotionConfig {
     /// used directly and ignores this map.
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "Priority values", "ja": "優先度の値"},
-        "x-help" = {"en": "Numbers for priority options; higher runs first, e.g. High = 3.", "ja": "優先度の選択肢ごとの数値。大きいほど先に実行する。例: High = 3。"}
+        "x-title" = "Priority values",
+        "x-help" = "Numbers for priority options; higher runs first, e.g. High = 3."
     ))]
     pub priority_map: HashMap<String, i64>,
     /// The plugin instance name stamped onto each `Task.source`.
     #[serde(default = "default_source_name")]
     #[schemars(extend(
-        "x-title" = {"en": "Source name", "ja": "ソース名"},
-        "x-help" = {"en": "This source's name on tasks. Change it only to run two of this plugin.", "ja": "タスクに付くこのソースの名前。このプラグインを 2 つ動かすときだけ変える。"}
+        "x-title" = "Source name",
+        "x-help" = "This source's name on tasks. Change it only to run two of this plugin."
     ))]
     pub source_name: String,
     /// REST base URL (overridable for tests).
     #[serde(default = "default_api_url")]
     #[schemars(extend(
-        "x-title" = {"en": "API URL", "ja": "API の URL"},
-        "x-help" = {"en": "The API's base URL.", "ja": "API のベース URL。"}
+        "x-title" = "API URL",
+        "x-help" = "The API's base URL."
     ))]
     pub api_url: String,
     /// Pinned Notion API version header (`Notion-Version`).
     #[serde(default = "default_api_version")]
     #[schemars(extend(
-        "x-title" = {"en": "API version", "ja": "API のバージョン"},
-        "x-help" = {"en": "The Notion-Version header.", "ja": "Notion-Version ヘッダー。"}
+        "x-title" = "API version",
+        "x-help" = "The Notion-Version header."
     ))]
     pub api_version: String,
     /// Max retry attempts for retryable API failures.
     #[serde(default = "default_max_retries")]
     #[schemars(extend(
-        "x-title" = {"en": "Retries", "ja": "再試行回数"},
-        "x-help" = {"en": "How many times a failed API call that can be retried is retried.", "ja": "再試行できる API の失敗を何回まで再試行するか。"}
+        "x-title" = "Retries",
+        "x-help" = "How many times a failed API call that can be retried is retried."
     ))]
     pub max_retries: u32,
     /// Internal fetch cadence of the poll loop, in seconds (F-06). Moved
@@ -457,25 +457,25 @@ pub struct NotionConfig {
     /// unset (busy-spin guard, applied in the server).
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "Poll interval (seconds)", "ja": "取得の間隔（秒）"},
+        "x-title" = "Poll interval (seconds)",
         "x-placeholder" = "60",
-        "x-help" = {"en": "How often to look for new tasks.", "ja": "新しいタスクを探しにいく間隔。"}
+        "x-help" = "How often to look for new tasks."
     ))]
     pub poll_interval_secs: Option<u64>,
     /// Client-side request rate cap (requests/second) for the built-in
     /// throttle. Notion's public limit is ~3 rps.
     #[serde(default = "default_rate_limit")]
     #[schemars(extend(
-        "x-title" = {"en": "Requests per second", "ja": "毎秒のリクエスト数"},
-        "x-help" = {"en": "The most requests per second (Notion allows about 3).", "ja": "1 秒あたりのリクエスト数の上限（Notion の制限は約 3）。"}
+        "x-title" = "Requests per second",
+        "x-help" = "The most requests per second (Notion allows about 3)."
     ))]
     pub rate_limit_rps: u32,
     /// Instruction text overrides (#398). Every key falls back to the embedded
     /// default when omitted.
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "Instructions", "ja": "指示文"},
-        "x-help" = {"en": "The instructions given to the agent, by profile.", "ja": "エージェントへ渡す指示文。プロファイルごと。"}
+        "x-title" = "Instructions",
+        "x-help" = "The instructions given to the agent, by profile."
     ))]
     pub prompts: NotionPrompts,
     /// Named lookups a `trigger.filter` may reference as `@<name>` (#606).
@@ -488,8 +488,8 @@ pub struct NotionConfig {
     /// instead of this fortnight's answer.
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "Dynamic lookups", "ja": "動的な参照"},
-        "x-help" = {"en": "Named lookups a trigger filter can use as @name, e.g. the current sprint.", "ja": "トリガーの filter から @名前 で使える、名前付きの参照。例: 現在のスプリント。"}
+        "x-title" = "Dynamic lookups",
+        "x-help" = "Named lookups a trigger filter can use as @name, e.g. the current sprint."
     ))]
     pub dynamic: HashMap<String, DynamicRef>,
 }
@@ -508,16 +508,16 @@ pub struct DynamicRef {
     /// databases — a sprint list usually is not — but the token must be able
     /// to read it.
     #[schemars(extend(
-        "x-title" = {"en": "Database ID", "ja": "データベース ID"},
-        "x-help" = {"en": "The database to look in.", "ja": "参照するデータベース。"}
+        "x-title" = "Database ID",
+        "x-help" = "The database to look in."
     ))]
     pub database_id: String,
     /// The Notion filter that selects **exactly one** page. Zero and
     /// two-or-more are both errors: see `NotionClient::resolve_dynamic_ref`
     /// for why neither may degrade into "no condition".
     #[schemars(extend(
-        "x-title" = {"en": "Filter", "ja": "フィルター"},
-        "x-help" = {"en": "A Notion filter that selects exactly one page.", "ja": "ページをちょうど 1 つ選ぶ Notion のフィルター。"}
+        "x-title" = "Filter",
+        "x-help" = "A Notion filter that selects exactly one page."
     ))]
     pub filter: Value,
 }
@@ -924,14 +924,14 @@ mod tests {
 #[cfg(test)]
 mod schema_tests {
     /// Every key of `[notion]`, at any depth, carries an `x-title` and `x-help`
-    /// in English and Japanese for the settings window (ADR-0109).
+    /// for the settings window, and no help states a default (ADR-0109).
     #[test]
-    fn every_key_has_bilingual_help() {
+    fn every_key_has_title_and_help() {
         let schema = plugin_sdk::config_schema::of::<super::NotionConfig>().schema;
         let missing = plugin_sdk::config_schema::missing_help(&schema);
         assert!(missing.is_empty(), "{}", missing.join("\n"));
         let stated = plugin_sdk::config_schema::help_stating_defaults(&schema);
         assert!(stated.is_empty(), "help states a default: {stated:?}");
-        assert!(schema["x-category"]["ja"].is_string(), "{schema}");
+        assert!(schema["x-category"].is_string(), "{schema}");
     }
 }

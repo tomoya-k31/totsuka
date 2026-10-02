@@ -8,14 +8,14 @@ use serde::Deserialize;
 
 /// herdr agent_ide settings.
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
-#[schemars(extend("x-category" = {"en": "herdr", "ja": "herdr"}))]
+#[schemars(extend("x-category" = "herdr"))]
 #[serde(deny_unknown_fields)]
 pub struct HerdrConfig {
     /// Explicit socket path. Highest precedence when set.
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "Socket path", "ja": "ソケットのパス"},
-        "x-help" = {"en": "herdr's socket. Wins over the session when set.", "ja": "herdr のソケット。指定すると session より優先。"}
+        "x-title" = "Socket path",
+        "x-help" = "herdr's socket. Wins over the session when set."
     ))]
     pub socket_path: Option<String>,
     /// Named herdr session (resolves to
@@ -23,23 +23,23 @@ pub struct HerdrConfig {
     /// is unset.
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "Session", "ja": "セッション"},
-        "x-help" = {"en": "A named herdr session to use when no socket path is set.", "ja": "ソケットのパスが無いときに使う、名前付きの herdr セッション。"}
+        "x-title" = "Session",
+        "x-help" = "A named herdr session to use when no socket path is set."
     ))]
     pub session: Option<String>,
     /// How the dispatched task's panes are arranged (#356).
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "Layout", "ja": "レイアウト"},
-        "x-help" = {"en": "How the task's panes are arranged.", "ja": "タスクの pane の並べ方。"}
+        "x-title" = "Layout",
+        "x-help" = "How the task's panes are arranged."
     ))]
     pub layout: LayoutConfig,
     /// Whether dispatch tells herdr which repository and task a workspace is
     /// for (#417).
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "Workspace names", "ja": "ワークスペースの名前"},
-        "x-help" = {"en": "Whether herdr is told which repository and task a workspace is for.", "ja": "ワークスペースがどのリポジトリ・タスクのものかを herdr に伝えるか。"}
+        "x-title" = "Workspace names",
+        "x-help" = "Whether herdr is told which repository and task a workspace is for."
     ))]
     pub identity: IdentityConfig,
     /// Overrides for the program-basename → herdr `kind` mapping
@@ -62,15 +62,15 @@ pub struct HerdrConfig {
     /// only give the two a chance to disagree.
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "Program → kind", "ja": "プログラム → kind"},
-        "x-help" = {"en": "Tells herdr which agent a wrapper script is, e.g. my-claude = \"claude\".", "ja": "ラッパースクリプトがどのエージェントかを herdr に伝える。例: my-claude = \"claude\"。"}
+        "x-title" = "Program → kind",
+        "x-help" = "Tells herdr which agent a wrapper script is, e.g. my-claude = \"claude\"."
     ))]
     pub kind_map: HashMap<String, String>,
     /// Per-request timeout (seconds) for herdr socket calls.
     #[serde(default = "default_request_timeout")]
     #[schemars(extend(
-        "x-title" = {"en": "Request timeout (seconds)", "ja": "リクエストのタイムアウト（秒）"},
-        "x-help" = {"en": "How long one herdr call may take.", "ja": "herdr への呼び出し 1 回にかけてよい秒数。"}
+        "x-title" = "Request timeout (seconds)",
+        "x-help" = "How long one herdr call may take."
     ))]
     pub request_timeout_secs: u64,
 }
@@ -89,15 +89,15 @@ pub struct LayoutConfig {
     /// [`direction`](Self::direction)/[`ratio`](Self::ratio) irrelevant.
     #[serde(default = "default_layout_shell")]
     #[schemars(extend(
-        "x-title" = {"en": "Shell pane", "ja": "シェルの pane"},
-        "x-help" = {"en": "Put a shell pane beside the agent.", "ja": "エージェントの横にシェルの pane を置く。"}
+        "x-title" = "Shell pane",
+        "x-help" = "Put a shell pane beside the agent."
     ))]
     pub shell: bool,
     /// Which way the workspace is split.
     #[serde(default = "default_layout_direction")]
     #[schemars(extend(
-        "x-title" = {"en": "Split direction", "ja": "分割の向き"},
-        "x-help" = {"en": "down or right.", "ja": "down か right。"}
+        "x-title" = "Split direction",
+        "x-help" = "down or right."
     ))]
     pub direction: SplitDirection,
     /// The **agent** side's share of the split (the shell gets the rest).
@@ -109,8 +109,8 @@ pub struct LayoutConfig {
     /// [`HerdrAgent::dispatch`](crate::agent::HerdrAgent::dispatch).
     #[serde(default = "default_layout_ratio")]
     #[schemars(extend(
-        "x-title" = {"en": "Agent share", "ja": "エージェントの割合"},
-        "x-help" = {"en": "The agent's share of the split, e.g. 0.8.", "ja": "分割したときのエージェント側の割合。例: 0.8。"}
+        "x-title" = "Agent share",
+        "x-help" = "The agent's share of the split, e.g. 0.8."
     ))]
     pub ratio: f64,
 }
@@ -142,8 +142,8 @@ pub struct IdentityConfig {
     /// `totsuka {task.id}` and no tokens.
     #[serde(default = "default_identity_enabled")]
     #[schemars(extend(
-        "x-title" = {"en": "Enabled", "ja": "有効"},
-        "x-help" = {"en": "Name workspaces after their repository and task.", "ja": "ワークスペースにリポジトリとタスクの名前を付ける。"}
+        "x-title" = "Enabled",
+        "x-help" = "Name workspaces after their repository and task."
     ))]
     pub enabled: bool,
 }
@@ -438,14 +438,14 @@ mod tests {
 #[cfg(test)]
 mod schema_tests {
     /// Every key of `[herdr]`, at any depth, carries an `x-title` and `x-help`
-    /// in English and Japanese for the settings window (ADR-0109).
+    /// for the settings window, and no help states a default (ADR-0109).
     #[test]
-    fn every_key_has_bilingual_help() {
+    fn every_key_has_title_and_help() {
         let schema = plugin_sdk::config_schema::of::<super::HerdrConfig>().schema;
         let missing = plugin_sdk::config_schema::missing_help(&schema);
         assert!(missing.is_empty(), "{}", missing.join("\n"));
         let stated = plugin_sdk::config_schema::help_stating_defaults(&schema);
         assert!(stated.is_empty(), "help states a default: {stated:?}");
-        assert!(schema["x-category"]["ja"].is_string(), "{schema}");
+        assert!(schema["x-category"].is_string(), "{schema}");
     }
 }

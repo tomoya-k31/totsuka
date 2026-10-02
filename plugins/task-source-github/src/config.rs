@@ -56,30 +56,30 @@ pub struct GithubPrompts {
     /// Sent when the workflow's profile is `triage`.
     #[serde(default = "default_triage_instructions")]
     #[schemars(extend(
-        "x-title" = {"en": "Triage", "ja": "triage"},
-        "x-help" = {"en": "Instructions for triage workflows. Remove the key to use the built-in text (an empty value is used as is).", "ja": "triage のワークフローへの指示。キーを消すと組み込みの文になる（空の値はそのまま使われる）。"}
+        "x-title" = "Triage",
+        "x-help" = "Instructions for triage workflows. Remove the key to use the built-in text (an empty value is used as is)."
     ))]
     pub triage_instructions: String,
     /// Sent when the workflow's profile is `design`.
     #[serde(default = "default_design_instructions")]
     #[schemars(extend(
-        "x-title" = {"en": "Design", "ja": "design"},
-        "x-help" = {"en": "Instructions for design workflows. Remove the key to use the built-in text (an empty value is used as is).", "ja": "design のワークフローへの指示。キーを消すと組み込みの文になる（空の値はそのまま使われる）。"}
+        "x-title" = "Design",
+        "x-help" = "Instructions for design workflows. Remove the key to use the built-in text (an empty value is used as is)."
     ))]
     pub design_instructions: String,
     /// Sent when the workflow's profile is `implement`.
     #[serde(default = "default_implement_instructions")]
     #[schemars(extend(
-        "x-title" = {"en": "Implement", "ja": "implement"},
-        "x-help" = {"en": "Instructions for implement workflows. Remove the key to use the built-in text (an empty value is used as is).", "ja": "implement のワークフローへの指示。キーを消すと組み込みの文になる（空の値はそのまま使われる）。"}
+        "x-title" = "Implement",
+        "x-help" = "Instructions for implement workflows. Remove the key to use the built-in text (an empty value is used as is)."
     ))]
     pub implement_instructions: String,
     /// Sent instead of [`design_instructions`](Self::design_instructions) when
     /// the task **is a pull request** (#734).
     #[serde(default = "default_design_pr_instructions")]
     #[schemars(extend(
-        "x-title" = {"en": "Design (pull request)", "ja": "design（プルリクエスト）"},
-        "x-help" = {"en": "Design instructions when the task is a pull request. Remove the key to use the built-in text (an empty value is used as is).", "ja": "タスクがプルリクエストのときの design の指示。キーを消すと組み込みの文になる（空の値はそのまま使われる）。"}
+        "x-title" = "Design (pull request)",
+        "x-help" = "Design instructions when the task is a pull request. Remove the key to use the built-in text (an empty value is used as is)."
     ))]
     pub design_pr_instructions: String,
     /// Sent instead of
@@ -88,8 +88,8 @@ pub struct GithubPrompts {
     /// request", which on a pull request's own branch means a second one.
     #[serde(default = "default_implement_pr_instructions")]
     #[schemars(extend(
-        "x-title" = {"en": "Implement (pull request)", "ja": "implement（プルリクエスト）"},
-        "x-help" = {"en": "Implement instructions when the task is a pull request. Remove the key to use the built-in text (an empty value is used as is).", "ja": "タスクがプルリクエストのときの implement の指示。キーを消すと組み込みの文になる（空の値はそのまま使われる）。"}
+        "x-title" = "Implement (pull request)",
+        "x-help" = "Implement instructions when the task is a pull request. Remove the key to use the built-in text (an empty value is used as is)."
     ))]
     pub implement_pr_instructions: String,
 }
@@ -341,14 +341,14 @@ impl ProjectConfig {
 
 /// GitHub task-source settings.
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
-#[schemars(extend("x-category" = {"en": "GitHub", "ja": "GitHub"}))]
+#[schemars(extend("x-category" = "GitHub"))]
 #[serde(deny_unknown_fields)]
 pub struct GithubConfig {
     /// API token (resolved by the orchestrator, F-65). Never touched by us
     /// beyond sending it as a bearer token.
     #[schemars(extend(
-        "x-title" = {"en": "Token", "ja": "トークン"},
-        "x-help" = {"en": "A GitHub token that can read and write the project boards and issues.", "ja": "Project のボードと Issue を読み書きできる GitHub のトークン。"},
+        "x-title" = "Token",
+        "x-help" = "A GitHub token that can read and write the project boards and issues.",
         "x-secret" = true
     ))]
     pub token: String,
@@ -364,8 +364,8 @@ pub struct GithubConfig {
     /// SingleSelect field name holding the status column (F-02).
     #[serde(default = "default_status_field")]
     #[schemars(extend(
-        "x-title" = {"en": "Status field", "ja": "ステータスのフィールド"},
-        "x-help" = {"en": "The board's single-select field holding the status.", "ja": "ボードでステータスを持つ単一選択フィールド。"}
+        "x-title" = "Status field",
+        "x-help" = "The board's single-select field holding the status."
     ))]
     pub status_field: String,
     /// The operator's own login: detects self-assigned tasks (F-08) and is
@@ -373,37 +373,37 @@ pub struct GithubConfig {
     /// instance — assignees carry only the login, so two instances sharing
     /// one are indistinguishable to the adjudication (unsupported).
     #[schemars(extend(
-        "x-title" = {"en": "Your login", "ja": "あなたのログイン名"},
-        "x-help" = {"en": "Your own GitHub login. Tasks are claimed by assigning them to it.", "ja": "あなた自身の GitHub のログイン名。タスクはこのユーザーに割り当てて確保する。"}
+        "x-title" = "Your login",
+        "x-help" = "Your own GitHub login. Tasks are claimed by assigning them to it."
     ))]
     pub github_login: String,
     /// Status names treated as "in progress" and therefore excluded from
     /// ingest (F-08).
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "In-progress statuses", "ja": "作業中のステータス"},
-        "x-help" = {"en": "Statuses that mean someone is already working on it; such tasks are not picked up.", "ja": "誰かがすでに作業中であることを表すステータス。この状態のタスクは拾わない。"}
+        "x-title" = "In-progress statuses",
+        "x-help" = "Statuses that mean someone is already working on it; such tasks are not picked up."
     ))]
     pub in_progress_statuses: Vec<String>,
     /// The plugin instance name stamped onto each `Task.source`.
     #[serde(default = "default_source_name")]
     #[schemars(extend(
-        "x-title" = {"en": "Source name", "ja": "ソース名"},
-        "x-help" = {"en": "This source's name on tasks. Change it only to run two of this plugin.", "ja": "タスクに付くこのソースの名前。このプラグインを 2 つ動かすときだけ変える。"}
+        "x-title" = "Source name",
+        "x-help" = "This source's name on tasks. Change it only to run two of this plugin."
     ))]
     pub source_name: String,
     /// GraphQL endpoint (overridable for GitHub Enterprise / tests).
     #[serde(default = "default_api_url")]
     #[schemars(extend(
-        "x-title" = {"en": "API URL", "ja": "API の URL"},
-        "x-help" = {"en": "The GraphQL endpoint. Change it for GitHub Enterprise.", "ja": "GraphQL のエンドポイント。GitHub Enterprise では変える。"}
+        "x-title" = "API URL",
+        "x-help" = "The GraphQL endpoint. Change it for GitHub Enterprise."
     ))]
     pub api_url: String,
     /// Max retry attempts for retryable API failures.
     #[serde(default = "default_max_retries")]
     #[schemars(extend(
-        "x-title" = {"en": "Retries", "ja": "再試行回数"},
-        "x-help" = {"en": "How many times a failed API call that can be retried is retried.", "ja": "再試行できる API の失敗を何回まで再試行するか。"}
+        "x-title" = "Retries",
+        "x-help" = "How many times a failed API call that can be retried is retried."
     ))]
     pub max_retries: u32,
     /// Internal fetch cadence of the poll loop, in seconds (F-06). Moved
@@ -412,9 +412,9 @@ pub struct GithubConfig {
     /// unset (busy-spin guard, applied in the server).
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "Poll interval (seconds)", "ja": "取得の間隔（秒）"},
+        "x-title" = "Poll interval (seconds)",
         "x-placeholder" = "60",
-        "x-help" = {"en": "How often to look for new tasks.", "ja": "新しいタスクを探しにいく間隔。"}
+        "x-help" = "How often to look for new tasks."
     ))]
     pub poll_interval_secs: Option<u64>,
     /// Milliseconds to wait between writing the exclusion claim and reading
@@ -425,17 +425,17 @@ pub struct GithubConfig {
     /// production because a too-early read only costs one extra retry.
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "Claim check delay (ms)", "ja": "確保の確認までの待ち（ミリ秒）"},
+        "x-title" = "Claim check delay (ms)",
         "x-placeholder" = "750",
-        "x-help" = {"en": "How long to wait before reading back a claim.", "ja": "タスクを確保してから読み戻すまで待つ時間。"}
+        "x-help" = "How long to wait before reading back a claim."
     ))]
     pub claim_verify_delay_ms: Option<u64>,
     /// Instruction text overrides (#398). Every key falls back to the embedded
     /// default when omitted.
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "Instructions", "ja": "指示文"},
-        "x-help" = {"en": "The instructions given to the agent, by profile.", "ja": "エージェントへ渡す指示文。プロファイルごと。"}
+        "x-title" = "Instructions",
+        "x-help" = "The instructions given to the agent, by profile."
     ))]
     pub prompts: GithubPrompts,
 }
@@ -693,14 +693,14 @@ mod tests {
 #[cfg(test)]
 mod schema_tests {
     /// Every key of `[github]`, at any depth, carries an `x-title` and `x-help`
-    /// in English and Japanese for the settings window (ADR-0109).
+    /// for the settings window, and no help states a default (ADR-0109).
     #[test]
-    fn every_key_has_bilingual_help() {
+    fn every_key_has_title_and_help() {
         let schema = plugin_sdk::config_schema::of::<super::GithubConfig>().schema;
         let missing = plugin_sdk::config_schema::missing_help(&schema);
         assert!(missing.is_empty(), "{}", missing.join("\n"));
         let stated = plugin_sdk::config_schema::help_stating_defaults(&schema);
         assert!(stated.is_empty(), "help states a default: {stated:?}");
-        assert!(schema["x-category"]["ja"].is_string(), "{schema}");
+        assert!(schema["x-category"].is_string(), "{schema}");
     }
 }

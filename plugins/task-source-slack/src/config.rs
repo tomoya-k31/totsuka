@@ -101,37 +101,37 @@ enum LlmApiKind {
 struct RawLlmConfig {
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "API", "ja": "API"},
-        "x-help" = {"en": "chat (an OpenAI-compatible chat API) or decisions.", "ja": "chat（OpenAI 互換のチャット API）か decisions。"}
+        "x-title" = "API",
+        "x-help" = "chat (an OpenAI-compatible chat API) or decisions."
     ))]
     api: LlmApiKind,
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "Base URL", "ja": "ベース URL"},
-        "x-help" = {"en": "For chat: the API's base URL.", "ja": "chat の場合: API のベース URL。"}
+        "x-title" = "Base URL",
+        "x-help" = "For chat: the API's base URL."
     ))]
     base_url: Option<String>,
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "Endpoint", "ja": "エンドポイント"},
-        "x-help" = {"en": "For decisions: the Decisions API's full URL.", "ja": "decisions の場合: Decisions API の完全な URL。"}
+        "x-title" = "Endpoint",
+        "x-help" = "For decisions: the Decisions API's full URL."
     ))]
     endpoint: Option<String>,
     #[schemars(extend(
-        "x-title" = {"en": "Model", "ja": "モデル"},
-        "x-help" = {"en": "The model name.", "ja": "モデル名。"}
+        "x-title" = "Model",
+        "x-help" = "The model name."
     ))]
     model: String,
     #[schemars(extend(
-        "x-title" = {"en": "API key", "ja": "API キー"},
-        "x-help" = {"en": "The API key.", "ja": "API キー。"},
+        "x-title" = "API key",
+        "x-help" = "The API key.",
         "x-secret" = true
     ))]
     api_key: String,
     #[serde(default = "default_confidence_threshold")]
     #[schemars(extend(
-        "x-title" = {"en": "Confidence threshold", "ja": "確信度のしきい値"},
-        "x-help" = {"en": "Below this, you are asked in the thread instead.", "ja": "これ未満なら、代わりにスレッドで尋ねる。"}
+        "x-title" = "Confidence threshold",
+        "x-help" = "Below this, you are asked in the thread instead."
     ))]
     confidence_threshold: f64,
 }
@@ -267,14 +267,14 @@ pub struct ChannelGroup {
     /// Channel-name prefix, or a list of them (e.g. `"dev-frontend-"`,
     /// `["dev-", "team-"]`).
     #[schemars(extend(
-        "x-title" = {"en": "Channel prefix", "ja": "チャンネルの接頭辞"},
-        "x-help" = {"en": "A channel-name prefix, or a list of them, e.g. \"dev-\".", "ja": "チャンネル名の接頭辞。またはそのリスト。例: \"dev-\"。"}
+        "x-title" = "Channel prefix",
+        "x-help" = "A channel-name prefix, or a list of them, e.g. \"dev-\"."
     ))]
     pub prefix: ChannelPrefixes,
     /// Candidate repository names; each must exist in [`SlackConfig::repos`].
     #[schemars(extend(
-        "x-title" = {"en": "Repositories", "ja": "リポジトリ"},
-        "x-help" = {"en": "The candidate repositories for those channels.", "ja": "それらのチャンネルの候補のリポジトリ。"}
+        "x-title" = "Repositories",
+        "x-help" = "The candidate repositories for those channels."
     ))]
     pub repos: Vec<String>,
 }
@@ -286,23 +286,23 @@ pub struct ChannelGroup {
 pub struct RepoInfo {
     /// Repository name (as known to the orchestrator).
     #[schemars(extend(
-        "x-title" = {"en": "Name", "ja": "名前"},
-        "x-help" = {"en": "The repository's name.", "ja": "リポジトリの名前。"}
+        "x-title" = "Name",
+        "x-help" = "The repository's name."
     ))]
     pub name: String,
     /// One-line description fed to the LLM classifier.
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "Summary", "ja": "説明"},
-        "x-help" = {"en": "What the repository is about, for the classifier.", "ja": "分類器に渡す、リポジトリの説明。"}
+        "x-title" = "Summary",
+        "x-help" = "What the repository is about, for the classifier."
     ))]
     pub summary: Option<String>,
     /// Local checkout path; when set, the README head is added as classifier
     /// material.
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "Path", "ja": "パス"},
-        "x-help" = {"en": "The local clone; its README helps the classifier.", "ja": "ローカルのクローン。README が分類の手がかりになる。"}
+        "x-title" = "Path",
+        "x-help" = "The local clone; its README helps the classifier."
     ))]
     pub path: Option<String>,
 }
@@ -375,16 +375,16 @@ pub struct SlackPrompts {
     /// Reply-crafting directions carried as `Task.instructions`.
     #[serde(default = "default_reply_instructions")]
     #[schemars(extend(
-        "x-title" = {"en": "Reply instructions", "ja": "返信の指示"},
-        "x-help" = {"en": "Instructions for drafting a reply. Remove the key to use the built-in text (an empty value is used as is).", "ja": "返信を下書きするときの指示。キーを消すと組み込みの文になる（空の値はそのまま使われる）。"}
+        "x-title" = "Reply instructions",
+        "x-help" = "Instructions for drafting a reply. Remove the key to use the built-in text (an empty value is used as is)."
     ))]
     pub reply_instructions: String,
     /// Sent instead of [`reply_instructions`](Self::reply_instructions) when
     /// the matched workflow's profile is `implement` (#397/#398).
     #[serde(default = "default_implement_instructions")]
     #[schemars(extend(
-        "x-title" = {"en": "Implement", "ja": "implement"},
-        "x-help" = {"en": "Instructions for implement workflows. Remove the key to use the built-in text (an empty value is used as is).", "ja": "implement のワークフローへの指示。キーを消すと組み込みの文になる（空の値はそのまま使われる）。"}
+        "x-title" = "Implement",
+        "x-help" = "Instructions for implement workflows. Remove the key to use the built-in text (an empty value is used as is)."
     ))]
     pub implement_instructions: String,
     /// Sent instead of [`reply_instructions`](Self::reply_instructions) when
@@ -392,23 +392,23 @@ pub struct SlackPrompts {
     /// files an issue instead of answering or implementing.
     #[serde(default = "default_triage_instructions")]
     #[schemars(extend(
-        "x-title" = {"en": "Triage", "ja": "triage"},
-        "x-help" = {"en": "Instructions for triage workflows. Remove the key to use the built-in text (an empty value is used as is).", "ja": "triage のワークフローへの指示。キーを消すと組み込みの文になる（空の値はそのまま使われる）。"}
+        "x-title" = "Triage",
+        "x-help" = "Instructions for triage workflows. Remove the key to use the built-in text (an empty value is used as is)."
     ))]
     pub triage_instructions: String,
     /// Appended to [`reply_instructions`](Self::reply_instructions) only when
     /// [`SlackConfig::reply_style`] is set. Placeholder: `{style}`.
     #[serde(default = "default_reply_style_suffix")]
     #[schemars(extend(
-        "x-title" = {"en": "Reply style text", "ja": "返信の文体の文"},
-        "x-help" = {"en": "Added when a reply style is set; {style} is replaced. Remove the key to use the built-in text (an empty value is used as is).", "ja": "返信の文体を指定したときに足す文。{style} は置き換えられる。キーを消すと組み込みの文になる（空の値はそのまま使われる）。"}
+        "x-title" = "Reply style text",
+        "x-help" = "Added when a reply style is set; {style} is replaced. Remove the key to use the built-in text (an empty value is used as is)."
     ))]
     pub reply_style_suffix: String,
     /// The visible task body. Placeholders: `{sender}` `{channel}` `{text}`.
     #[serde(default = "default_body_template")]
     #[schemars(extend(
-        "x-title" = {"en": "Task body", "ja": "タスクの本文"},
-        "x-help" = {"en": "The task's body; {sender} {channel} {text} are replaced. Remove the key to use the built-in text (an empty value is used as is).", "ja": "タスクの本文。{sender} {channel} {text} は置き換えられる。キーを消すと組み込みの文になる（空の値はそのまま使われる）。"}
+        "x-title" = "Task body",
+        "x-help" = "The task's body; {sender} {channel} {text} are replaced. Remove the key to use the built-in text (an empty value is used as is)."
     ))]
     pub body_template: String,
     /// Attachment-section header, emitted only when the message carried
@@ -416,67 +416,67 @@ pub struct SlackPrompts {
     /// fetched — the plugin has no `files:read` scope.
     #[serde(default = "default_body_attachment_header")]
     #[schemars(extend(
-        "x-title" = {"en": "Attachments header", "ja": "添付の見出し"},
-        "x-help" = {"en": "Heads the attachment list; {count} is replaced. Remove the key to use the built-in text (an empty value is used as is).", "ja": "添付の一覧の見出し。{count} は置き換えられる。キーを消すと組み込みの文になる（空の値はそのまま使われる）。"}
+        "x-title" = "Attachments header",
+        "x-help" = "Heads the attachment list; {count} is replaced. Remove the key to use the built-in text (an empty value is used as is)."
     ))]
     pub body_attachment_header: String,
     /// One attachment line. Placeholder: `{file}` (name, MIME type, size and
     /// permalink, already composed).
     #[serde(default = "default_body_attachment_line")]
     #[schemars(extend(
-        "x-title" = {"en": "Attachment line", "ja": "添付の行"},
-        "x-help" = {"en": "One attachment; {file} is replaced. Remove the key to use the built-in text (an empty value is used as is).", "ja": "添付 1 件。{file} は置き換えられる。キーを消すと組み込みの文になる（空の値はそのまま使われる）。"}
+        "x-title" = "Attachment line",
+        "x-help" = "One attachment; {file} is replaced. Remove the key to use the built-in text (an empty value is used as is)."
     ))]
     pub body_attachment_line: String,
     /// The parent thread's permalink section, emitted only when the mention
     /// is a reply inside a thread (#683). Placeholder: `{url}`.
     #[serde(default = "default_body_thread_permalink")]
     #[schemars(extend(
-        "x-title" = {"en": "Thread link", "ja": "スレッドのリンク"},
-        "x-help" = {"en": "The parent thread's link; {url} is replaced. Remove the key to use the built-in text (an empty value is used as is).", "ja": "親スレッドのリンク。{url} は置き換えられる。キーを消すと組み込みの文になる（空の値はそのまま使われる）。"}
+        "x-title" = "Thread link",
+        "x-help" = "The parent thread's link; {url} is replaced. Remove the key to use the built-in text (an empty value is used as is)."
     ))]
     pub body_thread_permalink: String,
     /// Thread-context section header. Placeholder: `{count}`.
     #[serde(default = "default_body_thread_header")]
     #[schemars(extend(
-        "x-title" = {"en": "Thread header", "ja": "スレッドの見出し"},
-        "x-help" = {"en": "Heads the thread context; {count} is replaced. Remove the key to use the built-in text (an empty value is used as is).", "ja": "スレッドの文脈の見出し。{count} は置き換えられる。キーを消すと組み込みの文になる（空の値はそのまま使われる）。"}
+        "x-title" = "Thread header",
+        "x-help" = "Heads the thread context; {count} is replaced. Remove the key to use the built-in text (an empty value is used as is)."
     ))]
     pub body_thread_header: String,
     /// One thread-context line. Placeholder: `{line}`.
     #[serde(default = "default_body_thread_line")]
     #[schemars(extend(
-        "x-title" = {"en": "Thread line", "ja": "スレッドの行"},
-        "x-help" = {"en": "One thread message; {line} is replaced. Remove the key to use the built-in text (an empty value is used as is).", "ja": "スレッドのメッセージ 1 件。{line} は置き換えられる。キーを消すと組み込みの文になる（空の値はそのまま使われる）。"}
+        "x-title" = "Thread line",
+        "x-help" = "One thread message; {line} is replaced. Remove the key to use the built-in text (an empty value is used as is)."
     ))]
     pub body_thread_line: String,
     /// Emitted instead of the thread-context section when the fetch failed.
     #[serde(default = "default_body_thread_unavailable")]
     #[schemars(extend(
-        "x-title" = {"en": "Thread unavailable", "ja": "スレッドが読めないとき"},
-        "x-help" = {"en": "Shown when the thread could not be read. Remove the key to use the built-in text (an empty value is used as is).", "ja": "スレッドを読めなかったときに出す文。キーを消すと組み込みの文になる（空の値はそのまま使われる）。"}
+        "x-title" = "Thread unavailable",
+        "x-help" = "Shown when the thread could not be read. Remove the key to use the built-in text (an empty value is used as is)."
     ))]
     pub body_thread_unavailable: String,
     /// Classifier system prompt. Placeholder: `{repo_names}`.
     #[serde(default = "default_classifier_system")]
     #[schemars(extend(
-        "x-title" = {"en": "Classifier system prompt", "ja": "分類器のシステムプロンプト"},
-        "x-help" = {"en": "The classifier's system prompt; {repo_names} is replaced. Remove the key to use the built-in text (an empty value is used as is).", "ja": "分類器のシステムプロンプト。{repo_names} は置き換えられる。キーを消すと組み込みの文になる（空の値はそのまま使われる）。"}
+        "x-title" = "Classifier system prompt",
+        "x-help" = "The classifier's system prompt; {repo_names} is replaced. Remove the key to use the built-in text (an empty value is used as is)."
     ))]
     pub classifier_system: String,
     /// Classifier user message. Placeholders: `{mention_text}`
     /// `{thread_context}` `{catalog}`.
     #[serde(default = "default_classifier_user")]
     #[schemars(extend(
-        "x-title" = {"en": "Classifier message", "ja": "分類器へのメッセージ"},
-        "x-help" = {"en": "The classifier's message; {mention_text} {thread_context} {catalog} are replaced. Remove the key to use the built-in text (an empty value is used as is).", "ja": "分類器へのメッセージ。{mention_text} {thread_context} {catalog} は置き換えられる。キーを消すと組み込みの文になる（空の値はそのまま使われる）。"}
+        "x-title" = "Classifier message",
+        "x-help" = "The classifier's message; {mention_text} {thread_context} {catalog} are replaced. Remove the key to use the built-in text (an empty value is used as is)."
     ))]
     pub classifier_user: String,
     /// Retry turn after a malformed answer.
     #[serde(default = "default_classifier_correction")]
     #[schemars(extend(
-        "x-title" = {"en": "Classifier retry", "ja": "分類器への再依頼"},
-        "x-help" = {"en": "Sent when the classifier's answer could not be read. Remove the key to use the built-in text (an empty value is used as is).", "ja": "分類器の答えが読めなかったときに送る文。キーを消すと組み込みの文になる（空の値はそのまま使われる）。"}
+        "x-title" = "Classifier retry",
+        "x-help" = "Sent when the classifier's answer could not be read. Remove the key to use the built-in text (an empty value is used as is)."
     ))]
     pub classifier_correction: String,
 }
@@ -648,37 +648,37 @@ pub enum EventSource {
 pub struct GatewayConfig {
     /// GCP project holding the subscriptions.
     #[schemars(extend(
-        "x-title" = {"en": "GCP project", "ja": "GCP プロジェクト"},
-        "x-help" = {"en": "The GCP project holding the subscriptions.", "ja": "サブスクリプションがある GCP プロジェクト。"}
+        "x-title" = "GCP project",
+        "x-help" = "The GCP project holding the subscriptions."
     ))]
     pub project: String,
     /// Subscription carrying messages and reactions.
     #[schemars(extend(
-        "x-title" = {"en": "Subscription", "ja": "サブスクリプション"},
-        "x-help" = {"en": "The subscription for messages and reactions.", "ja": "メッセージとリアクションのサブスクリプション。"}
+        "x-title" = "Subscription",
+        "x-help" = "The subscription for messages and reactions."
     ))]
     pub subscription: String,
     /// Subscription carrying button presses. Separate because its retention
     /// has to clear `response_url`'s ~30-minute life while the other's is
     /// measured in days (ADR-0072 decision 5).
     #[schemars(extend(
-        "x-title" = {"en": "Button subscription", "ja": "ボタンのサブスクリプション"},
-        "x-help" = {"en": "The subscription for button presses.", "ja": "ボタン操作のサブスクリプション。"}
+        "x-title" = "Button subscription",
+        "x-help" = "The subscription for button presses."
     ))]
     pub block_actions_subscription: String,
     /// Pub/Sub base URL. Overridable so tests need no network.
     #[serde(default = "default_pubsub_url")]
     #[schemars(extend(
-        "x-title" = {"en": "Pub/Sub URL", "ja": "Pub/Sub の URL"},
-        "x-help" = {"en": "The Pub/Sub API's base URL.", "ja": "Pub/Sub の API のベース URL。"}
+        "x-title" = "Pub/Sub URL",
+        "x-help" = "The Pub/Sub API's base URL."
     ))]
     pub pubsub_url: String,
     /// Messages requested per `pull`. Pub/Sub caps the response at this many;
     /// it is not a promise that many exist.
     #[serde(default = "default_pull_max_messages")]
     #[schemars(extend(
-        "x-title" = {"en": "Messages per pull", "ja": "1 回の取得件数"},
-        "x-help" = {"en": "Messages requested per pull.", "ja": "1 回の pull で求めるメッセージ数。"}
+        "x-title" = "Messages per pull",
+        "x-help" = "Messages requested per pull."
     ))]
     pub pull_max_messages: u32,
 }
@@ -703,7 +703,7 @@ impl GatewayConfig {
 
 /// Slack task-source settings.
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
-#[schemars(extend("x-category" = {"en": "Slack", "ja": "Slack"}))]
+#[schemars(extend("x-category" = "Slack"))]
 #[serde(deny_unknown_fields)]
 pub struct SlackConfig {
     /// App-Level Token (`xapp-`) for Socket Mode. Required under
@@ -711,15 +711,15 @@ pub struct SlackConfig {
     /// [`EventSource::Gateway`], which opens no WebSocket.
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "App token", "ja": "App トークン"},
-        "x-help" = {"en": "The xapp- token, for Socket Mode.", "ja": "Socket Mode 用の xapp- トークン。"},
+        "x-title" = "App token",
+        "x-help" = "The xapp- token, for Socket Mode.",
         "x-secret" = true
     ))]
     pub app_token: Option<String>,
     /// User OAuth Token (`xoxp-`); replies are posted as the operator.
     #[schemars(extend(
-        "x-title" = {"en": "User token", "ja": "ユーザートークン"},
-        "x-help" = {"en": "The xoxp- token. Replies are posted as you.", "ja": "xoxp- トークン。返信はあなたとして投稿される。"},
+        "x-title" = "User token",
+        "x-help" = "The xoxp- token. Replies are posted as you.",
         "x-secret" = true
     ))]
     pub user_token: String,
@@ -728,16 +728,16 @@ pub struct SlackConfig {
     /// Slack notification of their own. Absent = nudges disabled (#305).
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "Bot token", "ja": "Bot トークン"},
-        "x-help" = {"en": "The xoxb- token. When set, the bot DMs you about drafts and choices.", "ja": "xoxb- トークン。指定すると、下書きや選択について Bot が DM で知らせる。"},
+        "x-title" = "Bot token",
+        "x-help" = "The xoxb- token. When set, the bot DMs you about drafts and choices.",
         "x-secret" = true
     ))]
     pub bot_token: Option<String>,
     /// The operator's own Slack user id (`U…`). Mentions of this user become
     /// tasks, and the TokenGuard refuses a token belonging to anyone else.
     #[schemars(extend(
-        "x-title" = {"en": "Your user ID", "ja": "あなたのユーザー ID"},
-        "x-help" = {"en": "Your own Slack user ID (U…). Mentions of you become tasks.", "ja": "あなた自身の Slack のユーザー ID（U…）。あなたへのメンションがタスクになる。"}
+        "x-title" = "Your user ID",
+        "x-help" = "Your own Slack user ID (U…). Mentions of you become tasks."
     ))]
     pub target_user_id: String,
     /// The user groups (`S…`) whose mentions this plugin answers, regardless
@@ -749,22 +749,22 @@ pub struct SlackConfig {
     /// How many recent thread messages to include as context.
     #[serde(default = "default_thread_context_limit")]
     #[schemars(extend(
-        "x-title" = {"en": "Thread context", "ja": "スレッドの文脈"},
-        "x-help" = {"en": "How many recent thread messages are included.", "ja": "含めるスレッドの直近のメッセージ数。"}
+        "x-title" = "Thread context",
+        "x-help" = "How many recent thread messages are included."
     ))]
     pub thread_context_limit: u32,
     /// Optional tone/style instruction injected into the task body.
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "Reply style", "ja": "返信の文体"},
-        "x-help" = {"en": "An optional tone or style for replies.", "ja": "返信の口調や文体の指定（任意）。"}
+        "x-title" = "Reply style",
+        "x-help" = "An optional tone or style for replies."
     ))]
     pub reply_style: Option<String>,
     /// The plugin instance name stamped onto each `Task.source`.
     #[serde(default = "default_source_name")]
     #[schemars(extend(
-        "x-title" = {"en": "Source name", "ja": "ソース名"},
-        "x-help" = {"en": "This source's name on tasks. Change it only to run two of this plugin.", "ja": "タスクに付くこのソースの名前。このプラグインを 2 つ動かすときだけ変える。"}
+        "x-title" = "Source name",
+        "x-help" = "This source's name on tasks. Change it only to run two of this plugin."
     ))]
     pub source_name: String,
     /// Repository-selection LLM. Required when more than one repository
@@ -773,16 +773,16 @@ pub struct SlackConfig {
     /// orchestrator's `[llm]` (supplied at `initialize`) fills in.
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "Repository classification", "ja": "リポジトリ分類"},
-        "x-help" = {"en": "An LLM for this source only. Empty uses the global repository classification.", "ja": "このソースだけで使う LLM。空なら全体のリポジトリ分類を使う。"}
+        "x-title" = "Repository classification",
+        "x-help" = "An LLM for this source only. Empty uses the global repository classification."
     ))]
     #[schemars(with = "Option<RawLlmConfig>")]
     pub llm: Option<LlmConfig>,
     /// Channel-prefix rules, checked before the LLM (first match wins).
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "Channel rules", "ja": "チャンネルの規則"},
-        "x-help" = {"en": "Channel-name prefixes mapped to repositories, checked first.", "ja": "チャンネル名の接頭辞とリポジトリの対応。最初に確かめる。"}
+        "x-title" = "Channel rules",
+        "x-help" = "Channel-name prefixes mapped to repositories, checked first."
     ))]
     pub channel_groups: Vec<ChannelGroup>,
     /// The repository a mention falls back to when no [`ChannelGroup`] covers
@@ -804,8 +804,8 @@ pub struct SlackConfig {
     /// that.
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "Fallback repository", "ja": "既定のリポジトリ"},
-        "x-help" = {"en": "The repository for channels no rule covers.", "ja": "どの規則にも当たらないチャンネルのリポジトリ。"}
+        "x-title" = "Fallback repository",
+        "x-help" = "The repository for channels no rule covers."
     ))]
     pub fallback_repo: Option<String>,
     /// Candidate repositories. Optional since #109: when omitted, the
@@ -813,39 +813,39 @@ pub struct SlackConfig {
     /// the candidates; an explicit list here always wins.
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "Repositories", "ja": "リポジトリ"},
-        "x-help" = {"en": "Candidate repositories. Empty uses the global repositories.", "ja": "候補のリポジトリ。空なら全体のリポジトリを使う。"}
+        "x-title" = "Repositories",
+        "x-help" = "Candidate repositories. Empty uses the global repositories."
     ))]
     pub repos: Vec<RepoInfo>,
     /// Slack Web API base URL (overridable for tests).
     #[serde(default = "default_api_url")]
     #[schemars(extend(
-        "x-title" = {"en": "API URL", "ja": "API の URL"},
-        "x-help" = {"en": "The API's base URL.", "ja": "API のベース URL。"}
+        "x-title" = "API URL",
+        "x-help" = "The API's base URL."
     ))]
     pub api_url: String,
     /// State-directory root for the persisted draft store (#122), replacing
     /// `${XDG_STATE_HOME:-~/.local/state}/totsuka` (overridable for tests).
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "State directory", "ja": "状態のディレクトリ"},
-        "x-help" = {"en": "Where drafts are kept. Empty means the default.", "ja": "下書きを保存する場所。空なら既定。"}
+        "x-title" = "State directory",
+        "x-help" = "Where drafts are kept. Empty means the default."
     ))]
     pub state_dir: Option<std::path::PathBuf>,
     /// Max retry attempts for retryable API failures.
     #[serde(default = "default_max_retries")]
     #[schemars(extend(
-        "x-title" = {"en": "Retries", "ja": "再試行回数"},
-        "x-help" = {"en": "How many times a failed API call that can be retried is retried.", "ja": "再試行できる API の失敗を何回まで再試行するか。"}
+        "x-title" = "Retries",
+        "x-help" = "How many times a failed API call that can be retried is retried."
     ))]
     pub max_retries: u32,
     /// Most messages the startup backfill recovers per watched channel
     /// (#617). Omitted means [`plugin_sdk::watch::DEFAULT_BACKFILL_COUNT`].
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "Backfill limit", "ja": "取りこぼしの回収件数"},
+        "x-title" = "Backfill limit",
         "x-placeholder" = "100",
-        "x-help" = {"en": "How many missed posts per watched channel are recovered on start.", "ja": "起動時に、見張っているチャンネルごとに取りこぼした投稿を何件まで回収するか。"}
+        "x-help" = "How many missed posts per watched channel are recovered on start."
     ))]
     pub watch_backfill_limit: Option<u32>,
     /// How old a missed post may be and still be recovered, in hours (#617).
@@ -856,16 +856,16 @@ pub struct SlackConfig {
     /// would recover the last `watch_backfill_limit` posts however old.
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "Backfill age (hours)", "ja": "取りこぼしの回収期間（時間）"},
+        "x-title" = "Backfill age (hours)",
         "x-placeholder" = "24",
-        "x-help" = {"en": "How old a missed post may be and still be recovered.", "ja": "取りこぼした投稿を何時間前のものまで回収するか。"}
+        "x-help" = "How old a missed post may be and still be recovered."
     ))]
     pub watch_backfill_max_age_hours: Option<u64>,
     /// Which transport delivers Slack events (#652). Default [`EventSource::Socket`].
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "Event source", "ja": "イベントの受け取り方"},
-        "x-help" = {"en": "socket (Socket Mode) or gateway (the Event Gateway).", "ja": "socket（Socket Mode）か gateway（Event Gateway）。"}
+        "x-title" = "Event source",
+        "x-help" = "socket (Socket Mode) or gateway (the Event Gateway)."
     ))]
     pub event_source: EventSource,
     /// Where the Event Gateway's Pub/Sub queues live. Required under
@@ -876,8 +876,8 @@ pub struct SlackConfig {
     /// with the consumer rather than with the schema both sides must agree on.
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "Event Gateway", "ja": "Event Gateway"},
-        "x-help" = {"en": "Where the Event Gateway's queues are. Needed for the gateway event source.", "ja": "Event Gateway のキューの場所。gateway で受け取るときに必要。"}
+        "x-title" = "Event Gateway",
+        "x-help" = "Where the Event Gateway's queues are. Needed for the gateway event source."
     ))]
     pub gateway: Option<GatewayConfig>,
     /// How old a queued event may be and still be filed, in hours.
@@ -891,18 +891,18 @@ pub struct SlackConfig {
     /// Only meaningful under [`EventSource::Gateway`].
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "Queue age (hours)", "ja": "キューの期限（時間）"},
+        "x-title" = "Queue age (hours)",
         "x-placeholder" = "24",
-        "x-help" = {"en": "How old a queued event may be and still be filed.", "ja": "キューのイベントを何時間前のものまで取り込むか。"}
+        "x-help" = "How old a queued event may be and still be filed."
     ))]
     pub drain_max_age_hours: Option<u64>,
     /// Most queued events filed per drain pass, `None` meaning
     /// [`DEFAULT_DRAIN_LIMIT`]. Only meaningful under [`EventSource::Gateway`].
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "Queue batch", "ja": "キューの取り込み件数"},
+        "x-title" = "Queue batch",
         "x-placeholder" = "100",
-        "x-help" = {"en": "The most queued events filed at a time.", "ja": "キューのイベントを一度に何件まで取り込むか。"}
+        "x-help" = "The most queued events filed at a time."
     ))]
     pub drain_limit: Option<u32>,
     /// Seconds between `conversations.history` polls of watched channels,
@@ -916,17 +916,17 @@ pub struct SlackConfig {
     /// [`EventSource::Gateway`]; Socket Mode gets these posts pushed to it.
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "Watch interval (seconds)", "ja": "見張りの間隔（秒）"},
+        "x-title" = "Watch interval (seconds)",
         "x-placeholder" = "60",
-        "x-help" = {"en": "How often watched channels are checked.", "ja": "見張っているチャンネルを確かめる間隔。"}
+        "x-help" = "How often watched channels are checked."
     ))]
     pub watch_poll_interval_secs: Option<u64>,
     /// Prompt text overrides (#318). Every key falls back to the embedded
     /// default when omitted.
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = {"en": "Texts", "ja": "文面"},
-        "x-help" = {"en": "The texts of instructions, task bodies and the classifier.", "ja": "指示・タスクの本文・分類器の文面。"}
+        "x-title" = "Texts",
+        "x-help" = "The texts of instructions, task bodies and the classifier."
     ))]
     pub prompts: SlackPrompts,
 }
@@ -2011,14 +2011,14 @@ mod tests {
 #[cfg(test)]
 mod schema_tests {
     /// Every key of `[slack]`, at any depth, carries an `x-title` and `x-help`
-    /// in English and Japanese for the settings window (ADR-0109).
+    /// for the settings window, and no help states a default (ADR-0109).
     #[test]
-    fn every_key_has_bilingual_help() {
+    fn every_key_has_title_and_help() {
         let schema = plugin_sdk::config_schema::of::<super::SlackConfig>().schema;
         let missing = plugin_sdk::config_schema::missing_help(&schema);
         assert!(missing.is_empty(), "{}", missing.join("\n"));
         let stated = plugin_sdk::config_schema::help_stating_defaults(&schema);
         assert!(stated.is_empty(), "help states a default: {stated:?}");
-        assert!(schema["x-category"]["ja"].is_string(), "{schema}");
+        assert!(schema["x-category"].is_string(), "{schema}");
     }
 }
