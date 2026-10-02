@@ -9,12 +9,9 @@
         "token": {
           "type": "string",
           "x-secret": true,
-          "x-category": { "en": "Authentication", "ja": "認証" },
-          "x-title": { "en": "API token", "ja": "API トークン" },
-          "x-help": {
-            "en": "A secret reference such as secret:github.token.",
-            "ja": "secret:github.token のような機密情報の参照。"
-          }
+          "x-category": "Authentication",
+          "x-title": "API token",
+          "x-help": "A secret reference such as secret:github.token."
         }
       },
       "required": ["token"]

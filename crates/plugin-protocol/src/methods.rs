@@ -566,10 +566,9 @@ pub struct ConfigSchemaResult {
     /// that uses `$ref` is shown as raw TOML instead of a form.
     ///
     /// Besides the standard keywords, the settings GUI reads four extension
-    /// keywords on any property (ADR-0109): `x-title` and `x-help` (objects
-    /// with `en` and `ja` strings), `x-category` (a group label, also
-    /// `{en, ja}`), and `x-secret` (`true` for a value that is a secret
-    /// reference). Unknown keywords are ignored, so a schema without them is
+    /// keywords on any property (ADR-0109): `x-title`, `x-help` and
+    /// `x-category` (a group label) as English strings, and `x-secret` (`true`
+    /// for a value that is a secret reference). Unknown keywords are ignored, so a schema without them is
     /// still valid — the field is shown by its key with no help text.
     pub schema: serde_json::Value,
 }
@@ -1329,7 +1328,7 @@ mod tests {
                     "token": {
                         "type": "string",
                         "x-secret": true,
-                        "x-help": { "en": "API token", "ja": "API トークン" },
+                        "x-help": "API token",
                     },
                 },
             }),
