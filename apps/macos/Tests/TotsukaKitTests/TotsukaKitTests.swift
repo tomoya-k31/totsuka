@@ -105,10 +105,10 @@ import Testing
             JSONValue.parse(
                 #"""
                 {"type":"object","required":["name"],"properties":{
-                  "name":{"type":"string","x-title":{"en":"Name","ja":"名前"}},
+                  "name":{"type":"string","x-title":"Name"},
                   "level":{"type":["string","null"]},
                   "mode":{"anyOf":[{"oneOf":[{"const":"plan"},{"const":"implement"}]},{"type":"null"}],
-                          "x-title":{"en":"Mode","ja":"モード"}},
+                          "x-title":"Mode"},
                   "token":{"type":"string","x-secret":true},
                   "tags":{"type":"array","items":{"type":"string"}},
                   "repos":{"type":"array","items":{"type":"object","properties":{"a":{"type":"string"}}}},
@@ -130,7 +130,7 @@ import Testing
         if case .list = kinds["repos"] {} else { Issue.record("repos is not a list") }
         if case .map = kinds["tools"] {} else { Issue.record("tools is not a map") }
         let mode = props.first { $0.key == "mode" }!.schema
-        #expect(localized(nonNull(mode), "x-title", language: "ja") == "モード")
+        #expect(annotation(nonNull(mode), "x-title") == "Mode")
     }
 
     @Test func newValuesFillOnlyRequiredKeys() throws {
@@ -174,5 +174,88 @@ import Testing
         #expect(env["PATH"] == "/a:/b")
         #expect(env["MULTI"] == "line1")
         #expect(env.count == 3)
+    }
+}
+
+@Suite struct SettingsLayoutTests {
+    @Test func pagesHaveAFixedOrderAndPluginsAreGrouped() throws {
+        let keys = ["version", "max_concurrency", "worktree", "repositories", "projects", "workflows",
+                    "default_tool", "tools", "llm", "log", "hooks", "plugins",
+                    "orca", "slack", "macos", "github", "herdr", "notion", "discord", "zeta"]
+        var props: [String: JSONValue] = [:]
+        for key in keys { props[key] = .object([:]) }
+        let layout = SettingsLayout(schema: .object(["properties": .object(props)]))
+        #expect(layout.general.keys == ["version", "max_concurrency", "worktree"])
+        #expect(layout.settings.map(\.id) == ["repositories", "projects", "workflows", "tools", "llm", "log", "hooks"])
+        #expect(layout.settings.first { $0.id == "tools" }?.keys == ["default_tool", "tools"])
+        #expect(layout.plugins.map(\.id)
+            == ["github", "notion", "slack", "discord", "herdr", "orca", "macos", "zeta"])
+    }
+
+    @Test func referencesOfferWhatIsConfigured() throws {
+        let config = try #require(JSONValue.parse(#"""
+            {"tools":{"claude-fast":{"kind":"claude"},"codex":{"kind":"codex"}},
+             "plugins":{"herdr":{"kind":"agent_ide"},"github":{"kind":"task_source"},"orca":{"kind":"agent_ide"}},
+             "projects":[{"name":"board"}],"repositories":[{"name":"web"},{"name":"cli"}]}
+            """#))
+        #expect(reference(for: ["workflows", "0", "tool"])?.0 == .tool)
+        #expect(reference(for: ["workflows", "2", "projects"])?.multiple == true)
+        #expect(reference(for: ["workflows", "0", "name"]) == nil)
+        #expect(referenceOptions(.tool, config: config) == ["claude", "codex", "opencode", "claude-fast"])
+        #expect(referenceOptions(.agent, config: config) == ["herdr", "orca"])
+        #expect(referenceOptions(.source, config: config) == ["github"])
+        #expect(referenceOptions(.project, config: config) == ["board"])
+        #expect(referenceOptions(.repository, config: config) == ["web", "cli"])
+    }
+}
+
+@Suite struct PlaceholderAndCleanupTests {
+    @Test func placeholdersComeFromXPlaceholderOrDefault() throws {
+        let explicit = try #require(JSONValue.parse(#"{"type":["integer","null"],"default":null,"x-placeholder":"4"}"#))
+        #expect(placeholder(explicit) == "4")
+        let derived = try #require(JSONValue.parse(#"{"type":"integer","default":30}"#))
+        #expect(placeholder(derived) == "30")
+        let none = try #require(JSONValue.parse(#"{"type":"string"}"#))
+        #expect(placeholder(none) == nil)
+    }
+
+    @Test func cleanupIsAChoiceOrDays() throws {
+        let cleanup = try #require(JSONValue.parse(#"""
+            {"anyOf":[{"anyOf":[{"oneOf":[{"const":"immediate"},{"const":"manual"}]},
+              {"type":"object","required":["retention_days"],"properties":{"retention_days":{"type":"integer"}}}]},
+              {"type":"null"}],"x-title":"Cleanup"}
+            """#))
+        guard case .choiceOrObject(let choices, let object) = fieldKind(cleanup) else {
+            Issue.record("not a choice-or-object: \(fieldKind(cleanup))")
+            return
+        }
+        #expect(choices == ["immediate", "manual"])
+        #expect(object["properties"]?["retention_days"] != nil)
+    }
+
+    @Test func decodesThePluginList() throws {
+        let json = #"[{"name":"github","installed":true,"enabled":true,"kind":"task_source","version":"0.3.0"}]"#
+        let list = try PluginInfo.decodeList(Data(json.utf8))
+        #expect(list == [PluginInfo(name: "github", kind: "task_source", enabled: true)])
+    }
+}
+
+@Suite struct FormHintsTests {
+    @Test func longTextsAreMultiline() {
+        #expect(isMultiline(["github", "prompts", "triage_instructions"], value: nil))
+        #expect(isMultiline(["workflows", "0", "rubric"], value: nil))
+        #expect(isMultiline(["x"], value: .string("a\nb")))
+        #expect(!isMultiline(["log", "level"], value: .string("info")))
+    }
+
+    @Test func optionalFieldsWithADefaultAreAdvanced() throws {
+        let withDefault = Property(key: "t", schema: .object(["default": .int(30)]), required: false)
+        let bool = Property(key: "b", schema: .object(["type": .string("boolean"), "default": .bool(true)]), required: false)
+        let required = Property(key: "r", schema: .object(["default": .int(1)]), required: true)
+        let bare = Property(key: "s", schema: .object(["type": .string("string")]), required: false)
+        #expect(isAdvanced(withDefault))
+        #expect(isAdvanced(bool))
+        #expect(!isAdvanced(required))
+        #expect(!isAdvanced(bare))
     }
 }

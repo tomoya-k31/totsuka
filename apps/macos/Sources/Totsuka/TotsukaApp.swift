@@ -22,10 +22,11 @@ struct TotsukaApp: App {
         } label: {
             MenuLabel(app: app)
         }
+        .menuBarExtraStyle(.window)
         Settings {
             SettingsView(model: settings, app: app)
         }
-        Window(L("Totsuka Logs", "Totsuka のログ"), id: "logs") {
+        Window("Totsuka Logs", id: "logs") {
             LogsView(app: app)
         }
     }
@@ -65,11 +66,15 @@ struct MenuLabel: View {
 
     var body: some View {
         HStack(spacing: 2) {
-            if let image = NSImage(named: "StatusBarTemplate") {
-                Image(nsImage: image)
-            } else {
-                Image(systemName: "bolt.circle")
+            // Dimmed while `run` is not running, so the state reads at a glance.
+            Group {
+                if let image = NSImage(named: "StatusBarTemplate") {
+                    Image(nsImage: image)
+                } else {
+                    Image(systemName: "bolt.circle")
+                }
             }
+            .opacity(app.runState == .running ? 1 : 0.45)
             if let count = app.menu?.attentionCount, count > 0 {
                 Text("\(count)")
             }
@@ -77,61 +82,114 @@ struct MenuLabel: View {
     }
 }
 
+/// The menu bar panel: a fixed-width window rather than a plain menu, whose
+/// width would follow its shortest labels.
 struct MenuContent: View {
     @ObservedObject var app: AppModel
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        Text(statusText)
-        if let notice = app.notice { Text(notice) }
-        if let error = app.menu?.error, app.runState == .running { Text(error) }
-        ForEach(app.menu?.degraded ?? [], id: \.self) { Text("⚠ " + $0) }
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: status.symbol)
+                    .foregroundStyle(status.color)
+                    .font(.title3)
+                Text(status.text)
+                    .font(.headline)
+                    .lineLimit(3)
+                Spacer()
+                toggle
+            }
+            if let notice = app.notice {
+                Label(notice, systemImage: "info.circle").font(.callout)
+            }
+            if let error = app.menu?.error, app.runState == .running {
+                Label(error, systemImage: "exclamationmark.circle").font(.callout)
+            }
+            ForEach(app.menu?.degraded ?? [], id: \.self) {
+                Label($0, systemImage: "exclamationmark.triangle").font(.callout)
+            }
+            if let rows = app.menu?.attention, !rows.isEmpty {
+                TaskSection(app: app, title: "Needs you", rows: rows)
+            }
+            if let rows = app.menu?.working, !rows.isEmpty {
+                TaskSection(app: app, title: "Working", rows: rows)
+            }
+            Divider()
+            if app.needsRestart {
+                Button("Updated — restart") { app.restartIntoUpdate() }
+            }
+            HStack {
+                SettingsLink { Label("Settings…", systemImage: "gearshape") }
+                Button {
+                    openWindow(id: "logs")
+                    NSApp.activate()
+                } label: {
+                    Label("Logs", systemImage: "doc.text")
+                }
+                Spacer()
+                Button { app.quit() } label: { Label("Quit", systemImage: "power") }
+            }
+            .buttonStyle(.borderless)
+        }
+        .padding(14)
+        .frame(width: 320)
+    }
 
+    /// One button for starting and stopping (and stopping now, once a stop is
+    /// under way). Nothing to press while another `run` holds the lock.
+    @ViewBuilder private var toggle: some View {
         switch app.runState {
         case .stopped, .failed:
-            Button(L("Start", "起動")) { Task { await app.start() } }
+            Button { Task { await app.start() } } label: {
+                Label("Start", systemImage: "play.fill")
+            }
+            .buttonStyle(.borderedProminent)
         case .running, .starting, .restarting:
-            Button(L("Stop", "停止")) { app.stop() }
+            Button { app.stop() } label: { Label("Stop", systemImage: "stop.fill") }
+                .buttonStyle(.bordered)
         case .stopping:
-            Button(L("Stop now", "すぐに停止")) { app.forceStop() }
+            Button { app.forceStop() } label: {
+                Label("Stop now", systemImage: "xmark.octagon")
+            }
+            .buttonStyle(.bordered)
         case .external:
             EmptyView()
         }
-
-        if let rows = app.menu?.attention, !rows.isEmpty {
-            Divider()
-            Text(L("Needs you", "要対応"))
-            ForEach(rows) { TaskMenu(app: app, row: $0) }
-        }
-        if let rows = app.menu?.working, !rows.isEmpty {
-            Divider()
-            Text(L("Working", "作業中"))
-            ForEach(rows) { TaskMenu(app: app, row: $0) }
-        }
-
-        Divider()
-        if app.needsRestart {
-            Button(L("Updated — restart", "更新済み・再起動")) { app.restartIntoUpdate() }
-        }
-        SettingsLink { Text(L("Settings…", "設定…")) }
-        Button(L("Logs", "ログ")) {
-            openWindow(id: "logs")
-            NSApp.activate()
-        }
-        Button(L("Quit", "終了")) { app.quit() }
     }
 
-    private var statusText: String {
+    private var status: (symbol: String, color: Color, text: String) {
         switch app.runState {
-        case .stopped: return L("Stopped", "停止中")
-        case .starting: return L("Starting…", "起動中…")
-        case .running: return app.menu?.availability == "degraded"
-            ? L("Running (degraded)", "稼働中（縮退）") : L("Running", "稼働中")
-        case .stopping: return L("Stopping…", "停止中…")
+        case .stopped:
+            return ("circle", .secondary, "Stopped")
+        case .starting:
+            return ("arrow.triangle.2.circlepath", .orange, "Starting…")
+        case .running:
+            return app.menu?.availability == "degraded"
+                ? ("exclamationmark.circle.fill", .yellow, "Running (degraded)")
+                : ("circle.fill", .green, "Running")
+        case .stopping:
+            return ("arrow.triangle.2.circlepath", .orange, "Stopping…")
         case .restarting(let at):
-            return L("Restarting at ", "再起動予定: ") + at.formatted(date: .omitted, time: .standard)
-        case .failed(let message): return message
-        case .external: return L("Running outside the app", "アプリの外で稼働中")
+            return ("arrow.clockwise.circle", .orange,
+                    "Restarting at " + at.formatted(date: .omitted, time: .standard))
+        case .failed(let message):
+            return ("exclamationmark.triangle.fill", .red, message)
+        case .external:
+            return ("circle.fill", .blue, "Running outside the app")
+        }
+    }
+}
+
+struct TaskSection: View {
+    @ObservedObject var app: AppModel
+    let title: String
+    let rows: [MenuRow]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title).font(.caption).foregroundStyle(.secondary)
+            ForEach(rows) { TaskMenu(app: app, row: $0) }
         }
     }
 }
@@ -143,11 +201,21 @@ struct TaskMenu: View {
     let row: MenuRow
 
     var body: some View {
-        Menu("#\(row.taskId) \(row.title)") {
-            Text("\(row.workflow) · \(row.state)")
-            Button(L("Focus", "前面に出す")) { app.focus(String(row.taskId)) }
-            Button(L("Retry", "やり直す")) { app.retry(row.taskId) }
-            Button(L("Cancel…", "取り消す…")) { app.cancel(row) }
+        HStack {
+            VStack(alignment: .leading, spacing: 1) {
+                Text("#\(row.taskId) \(row.title)").lineLimit(1)
+                Text("\(row.workflow) · \(row.state)").font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Menu {
+                Button("Focus") { app.focus(String(row.taskId)) }
+                Button("Retry") { app.retry(row.taskId) }
+                Button("Cancel…") { app.cancel(row) }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
         }
     }
 }
@@ -163,7 +231,7 @@ struct LogsView: View {
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-            Button(L("Open log folder", "ログのフォルダを開く")) {
+            Button("Open log folder") {
                 let dir = stateDirectory(environment: app.cli?.environment ?? [:])
                     .appendingPathComponent("logs")
                 NSWorkspace.shared.open(dir)

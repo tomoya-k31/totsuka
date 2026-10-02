@@ -4,7 +4,7 @@ title: ADR-0113 ネイティブ macOS メニューバーアプリが run を子�
 description: "SwiftBar 向けの `totsuka menu` だけでは届かない 2 つの要件（アプリ名義のネイティブ通知と、config.toml の GUI 編集）のため、SwiftUI のメニューバーアプリ（apps/macos/）を足す決定。run は `--secrets-stdin` 付きの子プロセスとして起動し終了コードで再起動を判断、通知は `run --events-jsonl` の stdout、設定画面は JSON Schema（core は schemars、プラグインは新メソッド config/schema）から生成し読み書きは CLI 経由。Developer Program に加入しないため ad-hoc 署名の .app を release tarball に同梱して formula で配る。ADR-0065 の「Swift アプリ」却下を部分的に覆す。"
 resource: https://github.com/tomoya-k31/totsuka/tree/main/apps/macos
 tags: [decision, macos, menubar, notifier, config, protocol, distribution, adr]
-generated: { by: claude-code/opus-5.5, at: 2026-10-01T23:32:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-03T02:38:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -26,7 +26,7 @@ stable。gh stack の 5 層で入れる。本 ADR は 1 層目（プロトコル
 ADR-0065 は「要件が UI の自由度を必要としない」ことを理由に Swift アプリを却下し、SwiftBar のプラグイン書式を吐く `totsuka menu` を選んだ。その後、次の 2 つが要件になった:
 
 - **通知をアプリ名義で出し、クリックを受ける。** 今の通知は notifier-macos プラグインの osascript（クリック不可）か terminal-notifier（別アプリの名義）で、どちらも totsuka の通知として許可・管理できない
-- **`config.toml` を GUI で設定する。** カテゴリごとに 1 項目ずつ手入力し、項目ごとにヘルプ（英語・日本語、OS の言語に合わせる）を出す。設定が通るまで `run` を起動させない
+- **`config.toml` を GUI で設定する。** カテゴリごとに 1 項目ずつ手入力し、項目ごとにヘルプを出す。設定が通るまで `run` を起動させない
 
 どちらも SwiftBar の上では作れない。一方で、アプリが `run` を監督する前提の下準備は #753〜#756 で済んでいる: SIGTERM / SIGHUP での graceful 停止（#753）、親プロセスから stdin で機密を受け取る `--secrets-stdin` と `secret:<name>`（[ADR-0100](/decisions/adr-0100-secrets-stdin.md)）、起動時エラーの終了コード（[ADR-0095](/decisions/adr-0095-run-startup-exit-codes.md)）、タスク操作のエンドポイント（[ADR-0094](/decisions/adr-0094-task-control-endpoints.md)）。GitHub トークンは無期限トークンで運用する（#756 の選択肢 a）。
 
@@ -40,7 +40,7 @@ Apple Developer Program には**加入しない**。それでも友人に配り�
 - ソースは同じリポジトリの **`apps/macos/`**。CLI のフラグ・JSON の形・config スキーマと同じ PR で追従できるようにするため
 - プロジェクトは **XcodeGen（`project.yml`）**。`.xcodeproj` は生成物としてコミットしない（pbxproj の衝突を避ける）
 - ロジックは SwiftPM のパッケージ（`apps/macos/Package.swift` の `TotsukaKit`）に置き、`swift test` で試す。Command Line Tools だけの環境でもテストとアプリ本体のビルドが通る（アセットカタログだけは Xcode の `actool` が要るので、出荷する `.app` は CI の `xcodebuild` がビルドする）
-- アプリ自身の文言も `{en, ja}` を OS の言語で選ぶ（`L(en, ja)`）。String Catalog は Command Line Tools でコンパイルできず、スキーマの `x-*` と同じ選び方にそろえた
+- **文言は英語だけ**（アプリの UI もスキーマのラベル・ヘルプも）。当初は英語・日本語を OS の言語で選ぶ設計だったが、設定のキー（`max_concurrency` など）と並べたとき、訳語よりも原語のほうがエンジニアには直感的だったため、実機で見て英語だけにした
 - 表示名 `Totsuka`、bundle ID `io.github.tomoya-k31.totsuka`。Dock に出さず（`LSUIElement`）、ログイン項目は `SMAppService.mainApp`
 
 ## 2. run の監督

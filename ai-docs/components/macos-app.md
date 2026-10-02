@@ -4,7 +4,7 @@ title: Totsuka.app（macOS メニューバーアプリ）
 description: "apps/macos/ の SwiftUI メニューバーアプリ（ADR-0109）。totsuka run --watch --secrets-stdin --events-jsonl を子プロセスとして監督し（終了コードで再起動を判断）、通知をアプリ名義で出し、config schema / get / set / unset で config.toml を GUI 編集する。ロジックは SwiftPM の TotsukaKit（swift test）、出荷する .app は XcodeGen の project.yml から CI がビルドする。"
 resource: https://github.com/tomoya-k31/totsuka/tree/main/apps/macos
 tags: [macos, swift, swiftui, menubar, app, notifier, config]
-generated: { by: claude-code/opus-5.5, at: 2026-10-01T23:31:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-03T02:38:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -32,7 +32,7 @@ owner: tomoya-k31
 - **外部の run**: exit 5 の後は `menu --json` がロックの解放（`down`）を見たところで引き継ぐ
 - **通知**: `run` の stdout の `notify` 行を、`config get` で読んだ `[macos]` のフィルタ（ワークフロー別 → 全体 → 既定オン）に通してから `UserNotifications` で出す。クリックは `totsuka focus <task_id>`
 - **メニュー**: 10 秒ごとと通知のたびに `menu --json`。要対応・作業中の各行に focus / retry / cancel（確認付き）。verify は置かない
-- **設定**: `config schema` の `x-category` ごとに並べ、節点の種類（`fieldKind`）でフォームを作る。入力は 1 キーずつ `config set` / `unset`（JSON Pointer）。`x-secret` は Keychain に保存して `secret:<名前>` を書く（名前は `secretName`: キーパスのセグメントを `.` でつなぎ、`[A-Za-z0-9-]` 以外は `_XX` に逃がす一対一の符号化）。設定の書き込みは 1 本ずつ順に流す（同時に走ると、後の書き込みが先の編集を消すため）。`x-raw` や型の決まらないテーブルは JSON で編集する。「確認」で `config validate --secrets-stdin` を流す
+- **設定**: サイドバーは固定の順（`SettingsLayout`: General / Check、Settings にリポジトリ・プロジェクト・ワークフロー・AI ツール・分類・ログ・フック、Plugins に GitHub / Notion・Slack / Discord・herdr / orca・通知）。リポジトリ・プロジェクト・ワークフロー・AI ツールは行の右端の＋で追加し、項目は下に字下げして並ぶ。各ページは grouped の `Form` でラベルと入力欄をそろえ、節点の種類（`fieldKind`）で入力を選ぶ。任意で既定値のある項目は畳んだ **Advanced** に入れ、既定値は空欄の placeholder に出す（`x-placeholder` かスキーマの `default`）。他の設定を指す項目（ワークフローの AI ツール・エージェント・プロジェクト、リポジトリのプロジェクト、プロジェクトのソースなど、`reference(for:)`）は設定済みの名前から選ぶ。指示文やプロンプトは複数行の入力欄にする。プラグインのページは先頭の Plugin 節で有効・無効と共通設定（`[plugins.<name>]`、`kind` は出さない）を扱う。UI は英語だけ。入力は 1 キーずつ `config set` / `unset`（JSON Pointer）。`x-secret` は Keychain に保存して `secret:<名前>` を書く（名前は `secretName`: キーパスのセグメントを `.` でつなぎ、`[A-Za-z0-9-]` 以外は `_XX` に逃がす一対一の符号化）。設定の書き込みは 1 本ずつ順に流す（同時に走ると、後の書き込みが先の編集を消すため）。`x-raw` や型の決まらないテーブルは JSON で編集する。「確認」で `config validate --secrets-stdin` を流す
 - **更新**: 自分のバンドルが消えたら（`brew upgrade` と cleanup）メニューに「更新済み・再起動」を出し、CLI の隣の `Totsuka.app` を開いて自分は終わる。起動時に、ログイン項目が有効なら登録し直して新しい場所へ移す
 
 # テスト

@@ -10,6 +10,9 @@ public indirect enum FieldKind: Equatable, Sendable {
     /// `secret:<name>`.
     case secret
     case choice([String])
+    /// One of `choices`, or a table of the given schema instead (a cleanup
+    /// policy: a name, or `{ retention_days = N }`).
+    case choiceOrObject([String], object: JSONValue)
     case stringList
     /// A table with known keys.
     case object([Property])
@@ -29,18 +32,9 @@ public struct Property: Equatable, Sendable, Identifiable {
     public var id: String { key }
 }
 
-/// The language the `{en, ja}` texts are shown in: Japanese when it is the
-/// user's first preferred language, English otherwise.
-public var preferredLanguage: String {
-    (Locale.preferredLanguages.first ?? "en").hasPrefix("ja") ? "ja" : "en"
-}
-
-/// A `{en, ja}` text of `keyword` on `schema`, in `language` (English when the
-/// language is missing).
-public func localized(_ schema: JSONValue, _ keyword: String, language: String = preferredLanguage)
-    -> String?
-{
-    schema[keyword]?[language]?.string ?? schema[keyword]?["en"]?.string
+/// A text annotation (`x-title`, `x-help`, `x-category`) on `schema`.
+public func annotation(_ schema: JSONValue, _ keyword: String) -> String? {
+    schema[keyword]?.string
 }
 
 /// The schema without its `null` alternative: `Option<T>` arrives as
@@ -69,6 +63,12 @@ public func fieldKind(_ schema: JSONValue) -> FieldKind {
     if s["x-raw"]?.bool == true { return .raw(reason: s["x-schema-error"]?.string) }
     if s["x-secret"]?.bool == true { return .secret }
     if let choices = enumChoices(s) { return .choice(choices) }
+    if let alternatives = s["anyOf"]?.array, alternatives.count == 2,
+        let choices = alternatives.lazy.compactMap(enumChoices).first,
+        let object = alternatives.first(where: { $0["properties"] != nil })
+    {
+        return .choiceOrObject(choices, object: object)
+    }
     switch s["type"]?.string {
     case "boolean": return .bool
     case "integer": return .integer
@@ -123,7 +123,7 @@ public func newValue(for schema: JSONValue) -> JSONValue {
     case .integer: return .int(0)
     case .number: return .double(0)
     case .string, .secret: return .string("")
-    case .choice(let choices): return .string(choices.first ?? "")
+    case .choice(let choices), .choiceOrObject(let choices, _): return .string(choices.first ?? "")
     case .stringList, .list: return .array([])
     case .map, .raw: return .object([:])
     case .object(let properties):
@@ -131,4 +131,46 @@ public func newValue(for schema: JSONValue) -> JSONValue {
         for p in properties where p.required { object[p.key] = newValue(for: p.schema) }
         return .object(object)
     }
+}
+
+/// The text an empty field shows: `x-placeholder` (a default the code
+/// decides), else the schema's own `default` (one serde knows).
+public func placeholder(_ schema: JSONValue) -> String? {
+    let node = nonNull(schema)
+    if let text = node["x-placeholder"]?.string ?? schema["x-placeholder"]?.string { return text }
+    switch node["default"] ?? schema["default"] {
+    case .string(let s)?: return s
+    case .int(let i)?: return String(i)
+    case .double(let d)?: return String(d)
+    default: return nil
+    }
+}
+
+/// One row of `totsuka plugin list --json`.
+public struct PluginInfo: Decodable, Equatable, Sendable {
+    public let name: String
+    public let kind: String
+    public let enabled: Bool
+
+    public static func decodeList(_ data: Data) throws -> [PluginInfo] {
+        try JSONDecoder().decode([PluginInfo].self, from: data)
+    }
+}
+
+/// Whether a text field is long enough to deserve a multi-line editor:
+/// instruction and prompt texts by their key, and any value that already
+/// spans lines.
+public func isMultiline(_ segments: [String], value: JSONValue?) -> Bool {
+    if value?.string?.contains("\n") == true { return true }
+    let key = segments.last ?? ""
+    return segments.contains("prompts") || key.hasSuffix("_instructions")
+        || ["rubric", "initial_prompt", "reply_style", "summary"].contains(key)
+}
+
+/// Whether a property belongs under "Advanced": optional, with a default the
+/// field already shows. What a person must fill in, or may want to without a
+/// default to fall back on, stays visible.
+public func isAdvanced(_ property: Property) -> Bool {
+    !property.required && placeholder(property.schema) != nil
+        || !property.required && nonNull(property.schema)["default"]?.bool != nil
 }

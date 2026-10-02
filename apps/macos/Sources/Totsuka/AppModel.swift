@@ -3,10 +3,6 @@ import ServiceManagement
 import TotsukaKit
 import UserNotifications
 
-/// The texts of the app's own UI, in the user's language — the same `{en, ja}`
-/// choice the settings window makes for the schema's texts.
-func L(_ en: String, _ ja: String) -> String { preferredLanguage == "ja" ? ja : en }
-
 /// Everything the menu shows and does: the supervised `run`, its
 /// notifications, the polled `menu --json` (ADR-0109 §2–§4).
 @MainActor
@@ -70,9 +66,7 @@ final class AppModel: ObservableObject {
         var env = runEnvironment(login: login, own: ProcessInfo.processInfo.environment)
         if !pathOverride.isEmpty { env["PATH"] = pathOverride }
         guard let binary = locateTotsuka(override: binaryOverride, environment: env) else {
-            notice = L(
-                "totsuka was not found → install it with Homebrew, or set its path in Settings",
-                "totsuka が見つからない → Homebrew で入れるか、設定でパスを指定する")
+            notice = "totsuka was not found → install it with Homebrew, or set its path in Settings"
             return
         }
         cli = TotsukaCLI(binary: binary, environment: env)
@@ -97,14 +91,10 @@ final class AppModel: ObservableObject {
         switch compareVersions(app: app, cli: installed) {
         case .match: break
         case .warn:
-            notice = L(
-                "totsuka \(installed.0).\(installed.1).\(installed.2) differs from the app (\(appVersion)) → brew upgrade totsuka",
-                "totsuka \(installed.0).\(installed.1).\(installed.2) とアプリ（\(appVersion)）の版が違う → brew upgrade totsuka")
+            notice = "totsuka \(installed.0).\(installed.1).\(installed.2) differs from the app (\(appVersion)) → brew upgrade totsuka"
         case .block:
             versionBlocked = true
-            notice = L(
-                "totsuka \(installed.0).x does not match the app (\(appVersion)) → brew upgrade totsuka",
-                "totsuka \(installed.0).x とアプリ（\(appVersion)）のメジャー版が違うので起動しない → brew upgrade totsuka")
+            notice = "totsuka \(installed.0).x does not match the app (\(appVersion)) → brew upgrade totsuka"
         }
     }
 
@@ -122,7 +112,7 @@ final class AppModel: ObservableObject {
         guard runState == .starting else { return }
         guard let check, check.status == 0 else {
             let output = [check?.stdoutText, check?.stderrText].compactMap { $0 }.joined()
-            fail(L("The configuration does not pass → open Settings", "設定が通らない → 設定を開く")
+            fail("The configuration does not pass → open Settings"
                 + "\n" + output.trimmingCharacters(in: .whitespacesAndNewlines))
             return
         }
@@ -200,12 +190,10 @@ final class AppModel: ObservableObject {
                 [weak self] _ in Task { @MainActor in await self?.start() }
             }
         case .fail(.configuration):
-            fail(L("Configuration or secrets were refused (exit 4) → open Settings",
-                   "設定か機密情報が受け付けられなかった（exit 4）→ 設定を開く")
+            fail("Configuration or secrets were refused (exit 4) → open Settings"
                 + "\n" + recentLog())
         case .fail(.usage):
-            fail(L("totsuka refused the app's arguments (exit 2) → update both",
-                   "totsuka がアプリの引数を受け付けなかった（exit 2）→ 両方を更新する")
+            fail("totsuka refused the app's arguments (exit 2) → update both"
                 + "\n" + recentLog())
         case .externalRun:
             runState = .external
@@ -235,10 +223,8 @@ final class AppModel: ObservableObject {
         let seen = defaults.string(forKey: "keychainVersion")
         if let seen, seen != appVersion {
             let alert = NSAlert()
-            alert.messageText = L("Keychain access", "キーチェーンへのアクセス")
-            alert.informativeText = L(
-                "Totsuka was updated, so macOS will ask once more for its saved secrets. Choose “Always Allow”.",
-                "Totsuka が更新されたので、保存した機密情報について macOS がもう一度確認する。「常に許可」を選ぶ。")
+            alert.messageText = "Keychain access"
+            alert.informativeText = "Totsuka was updated, so macOS will ask once more for its saved secrets. Choose “Always Allow”."
             NSApp.activate()
             alert.runModal()
         }
@@ -247,7 +233,7 @@ final class AppModel: ObservableObject {
             defaults.set(appVersion, forKey: "keychainVersion")
             return map
         } catch {
-            fail(L("Keychain: ", "キーチェーン: ") + String(describing: error))
+            fail("Keychain: " + String(describing: error))
             return nil
         }
     }
@@ -275,12 +261,12 @@ final class AppModel: ObservableObject {
 
     private func eventLabel(_ event: String) -> String {
         switch event {
-        case "waiting_input": return L("Waiting for your input", "入力を待っている")
-        case "done": return L("Done", "完了")
-        case "failed": return L("Failed", "失敗")
-        case "pending": return L("Waiting for a repository choice", "リポジトリの選択を待っている")
-        case "escalated": return L("Handed to you", "あなたに渡された")
-        case "verification_pending": return L("Waiting for your verification", "検収を待っている")
+        case "waiting_input": return "Waiting for your input"
+        case "done": return "Done"
+        case "failed": return "Failed"
+        case "pending": return "Waiting for a repository choice"
+        case "escalated": return "Handed to you"
+        case "verification_pending": return "Waiting for your verification"
         default: return event
         }
     }
@@ -332,10 +318,10 @@ final class AppModel: ObservableObject {
 
     func cancel(_ row: MenuRow) {
         let alert = NSAlert()
-        alert.messageText = L("Cancel this task?", "このタスクを取り消すか？")
+        alert.messageText = "Cancel this task?"
         alert.informativeText = row.title
-        alert.addButton(withTitle: L("Cancel task", "取り消す"))
-        alert.addButton(withTitle: L("Keep", "やめる"))
+        alert.addButton(withTitle: "Cancel task")
+        alert.addButton(withTitle: "Keep")
         NSApp.activate()
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         Task { await act(["task", "cancel", String(row.taskId)]) }
