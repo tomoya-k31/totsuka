@@ -152,20 +152,30 @@ struct MenuContent: View {
                 Button("Updated — restart") { app.restartIntoUpdate() }
             }
             HStack {
-                // No settings window: config.toml is edited in $EDITOR, and the
-                // log followed in $TERMINAL (ADR-0113 §5).
-                Button { app.openSettings() } label: { Label("Settings…", systemImage: "gearshape") }
-                    .help("Open config.toml in $EDITOR")
-                Button { app.openLogs() } label: { Label("Logs", systemImage: "doc.text") }
-                    .help("Follow totsuka run's output in $TERMINAL")
+                // A development build has no version (see `checkVersion`).
+                if !app.appVersion.isEmpty {
+                    Text("v\(app.appVersion)").font(.caption2).foregroundStyle(.tertiary)
+                }
                 Spacer()
                 Menu {
-                    Toggle("Open at login", isOn: Binding(
-                        get: { app.launchesAtLogin }, set: { app.launchesAtLogin = $0 }))
-                    Button("Forget saved secrets…") { app.forgetSecrets() }
+                    // No settings window: config.toml is edited in $EDITOR, and
+                    // the log followed in $TERMINAL (ADR-0113 §5).
+                    Button { app.openSettings() } label: { Label("Settings…", systemImage: "gearshape") }
+                        .help("Open config.toml in $EDITOR")
+                    Button { app.openLogs() } label: { Label("Logs", systemImage: "doc.text") }
+                        .help("Follow totsuka run's output in $TERMINAL")
+                    Divider()
+                    Toggle(isOn: Binding(
+                        get: { app.launchesAtLogin }, set: { app.launchesAtLogin = $0 })
+                    ) { Label("Open at login", systemImage: "person.badge.clock") }
+                    Button { app.forgetSecrets() } label: {
+                        Label("Forget saved secrets…", systemImage: "key.slash")
+                    }
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
+                // Menu items drop a Label's icon unless asked for it.
+                .labelStyle(.titleAndIcon)
                 .menuStyle(.borderlessButton)
                 .fixedSize()
                 Button { app.quit() } label: { Label("Quit", systemImage: "power") }
