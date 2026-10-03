@@ -461,7 +461,6 @@ struct FieldRows: View {
     let segments: [String]
     let properties: [Property]
     var depth = 1
-    @State private var showAdvanced = false
 
     var body: some View {
         let advanced = properties.filter(isAdvanced)
@@ -470,12 +469,46 @@ struct FieldRows: View {
                                 schema: prop.schema, required: prop.required, depth: depth))
         }
         if !advanced.isEmpty {
-            DisclosureGroup("Advanced", isExpanded: $showAdvanced) {
+            Collapsible(expanded: false) { Text("Advanced") } content: {
                 ForEach(advanced) { prop in
                     AnyView(FieldEditor(model: model, segments: segments + [prop.key],
                                         schema: prop.schema, required: prop.required, depth: depth))
                 }
             }
+        }
+    }
+}
+
+/// A collapsible run of form rows. Not `DisclosureGroup`: in a grouped `Form`
+/// that only takes clicks on its chevron and packs the rows it reveals without
+/// the form's row spacing. Here the whole header row toggles, and the revealed
+/// rows are ordinary rows of the form, indented under the header.
+struct Collapsible<Label: View, Content: View>: View {
+    @State private var expanded: Bool
+    private let label: Label
+    private let content: Content
+
+    init(expanded: Bool = true, @ViewBuilder label: () -> Label, @ViewBuilder content: () -> Content) {
+        _expanded = State(initialValue: expanded)
+        self.label = label()
+        self.content = content()
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .rotationEffect(.degrees(expanded ? 90 : 0))
+            label
+            Spacer(minLength: 0)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() } }
+        .accessibilityAddTraits(.isButton)
+        .accessibilityValue(expanded ? "expanded" : "collapsed")
+        if expanded {
+            Group { content }.padding(.leading, 18)
         }
     }
 }
@@ -491,7 +524,6 @@ struct FieldEditor: View {
     @State private var text = ""
     @State private var newKey = ""
     @State private var showingHelp = false
-    @State private var expanded = true
 
     private var node: JSONValue { nonNull(schema) }
     private var value: JSONValue? { model.value(at: segments) }
@@ -608,14 +640,16 @@ struct FieldEditor: View {
             if depth == 0 {
                 Section { FieldRows(model: model, segments: segments, properties: props) } header: { label }
             } else {
-                DisclosureGroup(isExpanded: $expanded) {
+                Collapsible { label } content: {
                     FieldRows(model: model, segments: segments, properties: props, depth: depth + 1)
-                } label: { label }
+                }
             }
         case .list(let item):
             group {
                 ForEach(Array((value?.array ?? []).enumerated()), id: \.offset) { index, element in
-                    DisclosureGroup(element["name"]?.string ?? "#\(index + 1)") {
+                    Collapsible(expanded: false) {
+                        Text(element["name"]?.string ?? "#\(index + 1)")
+                    } content: {
                         AnyView(FieldEditor(model: model, segments: segments + [String(index)],
                                             schema: item, required: true, depth: depth + 1))
                         Button("Remove", role: .destructive) {
@@ -630,7 +664,7 @@ struct FieldEditor: View {
         case .map(let valueSchema):
             group {
                 ForEach((value?.object ?? [:]).keys.sorted(), id: \.self) { key in
-                    DisclosureGroup(key) {
+                    Collapsible(expanded: false) { Text(key) } content: {
                         AnyView(FieldEditor(model: model, segments: segments + [key],
                                             schema: valueSchema, required: true, depth: depth + 1))
                         Button("Remove", role: .destructive) {
@@ -672,7 +706,7 @@ struct FieldEditor: View {
         if depth == 0 {
             Section { rows } header: { label }
         } else {
-            DisclosureGroup(isExpanded: $expanded) { rows } label: { label }
+            Collapsible { label } content: { rows }
         }
     }
 
