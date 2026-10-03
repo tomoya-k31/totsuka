@@ -77,6 +77,7 @@ struct MenuLabel: View {
         let frame = !needsYou && working && !Self.frames.isEmpty
             ? Self.frames[tick % Self.frames.count]
             : NSImage(named: "StatusBarTemplate")
+                ?? NSImage(systemSymbolName: "bolt.circle", accessibilityDescription: nil)
         if let frame {
             // Half a second on, half a second faint. Dimmed while no `run` is
             // running, so the state reads at a glance; an outside `run`

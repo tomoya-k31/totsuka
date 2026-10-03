@@ -4,7 +4,7 @@ title: Totsuka.app（macOS メニューバーアプリ）
 description: "apps/macos/ の SwiftUI メニューバーアプリ（ADR-0113）。totsuka run --watch --events-jsonl（config に secret: があれば --secrets-stdin 付き）を子プロセスとして監督し（終了コードで再起動を判断）、通知をアプリ名義で出す。設定画面は持たず、config.toml を $TERMINAL の $EDITOR で開き、run の stderr を $TERMINAL で tail -F する。機密は Start 時に Keychain に無い secret:<名前> を尋ねる（[github].token の secret は、選べば Start のたびに gh auth token から取る。ADR-0114）。ロジックは SwiftPM の TotsukaKit（swift test）、出荷する .app は XcodeGen の project.yml から CI がビルドする。"
 resource: https://github.com/tomoya-k31/totsuka/tree/main/apps/macos
 tags: [macos, swift, swiftui, menubar, app, notifier, config]
-generated: { by: claude-code/opus-5.5, at: 2026-10-03T12:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-04T01:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
