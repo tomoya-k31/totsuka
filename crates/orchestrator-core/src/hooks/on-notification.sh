@@ -26,6 +26,14 @@ if tools_missing; then
 fi
 
 session_id="$(printf '%s' "$input" | jq -r '.session_id // ""')"
+# One id per prompt, stable across curl retries / spool re-sends (they replay
+# this payload). Claude Code's Notification input carries none, and with an
+# empty one every later prompt in the session shared the first one's
+# idempotency key and was dropped as a duplicate — so only the first prompt
+# ever marked the task as awaiting approval. Codex's PermissionRequest has a
+# tool_use_id; otherwise this invocation's time and pid name the prompt.
+prompt_id="$(printf '%s' "$input" | jq -r '.tool_use_id // ""')"
+[ -n "$prompt_id" ] || prompt_id="n-$(iso_now)-$$"
 message="$(printf '%s' "$input" | jq -r 'if .message then .message elif .tool_name then "permission_prompt: \(.tool_name)" else "" end')"
 
 payload="$(jq -cn \
@@ -33,7 +41,8 @@ payload="$(jq -cn \
   --arg session_id "$session_id" \
   --arg ts "$(iso_now)" \
   --arg message "$message" \
-  '{job_id: $job_id, session_id: $session_id, hook_event_name: "Notification", ts: $ts, message: $message}')"
+  --arg prompt_id "$prompt_id" \
+  '{job_id: $job_id, session_id: $session_id, prompt_id: $prompt_id, hook_event_name: "Notification", ts: $ts, message: $message}')"
 
 post_event "$payload"
 exit 0

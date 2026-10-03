@@ -57,6 +57,7 @@ Apple Developer Program には**加入しない**。それでも友人に配り�
 ## 3. 状態表示とメニュー
 
 - 状態は `totsuka menu --json`（`MenuModel`）を流用する。SwiftBar 版は残す（CLI だけで使う人の経路）。行にリポジトリと経過時間を出すため、`--json` の各行に `repo` と取り込み時刻 `created_at` を足した
+- **許可を求めて止まっているタスクは「Needs you」に出す。** 状態は `running` のまま（R-08 は変えない）で、許可待ちは `run` のメモリにしか無かったので、`run` が `health.json` の `awaiting_approval` に載せ、`menu` が要対応に数えて `waiting_for: "approval"` を付ける。許可に答えた後はターンの終わりまでフックが何も来なかったため、`PostToolUse` フックを足して最初のツール実行で外す。DB の最後の信号から推す案は、許可した後も作業中のタスクを「Needs you」に残すので採らない。あわせて、同じセッションの 2 回目以降の許可プロンプトが冪等キーの重複として捨てられていた不具合を直した（`on-notification.sh` がプロンプトごとに `prompt_id` を付ける）
 - メニューの操作は focus・cancel（確認付き）・retry。**CLI の `totsuka focus` / `task cancel` / `task retry` を呼ぶ**（当初は UDS へ直接 POST する案だったが、CLI がソケットの場所と hook-token（[ADR-0099](/decisions/adr-0099-generated-hook-token.md)。#785 で機密の参照ではなくなった）をすでに解決するので、同じ処理を Swift に持たない。ADR-0094 のエンドポイントは CLI の向こうで使われる）。**`task verify` は置かない**（取り消せない操作なので ADR-0065 と同じ判断）
 
 ## 4. 通知

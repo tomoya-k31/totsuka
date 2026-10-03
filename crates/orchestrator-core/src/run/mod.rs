@@ -1017,10 +1017,14 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         let Some(path) = self.settings.health_path.as_ref() else {
             return;
         };
+        let mut awaiting_approval: Vec<i64> =
+            self.awaiting_approval.iter().map(|id| id.0).collect();
+        awaiting_approval.sort_unstable();
         let health = RunHealth {
             pid: std::process::id(),
             recorded_at: self.clock.now_rfc3339(),
             degraded: self.degradations(),
+            awaiting_approval,
         };
         if let Err(e) = run_health::write(path, &health) {
             tracing::warn!(path = %path.display(), "could not publish run health: {e}");
@@ -1227,6 +1231,23 @@ mod health_tests {
         let health = published(&dir);
         assert_eq!(health.pid, std::process::id());
         assert!(!health.is_degraded(), "{health:?}");
+    }
+
+    /// A task stopped at a permission prompt is published (ascending), so
+    /// `totsuka menu` can count it as needing attention; once the mark clears,
+    /// so does the field.
+    #[tokio::test]
+    async fn tasks_awaiting_approval_are_published() {
+        let dir = test_support::scratch("health_awaiting");
+        let mut engine = engine_with_health(&dir).await;
+        engine.awaiting_approval.insert(TaskId(9));
+        engine.awaiting_approval.insert(TaskId(3));
+        engine.cycle().await.unwrap();
+        assert_eq!(published(&dir).awaiting_approval, vec![3, 9]);
+
+        engine.awaiting_approval.clear();
+        engine.cycle().await.unwrap();
+        assert!(published(&dir).awaiting_approval.is_empty());
     }
 
     /// The reason this feature exists: the process is alive and looks fine,

@@ -153,6 +153,14 @@ pub struct RunHealth {
     pub recorded_at: String,
     /// Everything currently wrong. Empty means healthy.
     pub degraded: Vec<Degradation>,
+    /// Running tasks whose agent is stopped at a permission prompt (task ids,
+    /// ascending). They stay `running` and keep their slot — approval-waiting
+    /// is not question-waiting (R-08) — but a human has to act, so the menu
+    /// counts them as needing attention. Known only to the live `run` (no
+    /// state change records it), which is why it travels here. Absent from a
+    /// run older than the field.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub awaiting_approval: Vec<i64>,
 }
 
 impl RunHealth {
@@ -238,6 +246,7 @@ mod tests {
             pid: 4821,
             recorded_at: "2026-08-28T00:00:00Z".to_string(),
             degraded,
+            awaiting_approval: Vec::new(),
         }
     }
 
@@ -369,6 +378,7 @@ mod staleness_tests {
             pid: 1,
             recorded_at: recorded_at.to_string(),
             degraded: Vec::new(),
+            awaiting_approval: Vec::new(),
         }
     }
 

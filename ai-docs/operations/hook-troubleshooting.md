@@ -73,7 +73,7 @@ parse 不能行を含むスプールファイルは**削除されず** `<name>.c
 タスクは次のいずれかで `Escalated`（**非終端**）へ遷移し、notifier 通知（🚨 エスカレーション）と `diagnostics/snapshot` を伴う（[notifier-macos](/components/notifier-macos.md)）:
 
 - **UNKNOWN 連続 ≥ `block_retry_limit`（既定 3）**: マーカー無し完了が続いた（DB から再計算・フック自己申告は不使用, D-02）。
-- **タイムアウト**: 最後のシグナルから `workflow.timeout_secs` 秒無音（`sweep_signal_timeouts`, D-03）。既定 `0` は掃引なし。最後のシグナルが権限 / idle プロンプト（`Notification`）なら数えない（[ADR-0086](/decisions/adr-0086-timeout-default-off.md)）。
+- **タイムアウト**: 最後のシグナルから `workflow.timeout_secs` 秒無音（`sweep_signal_timeouts`, D-03）。既定 `0` は掃引なし。最後のシグナルが権限 / idle プロンプト（`Notification`）なら数えない（[ADR-0086](/decisions/adr-0086-timeout-default-off.md)）。`on-notification.sh` はプロンプトごとに `prompt_id` を付ける（codex は `tool_use_id`、無ければ時刻と pid）—— 空だと同じセッションの 2 回目以降のプロンプトが冪等キーの重複として捨てられ、許可待ちの印が付かなかった。許可待ちの印は次のツール実行（`PostToolUse`）か次の信号で外れ、付いている間は `health.json` の `awaiting_approval` に載って `totsuka menu` が要対応に数える
 - **相関の異常**。
 
 `Escalated` は人間対応待ちだが**スロットは保持する**（F-45、[ADR-0093](/decisions/adr-0093-waiting-holds-slot.md)）。枠を空けたければ回復させるか `totsuka task cancel` する。pane は診断のため保持される（F-107）。

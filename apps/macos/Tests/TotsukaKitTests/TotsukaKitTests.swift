@@ -181,13 +181,15 @@ import Testing
         {"availability":"ok","attention_count":0,"attention":[],"degraded":[],
          "working":[{"task_id":97,"state":"running","workflow":"github-task","title":"t",
                      "repo":"web","created_at":"2026-10-03T11:48:10.699617Z"},
-                    {"task_id":98,"state":"queued","workflow":"w","title":"t"}]}
+                    {"task_id":98,"state":"queued","workflow":"w","title":"t"},
+                    {"task_id":99,"state":"running","workflow":"w","title":"t","waiting_for":"approval"}]}
         """#.utf8)
         let menu = try MenuModel.decode(data)
         let now = try #require(parseTimestamp("2026-10-03T12:00:40Z"))
         #expect(menu.working[0].detail(now: now) == "running · 12m · web · github-task")
         // An older CLI sends neither field: the row still renders.
         #expect(menu.working[1].detail(now: now) == "queued · w")
+        #expect(menu.working[2].detail(now: now) == "awaiting approval · w")
     }
 
     @Test func elapsedIsShortAndNeverNegative() {

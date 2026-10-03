@@ -136,7 +136,9 @@ enum Section {
 /// Classify one task. `has_wait_reason` is whether the orchestrator recorded a
 /// note explaining why it is not starting (#407) — the only thing that
 /// separates a queued task waiting its turn from one that is stuck.
-fn classify(state: TaskState, has_wait_reason: bool) -> Section {
+/// `awaiting_approval` is whether the live `run` reports its agent stopped at
+/// a permission prompt: still `running` (R-08), but a human has to act.
+fn classify(state: TaskState, has_wait_reason: bool, awaiting_approval: bool) -> Section {
     match state {
         // Waiting on a human, always.
         TaskState::Pending
@@ -147,6 +149,7 @@ fn classify(state: TaskState, has_wait_reason: bool) -> Section {
         // simply next in line and will start on its own.
         TaskState::Queued if has_wait_reason => Section::Attention,
         TaskState::Queued => Section::Hidden,
+        TaskState::Running if awaiting_approval => Section::Attention,
         TaskState::Dispatched | TaskState::Running | TaskState::Publishing => Section::Working,
         // Terminal states are never counted. `StateDb::list_tasks` returns
         // every task ever ingested, with no filter and no limit, so counting
@@ -176,6 +179,10 @@ pub struct MenuRow {
     pub created_at: String,
     /// Task title, **verbatim** (`--json` stays byte-exact, #280).
     pub title: String,
+    /// What the task waits on when `state` alone does not say:
+    /// `"approval"` for a `running` task stopped at a permission prompt.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub waiting_for: Option<&'static str>,
 }
 
 /// The whole menu, independent of how it is rendered.
@@ -248,7 +255,15 @@ fn build(cx: &Cx) -> Result<MenuModel, CliError> {
     let lock = lock_status(cx);
     // `run.lock` decides availability first: a run that was killed leaves its
     // health file behind, and trusting it would paint `⚠` over a `✕`.
-    let degraded: Vec<String> = live_health(cx, &lock)
+    let live = live_health(cx, &lock);
+    // Only a fresh report: a run that stopped publishing may well have seen
+    // the prompt answered since.
+    let awaiting: std::collections::HashSet<i64> = live
+        .as_ref()
+        .filter(|live| !live.stale)
+        .map(|live| live.health.awaiting_approval.iter().copied().collect())
+        .unwrap_or_default();
+    let degraded: Vec<String> = live
         .map(|live| {
             let mut reasons: Vec<String> =
                 live.health.degraded.iter().map(|d| d.message()).collect();
@@ -267,7 +282,8 @@ fn build(cx: &Cx) -> Result<MenuModel, CliError> {
     let mut attention = Vec::new();
     let mut working = Vec::new();
     for task in db.list_tasks()? {
-        let section = classify(task.state, notes.contains_key(&task.id));
+        let approval = task.state == TaskState::Running && awaiting.contains(&task.id.0);
+        let section = classify(task.state, notes.contains_key(&task.id), approval);
         let target = match section {
             Section::Attention => &mut attention,
             Section::Working => &mut working,
@@ -280,6 +296,7 @@ fn build(cx: &Cx) -> Result<MenuModel, CliError> {
             repo: task.repo,
             created_at: orchestrator_core::ports::clock::format_rfc3339(task.created_at),
             title: task.title,
+            waiting_for: approval.then_some("approval"),
         });
     }
 
@@ -369,7 +386,7 @@ fn elide(title: &str) -> String {
 fn row_glyph(state: &str) -> &'static str {
     match state {
         "verifying" => "🔍",
-        "waiting_input" => "⏸",
+        "waiting_input" | "awaiting_approval" => "⏸",
         "escalated" => "🚨",
         "pending" => "◇",
         "queued" => "⛔",
@@ -379,11 +396,16 @@ fn row_glyph(state: &str) -> &'static str {
 
 /// Render one task row, with `totsuka focus <id>` as its click action.
 fn render_row(row: &MenuRow, binary: &str) -> String {
+    // A task at a permission prompt is still `running`; say what it waits on.
+    let state = match row.waiting_for {
+        Some("approval") => "awaiting_approval",
+        _ => row.state.as_str(),
+    };
     format!(
         "{glyph} #{id} {state}  {workflow} — {title} | bash=\"{binary}\" param1=focus param2={id} terminal=false {RENDER_AS_TEXT}\n",
-        glyph = row_glyph(&row.state),
+        glyph = row_glyph(state),
         id = row.task_id,
-        state = menu_text(&row.state),
+        state = menu_text(state),
         workflow = menu_text(&row.workflow),
         title = menu_text(&elide(&row.title)),
         binary = menu_text(binary),
@@ -469,6 +491,7 @@ mod tests {
             repo: None,
             created_at: "2026-10-03T00:00:00Z".to_string(),
             title: title.to_string(),
+            waiting_for: None,
         }
     }
 
@@ -540,15 +563,15 @@ mod tests {
             TaskState::Verifying,
             TaskState::Escalated,
         ] {
-            assert_eq!(classify(state, false), Section::Attention, "{state}");
+            assert_eq!(classify(state, false, false), Section::Attention, "{state}");
         }
-        assert_eq!(classify(TaskState::Queued, true), Section::Attention);
+        assert_eq!(classify(TaskState::Queued, true, false), Section::Attention);
     }
 
     /// A queued task with no recorded reason is next in line, not stuck.
     #[test]
     fn queued_without_a_wait_reason_is_hidden() {
-        assert_eq!(classify(TaskState::Queued, false), Section::Hidden);
+        assert_eq!(classify(TaskState::Queued, false, false), Section::Hidden);
     }
 
     /// Terminal states must never reach the badge: `list_tasks` returns every
@@ -561,9 +584,39 @@ mod tests {
             TaskState::Cancelled,
             TaskState::Skipped,
         ] {
-            assert_eq!(classify(state, false), Section::Hidden, "{state}");
-            assert_eq!(classify(state, true), Section::Hidden, "{state} with note");
+            assert_eq!(classify(state, false, false), Section::Hidden, "{state}");
+            assert_eq!(
+                classify(state, true, false),
+                Section::Hidden,
+                "{state} with note"
+            );
         }
+    }
+
+    /// The SwiftBar row of a task at a permission prompt says so, rather
+    /// than `running` under "needs attention".
+    #[test]
+    fn an_approval_row_reads_as_awaiting_approval() {
+        let mut r = row(5, "running", "t");
+        r.waiting_for = Some("approval");
+        let line = render_row(&r, "/bin/totsuka");
+        assert!(line.starts_with("⏸ #5 awaiting_approval "), "{line}");
+    }
+
+    /// A running task stopped at a permission prompt needs a human, though
+    /// its state stays `running` (R-08). Only `running` can be in that spot:
+    /// the mark is not read for any other state.
+    #[test]
+    fn a_running_task_awaiting_approval_needs_attention() {
+        assert_eq!(
+            classify(TaskState::Running, false, true),
+            Section::Attention
+        );
+        assert_eq!(
+            classify(TaskState::Dispatched, false, true),
+            Section::Working
+        );
+        assert_eq!(classify(TaskState::Done, false, true), Section::Hidden);
     }
 
     #[test]
@@ -573,7 +626,7 @@ mod tests {
             TaskState::Running,
             TaskState::Publishing,
         ] {
-            assert_eq!(classify(state, false), Section::Working, "{state}");
+            assert_eq!(classify(state, false, false), Section::Working, "{state}");
         }
     }
 

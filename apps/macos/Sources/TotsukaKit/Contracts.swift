@@ -26,6 +26,9 @@ public struct MenuRow: Decodable, Equatable, Hashable, Sendable, Identifiable {
     /// When the task was ingested (RFC 3339), what the row's elapsed time
     /// counts from. Absent from a CLI older than the field.
     public let createdAt: String?
+    /// What a task waits on when its state alone does not say: `approval`
+    /// for a `running` task stopped at a permission prompt.
+    public let waitingFor: String?
 
     public var id: Int64 { taskId }
 
@@ -33,8 +36,9 @@ public struct MenuRow: Decodable, Equatable, Hashable, Sendable, Identifiable {
     /// repository and workflow — most telling first, since a narrow panel
     /// truncates the tail — leaving out whatever is not known.
     public func detail(now: Date = Date()) -> String {
+        let shown = waitingFor == "approval" ? "awaiting approval" : state
         let elapsed = createdAt.flatMap(parseTimestamp).map { elapsedText(from: $0, to: now) }
-        return [state, elapsed, repo, workflow].compactMap { $0 }.joined(separator: " · ")
+        return [shown, elapsed, repo, workflow].compactMap { $0 }.joined(separator: " · ")
     }
 }
 

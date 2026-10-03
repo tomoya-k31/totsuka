@@ -10,6 +10,9 @@
 * **Update**: [slack-event-gateway](/components/slack-event-gateway.md) — `modal` モジュール、`bot_token`、`view_submission` の射影
 * **Update**: [task-source-slack](/components/task-source-slack.md) — `gateway_contract` / `gateway` が `view_submission` を受ける
 * **Update**: [Event Gateway 構築手順](/operations/event-gateway-setup.md) — 任意の `bot_token` と、それで増える資格情報
+* **Update**: [要対応（Attention）](/glossary/attention.md) / [orchestrator-cli](/components/orchestrator-cli.md) — 許可を求めて止まっている `running` タスクを要対応に入れ、`menu --json` の行に `waiting_for: "approval"` を付ける（SwiftBar では `awaiting_approval` と ⏸）。
+* **Update**: [orchestrator-core](/components/orchestrator-core.md) / [フックのトラブルシューティング](/operations/hook-troubleshooting.md) / [フックのセキュリティ](/security/hook-security.md) — `PostToolUse` フック（`on-post-tool-use.sh`）で許可待ちの印を外し、許可待ちのタスクを `health.json` の `awaiting_approval` に載せる。`on-notification.sh` がプロンプトごとに `prompt_id` を付け、同じセッションの 2 回目以降の許可プロンプトが重複として捨てられていた不具合を直した。
+* **Update**: [ADR-0109](/decisions/adr-0109-native-menubar-app.md) — 許可待ちをメニューの「Needs you」に出す決定と、DB の最後の信号から推す案を採らない理由を記録した。
 * **Update**: [ADR-0113](/decisions/adr-0113-native-menubar-app.md) — 実機での確認を受けて、アプリとスキーマの文言を英語だけにした。
 * **Update**: [ADR-0113](/decisions/adr-0113-native-menubar-app.md) / [Totsuka.app](/components/macos-app.md) — 設定画面を外した。Settings… は config.toml を `$TERMINAL -e $EDITOR` で開き、Logs は run の stderr を書いたファイルを `$TERMINAL` で `tail -F` する。機密は Start 時に Keychain に無い `secret:<名前>` を尋ねる。スキーマと config CLI の層は残した。
 * **Update**: [プラグイン開発ガイド](/development/plugin-dev-guide.md) — `config/schema` の説明から「メニューバーアプリの設定画面が尋ねる」前提を外した（設定画面を外したため）。
