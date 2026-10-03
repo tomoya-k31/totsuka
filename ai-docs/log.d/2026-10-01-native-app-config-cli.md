@@ -2,3 +2,4 @@
 * **Update**: [orchestrator-core](/components/orchestrator-core.md) — `config::json_schema`（schemars による config の JSON Schema とラベル・ヘルプ）、`config::set_path` / `unset_path`、`plugins::plugin_schemas`（initialize 前の `config/schema`）。
 * **Update**: [orchestrator-cli](/components/orchestrator-cli.md) — `config schema` / `get` / `set` / `unset`。
 * **Update**: [ADR-0109](/decisions/adr-0109-native-menubar-app.md) — 5 層に分けたこと、`x-raw` / `x-schema-error`、書き込みの拒否条件、プラグイン所有の project / workflow キーを `x-by-source` / `x-by-agent` で要素のスキーマに添えること、`on_*` を `status` / `labels` として載せること。
+* **Update**: [config CLI 契約](/apis/config-cli.md) / [ADR-0109](/decisions/adr-0109-native-menubar-app.md) — 使えない申告スキーマを捨てた理由はどこにも出ないことを正しく書き、CLI が付ける拡張キーワードに `x-by-source` / `x-by-agent` を足した。

@@ -111,8 +111,9 @@ pub fn run(cx: &Cx, command: ConfigCommand) -> Result<(), CliError> {
 /// the core's, keyed by plugin name, since which apply depends on the entry
 /// (ADR-0109 §5): `x-by-source` on a project (its `source`) and on a workflow
 /// (the source its `projects` resolve to), `x-by-agent` on a workflow (its
-/// `agent`). An unusable one is left out — the entry then shows the core's keys
-/// only, and the plugin's own table already carries the reason.
+/// `agent`). An unusable one (`$ref`, not an object) is left out, and the
+/// reason is reported nowhere — the entry just shows the core's keys. The
+/// bundled plugins' own tests are what keep their answers usable.
 fn schema(cx: &Cx) -> Result<(), CliError> {
     use orchestrator_core::plugins::plugin_schemas;
     use serde_json::json;

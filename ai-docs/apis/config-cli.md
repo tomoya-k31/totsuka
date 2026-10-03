@@ -74,7 +74,7 @@ owner: tomoya-k31
 # 既知の制限
 
 - `[[projects]]` と `[[workflows]]` に書くプラグイン所有のキー（`owner` や `project_number`、`trigger` の中身）は、そのプラグインが `config/schema` の `project` / `workflow` で申告したときだけ `x-by-source` / `x-by-agent` に載る。申告の無いプラグインの要素では core のキーしか出ない（`trigger` は任意の object のまま）
-- 申告のスキーマが使えない（`$ref` を含む、object でない）ときは、その申告だけを載せない。理由はそのプラグインのテーブルの検査と同じなので、テーブル側の `x-raw` / `x-schema-error` で分かる
+- 申告のスキーマが使えない（`$ref` を含む、object でない）ときは、その申告だけを載せない。**理由はどこにも出ない**（テーブル側の `x-raw` / `x-schema-error` はテーブルのスキーマだけで決まる）ので、要素は core のキーだけになる。同梱プラグインの答えが使えることは、各プラグインのテスト（キーの一致と `missing_help`）が守る
 - `toml::Datetime` の値は TOML の内部表現の JSON で返る（設定に日時を書くキーは今のところ無い）
 
 # 関連
