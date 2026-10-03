@@ -90,3 +90,5 @@ manifest（`plugins/task-source-notion/plugin.toml`、`protocol_version = ">=0.7
 # 設定スキーマ（`config/schema`、[ADR-0109](/decisions/adr-0109-native-menubar-app.md)）
 
 マニフェストで `config_schema = true` を宣言し、`initialize` より前の `config/schema` に `[notion]` のスキーマ（`plugin_sdk::config_schema::of::<NotionConfig>()`）で答える。実装はSDK の `TaskSourceHandler::config_schema`。スキーマは serde が読む `NotionConfig` から schemars で導出するので、受け付けないキーは載らない。全キー（入れ子を含む）に `x-title` / `x-help` があり、ヘルプに既定値を書いていないことを `config.rs` の `schema_tests` が、`initialize` 前に答えることを適合キットの検査 10 が確かめる。`x-secret` を付けたフィールド: `token`。
+
+答えには `[[projects]]` 要素のキー（`project`: `DatabaseOptions` から導出 —— `database_id` / `triage_status`）と、`[[workflows]]` の `trigger` のキー（`workflow`: `client::workflow_schema()`。`status` / `filter` / `assignee` / `exclude`。`filter` は Notion へそのまま送るので `x-raw` の JSON 欄）も載せる。`TRIGGER_KEYS` / `EXCLUDE_KEYS` とキーが一致することをテストで検査する（ADR-0109 §5）。

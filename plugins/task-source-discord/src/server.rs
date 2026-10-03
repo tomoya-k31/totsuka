@@ -30,6 +30,13 @@ use crate::watch::WatchTriggers;
 /// why an unknown one fails startup instead of being ignored.
 const TRIGGER_KEYS: &[&str] = &["channel", "channel_name", "repo", "from"];
 
+/// The `workflow` part of this source's `config/schema` answer (ADR-0109):
+/// the channel watch [`TRIGGER_KEYS`] names.
+fn workflow_schema() -> serde_json::Value {
+    use plugin_sdk::config_schema::{watch_trigger, workflow};
+    workflow(watch_trigger(), serde_json::Map::new())
+}
+
 /// Discord's ceiling on `GET /channels/{id}/messages?limit=`.
 const DISCORD_MESSAGE_PAGE_MAX: u32 = 100;
 
@@ -238,7 +245,12 @@ where
         &mut self,
         _params: plugin_protocol::methods::ConfigSchemaParams,
     ) -> Result<plugin_protocol::methods::ConfigSchemaResult, Error> {
-        Ok(plugin_sdk::config_schema::of::<DiscordConfig>())
+        Ok(plugin_protocol::methods::ConfigSchemaResult {
+            // A project names this source and nothing else: no key on it is read.
+            project: Some(plugin_sdk::config_schema::no_keys()),
+            workflow: Some(workflow_schema()),
+            ..plugin_sdk::config_schema::of::<DiscordConfig>()
+        })
     }
 
     /// Schema + static checks only. Deliberately offline: live token
@@ -293,4 +305,19 @@ where
 /// This plugin's own version, from the crate metadata.
 fn plugin_version() -> semver::Version {
     semver::Version::parse(env!("CARGO_PKG_VERSION")).expect("crate version is valid semver")
+}
+
+#[cfg(test)]
+mod workflow_schema_tests {
+    use super::*;
+    use plugin_sdk::config_schema::keys;
+
+    /// The settings window offers exactly the trigger keys `initialize`
+    /// accepts.
+    #[test]
+    fn workflow_schema_names_the_keys_this_source_reads() {
+        let mut want: Vec<String> = TRIGGER_KEYS.iter().map(|k| k.to_string()).collect();
+        want.sort_unstable();
+        assert_eq!(keys(&workflow_schema(), "/properties/trigger"), want);
+    }
 }

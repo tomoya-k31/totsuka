@@ -257,10 +257,14 @@ impl Default for PropertyMap {
 /// `name` and `source` are the Orchestrator's keys and never reach here;
 /// `deny_unknown_fields` turns a typo in the rest into an `initialize`
 /// failure rather than a setting that quietly does nothing.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DatabaseOptions {
     /// The database queried for tasks.
+    #[schemars(extend(
+        "x-title" = "Database ID",
+        "x-help" = "The Notion database to take tasks from (the ID in its URL)."
+    ))]
     pub database_id: String,
     /// The status option a triage-filed page should be created with (#548
     /// follow-up).
@@ -274,6 +278,10 @@ pub struct DatabaseOptions {
     /// never validated starts fine and silently omits the status instruction
     /// from the destination, because there is no column to name.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Triage status",
+        "x-help" = "The status a page filed by a triage workflow is created with. Needs the status column mapped; a status some trigger picks up sends filed pages straight into an unattended run."
+    ))]
     pub triage_status: Option<String>,
 }
 
@@ -923,6 +931,19 @@ mod tests {
 
 #[cfg(test)]
 mod schema_tests {
+    /// The `[[projects]]` keys carry help, and are exactly what
+    /// `DatabaseOptions` accepts.
+    #[test]
+    fn project_keys_have_title_and_help() {
+        let schema = plugin_sdk::config_schema::schema_for::<super::DatabaseOptions>();
+        let missing = plugin_sdk::config_schema::missing_help(&schema);
+        assert!(missing.is_empty(), "{}", missing.join("\n"));
+        assert_eq!(
+            plugin_sdk::config_schema::keys(&schema, ""),
+            ["database_id", "triage_status"]
+        );
+    }
+
     /// Every key of `[notion]`, at any depth, carries an `x-title` and `x-help`
     /// for the settings window, and no help states a default (ADR-0109).
     #[test]

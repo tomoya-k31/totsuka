@@ -159,7 +159,7 @@ impl GithubPrompts {
 
 /// Whether the project owner is a user or an organization (GraphQL requires
 /// choosing the right root field).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum OwnerType {
     /// A user account (`user(login:)`).
@@ -184,15 +184,27 @@ impl OwnerType {
 /// `name` and `source` are the Orchestrator's keys and never reach here;
 /// `deny_unknown_fields` is what turns a typo in the rest into an
 /// `initialize` failure instead of a setting that quietly does nothing.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ProjectOptions {
     /// Project owner login (user or org).
+    #[schemars(extend(
+        "x-title" = "Owner",
+        "x-help" = "The user or organization that owns the project (its login)."
+    ))]
     pub owner: String,
     /// Whether `owner` is a user or an organization.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Owner type",
+        "x-help" = "Whether the owner is a user or an organization."
+    ))]
     pub owner_type: OwnerType,
     /// ProjectsV2 number under `owner`.
+    #[schemars(extend(
+        "x-title" = "Project number",
+        "x-help" = "The number in the project's URL (…/projects/<number>)."
+    ))]
     pub project_number: i64,
     /// The Status option a triage-filed item should land in (#548 follow-up).
     ///
@@ -208,6 +220,10 @@ pub struct ProjectOptions {
     ///
     /// Per board, not top-level: option names belong to a board.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Triage status",
+        "x-help" = "The status an item filed by a triage workflow lands in. Without it the item has no status; a status some trigger picks up sends filed items straight into an unattended run."
+    ))]
     pub triage_status: Option<String>,
 }
 
@@ -692,6 +708,28 @@ mod tests {
 
 #[cfg(test)]
 mod schema_tests {
+    /// The `[[projects]]` keys carry help too, and are exactly what
+    /// `ProjectOptions` accepts (it is the struct serde reads).
+    #[test]
+    fn project_keys_have_title_and_help() {
+        let schema = plugin_sdk::config_schema::schema_for::<super::ProjectOptions>();
+        let missing = plugin_sdk::config_schema::missing_help(&schema);
+        assert!(missing.is_empty(), "{}", missing.join("\n"));
+        let stated = plugin_sdk::config_schema::help_stating_defaults(&schema);
+        assert!(stated.is_empty(), "help states a default: {stated:?}");
+        let mut keys: Vec<&str> = schema["properties"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            ["owner", "owner_type", "project_number", "triage_status"]
+        );
+    }
+
     /// Every key of `[github]`, at any depth, carries an `x-title` and `x-help`
     /// for the settings window, and no help states a default (ADR-0109).
     #[test]

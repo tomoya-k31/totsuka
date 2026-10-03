@@ -66,6 +66,54 @@ const TRIGGER_KEYS: &[&str] = &[
     "from",
 ];
 
+/// The `workflow` part of this source's `config/schema` answer (ADR-0109):
+/// the trigger keys `TRIGGER_KEYS` names, and the options
+/// [`workflow_options`](crate::workflow_options) claims. A trigger is one of
+/// three kinds — a mention, a reaction, a channel watch — and the help says
+/// which kind each key belongs to.
+pub fn workflow_schema() -> Value {
+    use plugin_sdk::config_schema::{field, watch_trigger, workflow};
+    let ids = |title: &str, help: &str| {
+        field(
+            serde_json::json!({ "type": "array", "items": { "type": "string" } }),
+            title,
+            help,
+        )
+    };
+    let mut trigger = watch_trigger();
+    trigger.insert(
+        "mention".into(),
+        field(
+            serde_json::json!({ "type": "boolean" }),
+            "Mention",
+            "Start on a mention addressed to you (a mention trigger).",
+        ),
+    );
+    trigger.insert(
+        "to_group".into(),
+        ids(
+            "User groups",
+            "Mention triggers only: the user group IDs whose mentions select this workflow.",
+        ),
+    );
+    trigger.insert(
+        "reaction".into(),
+        field(
+            serde_json::json!({ "type": "string" }),
+            "Reaction",
+            "The emoji name (no colons) that starts this workflow when added to a message (a reaction trigger).",
+        ),
+    );
+    trigger.insert(
+        "from_bot".into(),
+        ids(
+            "From bots",
+            "Reaction triggers only: bot IDs whose posts the emoji may also be used on.",
+        ),
+    );
+    workflow(trigger, crate::workflow_options::option_schemas())
+}
+
 /// The subset of [`TRIGGER_KEYS`] that names a **kind** of trigger by being
 /// present, as opposed to modifying one.
 ///
@@ -1010,7 +1058,12 @@ where
         &mut self,
         _params: plugin_protocol::methods::ConfigSchemaParams,
     ) -> Result<plugin_protocol::methods::ConfigSchemaResult, Error> {
-        Ok(plugin_sdk::config_schema::of::<SlackConfig>())
+        Ok(plugin_protocol::methods::ConfigSchemaResult {
+            // A project names this source and nothing else: no key on it is read.
+            project: Some(plugin_sdk::config_schema::no_keys()),
+            workflow: Some(workflow_schema()),
+            ..plugin_sdk::config_schema::of::<SlackConfig>()
+        })
     }
 
     /// `config/validate`: schema + static consistency checks only (F-59/F-63).
@@ -1386,6 +1439,25 @@ fn published(result: Result<(), String>) -> Result<Value, Error> {
     result
         .map(|()| Value::Null)
         .map_err(|message| Error::new(error_code::INTERNAL_ERROR, message))
+}
+
+#[cfg(test)]
+mod workflow_schema_tests {
+    use super::*;
+    use plugin_sdk::config_schema::{help_stating_defaults, keys, missing_help};
+
+    /// The settings window offers exactly the trigger keys `initialize`
+    /// accepts, and the options this plugin claims.
+    #[test]
+    fn workflow_schema_names_the_keys_this_source_reads() {
+        let schema = workflow_schema();
+        let mut want: Vec<String> = TRIGGER_KEYS.iter().map(|k| k.to_string()).collect();
+        want.sort_unstable();
+        assert_eq!(keys(&schema, "/properties/trigger"), want);
+        assert_eq!(keys(&schema, ""), ["publish", "trigger"]);
+        assert_eq!(missing_help(&schema), Vec::<String>::new());
+        assert_eq!(help_stating_defaults(&schema), Vec::<String>::new());
+    }
 }
 
 #[cfg(test)]

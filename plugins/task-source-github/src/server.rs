@@ -195,7 +195,13 @@ where
         &mut self,
         _params: plugin_protocol::methods::ConfigSchemaParams,
     ) -> Result<plugin_protocol::methods::ConfigSchemaResult, Error> {
-        Ok(plugin_sdk::config_schema::of::<GithubConfig>())
+        Ok(plugin_protocol::methods::ConfigSchemaResult {
+            project: Some(plugin_sdk::config_schema::schema_for::<
+                crate::config::ProjectOptions,
+            >()),
+            workflow: Some(crate::client::workflow_schema()),
+            ..plugin_sdk::config_schema::of::<GithubConfig>()
+        })
     }
 
     async fn config_validate(

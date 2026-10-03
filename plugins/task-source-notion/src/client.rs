@@ -71,6 +71,36 @@ pub const EXCLUDE_KEYS: &[&str] = &["assignee", "status"];
 /// it.
 pub const TRIGGER_KEYS: &[&str] = &["assignee", "exclude", "filter", "status"];
 
+/// The `workflow` part of this source's `config/schema` answer (ADR-0109):
+/// the trigger keys [`TRIGGER_KEYS`] / [`EXCLUDE_KEYS`] name. `filter` goes to
+/// Notion verbatim, so it is edited as JSON (`x-raw`).
+pub fn workflow_schema() -> Value {
+    use plugin_sdk::config_schema::{assignee, exclude, field, one_or_many, workflow};
+    let mut excluded = serde_json::Map::new();
+    excluded.insert("status".into(), one_or_many("Status", "Statuses to skip."));
+    excluded.insert("assignee".into(), assignee());
+    let mut trigger = serde_json::Map::new();
+    trigger.insert(
+        "status".into(),
+        field(
+            json!({ "type": "string" }),
+            "Status",
+            "The status a page must have.",
+        ),
+    );
+    trigger.insert(
+        "filter".into(),
+        field(
+            json!({ "type": "object", "x-raw": true }),
+            "Filter",
+            "A Notion database filter, sent as is; @name refers to [notion.dynamic.name].",
+        ),
+    );
+    trigger.insert("assignee".into(), assignee());
+    trigger.insert("exclude".into(), exclude(excluded));
+    workflow(trigger, serde_json::Map::new())
+}
+
 impl TriggerFilter {
     /// `Err` only for a malformed `assignee`; everything else is parsed
     /// leniently because `initialize` has already rejected unknown keys (#574).
@@ -942,6 +972,31 @@ pub fn static_config_errors(config: &NotionConfig) -> Vec<String> {
         );
     }
     errors
+}
+
+#[cfg(test)]
+mod workflow_schema_tests {
+    use super::*;
+    use plugin_sdk::config_schema::{help_stating_defaults, keys, missing_help};
+
+    /// The settings window offers exactly the trigger keys `initialize`
+    /// accepts.
+    #[test]
+    fn trigger_schema_names_the_keys_this_source_reads() {
+        let schema = workflow_schema();
+        let sorted = |list: &[&str]| {
+            let mut v: Vec<String> = list.iter().map(|k| k.to_string()).collect();
+            v.sort_unstable();
+            v
+        };
+        assert_eq!(keys(&schema, "/properties/trigger"), sorted(TRIGGER_KEYS));
+        assert_eq!(
+            keys(&schema, "/properties/trigger/properties/exclude"),
+            sorted(EXCLUDE_KEYS)
+        );
+        assert_eq!(missing_help(&schema), Vec::<String>::new());
+        assert_eq!(help_stating_defaults(&schema), Vec::<String>::new());
+    }
 }
 
 #[cfg(test)]
