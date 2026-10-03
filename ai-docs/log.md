@@ -4,7 +4,8 @@
 
 * **Update**: [ADR-0114](/decisions/adr-0114-macos-app-gh-token.md) — 実機検収の結果を記録し `verified` を追加（ダイアログ、gh のトークンでの起動とカード移動、gh 失敗時に起動しないこと）
 * **Update**: [Homebrew tap](/infrastructure/homebrew-tap.md) — formula が Totsuka.app を入れるようになった（homebrew-tap PR #3）。「足すもの」の予定表記を、実際の formula・利用者の手順・quarantine が付かない実測に置き換えた
-* **Update**: [Homebrew tap](/infrastructure/homebrew-tap.md) — public 化前のままだった「まだ済んでいないこと」を現状の表に置き換えた（残りは未導入の Mac での実測のみ）。トークン表の「未発行」と、`brew trust` の対話プロンプトを「未確認」としていた記述も実測済みの内容に直した
+* **Update**: [Homebrew tap](/infrastructure/homebrew-tap.md) — public 化前のままだった「まだ済んでいないこと」を現状の表に置き換えた（残りは未導入の Mac での実測のみ）。トークン表の「未発行」、`brew trust` の対話プロンプトを「未確認」としていた記述、可視性ゲートの未来形の説明も直した
+* **Update**: [ADR-0053](/decisions/adr-0053-homebrew-tap-distribution.md) — `brew trust` の対話プロンプトが出ないことを 2026-08-31 に実測済みと追記。`verified` を付けない理由は未導入の Mac での実測だけになった
 
 ## 2026-10-03
 

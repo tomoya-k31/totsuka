@@ -4,7 +4,7 @@ title: ADR-0053 配布を Homebrew tap に寄せ、formula は別リポジトリ
 description: "sudo 5 本の tarball 手配置をやめ brew install / brew upgrade へ移す決定。formula は tomoya-k31/homebrew-tap に置き、リリースジョブが version と sha256 の 2 行だけを書き換えて push する。本リポジトリ内の Formula/ 案はブランチ保護で自動化できないため却下。tap が実際に効くのは本リポジトリが public になってから。"
 resource: https://github.com/tomoya-k31/homebrew-tap
 tags: [decision, distribution, homebrew, release, install, adr]
-generated: { by: claude-code/opus-5, at: 2026-08-31T00:00:00Z }
+generated: { by: claude-code/opus-5.5, at: 2026-10-04T01:27:00+09:00 }
 status: stable
 owner: tomoya-k31
 sources:
@@ -32,12 +32,13 @@ stable。ワークフロー配線と tap リポジトリの作成は本 ADR と�
 **一部検収済み（2026-08-31）。** 2026-08-31 に本リポジトリを public 化し、`brew install`
 → `brew test` → `doctor` を実測して通した（結果は下の「public 化の後に実測すること」）。
 
-**それでも `verified` は付けていない。** ADR が挙げた実測項目のうち **`brew trust` の
-対話プロンプト**がまだ測れていないためである。検証機では 8/22 の非対話実行で
-`trust.json` に `tomoya-k31/tap/totsuka` が既に記録されており、**プロンプトが出る経路に
-原理的に入らない**。また実測は開発機で行っており、ADR が指定した「totsuka を一度も
-入れたことのない Mac」ではない（レイアウト検証の中心である `brew test` は `test do` が
-XDG を張り替えるので隔離されているが、その 1 点だけである）。
+**それでも `verified` は付けていない。** 残る理由は、実測が開発機で行ったもので、ADR が指定した
+「totsuka を一度も入れたことのない Mac」ではないことである（レイアウト検証の中心である
+`brew test` は `test do` が XDG を張り替えるので隔離されているが、その 1 点だけである）。
+当初もう 1 つの理由だった **`brew trust` の対話プロンプト**は、同日のうちに測った:
+`trust.json` の該当エントリを退避して対話・非対話の両方で `brew reinstall` し、**プロンプトは
+出ず**、`==> Trusted formula tomoya-k31/tap/totsuka` の 1 行が出て進むだけだった
+（[setup playbook](/operations/setup-playbook.md) に反映済み）。
 
 # Context
 
@@ -143,7 +144,7 @@ Actions の課金はジョブ単位で分単位切り上げ（`ci.yml` に記録
 
 **シークレットの有無でゲートしていないのは、それが危険を読み違えるからである。** `secrets.HOMEBREW_TAP_TOKEN != ''` 相当のガードは、*失効した*トークン（非空なのでどのみち大声で落ちる）を素通りさせる一方で、*未登録・削除・改名*されたシークレットを**毎リリース黙って緑で skip させ、tap を永久に置き去りにする**。それは `grep -q` の assert を置いて赤に変換しようとしている失敗そのものである。可視性でゲートすれば、**外し忘れうる人間の手順が存在せず**、public 化以降はシークレット欠落が赤くなる。
 
-public 化の後に残る手順は [Homebrew tap](/infrastructure/homebrew-tap.md) の「まだ済んでいないこと」にある。**ゲートを外す作業は含まれない** — 自分で外れる。
+public 化の後に残る手順は [Homebrew tap](/infrastructure/homebrew-tap.md) の「tap を本番にするまでの手順」にある。**ゲートを外す作業は含まれない** — 自分で外れる。
 
 # Consequences
 
@@ -209,6 +210,7 @@ macOS 13 以降、システムは実行された非システムバイナリに `
 - 新規ユーザー相当の `doctor`（一時 XDG）で
   `bundled-plugins — 6 in .../bin/../libexec/totsuka/plugins` を確認。探索順
   `<exe dir>/../libexec/totsuka/plugins` が実環境で解決している
-- **`brew trust` の対話プロンプトは未確認のまま**。検証機では 8/22 の非対話実行で
-  `trust.json` に `tomoya-k31/tap/totsuka` が既に記録されており、プロンプトが出る
-  経路に入らなかった
+- **`brew trust` の対話プロンプトは出ない**（同日に追加で実測）。検証機では 8/22 の非対話実行で
+  `trust.json` に `tomoya-k31/tap/totsuka` が既に記録されていたので、その時点ではプロンプトが出る
+  経路に入らなかった。エントリを退避して対話・非対話の両方で `brew reinstall` し、どちらも
+  `==> Trusted formula tomoya-k31/tap/totsuka` が出て進むだけだった（`brew info` では発火しない）

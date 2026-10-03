@@ -1,10 +1,10 @@
 ---
 type: Environment
 title: Homebrew tap（tomoya-k31/homebrew-tap）
-description: "totsuka を brew install で配れるようにするための tap リポジトリ。formula のインストールレイアウトがなぜ bundled plugins の探索順と一致するのか、メニューバーアプリ（Totsuka.app）を formula で入れる理由と入れ方、リリースジョブが何を書き換えるのか、HOMEBREW_TAP_TOKEN のスコープ、bump が失敗したときの復旧、そして public 化までステップを止めている可視性ゲート。"
+description: "totsuka を brew install で配れるようにするための tap リポジトリ。formula のインストールレイアウトがなぜ bundled plugins の探索順と一致するのか、メニューバーアプリ（Totsuka.app）を formula で入れる理由と入れ方、リリースジョブが何を書き換えるのか、HOMEBREW_TAP_TOKEN のスコープ、bump が失敗したときの復旧、そして public 化までステップを止めていた可視性ゲート（2026-08-31 の public 化で有効になった）。"
 resource: https://github.com/tomoya-k31/homebrew-tap
 tags: [infrastructure, homebrew, distribution, release, token]
-generated: { by: claude-code/opus-5.5, at: 2026-10-04T01:25:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-04T01:27:00+09:00 }
 status: stable
 owner: tomoya-k31
 sources:
@@ -117,7 +117,7 @@ bump が失敗したときの**復旧は、job の再実行ではなく tap の 
 
 Homebrew の formula は `url` を**素の `curl`（GitHub 認証なし）**で取る。totsuka リポジトリが private である間、リリースアセットの URL は未認証では 404 を返す。**tap 経路は public 化まで動かない。**
 
-そのため bump ステップは **`if: ${{ !github.event.repository.private }}`** でゲートしてある。private の間はステップごと skip され、**public 化した瞬間に自分で有効になる。外し忘れうる人間の手順は無い。**
+そのため bump ステップは **`if: ${{ !github.event.repository.private }}`** でゲートしてある。private の間はステップごと skip され、**public 化した瞬間に自分で有効になる。外し忘れうる人間の手順は無い。** 2026-08-31 の public 化でそのとおり有効になり、以後は毎リリース走っている（→ [tap を本番にするまでの手順](#tap-を本番にするまでの手順2026-08-31-にほぼ完了)）。
 
 **シークレットの有無でゲートしていない**のは意図的である。それは危険を読み違える:
 
