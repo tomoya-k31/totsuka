@@ -765,7 +765,6 @@ async fn malformed_params_before_initialize_say_initialize_first() {
     assert_eq!(code("initialize").await, error_code::INVALID_PARAMS);
     assert_eq!(code("config/validate").await, error_code::INVALID_PARAMS);
     assert_eq!(code("nope").await, error_code::METHOD_NOT_FOUND);
-    drop(code);
 
     // `config/schema` takes `{}`, so `{ "wrong": true }` parses; only params
     // that are not an object reach the error path.
