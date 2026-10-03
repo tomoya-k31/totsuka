@@ -243,3 +243,59 @@ import Testing
         #expect(elapsedText(from: start, to: start.addingTimeInterval(-5)) == "0s")
     }
 }
+
+@Suite struct AgentIDETests {
+    let config = JSONValue.parse(#"""
+        {"plugins":{"herdr":{"enabled":true},"orca":{"enabled":false},"github":{"enabled":true}},
+         "workflows":[{"name":"impl","agent":"herdr"},{"name":"o","agent":"orca"}],
+         "macos":{"activate_bundle_id":"org.alacritty"}}
+        """#)!
+
+    @Test func onlyEnabledIDEsAreChecked() {
+        #expect(enabledAgentIDEs(in: config) == ["herdr"])
+    }
+
+    @Test func herdrSocketFollowsThePluginsPrecedence() {
+        let env = ["HOME": "/h", "HERDR_SESSION": "env"]
+        #expect(herdrSocketPath(config: .object([:]), environment: ["HOME": "/h"]) == "/h/.config/herdr/herdr.sock")
+        #expect(herdrSocketPath(config: .object([:]), environment: env) == "/h/.config/herdr/sessions/env/herdr.sock")
+        let session = JSONValue.parse(#"{"herdr":{"session":"work"}}"#)!
+        #expect(herdrSocketPath(config: session, environment: env) == "/h/.config/herdr/sessions/work/herdr.sock")
+        let explicit = JSONValue.parse(#"{"herdr":{"socket_path":"/s.sock","session":"work"}}"#)!
+        #expect(herdrSocketPath(config: explicit, environment: env) == "/s.sock")
+        // `config get` hands `${VAR}` back unexpanded.
+        let templated = JSONValue.parse(#"{"herdr":{"socket_path":"${HOME}/x/${NOPE}.sock"}}"#)!
+        #expect(herdrSocketPath(config: expandingEnv(templated, env), environment: env) == "/h/x/${NOPE}.sock")
+        // The plugin leaves `~` alone, so the probe does too.
+        let tilde = JSONValue.parse(#"{"herdr":{"socket_path":"~/h.sock"}}"#)!
+        #expect(herdrSocketPath(config: tilde, environment: env) == "~/h.sock")
+    }
+
+    @Test func aMissingSocketDoesNotAccept() {
+        #expect(!unixSocketAccepts("/nonexistent/herdr.sock"))
+    }
+
+    @Test func orcaIsUpOnlyWhenItsRuntimeIsReachable() {
+        #expect(orcaRuntimeReachable(Data(#"{"ok":true,"result":{"runtime":{"reachable":true}}}"#.utf8)))
+        #expect(!orcaRuntimeReachable(Data(#"{"ok":true,"result":{"runtime":{"reachable":false}}}"#.utf8)))
+        #expect(!orcaRuntimeReachable(Data("not json".utf8)))
+    }
+
+    @Test func focusBringsTheWorkflowsIDEForward() {
+        #expect(focusApp(workflow: "o", config: config) == .named("Orca"))
+        #expect(focusApp(workflow: "impl", config: config) == .bundleID("org.alacritty"))
+        #expect(focusApp(workflow: nil, config: config) == .bundleID("org.alacritty"))
+        #expect(focusApp(workflow: "impl", config: .object([:])) == nil)
+    }
+}
+
+@Suite struct CLITimeoutTests {
+    /// A stalled health check must not hold the poll forever.
+    @Test func aCallPastItsTimeoutIsTerminated() async throws {
+        let cli = TotsukaCLI(binary: URL(fileURLWithPath: "/bin/sleep"), environment: [:])
+        let start = Date()
+        let result = try await cli.run(["30"], timeout: 0.2)
+        #expect(Date().timeIntervalSince(start) < 5)
+        #expect(result.status != 0)
+    }
+}
