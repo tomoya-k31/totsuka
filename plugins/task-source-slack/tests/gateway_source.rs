@@ -649,26 +649,60 @@ async fn a_queued_submission_is_rebuilt_into_a_view_submission() {
     );
 }
 
-/// **A press is not left waiting on an idle queue's backoff.** The event
-/// subscription may back off to a long ceiling, but the press subscription
-/// keeps polling at `press_empty_max`, so a press that arrives after a long
-/// quiet spell is still picked up promptly.
+/// A fake that keeps the two subscriptions apart: the press subscription
+/// answers `presses` in order, the event subscription is always idle, and
+/// each side's pulls are counted.
+#[derive(Default)]
+struct SplitPubSub {
+    presses: Mutex<Vec<Vec<PulledMessage>>>,
+    press_pulls: AtomicUsize,
+    event_pulls: AtomicUsize,
+}
+
+impl PubSubTransport for SplitPubSub {
+    async fn pull(
+        &self,
+        subscription: &str,
+        _max_messages: u32,
+    ) -> Result<Vec<PulledMessage>, SlackError> {
+        if subscription.ends_with("/presses") {
+            self.press_pulls.fetch_add(1, Ordering::SeqCst);
+            let mut presses = self.presses.lock().unwrap();
+            Ok(if presses.is_empty() {
+                Vec::new()
+            } else {
+                presses.remove(0)
+            })
+        } else {
+            self.event_pulls.fetch_add(1, Ordering::SeqCst);
+            Ok(Vec::new())
+        }
+    }
+
+    async fn ack(&self, _subscription: &str, _ack_ids: &[String]) -> Result<(), SlackError> {
+        Ok(())
+    }
+}
+
+/// **A press is not left waiting on an idle queue's backoff**, and only the
+/// press subscription is kept short.
 ///
-/// Both drain loops pull from the one fake, so the empties ahead of the
-/// press are shared between them. With the long ceiling applied to both, the
-/// 30 empty answers take well over the 2-second budget below; with the short
-/// ceiling on the press loop they are gone in a fraction of a second.
+/// The press is queued behind 30 empty answers **on the press subscription
+/// alone**. With the long ceiling on the press loop, those 30 take well over
+/// the 2-second budget; with the short one they are gone in a fraction of a
+/// second. The event loop meanwhile has to keep backing off — a swap of the
+/// two ceilings would fail both halves.
 #[tokio::test]
 async fn a_press_after_a_quiet_spell_is_picked_up_promptly() {
     let shared = Shared::default();
-    let mut batches: Vec<Vec<PulledMessage>> = vec![Vec::new(); 30];
-    batches.push(vec![PulledMessage {
+    let mut presses: Vec<Vec<PulledMessage>> = vec![Vec::new(); 30];
+    presses.push(vec![PulledMessage {
         ack_id: "ack-press".into(),
         data: serde_json::to_string(&press_record(&ts_ago(60))).unwrap(),
     }]);
-    let pubsub = Arc::new(FakePubSub {
-        batches: Arc::new(Mutex::new(batches)),
-        ..FakePubSub::default()
+    let pubsub = Arc::new(SplitPubSub {
+        presses: Mutex::new(presses),
+        ..SplitPubSub::default()
     });
     let config = gateway_config();
     let api = Arc::new(SlackApi::new(transport(&shared)));
@@ -677,7 +711,7 @@ async fn a_press_after_a_quiet_spell_is_picked_up_promptly() {
         api,
         Arc::new(config),
         gateway,
-        pubsub,
+        Arc::clone(&pubsub),
         GatewayOptions {
             backoff_base: Duration::from_millis(10),
             backoff_max: Duration::from_secs(60),
@@ -690,5 +724,13 @@ async fn a_press_after_a_quiet_spell_is_picked_up_promptly() {
     assert!(
         matches!(got, Ok(Some(SocketEvent::BlockActions(_)))),
         "the press should arrive within 2s, got {got:?}"
+    );
+    let (press_pulls, event_pulls) = (
+        pubsub.press_pulls.load(Ordering::SeqCst),
+        pubsub.event_pulls.load(Ordering::SeqCst),
+    );
+    assert!(
+        event_pulls < press_pulls / 2,
+        "the event loop keeps its longer backoff: {event_pulls} event pulls vs {press_pulls} press pulls"
     );
 }
