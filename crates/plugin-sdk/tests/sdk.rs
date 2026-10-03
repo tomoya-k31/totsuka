@@ -95,6 +95,8 @@ impl TaskSourceHandler for Recording {
         self.calls.push("config_schema");
         Ok(ConfigSchemaResult {
             schema: json!({ "type": "object" }),
+            project: None,
+            workflow: None,
         })
     }
 }

@@ -571,6 +571,30 @@ pub struct ConfigSchemaResult {
     /// for a value that is a secret reference). Unknown keywords are ignored, so a schema without them is
     /// still valid — the field is shown by its key with no help text.
     pub schema: serde_json::Value,
+    /// The keys this plugin reads on a `[[projects]]` entry whose `source` is
+    /// this plugin — what [`ProjectInfo::options`] carries — as an object
+    /// schema (same rules as [`schema`](Self::schema): inline, the same
+    /// extension keywords). `name` and `source` are the Orchestrator's and are
+    /// not in it.
+    ///
+    /// A **task_source**'s field. Absent means "not described": the settings
+    /// window then shows only the Orchestrator's two keys for this source's
+    /// projects, and edits nothing else.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<serde_json::Value>,
+    /// The keys this plugin reads on a `[[workflows]]` entry, as an object
+    /// schema: for a task_source its `trigger` table (one property named
+    /// `trigger`) and any flat option it claims ([`WorkflowInfo::options`],
+    /// e.g. Slack's `publish`); for an agent plugin only the options it
+    /// claims. Keys the Orchestrator owns (`name`, `profile`, `on_*`, …) are
+    /// never in it.
+    ///
+    /// The settings window shows a workflow's form as the Orchestrator's keys
+    /// plus this schema from the source its `projects` resolve to and from its
+    /// `agent`, so a field appears only where it means something (ADR-0109).
+    /// Absent means "not described", as for [`project`](Self::project).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<serde_json::Value>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1332,6 +1356,19 @@ mod tests {
                     },
                 },
             }),
+            project: None,
+            workflow: None,
+        });
+        round_trip(&ConfigSchemaResult {
+            schema: serde_json::json!({ "type": "object" }),
+            project: Some(serde_json::json!({
+                "type": "object",
+                "properties": { "board": { "type": "integer", "x-help": "Board number" } },
+            })),
+            workflow: Some(serde_json::json!({
+                "type": "object",
+                "properties": { "trigger": { "type": "object", "x-help": "Which tasks" } },
+            })),
         });
     }
 

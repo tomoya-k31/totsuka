@@ -66,6 +66,7 @@ Apple Developer Program には**加入しない**。それでも友人に配り�
 
 - **全項目を JSON Schema から生成する。** core は自分の部分を **schemars** で書き出し、各プラグインは新メソッド **`config/schema`** で自分のテーブルのスキーマを返す
 - `config/schema` は **`initialize` より前に答える**（`config/validate` と同じ）。`initialize` は機密を解決し、ポーリングや接続確認を始めるので、まだ機密が無い設定画面からは呼べない
+- task_source は答えに **`project`**（自分が source の `[[projects]]` 要素に読むキー）と **`workflow`**（`[[workflows]]` に読むキー: `trigger` と、claim する平置きのオプション）のスキーマも載せられる（どちらも任意）。agent プラグインは `workflow` に claim するオプションだけを載せる。どちらのテーブルも中身は source ごとに違い、core は解釈しないので、**選んだ source（と agent）のキーだけを出す**。全部を並べて使えない項目を無効にする案は採らない —— source ごとのキーはほとんど重ならず、灰色の行ばかりのフォームになり、別の source のキーが残っていると `deny_unknown_fields` で `initialize` が落ちるのに、その危険が見えなくなる
 - **capability `config_schema` で申告し、マニフェストから読む。** プラグインを起動せずに尋ねるべきかが分かる。未申告や失敗のプラグインのテーブルはフォームではなく生の TOML 欄に回す（エラーにしない。スキーマは人の編集を助けるだけで、実行時の挙動を何も変えない）
 - 拡張キーワードは 4 つ: **`x-title`** と **`x-help`**（`{en, ja}`、OS の言語に合わせて出す）、**`x-category`**（カテゴリ。`{en, ja}`）、**`x-secret`**（機密の参照を持つフィールド）。未知のキーワードは無視されるので、これらの無いスキーマも有効
 - **読み書きは CLI 経由**（Swift 側で TOML を扱わない）:

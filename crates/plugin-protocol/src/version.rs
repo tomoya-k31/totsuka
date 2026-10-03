@@ -427,6 +427,10 @@ use semver::{Version, VersionReq};
 /// a settings window must be able to ask before any secret exists.
 /// [`Capabilities::config_schema`](crate::Capabilities::config_schema) gates
 /// it.
+/// A task_source may also describe the keys it reads on a `[[projects]]`
+/// entry and on a `[[workflows]]` entry (`trigger`, claimed options) in the
+/// result's optional `project` / `workflow`, so the window shows those per
+/// source instead of as raw JSON.
 ///
 /// **Patch, for the 0.6.1 reason**: `Capabilities` deserializes with
 /// defaults and the Orchestrator only calls what was declared, so no manifest
