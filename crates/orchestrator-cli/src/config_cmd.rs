@@ -106,22 +106,43 @@ pub fn run(cx: &Cx, command: ConfigCommand) -> Result<(), CliError> {
 /// A plugin named like a core key (`log`, `workflows`, …) is left out rather
 /// than allowed to replace that key's schema: config validation refuses the
 /// name anyway, and the core settings must stay editable meanwhile.
+///
+/// The keys plugins read on `[[projects]]` / `[[workflows]]` entries go beside
+/// the core's, keyed by plugin name, since which apply depends on the entry
+/// (ADR-0109 §5): `x-by-source` on a project (its `source`) and on a workflow
+/// (the source its `projects` resolve to), `x-by-agent` on a workflow (its
+/// `agent`). An unusable one is left out — the entry then shows the core's keys
+/// only, and the plugin's own table already carries the reason.
 fn schema(cx: &Cx) -> Result<(), CliError> {
     use orchestrator_core::plugins::plugin_schemas;
     use serde_json::json;
 
     let mut schema = config::json_schema::core_schema();
     let answers = tokio::runtime::Runtime::new()?.block_on(plugin_schemas(&cx.store()))?;
+    let mut entries = EntrySchemas::default();
     let properties = schema["properties"]
         .as_object_mut()
         .expect("the core schema is an object schema");
     for (name, answer) in answers {
-        if !properties.contains_key(&name) {
-            let entry = plugin_property(&name, answer);
-            properties.insert(name, entry);
+        if properties.contains_key(&name) {
+            continue;
         }
+        entries.collect(&name, &answer);
+        let entry = plugin_property(&name, answer);
+        properties.insert(name, entry);
     }
+    entries.attach(&mut schema);
     crate::common::print_json(&json!({ "config_path": cx.config_path, "schema": schema }))
+}
+
+/// Why `schema` cannot be embedded in the merged document, if it cannot.
+fn unusable(schema: &serde_json::Value) -> Option<String> {
+    // Embedded in a larger document, a local `$ref` would resolve against the
+    // wrong root; the protocol asks for inline subschemas.
+    if schema.to_string().contains("\"$ref\"") {
+        return Some("the schema uses $ref → answer with every subschema inline".into());
+    }
+    (schema["type"] != "object").then(|| "the answer is not an object schema".into())
 }
 
 /// The schema property for one plugin's table: its answer, or `x-raw` (with
@@ -142,20 +163,67 @@ fn plugin_property(
         entry
     };
     match answer {
-        // Embedded under `properties.<name>`, a local `$ref` would resolve
-        // against the wrong root; the protocol asks for inline subschemas.
-        PluginSchema::Schema(s) if s.to_string().contains("\"$ref\"") => raw(Some(
-            "the schema uses $ref → answer with every subschema inline".into(),
-        )),
-        PluginSchema::Schema(mut s) if s["type"] == "object" => {
-            if s.get("x-category").is_none() {
-                s["x-category"] = category.clone();
+        PluginSchema::Schema { answer, .. } => match unusable(&answer.schema) {
+            Some(error) => raw(Some(error)),
+            None => {
+                let mut s = answer.schema;
+                if s.get("x-category").is_none() {
+                    s["x-category"] = category.clone();
+                }
+                s
             }
-            s
-        }
-        PluginSchema::Schema(_) => raw(Some("the answer is not an object schema".into())),
+        },
         PluginSchema::Undeclared => raw(None),
         PluginSchema::Failed(e) => raw(Some(e)),
+    }
+}
+
+/// The per-plugin schemas of `[[projects]]` / `[[workflows]]` entries' keys,
+/// gathered from the answers and attached to those arrays' item schemas.
+#[derive(Default)]
+struct EntrySchemas {
+    project_by_source: serde_json::Map<String, serde_json::Value>,
+    workflow_by_source: serde_json::Map<String, serde_json::Value>,
+    workflow_by_agent: serde_json::Map<String, serde_json::Value>,
+}
+
+impl EntrySchemas {
+    fn collect(&mut self, name: &str, answer: &orchestrator_core::plugins::PluginSchema) {
+        use orchestrator_core::plugins::PluginSchema;
+        use plugin_protocol::manifest::PluginKind;
+
+        let PluginSchema::Schema { answer, kind } = answer else {
+            return;
+        };
+        let usable = |s: &Option<serde_json::Value>| s.clone().filter(|s| unusable(s).is_none());
+        match kind {
+            PluginKind::TaskSource => {
+                if let Some(s) = usable(&answer.project) {
+                    self.project_by_source.insert(name.to_string(), s);
+                }
+                if let Some(s) = usable(&answer.workflow) {
+                    self.workflow_by_source.insert(name.to_string(), s);
+                }
+            }
+            PluginKind::AgentIde => {
+                if let Some(s) = usable(&answer.workflow) {
+                    self.workflow_by_agent.insert(name.to_string(), s);
+                }
+            }
+            PluginKind::Notifier => {}
+        }
+    }
+
+    fn attach(self, schema: &mut serde_json::Value) {
+        for (array, keyword, map) in [
+            ("projects", "x-by-source", self.project_by_source),
+            ("workflows", "x-by-source", self.workflow_by_source),
+            ("workflows", "x-by-agent", self.workflow_by_agent),
+        ] {
+            if !map.is_empty() {
+                schema["properties"][array]["items"][keyword] = serde_json::Value::Object(map);
+            }
+        }
     }
 }
 
@@ -516,24 +584,89 @@ fn redact_table(table: &mut toml::Table) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use plugin_protocol::manifest::PluginKind;
 
     /// A plugin's local `$ref` would point into the wrong document once
     /// embedded, so such an answer is shown raw (Copilot on #845).
     #[test]
     fn a_plugin_schema_with_ref_is_shown_raw() {
-        use orchestrator_core::plugins::PluginSchema;
         let with_ref = serde_json::json!({
             "type": "object",
             "properties": { "a": { "$ref": "#/$defs/A" } },
             "$defs": { "A": { "type": "string" } },
         });
-        let entry = plugin_property("p", PluginSchema::Schema(with_ref));
+        let entry = plugin_property("p", answer(with_ref, None, None, PluginKind::Notifier));
         assert_eq!(entry["x-raw"], true);
         assert!(entry["x-schema-error"].as_str().unwrap().contains("$ref"));
         let inline = serde_json::json!({ "type": "object", "properties": {} });
-        let entry = plugin_property("p", PluginSchema::Schema(inline));
+        let entry = plugin_property("p", answer(inline, None, None, PluginKind::Notifier));
         assert!(entry.get("x-raw").is_none());
         assert_eq!(entry["x-category"], "p");
+    }
+
+    fn answer(
+        schema: serde_json::Value,
+        project: Option<serde_json::Value>,
+        workflow: Option<serde_json::Value>,
+        kind: PluginKind,
+    ) -> orchestrator_core::plugins::PluginSchema {
+        orchestrator_core::plugins::PluginSchema::Schema {
+            answer: plugin_protocol::methods::ConfigSchemaResult {
+                schema,
+                project,
+                workflow,
+            },
+            kind,
+        }
+    }
+
+    /// A source's project / workflow keys land under its name on the entry
+    /// schemas, an agent's workflow keys under `x-by-agent`, and an unusable
+    /// one nowhere (ADR-0109 §5).
+    #[test]
+    fn entry_schemas_are_keyed_by_plugin_and_role() {
+        use serde_json::json;
+        let object =
+            |key: &str| json!({ "type": "object", "properties": { key: { "type": "string" } } });
+        let mut entries = EntrySchemas::default();
+        entries.collect(
+            "gh",
+            &answer(
+                object("token"),
+                Some(object("owner")),
+                Some(object("trigger")),
+                PluginKind::TaskSource,
+            ),
+        );
+        entries.collect(
+            "ide",
+            &answer(
+                object("socket"),
+                Some(object("ignored")),
+                Some(object("layout")),
+                PluginKind::AgentIde,
+            ),
+        );
+        entries.collect(
+            "bad",
+            &answer(
+                object("x"),
+                Some(json!({ "$ref": "#/$defs/A" })),
+                Some(json!("no")),
+                PluginKind::TaskSource,
+            ),
+        );
+        let mut schema = config::json_schema::core_schema();
+        entries.attach(&mut schema);
+        let projects = &schema["properties"]["projects"]["items"];
+        let workflows = &schema["properties"]["workflows"]["items"];
+        assert_eq!(projects["x-by-source"], json!({ "gh": object("owner") }));
+        assert_eq!(workflows["x-by-source"], json!({ "gh": object("trigger") }));
+        assert_eq!(workflows["x-by-agent"], json!({ "ide": object("layout") }));
+        assert!(
+            projects.get("x-by-agent").is_none(),
+            "an agent has no project keys"
+        );
     }
 
     #[test]

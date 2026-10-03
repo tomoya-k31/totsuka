@@ -120,6 +120,6 @@ Apple Developer Program には**加入しない**。それでも友人に配り�
 - プロトコルは 0.7.7 になる（加算的・patch。`Capabilities` を構造体リテラルで組むコードには source break）
 - リポジトリに Swift と XcodeGen が入り、CI に macOS ランナーのジョブが増える（`apps/macos/` を触った PR だけでビルドする）
 - 機密を `--secrets-stdin` で渡す構成では、ターミナルから単独で `doctor` などを叩くと `secret:` を解決できない（ADR-0100 の帰結のまま）
-- `[[projects]]` / `[[workflows]]` に書くプラグイン所有のキー（`owner`・`project_number`・`trigger` の中身など）は、プロトコルがスキーマを運ばないので設定画面ではフォームにならない。必要になったら `config/schema` の答えに `project` / `workflow` 用のスキーマを足す
+- `[[projects]]` / `[[workflows]]` に書くプラグイン所有のキー（`owner`・`project_number`・`trigger` の中身など）は、プラグインが `config/schema` の `project` / `workflow` で申告し、`config schema` がそれを要素のスキーマに `x-by-source` / `x-by-agent` として添える。申告しないプラグインの要素では core のキーしかフォームにならない。`on_*` は core のテーブルなので core のスキーマが `status` / `labels` を持つ
 - schemars は proc-macro の依存として syn の 3 系を連れてくる（ワークスペースの他は 2 系）。ビルド時間は増えるが、実行時の依存は増えない
 - 未確認のまま残すもの: 更新後に一度も起動せずに再ログインしたときのログイン項目の挙動

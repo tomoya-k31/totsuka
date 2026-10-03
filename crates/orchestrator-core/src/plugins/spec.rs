@@ -11,7 +11,9 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use plugin_protocol::manifest::PluginKind;
-use plugin_protocol::methods::{LlmApiKind, LlmInfo, ProjectInfo, RepoInfo, WorkflowInfo};
+use plugin_protocol::methods::{
+    ConfigSchemaResult, LlmApiKind, LlmInfo, ProjectInfo, RepoInfo, WorkflowInfo,
+};
 use serde_json::Value;
 
 use crate::adapters::plugin_host::PluginSpec;
@@ -104,8 +106,13 @@ pub fn plugin_spec(
 /// ([`plugin_schemas`]).
 #[derive(Debug)]
 pub enum PluginSchema {
-    /// The plugin's `config/schema` answer.
-    Schema(Value),
+    /// The plugin's `config/schema` answer, with the kind its manifest
+    /// declares — which decides whether its `workflow` schema describes a
+    /// task source's keys or an agent's.
+    Schema {
+        answer: ConfigSchemaResult,
+        kind: PluginKind,
+    },
     /// The manifest does not declare `config_schema`: the table is edited as
     /// raw TOML. Not an error (ADR-0109).
     Undeclared,
@@ -135,17 +142,23 @@ pub async fn plugin_schemas(
     for name in store.installed_names()? {
         let spec = match store.manifest_of(&name) {
             Ok(Some(manifest)) if manifest.capabilities.config_schema => {
-                store.resolved_dir(&name).map(|dir| PluginSpec {
-                    name: name.clone(),
-                    program: dir.join(&manifest.name),
-                    args: vec![],
-                    manifest,
-                    init_config: Value::Null,
-                    repositories: vec![],
-                    projects: vec![],
-                    llm: None,
-                    workflows: vec![],
-                    timeout: SCHEMA_TIMEOUT,
+                let kind = manifest.kind;
+                store.resolved_dir(&name).map(|dir| {
+                    (
+                        kind,
+                        PluginSpec {
+                            name: name.clone(),
+                            program: dir.join(&manifest.name),
+                            args: vec![],
+                            manifest,
+                            init_config: Value::Null,
+                            repositories: vec![],
+                            projects: vec![],
+                            llm: None,
+                            workflows: vec![],
+                            timeout: SCHEMA_TIMEOUT,
+                        },
+                    )
                 })
             }
             Ok(_) => {
@@ -155,10 +168,10 @@ pub async fn plugin_schemas(
             Err(e) => Err(e),
         };
         match spec {
-            Ok(spec) => {
+            Ok((kind, spec)) => {
                 asks.spawn(async move {
                     let answer = match crate::adapters::plugin_host::config_schema(spec).await {
-                        Ok(schema) => PluginSchema::Schema(schema),
+                        Ok(answer) => PluginSchema::Schema { answer, kind },
                         Err(e) => PluginSchema::Failed(e.to_string()),
                     };
                     (name, answer)

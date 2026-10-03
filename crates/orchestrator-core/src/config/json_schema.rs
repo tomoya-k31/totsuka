@@ -117,6 +117,30 @@ mod tests {
         );
     }
 
+    /// The `on_*` form offers exactly the keys `validate` accepts there.
+    #[test]
+    fn outcome_tables_offer_the_outcome_action_keys() {
+        let schema = core_schema();
+        let item = &schema["properties"]["workflows"]["items"]["properties"];
+        for table in ["on_start", "on_success", "on_failure"] {
+            let node = &item[table];
+            let props = node["properties"]
+                .as_object()
+                .or_else(|| {
+                    node["anyOf"]
+                        .as_array()?
+                        .iter()
+                        .find_map(|alt| alt["properties"].as_object())
+                })
+                .unwrap_or_else(|| panic!("{table}: {node}"));
+            let mut keys: Vec<&str> = props.keys().map(String::as_str).collect();
+            keys.sort_unstable();
+            let mut want = super::super::interpret::OUTCOME_ACTION_KEYS.to_vec();
+            want.sort_unstable();
+            assert_eq!(keys, want, "{table}");
+        }
+    }
+
     #[test]
     fn top_level_keys_have_a_category_and_secrets_are_marked() {
         let schema = core_schema();

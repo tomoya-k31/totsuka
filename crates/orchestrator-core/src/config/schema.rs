@@ -420,6 +420,26 @@ fn default_true() -> bool {
     true
 }
 
+/// The settings window's schema of an `on_start` / `on_success` /
+/// `on_failure` table (ADR-0109). Schema only: serde reads the table raw, and
+/// `validate` holds its keys to
+/// [`OUTCOME_ACTION_KEYS`](super::interpret::OUTCOME_ACTION_KEYS) — which a
+/// test in `json_schema` ties these fields to, so the two cannot drift.
+#[derive(schemars::JsonSchema)]
+#[allow(dead_code)]
+pub(crate) struct OutcomeActionSchema {
+    #[schemars(extend(
+        "x-title" = "Status",
+        "x-help" = "The status (column) to move the task to."
+    ))]
+    status: Option<String>,
+    #[schemars(extend(
+        "x-title" = "Labels",
+        "x-help" = "Labels to add (+name) or remove (-name)."
+    ))]
+    labels: Option<Vec<String>>,
+}
+
 /// A named workflow (F-80). Parsed structurally; trigger/handoff semantics are
 /// validated and matched in #54.
 ///
@@ -518,7 +538,7 @@ pub struct WorkflowConfig {
         "x-title" = "On start",
         "x-help" = "What to change on the task when work starts: { status = \"…\", labels = [\"+a\", \"-b\"] }."
     ))]
-    #[schemars(with = "Option<serde_json::Map<String, serde_json::Value>>")]
+    #[schemars(with = "Option<OutcomeActionSchema>")]
     pub on_start: Option<toml::Table>,
     /// Source status transition on success; kept raw (interpreted in #54).
     #[serde(default)]
@@ -526,7 +546,7 @@ pub struct WorkflowConfig {
         "x-title" = "On success",
         "x-help" = "What to change on the task when the work succeeds."
     ))]
-    #[schemars(with = "Option<serde_json::Map<String, serde_json::Value>>")]
+    #[schemars(with = "Option<OutcomeActionSchema>")]
     pub on_success: Option<toml::Table>,
     /// Source status transition on failure; kept raw (interpreted in #54).
     #[serde(default)]
@@ -534,7 +554,7 @@ pub struct WorkflowConfig {
         "x-title" = "On failure",
         "x-help" = "What to change on the task when the work fails."
     ))]
-    #[schemars(with = "Option<serde_json::Map<String, serde_json::Value>>")]
+    #[schemars(with = "Option<OutcomeActionSchema>")]
     pub on_failure: Option<toml::Table>,
     /// How completion self-reports are verified (D-01). Omitted means `llm`,
     /// same as before profiles existed — the `Option` distinguishes "omitted"

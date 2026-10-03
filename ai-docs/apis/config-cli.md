@@ -30,6 +30,7 @@ owner: tomoya-k31
 - マニフェストが壊れたプラグインは、そのプラグインだけが `x-raw` + `x-schema-error` になる
 - **core のキーと同じ名前のプラグイン**（`log` など）は足さない。core の設定を上書きさせないため（その名前は設定の検証でも拒否される）
 - **`$ref` を含む答えは `x-raw`** になる。プロトコルはサブスキーマをインラインで書くことを求めている（埋め込むとローカル参照が別の根に対して解決されるため）
+- `on_*`（`on_start` / `on_success` / `on_failure`）は core のテーブルなので、`status` と `labels` の 2 キーとして載る（`config validate` が受け付けるキーと一致することをテストで検査）
 - 拡張キーワード:
 
 | キーワード | 型 | 意味 |
@@ -40,6 +41,8 @@ owner: tomoya-k31
 | `x-placeholder` | string | 未設定のときに入力欄へ薄く出す既定値（例: `max_concurrency` の `4`）。serde が知っている既定値はスキーマ標準の `default` に出るので、これはコードの側で決まる既定値のためにある。ヘルプには既定値を書かない（テストで検査） |
 | `x-raw` | `true` | フォームにせず生の TOML として編集する。`config_schema` を宣言していない、または答えが使えなかったプラグインのテーブル |
 | `x-schema-error` | string | `x-raw` になった理由（起動失敗・エラー応答・object でない答え） |
+| `x-by-source` | object（プラグイン名 → スキーマ） | `projects.items` と `workflows.items` に付く。task_source が `config/schema` の `project` / `workflow` で申告した、その要素に読むキーのスキーマ。project なら `source`、workflow なら `projects` が指す project の `source` で引く。キーは core のキーと同じ要素に平置きで書く（workflow の `trigger` はこのスキーマが core の任意 object を置き換える） |
+| `x-by-agent` | object（プラグイン名 → スキーマ） | `workflows.items` に付く。agent プラグインが `workflow` で申告した、claim するオプションのスキーマ。`agent` で引く |
 
 1 つのプラグインの失敗でコマンド全体は失敗しない（`x-raw` + `x-schema-error` になるだけ）。
 
@@ -70,7 +73,8 @@ owner: tomoya-k31
 
 # 既知の制限
 
-- `[[projects]]` と `[[workflows]]` に書くプラグイン所有のキー（`owner` や `project_number`、`trigger` の中身）は、プロトコルがスキーマを運ばないので載っていない。`trigger` / `on_*` は任意の object として載る
+- `[[projects]]` と `[[workflows]]` に書くプラグイン所有のキー（`owner` や `project_number`、`trigger` の中身）は、そのプラグインが `config/schema` の `project` / `workflow` で申告したときだけ `x-by-source` / `x-by-agent` に載る。申告の無いプラグインの要素では core のキーしか出ない（`trigger` は任意の object のまま）
+- 申告のスキーマが使えない（`$ref` を含む、object でない）ときは、その申告だけを載せない。理由はそのプラグインのテーブルの検査と同じなので、テーブル側の `x-raw` / `x-schema-error` で分かる
 - `toml::Datetime` の値は TOML の内部表現の JSON で返る（設定に日時を書くキーは今のところ無い）
 
 # 関連

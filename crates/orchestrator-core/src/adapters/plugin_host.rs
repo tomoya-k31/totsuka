@@ -781,13 +781,15 @@ pub fn launchable_plugin_names(config: &crate::config::RootConfig) -> Vec<String
 /// resolved and nothing is started. `spec.init_config` and the lists are not
 /// sent; the caller decides from the manifest's `config_schema` capability
 /// whether to ask at all.
-pub async fn config_schema(spec: PluginSpec) -> Result<Value, HostError> {
+pub async fn config_schema(
+    spec: PluginSpec,
+) -> Result<plugin_protocol::methods::ConfigSchemaResult, HostError> {
     let plugin = Plugin::spawn(spec)?;
     let result = plugin
         .request::<rpc::ConfigSchema>(&plugin_protocol::methods::ConfigSchemaParams {})
         .await;
     let _ = plugin.shutdown(VALIDATE_SHUTDOWN_GRACE).await;
-    Ok(result?.schema)
+    result
 }
 
 /// Grace period for a config-validate probe's shutdown.
