@@ -36,6 +36,11 @@ pub struct Registration {
     /// retention has to clear `response_url`'s ~30-minute life while the
     /// other's is measured in days (decision 5).
     pub block_actions_topic: String,
+    /// The Slack app's bot token (`xoxb-`), optional. With it, a reject press
+    /// opens the reject modal from here (ADR-0112); without it, presses are
+    /// published as before and totsuka rejects on the spot.
+    #[serde(default)]
+    pub bot_token: Option<String>,
 }
 
 /// Every registered operator.
@@ -134,6 +139,14 @@ impl Registry {
             // 11). A short token can be guessed, and the symptom until it is
             // guessed is nothing at all — which is what puts this check here
             // rather than only in the OpenTofu module.
+            // Present but blank would fail every `views.open` and fall back
+            // forever with nothing pointing at the typo but a log line.
+            if user.bot_token.as_ref().is_some_and(|t| t.trim().is_empty()) {
+                return Err(RegistryError::Invalid(format!(
+                    "`{}` has an empty `bot_token`; omit the field instead",
+                    user.slack_user_id
+                )));
+            }
             if user.path_token.chars().count() < MIN_PATH_TOKEN_CHARS {
                 return Err(RegistryError::Invalid(format!(
                     "`{}` has a `path_token` shorter than {MIN_PATH_TOKEN_CHARS} characters; it \

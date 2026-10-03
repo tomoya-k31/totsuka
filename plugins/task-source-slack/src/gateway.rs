@@ -434,7 +434,7 @@ impl DrainWindow {
 /// |---|---|
 /// | `message` | `ts` — Slack's, and the post *is* the event |
 /// | `block_actions` | `action_ts` — Slack's, stamped at the press |
-/// | `reaction` | `received_at` — the **gateway's** |
+/// | `reaction` / `view_submission` | `received_at` — the **gateway's** |
 ///
 /// The reaction row is the compromise: Slack's `reaction_added` carries an
 /// `event_ts`, but the frozen record does not (ADR-0072 decision 7 closes the
@@ -451,7 +451,9 @@ fn event_time(record: &GatewayRecord) -> Option<SystemTime> {
             .action_ts
             .as_deref()
             .and_then(slack_ts_to_system_time),
-        RecordKind::Reaction => rfc3339_to_system_time(&record.received_at),
+        RecordKind::Reaction | RecordKind::ViewSubmission => {
+            rfc3339_to_system_time(&record.received_at)
+        }
     }
 }
 
@@ -636,6 +638,11 @@ async fn to_socket_event<T: SlackTransport>(
                 .block_actions_payload()
                 .map(SocketEvent::BlockActions))
         }
+        // Not dropped on age: the operator decided, and a stale
+        // `response_url` only costs the surface its tidy-up.
+        RecordKind::ViewSubmission => Ok(record
+            .view_submission_payload()
+            .map(SocketEvent::ViewSubmission)),
     }
 }
 
@@ -1253,6 +1260,9 @@ mod tests {
             response_url: None,
             container_channel: (kind == RecordKind::BlockActions).then(|| "C1".to_string()),
             action_ts: action_ts.map(str::to_string),
+            view_id: None,
+            alt_text: None,
+            send_alt: None,
         }
     }
 

@@ -4,7 +4,7 @@ title: Event Gateway 構築手順（event_source = "gateway"）
 description: GCP 側の構築手順。着手前の組織ポリシー確認、OpenTofu による Cloud Run / Pub/Sub / Secret Manager / IAM の一括構築、Slack の Request URL 2 箇所の設定、totsuka 側の config、人を増やす手順、破棄、費用の前提。Socket Mode を使う読者はこのページを読む必要がない。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/services/slack-event-gateway/tofu
 tags: [slack, gateway, gcp, cloud-run, pubsub, secret-manager, opentofu, runbook, cost]
-generated: { by: claude-code/opus-5.5, at: 2026-10-03T12:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-03T21:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -108,6 +108,11 @@ gcloud config set project <PROJECT_ID>
 | signing secret | Slack アプリ → Basic Information → App Credentials → Signing Secret |
 | パストークン | **生成する。考えない** —— `openssl rand -hex 24` |
 | Google プリンシパル | その人のキューを引ける identity。手順 5 で `gcloud auth application-default login` をするアカウントで、`user:alice@example.com` の形で書く |
+
+任意でもう 1 つ。**Bot User OAuth Token（`xoxb-…`）**を `bot_token` に入れると、返信案の「却下」で
+却下モーダルが開き、代わりの返信を書けるようになる（[ADR-0112](/decisions/adr-0112-gateway-reject-modal.md)）。
+入れなければ「却下」は押した瞬間に確定する（従来どおり）。Slack アプリ → OAuth & Permissions に
+あり、ナッジ DM 用に totsuka の `[slack] bot_token` に入れるものと同じトークンである。
 
 **パストークンは資格情報である。** 公開エンドポイントの手前には IAM も IP 許可リストも無いので、
 「推測不能なパス・署名・5 分のタイムスタンプ窓」の 3 つだけが関門になる（ADR-0072 決定 11）。
@@ -288,6 +293,11 @@ ack 期限は 3 秒なので、実用上の代償は無い。
 **VPC Service Controls は既定で入れない。** 引く側（Pub/Sub）を社内ネットワークに限定したいなら
 ペリメータを張るのが方法だが、**意図して足すものである** —— 自宅や出張先からキューを引けなくなり、
 それは totsuka がまさに想定している使い方だからである。
+
+**`bot_token` を入れるとクラウドに置く資格情報が増える。** 既定では signing secret だけだが、
+`bot_token` を入れた利用者の分はボットトークンも登録表（Secret Manager と OpenTofu の state）に入る。
+できるのはボット名義の操作までで、本人名義で投稿できるユーザートークンは引き続き置かない
+（ADR-0112）。
 
 **ドメイン制限共有は有効のまま維持する。** この構成は組織ポリシーを緩めずに成立するように
 作ってある（手順 0）。

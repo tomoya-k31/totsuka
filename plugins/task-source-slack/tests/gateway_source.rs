@@ -114,6 +114,9 @@ fn message_record(ts: &str, mentions_me: bool, subteams: &[&str]) -> GatewayReco
         response_url: None,
         container_channel: None,
         action_ts: None,
+        view_id: None,
+        alt_text: None,
+        send_alt: None,
     }
 }
 
@@ -129,6 +132,9 @@ fn press_record(action_ts: &str) -> GatewayRecord {
         response_url: Some("https://hooks.slack.com/actions/1".into()),
         container_channel: Some("D0SELFDM".into()),
         action_ts: Some(action_ts.into()),
+        view_id: None,
+        alt_text: None,
+        send_alt: None,
         ..message_record("1757640100.000200", false, &[])
     }
 }
@@ -591,5 +597,54 @@ fn subscription_paths_are_fully_qualified() {
     assert_eq!(
         gateway.block_actions_path(),
         "projects/my-project/subscriptions/totsuka-me-presses"
+    );
+}
+
+/// A queued reject-modal submission (ADR-0112) comes back as the
+/// `view_submission` payload `approval::handle_view_submission` reads — the
+/// same shape Socket Mode delivers, so one handler serves both sources.
+#[tokio::test]
+async fn a_queued_submission_is_rebuilt_into_a_view_submission() {
+    let shared = Shared::default();
+    let metadata =
+        r#"{"c":"C0LOBBY","d":"draft-1","r":"https://hooks.slack.com/actions/1","ts":"100.0"}"#;
+    let record = GatewayRecord {
+        kind: RecordKind::ViewSubmission,
+        channel: "C0LOBBY".into(),
+        ts: "100.0".into(),
+        user: ME.into(),
+        flags: Flags { mentions_me: false },
+        value: Some(metadata.into()),
+        response_url: Some("https://hooks.slack.com/actions/1".into()),
+        view_id: Some("V0REJECT01".into()),
+        alt_text: Some("木曜でお願いします".into()),
+        send_alt: Some(true),
+        ..message_record("100.0", false, &[])
+    };
+    let pubsub = Arc::new(FakePubSub::with_records(&[record]));
+    // The record's `received_at` is a fixed past date; a submission is judged
+    // by it, so widen the window instead of faking the clock.
+    let mut config = gateway_config();
+    config.drain_max_age_hours = Some(24 * 365 * 10);
+
+    let events = collect(&shared, config, Arc::clone(&pubsub), 1).await;
+    assert_eq!(events.len(), 1, "expected one rebuilt event");
+    let SocketEvent::ViewSubmission(payload) = &events[0] else {
+        panic!("expected a view submission, got {:?}", events[0]);
+    };
+    let view = &payload["view"];
+    assert_eq!(view["callback_id"], "reject_reply_modal");
+    assert_eq!(view["private_metadata"], metadata);
+    assert_eq!(
+        view["state"]["values"]["alt_reply"]["alt_text"]["value"],
+        "木曜でお願いします"
+    );
+    assert_eq!(
+        view["state"]["values"]["send_alt"]["send"]["selected_options"][0]["value"],
+        "send"
+    );
+    assert!(
+        shared.requests().is_empty(),
+        "nothing is fetched: the record carries everything"
     );
 }

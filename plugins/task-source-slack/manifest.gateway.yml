@@ -38,8 +38,9 @@
 #
 # The app acts as *you* for everything visible in a conversation: mention
 # detection and the approved reply both use the
-# user token. The bot user exists for exactly ONE thing — DM-ing you a
-# notification nudge when a draft/picker arrives (#305).
+# user token. The bot user exists for the notification nudge DM when a
+# draft/picker arrives (#305), and — if you also give its token to the Event
+# Gateway's registration table — for opening the reject modal (ADR-0112).
 #
 # After installing, put TWO tokens in your secret store and reference them
 # from the `[slack]` table of `~/.config/totsuka/config.toml`:

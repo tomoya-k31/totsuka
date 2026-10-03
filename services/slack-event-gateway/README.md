@@ -77,11 +77,20 @@ The registration table, one row per operator:
       "slack_user_id": "U0123456",
       "signing_secret": "<from the Slack app's Basic Information page>",
       "topic": "projects/<project>/topics/<operator>-events",
-      "block_actions_topic": "projects/<project>/topics/<operator>-presses"
+      "block_actions_topic": "projects/<project>/topics/<operator>-presses",
+      "bot_token": "<optional: the app's Bot User OAuth Token, xoxb-…>"
     }
   ]
 }
 ```
+
+`bot_token` is optional. With it, a press of a draft's reject button opens the
+reject modal from here — inside the 3 seconds a `trigger_id` lives, which a
+press queued through Pub/Sub cannot reach — and the press itself is not
+published; the modal's submission is published instead, as a
+`view_submission` record (ADR-0112). Without it, or whenever the modal cannot
+open, the press is published as before and totsuka rejects on the spot. A
+blank `bot_token` is refused at startup: omit the field instead.
 
 A `path_token` must be **at least 32 characters** — `openssl rand -hex 24`
 generates one. It is the routing credential on an endpoint with no IAM in

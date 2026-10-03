@@ -45,6 +45,9 @@ pub enum RecordKind {
     Reaction,
     /// A Block Kit button press, flattened out of `actions[0]`.
     BlockActions,
+    /// A reject modal's submission (ADR-0112): what the operator typed, plus
+    /// the draft coordinates the modal carried.
+    ViewSubmission,
 }
 
 /// Boolean verdicts reached by comparing against constant strings.
@@ -100,6 +103,17 @@ pub struct Record {
     /// identity.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub action_ts: Option<String>,
+    /// `view_submission` only: Slack's `view.id`, the delivery identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view_id: Option<String>,
+    /// `view_submission` only: the alternative reply the operator typed.
+    /// **The one free-text field a record carries** — the operator's own
+    /// words, typed for exactly this purpose (ADR-0112).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alt_text: Option<String>,
+    /// `view_submission` only: the "also post it" box was ticked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub send_alt: Option<bool>,
 }
 
 /// Which Request URL a delivery arrived on.
@@ -158,6 +172,7 @@ pub fn project(
     match endpoint {
         Endpoint::Interactivity => Projection::Publish(
             project_press(payload, received_at)
+                .or_else(|| project_submission(payload, received_at))
                 .map(|record| Published {
                     topic: Topic::BlockActions,
                     record,
@@ -248,6 +263,9 @@ fn project_message(event: &Value, operator: &str, received_at: &str) -> Option<R
         response_url: None,
         container_channel: None,
         action_ts: None,
+        view_id: None,
+        alt_text: None,
+        send_alt: None,
     })
 }
 
@@ -288,6 +306,68 @@ fn project_reaction(event: &Value, operator: &str, received_at: &str) -> Option<
         response_url: None,
         container_channel: None,
         action_ts: None,
+        view_id: None,
+        alt_text: None,
+        send_alt: None,
+    })
+}
+
+/// The reject modal's submission (ADR-0112). Any other modal is dropped: the
+/// reject modal is the only one this system opens.
+///
+/// `channel` / `ts` come from the modal's metadata — the thread the draft
+/// belongs to — because a submission names no conversation of its own.
+/// `value` carries that metadata verbatim and `response_url` the press's URL
+/// inside it, so the consumer reads them where a press keeps them.
+fn project_submission(payload: &Value, received_at: &str) -> Option<Record> {
+    if payload.get("type").and_then(Value::as_str) != Some("view_submission") {
+        return None;
+    }
+    let view = payload.get("view")?;
+    if view.get("callback_id").and_then(Value::as_str)
+        != Some(crate::modal::REJECT_MODAL_CALLBACK_ID)
+    {
+        return None;
+    }
+    let raw = view.get("private_metadata").and_then(Value::as_str)?;
+    let metadata: Value = serde_json::from_str(raw).ok()?;
+    let field = |name: &str| {
+        metadata
+            .get(name)
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    };
+    Some(Record {
+        v: SCHEMA_VERSION,
+        kind: RecordKind::ViewSubmission,
+        channel: field("c")?,
+        ts: field("ts")?,
+        thread_ts: None,
+        user: payload
+            .pointer("/user/id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        flags: Flags { mentions_me: false },
+        subteam_ids: Vec::new(),
+        received_at: received_at.to_string(),
+        reaction: None,
+        item_user: None,
+        action_id: None,
+        value: Some(raw.to_string()),
+        response_url: field("r"),
+        container_channel: None,
+        action_ts: None,
+        view_id: Some(view.get("id").and_then(Value::as_str)?.to_string()),
+        alt_text: view
+            .pointer("/state/values/alt_reply/alt_text/value")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        send_alt: Some(
+            view.pointer("/state/values/send_alt/send/selected_options")
+                .and_then(Value::as_array)
+                .is_some_and(|o| o.iter().any(|o| o["value"] == "send")),
+        ),
     })
 }
 
@@ -338,6 +418,9 @@ fn project_press(payload: &Value, received_at: &str) -> Option<Record> {
             .map(str::to_string),
         container_channel: Some(channel.to_string()),
         action_ts: Some(action.get("action_ts").and_then(Value::as_str)?.to_string()),
+        view_id: None,
+        alt_text: None,
+        send_alt: None,
     })
 }
 
@@ -411,6 +494,10 @@ pub fn delivery_id(record: &Record) -> String {
                 .unwrap_or(&record.channel),
             record.action_ts.as_deref().unwrap_or_default(),
             record.action_id.as_deref().unwrap_or_default()
+        ),
+        RecordKind::ViewSubmission => format!(
+            "view_submission:{}",
+            record.view_id.as_deref().unwrap_or_default()
         ),
     }
 }
@@ -520,6 +607,9 @@ mod tests {
             response_url: None,
             container_channel: None,
             action_ts: None,
+            view_id: None,
+            alt_text: None,
+            send_alt: None,
         };
         let json = encode(&record);
         let keys: Vec<&str> = json

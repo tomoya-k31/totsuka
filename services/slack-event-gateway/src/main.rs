@@ -11,11 +11,14 @@ use hyper_util::rt::TokioIo;
 use hyper_util::server::graceful::GracefulShutdown;
 
 use slack_event_gateway::http::{self, Gateway};
+use slack_event_gateway::modal::SlackModals;
 use slack_event_gateway::publish::{self, MetadataTokens, PubSub};
 use slack_event_gateway::registry::Registry;
 
 /// Default Pub/Sub endpoint.
 const DEFAULT_PUBSUB_URL: &str = "https://pubsub.googleapis.com";
+/// Slack Web API, for `views.open` (ADR-0112).
+const DEFAULT_SLACK_API_URL: &str = "https://slack.com/api";
 
 /// How long a shutdown waits for in-flight requests.
 ///
@@ -43,10 +46,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = reqwest::Client::builder()
         .timeout(publish::PUBLISH_BUDGET)
         .build()?;
+    let slack_api_url =
+        std::env::var("SLACK_API_URL").unwrap_or_else(|_| DEFAULT_SLACK_API_URL.to_string());
     let pubsub_url = std::env::var("PUBSUB_URL").unwrap_or_else(|_| DEFAULT_PUBSUB_URL.to_string());
     let gateway = Arc::new(Gateway {
         registry,
-        publisher: PubSub::new(client.clone(), &pubsub_url, MetadataTokens::new(client)),
+        publisher: PubSub::new(
+            client.clone(),
+            &pubsub_url,
+            MetadataTokens::new(client.clone()),
+        ),
+        modals: SlackModals::new(client, &slack_api_url),
     });
 
     let port: u16 = std::env::var("PORT")

@@ -12,7 +12,7 @@ owner: tomoya-k31
 
 # Status
 
-stable。[ADR-0074](/decisions/adr-0074-single-draft-surface.md)（下書きの提示面は 1 つ、決定はナッジ DM に記録してからエフェメラルを消す）の上に、却下時の入力を足す。Event Gateway 経由の押下は本 ADR では扱わない（その場で却下のまま）。
+stable。[ADR-0074](/decisions/adr-0074-single-draft-surface.md)（下書きの提示面は 1 つ、決定はナッジ DM に記録してからエフェメラルを消す）の上に、却下時の入力を足す。Event Gateway 経由は [ADR-0112](/decisions/adr-0112-gateway-reject-modal.md) で扱う。
 
 # Context
 
@@ -67,4 +67,4 @@ stable。[ADR-0074](/decisions/adr-0074-single-draft-surface.md)（下書きの�
 - 送信を選んだ却下は、承認と違い「スレッドに出た文面は運用者が書いたもの」になる。記録上は `Rejected` なので、承認率の集計に混ざらない
 - 却下は 1 クリックから 2 クリック（押下 → 送信）になる。代わりの返信を書かなくても「却下する」の 1 押しが増える
 - モーダルを開いたまま承認ボタンを押すと承認が先に確定し、後から届いた送信は「決定済み」の経路で表面の掃除だけをする
-- Gateway 経由では本 ADR の入力が使えない。押下が totsuka に届くまで最大 20 秒かかり `trigger_id` の 3 秒に間に合わないこと、`view_submission` を中継していないことの 2 点が理由で、対応は別の決定で扱う
+- Gateway 経由では totsuka がモーダルを開けない（押下が届くまで最大 20 秒かかり、`trigger_id` の 3 秒に間に合わない）。[ADR-0112](/decisions/adr-0112-gateway-reject-modal.md) でゲートウェイが代わりに開き、送信を中継する

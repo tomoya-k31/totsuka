@@ -105,6 +105,12 @@ dropped event.
 | `message` | `message:{channel}:{ts}` |
 | `reaction` | `reaction:{channel}:{ts}:{user}:{reaction}` |
 | `block_actions` | `block_actions:{container_channel}:{action_ts}:{action_id}` |
+| `view_submission` | `view_submission:{view_id}` |
+
+`view_submission` (ADR-0112) is the reject modal's submission. It is the one
+kind that carries free text — `alt_text`, the alternative reply the operator
+typed for exactly this route — and it goes to the `block_actions` topic,
+whose short retention already fits `response_url`'s life.
 
 For `message`, the identity without its prefix is **byte-identical** to
 totsuka's `Mention::message_key()`, so the existing dedup covers gateway-sourced

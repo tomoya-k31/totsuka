@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](event-gateway-setup.ja.md)
 
-<!-- generated-from: ai-docs/operations/event-gateway-setup.md sha256:4865d2551e9a36eb4e41d354ecd6c339fb11f6fd03fff483e4a0f1092f9bef8a -->
+<!-- generated-from: ai-docs/operations/event-gateway-setup.md sha256:83fffaa7a51e06d834caebfcaf8cff835d69a36345c0f8e40e52af1be9202e45 -->
 
 # Event Gateway setup
 
@@ -113,6 +113,13 @@ this so it does not go in a circle:
 | Signing secret | Slack app → Basic Information → App Credentials → Signing Secret |
 | Path token | **Generate it. Do not invent one** — `openssl rand -hex 24` |
 | Google principal | The identity allowed to read that person's queues — the account they will run `gcloud auth application-default login` as in step 5, written as `user:alice@example.com` |
+
+One more, optional: the app's **Bot User OAuth Token** (`xoxb-…`) as
+`bot_token`. With it, pressing **Reject** on a reply draft opens a dialog where
+you can write the reply you would have sent instead. Without it, **Reject** takes
+effect the moment it is pressed. It is on the Slack app's OAuth & Permissions
+page — the same token you give totsuka as `[slack] bot_token` for the
+notification DM.
 
 **The path token is a credential.** There is no IAM and no IP allowlist in front
 of the public endpoint, so the only things standing in the way are the
@@ -303,6 +310,12 @@ signature, and the five-minute window, all inside the container.
 side confined to company networks, a perimeter around Pub/Sub is the way — but
 add it deliberately: it also stops people draining their queue from home or on a
 trip, which is squarely what totsuka is built for.
+
+**A `bot_token` adds a credential to the cloud.** By default only the signing
+secret is stored there; for each person who sets `bot_token`, their bot token
+also goes into the registration table (Secret Manager and the OpenTofu state).
+It can only act as the bot. The user token, which posts as you, is never stored
+there.
 
 **Domain Restricted Sharing stays on.** This is built to work without relaxing
 any organization policy.

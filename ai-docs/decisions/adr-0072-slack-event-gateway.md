@@ -42,7 +42,7 @@ sources:
 
 # Status
 
-stable。設計判断は確定済み。実装は未着手で、[#652](https://github.com/tomoya-k31/totsuka/issues/652) の子 issue に分割する。
+stable。設計判断は確定済み。**決定 1（クラウドの資格情報）と決定 4（本文を保存しない）は、却下モーダルの 1 経路に限って [ADR-0112](/decisions/adr-0112-gateway-reject-modal.md) が改めた**（任意のボットトークンと、`view_submission` の `alt_text`）。実装は未着手で、[#652](https://github.com/tomoya-k31/totsuka/issues/652) の子 issue に分割する。
 
 **当初ここに書いていた「未検証のブロッカー」は、回避手段と費用の見積もりが誤っていた。** 訂正して残す。ただし**ブロッカーが消えたわけではなく、確認すべき対象が変わった**。`constraints/run.managed.requireInvokerIam` が適用されている組織では、下記の回避手段も塞がれて元の行き止まりに戻る。**結論は #659 の事前確認の結果に左右される。**
 

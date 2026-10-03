@@ -15,6 +15,7 @@ use hyper::{Method, Request, StatusCode};
 use serde_json::{Value, json};
 
 use slack_event_gateway::http::{Gateway, handle};
+use slack_event_gateway::modal::ModalOpener;
 use slack_event_gateway::publish::{PublishError, Publisher};
 use slack_event_gateway::registry::Registry;
 use slack_event_gateway::signature::sign;
@@ -42,6 +43,26 @@ impl Publisher for FakePublisher {
             .lock()
             .unwrap()
             .push((topic.to_string(), record.clone()));
+        Ok(())
+    }
+}
+
+/// Records the modals it was asked to open, and can be told to fail.
+#[derive(Clone, Default)]
+struct FakeModals {
+    opened: Arc<Mutex<Vec<(String, String, Value)>>>,
+    fail: bool,
+}
+
+impl ModalOpener for FakeModals {
+    async fn open(&self, token: &str, trigger_id: &str, view: &Value) -> Result<(), String> {
+        if self.fail {
+            return Err("expired_trigger_id".into());
+        }
+        self.opened
+            .lock()
+            .unwrap()
+            .push((token.to_string(), trigger_id.to_string(), view.clone()));
         Ok(())
     }
 }
@@ -108,6 +129,7 @@ async fn send(
     let gateway = Arc::new(Gateway {
         registry: registry(),
         publisher: publisher.clone(),
+        modals: FakeModals::default(),
     });
     let response = handle(gateway, delivery.request(), now()).await;
     let status = response.status();
@@ -430,6 +452,7 @@ async fn an_oversized_body_is_refused_without_a_content_length() {
     let gateway = Arc::new(Gateway {
         registry: registry(),
         publisher: FakePublisher::default(),
+        modals: FakeModals::default(),
     });
     let request = Request::builder()
         .method(Method::POST)
@@ -456,6 +479,7 @@ async fn an_oversized_content_length_is_refused() {
     let gateway = Arc::new(Gateway {
         registry: registry(),
         publisher: FakePublisher::default(),
+        modals: FakeModals::default(),
     });
     let request = Request::builder()
         .method(Method::POST)
@@ -477,6 +501,7 @@ async fn a_get_is_refused() {
     let gateway = Arc::new(Gateway {
         registry: registry(),
         publisher: FakePublisher::default(),
+        modals: FakeModals::default(),
     });
     let request = Request::builder()
         .method(Method::GET)
@@ -487,4 +512,109 @@ async fn a_get_is_refused() {
         handle(gateway, request, now()).await.status(),
         StatusCode::METHOD_NOT_ALLOWED
     );
+}
+
+// ---------------------------------------------------------------------------
+// The reject modal (ADR-0112)
+// ---------------------------------------------------------------------------
+
+/// A signed, form-encoded delivery on the interactivity Request URL.
+fn interactivity(payload: &Value) -> Delivery {
+    let encoded = percent_encoding::utf8_percent_encode(
+        &payload.to_string(),
+        percent_encoding::NON_ALPHANUMERIC,
+    )
+    .to_string();
+    let body = format!("payload={encoded}");
+    let timestamp = NOW_SECS.to_string();
+    Delivery {
+        path: format!("/slack/e/{TOKEN}"),
+        signature: Some(sign(SECRET, &timestamp, body.as_bytes())),
+        body,
+        timestamp,
+        content_type: "application/x-www-form-urlencoded",
+    }
+}
+
+fn reject_press() -> Value {
+    json!({
+        "type": "block_actions",
+        "user": { "id": "U_ME" },
+        "trigger_id": "1111.2222.abc",
+        "container": { "type": "message", "channel_id": "C1", "message_ts": "1757640100.000200" },
+        "response_url": "https://hooks.slack.com/actions/T/1/abc",
+        "actions": [{
+            "action_id": "reject_reply",
+            "value": "{\"d\":\"draft-1\",\"c\":\"C1\",\"ts\":\"100.0\"}",
+            "action_ts": "1757640200.111111"
+        }]
+    })
+}
+
+/// [`registry`] with a bot token on the row.
+fn registry_with_bot() -> Registry {
+    Registry::parse(&format!(
+        r#"{{"users":[{{"path_token":"{TOKEN}","slack_user_id":"U_ME",
+             "signing_secret":"{SECRET}",
+             "topic":"projects/p/topics/events",
+             "block_actions_topic":"projects/p/topics/presses",
+             "bot_token":"xoxb-test"}}]}}"#
+    ))
+    .expect("the table parses")
+}
+
+async fn send_reject(registry: Registry, modals: FakeModals) -> (StatusCode, FakePublisher) {
+    let publisher = FakePublisher::default();
+    let gateway = Arc::new(Gateway {
+        registry,
+        publisher: publisher.clone(),
+        modals,
+    });
+    let response = handle(gateway, interactivity(&reject_press()).request(), now()).await;
+    (response.status(), publisher)
+}
+
+/// **An opened modal replaces the press.** Publishing it too would make
+/// totsuka reject on the spot, before the operator typed anything.
+#[tokio::test]
+async fn a_reject_press_opens_the_modal_and_is_not_published() {
+    let modals = FakeModals::default();
+    let (status, publisher) = send_reject(registry_with_bot(), modals.clone()).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(publisher.published.lock().unwrap().is_empty());
+    let opened = modals.opened.lock().unwrap().clone();
+    assert_eq!(opened.len(), 1);
+    let (token, trigger, view) = &opened[0];
+    assert_eq!(token, "xoxb-test");
+    assert_eq!(trigger, "1111.2222.abc");
+    assert_eq!(view["callback_id"], "reject_reply_modal");
+    let metadata: Value = serde_json::from_str(view["private_metadata"].as_str().unwrap()).unwrap();
+    assert_eq!(metadata["d"], "draft-1");
+    assert_eq!(metadata["r"], "https://hooks.slack.com/actions/T/1/abc");
+}
+
+/// A modal that cannot open falls back to the press: the rejection survives.
+#[tokio::test]
+async fn a_modal_that_cannot_open_publishes_the_press() {
+    let modals = FakeModals {
+        fail: true,
+        ..FakeModals::default()
+    };
+    let (status, publisher) = send_reject(registry_with_bot(), modals).await;
+
+    assert_eq!(status, StatusCode::OK);
+    let published = publisher.published.lock().unwrap().clone();
+    assert_eq!(published.len(), 1);
+    assert_eq!(published[0].1["action_id"], "reject_reply");
+}
+
+/// Without a bot token nothing changes: the press is published.
+#[tokio::test]
+async fn without_a_bot_token_the_press_is_published() {
+    let modals = FakeModals::default();
+    let (_, publisher) = send_reject(registry(), modals.clone()).await;
+
+    assert!(modals.opened.lock().unwrap().is_empty());
+    assert_eq!(publisher.published.lock().unwrap().len(), 1);
 }

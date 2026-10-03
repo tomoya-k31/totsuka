@@ -27,6 +27,11 @@ operators = [
 
     # Who may pull alice's two subscriptions. Nobody else can.
     google_principal = "user:alice@example.com"
+
+    # Optional. The app's Bot User OAuth Token (`xoxb-…`): lets the gateway
+    # open the reject modal inside Slack's 3-second window (ADR-0112). Omit it
+    # and a reject press rejects on the spot, with no alternative reply.
+    # bot_token = "REPLACE-ME"
   },
 
   # Adding a second person is this block and nothing else: topics,

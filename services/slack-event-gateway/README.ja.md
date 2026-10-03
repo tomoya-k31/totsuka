@@ -70,11 +70,18 @@ Slack は IAM プリンシパルになれず、許可リストに使える安定
       "slack_user_id": "U0123456",
       "signing_secret": "<Slack アプリの Basic Information ページから>",
       "topic": "projects/<project>/topics/<operator>-events",
-      "block_actions_topic": "projects/<project>/topics/<operator>-presses"
+      "block_actions_topic": "projects/<project>/topics/<operator>-presses",
+      "bot_token": "<任意: アプリの Bot User OAuth Token、xoxb-…>"
     }
   ]
 }
 ```
+
+`bot_token` は任意である。あると、下書きの「却下」の押下でゲートウェイが却下モーダルを開く。
+`trigger_id` は押下から 3 秒で失効し、Pub/Sub を経由した押下では間に合わないため、ここで開く。
+開けたら押下そのものは publish せず、代わりにモーダルの送信を `view_submission` レコードとして
+publish する（ADR-0112）。無い場合やモーダルが開けない場合は、従来どおり押下を publish し、
+totsuka がその場で却下する。空文字の `bot_token` は起動時に拒否するので、使わないなら項目ごと省く。
 
 `path_token` は **32 文字以上**でなければならない（`openssl rand -hex 24` で生成する）。
 IAM の無いエンドポイントのルーティング資格情報そのものなので、短いものは総当たりで
