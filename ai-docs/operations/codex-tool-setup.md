@@ -49,9 +49,9 @@ Stop stdin の `last_assistant_message` / `turn_id`、UserPromptSubmit
 
 3. **登録同期**: `totsuka doctor` を実行。config が codex-kind ツールを参照して
    いれば `$CODEX_HOME/hooks.json` に totsuka 管理エントリ
-   （Stop / SessionStart / SessionEnd / UserPromptSubmit / PermissionRequest）が
+   （Stop / SessionStart / SessionEnd / UserPromptSubmit / PermissionRequest / PostToolUse）が
    追記される。自前で登録済みの hooks エントリは位置ごと保全される。
-4. **hooks trust（一回きり・対話必須）**: `codex` を一度 TUI で起動すると
+4. **hooks trust（エントリが増えたらもう一度・対話必須）**: `codex` を一度 TUI で起動すると
    起動時フックレビューが出るので **"Trust all and continue"** を選ぶ。
    - 未 trust のフックは codex が**サイレントにスキップ**する（エラーも警告も
      出ない）。その状態で dispatch すると完了通知が一切届かず全タスクが

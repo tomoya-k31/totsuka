@@ -41,13 +41,16 @@ use super::AssetIssue;
 /// Codex has no `Notification` event; `PermissionRequest` (fires before an
 /// approval prompt) is relayed through the same `on-notification.sh`, which
 /// synthesizes the message and keeps stdout empty (an output would decide the
-/// approval instead of relaying it).
+/// approval instead of relaying it). `PostToolUse` clears the task's
+/// awaiting-approval mark once a tool runs after that prompt, as it does for
+/// claude — without it the mark would last until the turn ends.
 const MANAGED_HOOKS: &[(&str, &str, u64)] = &[
     ("Stop", "on-stop.sh", 30),
     ("SessionStart", "on-session-start.sh", 10),
     ("SessionEnd", "on-session-end.sh", 3),
     ("UserPromptSubmit", "on-user-prompt-submit.sh", 10),
     ("PermissionRequest", "on-notification.sh", 10),
+    ("PostToolUse", "on-post-tool-use.sh", 10),
 ];
 
 /// The codex home directory: `$CODEX_HOME`, else `$HOME/.codex`. `None` when
@@ -230,6 +233,7 @@ fn event_key(event: &str) -> &'static str {
         "SessionEnd" => "session_end",
         "UserPromptSubmit" => "user_prompt_submit",
         "PermissionRequest" => "permission_request",
+        "PostToolUse" => "post_tool_use",
         other => unreachable!("unknown managed event {other}"),
     }
 }

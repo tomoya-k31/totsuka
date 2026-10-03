@@ -19,7 +19,7 @@ owner: tomoya-k31
 | `verifying` | `totsuka task verify --pass/--fail` による人間検収（#131 D-01） |
 | `escalated` | pane での詰まりの解消（UNKNOWN 連続 / タイムアウト / 相関異常、F-103） |
 | `queued` かつ `wait_reason` あり | 記録された停止理由の解消（#407。現状の唯一の kind は `blocked_agent_tools`） |
-| `running` かつ許可待ち | エージェントが出した許可の確認（Claude Code の permission prompt）への回答。状態は `running` のまま（R-08。承認待ちは質問待ちではない）なので、生きている `run` が `health.json` の `awaiting_approval` に載せたものを `menu` が読む。次のツール実行（`PostToolUse`）か次の信号で外れる |
+| `running` かつ許可待ち | エージェントが出した許可の確認（Claude Code の permission prompt）への回答。状態は `running` のまま（R-08。承認待ちは質問待ちではない）なので、生きている `run` が `health.json` の `awaiting_approval` に載せたものを `menu` が読む。claude と codex は次のツール実行（`PostToolUse`）で、opencode は答えたことを知らせるイベントが無いので次の信号（ターンの終わりなど）で外れる |
 
 `queued` は **`wait_reason` の有無で二分される**。理由が記録されていないものは単に順番待ちで、放っておけば自分で始まるので要対応ではない。
 
