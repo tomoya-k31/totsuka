@@ -295,7 +295,7 @@ macOS のメニューバーのように**常時視界に入る面**へ状態を�
 |---|---|
 | `setup` | 初期セットアップ: 選んだプラグインを導入し、全設定をコメントで書いた設定ファイルを生成する（この表を最初に書いた後に追加された。セットアップ Playbook 参照） |
 | `run [--watch] [--json]` | タスク取り込み（push、`task/submit`）〜ディスパッチのメインループ実行(デフォルトはワンショット、`--watch` は push を受け続けたまま shutdown まで常駐 — 未決事項 #2 は解決済み) |
-| `run --events-jsonl` | `run` を子プロセスとして起動するメニューバーアプリ向け: stdout の各行が JSON 1 つになり、通知(`type: "notify"`)と最後の要約(`type: "summary"`)が流れる。notifier プラグインは起動しない。`--json` とは併用不可(ADR-0109) |
+| `run --events-jsonl` | `run` を子プロセスとして起動するメニューバーアプリ向け: stdout の各行が JSON 1 つになり、通知(`type: "notify"`)と最後の要約(`type: "summary"`)が流れる。notifier プラグインは起動しない。`--json` とは併用不可(ADR-0113) |
 | `status [--json]` | 実行中 / キュー / 待機中タスクと worktree の一覧、および動作中の run の縮退(F-110) |
 | `menu [--json]` | メニューバー向けの表示(F-109)。既定は SwiftBar のプラグイン書式、`--json` は表示モデル。常に exit 0 |
 | `task list / show <id> / cancel <id> / retry <id>` | タスク個別操作 |

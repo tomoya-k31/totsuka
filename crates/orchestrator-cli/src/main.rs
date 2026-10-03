@@ -106,7 +106,7 @@ enum Command {
         #[arg(long)]
         secrets_stdin: bool,
         /// Write each notification to stdout as one JSON line, for the
-        /// process that launched this one (the menu bar app, ADR-0109).
+        /// process that launched this one (the menu bar app, ADR-0113).
         ///
         /// Every stdout line is then one JSON object with a `type`: `notify`
         /// (the fields of a `notify` sent to notifier plugins) as tasks move,

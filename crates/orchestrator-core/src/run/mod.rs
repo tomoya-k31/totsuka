@@ -1072,7 +1072,7 @@ fn notify_all(
     deliver_notification(notifiers, &params);
 }
 
-/// Whether `run --events-jsonl` is on (ADR-0109): every notification is also
+/// Whether `run --events-jsonl` is on (ADR-0113): every notification is also
 /// written to stdout as one JSON line, for the menu bar app that launched this
 /// process.
 ///
@@ -1082,7 +1082,7 @@ fn notify_all(
 /// flag carried as an argument is a flag some new call site forgets.
 static EVENTS_JSONL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// Turn on `run --events-jsonl` for this process (ADR-0109).
+/// Turn on `run --events-jsonl` for this process (ADR-0113).
 pub fn emit_events_jsonl() {
     EVENTS_JSONL.store(true, std::sync::atomic::Ordering::Relaxed);
 }

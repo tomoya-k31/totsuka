@@ -40,7 +40,7 @@ pub struct RunArgs {
     /// Take secret values from stdin's first line, never from a store (#754).
     pub secrets_stdin: bool,
     /// Notifications as JSON lines on stdout, notifier plugins not started
-    /// (ADR-0109).
+    /// (ADR-0113).
     pub events_jsonl: bool,
     /// Emit the summary as JSON on stdout instead of prose (#462).
     pub json: bool,
@@ -336,7 +336,7 @@ async fn launch_plugins(
     let mut claims: BTreeMap<String, Vec<plugin_protocol::methods::WorkflowOption>> =
         BTreeMap::new();
     for (name, plugin_cfg) in cfg.plugins.iter().filter(|(_, p)| p.enabled) {
-        // Under `--events-jsonl` the parent is the notifier (ADR-0109): a
+        // Under `--events-jsonl` the parent is the notifier (ADR-0113): a
         // notifier plugin as well would notify every event twice.
         if events_jsonl && plugin_cfg.kind == PluginKind::Notifier {
             tracing::info!(plugin = %name, "notifier not started: --events-jsonl delivers notifications");

@@ -332,7 +332,7 @@ fn e2e_run_json_emits_only_the_summary_document() {
     let _ = std::fs::remove_dir_all(&env.base);
 }
 
-/// `--events-jsonl` (ADR-0109): every stdout line is one JSON object — the
+/// `--events-jsonl` (ADR-0113): every stdout line is one JSON object — the
 /// `notify` events as they happen, then the `summary` — and the notifier
 /// plugin is not started, so nothing is notified twice.
 #[test]
