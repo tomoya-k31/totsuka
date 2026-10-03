@@ -370,6 +370,9 @@ pub fn spawn<T, C, S>(
     // cannot have changed in between. `None` means no route claimed a group,
     // and this resolves them itself below, non-fatally, as it always did.
     subteams: Option<Vec<String>>,
+    // The app's own `bot_id`, from the TokenGuard's bot `auth.test`. `None`
+    // without a bot token, where nothing is posted as a bot anyway.
+    own_bot_id: Option<String>,
     mut events: mpsc::UnboundedReceiver<SocketEvent>,
     state: SharedState,
     submitter: S,
@@ -385,6 +388,9 @@ where
             &config.target_user_id,
             trigger_reactions.mention_routes().to_vec(),
         );
+        if let Some(id) = own_bot_id {
+            filter.set_own_bot_id(id);
+        }
         // Resolve the operator's own DM channel up front, for filter row 3.
         // Failure is not fatal: row 2 (own posts) already breaks reply loops.
         match api.conversations_open_self(&config.target_user_id).await {

@@ -800,16 +800,19 @@ where
             return Err(Error::new(error_code::CONFIG_INVALID, errors.join("; ")));
         }
         let api = Arc::new(SlackApi::new(self.factory.build(settings(&config))));
-        if let Err(e) = token_guard(&api, &config, &reaction_triggers).await {
-            // Credential/identity problems are config-class (fix the token or
-            // the config); anything else (network down) is an internal error.
-            let code = if e.is_credential() {
-                error_code::CONFIG_INVALID
-            } else {
-                error_code::INTERNAL_ERROR
-            };
-            return Err(Error::new(code, e.to_string()));
-        }
+        let own_bot_id = match token_guard(&api, &config, &reaction_triggers).await {
+            Ok(own_bot_id) => own_bot_id,
+            Err(e) => {
+                // Credential/identity problems are config-class (fix the token or
+                // the config); anything else (network down) is an internal error.
+                let code = if e.is_credential() {
+                    error_code::CONFIG_INVALID
+                } else {
+                    error_code::INTERNAL_ERROR
+                };
+                return Err(Error::new(code, e.to_string()));
+            }
+        };
 
         // `to_group` membership, which only a live `usergroups.list` can
         // settle (ADR-0081 decisions 4 and 9).
@@ -968,6 +971,7 @@ where
                 watch_triggers,
                 backfill_limits,
                 subteams,
+                own_bot_id,
                 events,
                 state.clone(),
                 self.submit.clone(),
@@ -1142,6 +1146,9 @@ where
 /// doctor` would report the plugin healthy while it can never receive an
 /// event.
 ///
+/// Returns the bot token's own `bot_id`, when there is a bot token and Slack
+/// reported one: the mention filter excludes that bot's posts (ADR-0109).
+///
 /// **The xapp probe is skipped under `event_source = "gateway"`** (#657):
 /// there is no Socket Mode connection to open, so the probe would fail
 /// startup over a token the run never uses. The equivalent guard for the
@@ -1151,7 +1158,7 @@ async fn token_guard<T: SlackTransport>(
     api: &SlackApi<T>,
     config: &SlackConfig,
     reactions: &ReactionTriggers,
-) -> Result<(), SlackError> {
+) -> Result<Option<String>, SlackError> {
     let identity = api.auth_test().await?;
     if identity.user_id != config.target_user_id {
         return Err(SlackError::IdentityMismatch {
@@ -1166,11 +1173,13 @@ async fn token_guard<T: SlackTransport>(
     // xapp token: probe it here so a dead one fails startup with guidance
     // (visible to `doctor`) instead of silently dropping every nudge (#305).
     // Absent = nudges off by choice; nothing to probe.
-    if config.bot_token.is_some() {
-        api.auth_test_bot().await?;
-    }
+    let own_bot_id = if config.bot_token.is_some() {
+        api.auth_test_bot().await?
+    } else {
+        None
+    };
     check_scopes(api, config, reactions).await;
-    Ok(())
+    Ok(own_bot_id)
 }
 
 /// Warn when the user token lacks a scope this plugin needs (#379).

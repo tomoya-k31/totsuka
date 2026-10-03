@@ -137,6 +137,8 @@ totsuka が用意する worktree は `origin/{default}` の detached HEAD であ
 
 ## bot 投稿を自動でタスク化する（メンション経路を緩める）
 
+> **後に覆った。** メンション経路は [ADR-0109](/decisions/adr-0109-slack-bot-mentions.md) で bot に開いた。以下は当時の判断の記録として残す。
+
 **不採用。** 取りこぼしが無いのは利点だが、代償が 3 つある。
 
 1. 1 日 5〜10 件の pane が無人で立ち上がる

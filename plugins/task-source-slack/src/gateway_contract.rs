@@ -583,11 +583,13 @@ fn project_message(
 ) -> Option<GatewayRecord> {
     let str_field = |name: &str| event.get(name).and_then(Value::as_str);
 
-    // Edits, deletions, system posts, bot posts.
-    if event.get("subtype").is_some() || event.get("bot_id").is_some() {
+    // Edits, deletions, system posts. Bot posts pass (ADR-0109): a classic
+    // one is `subtype: bot_message` with no `user`, so `bot_id` stands in.
+    // This app's own bot cannot be told apart here; the plugin drops it.
+    if str_field("subtype").is_some_and(|s| s != "bot_message") {
         return None;
     }
-    let user = str_field("user")?;
+    let user = str_field("user").or_else(|| str_field("bot_id"))?;
     let channel = str_field("channel")?;
     let ts = str_field("ts")?;
     // The operator's own posts, including approved auto-replies.
@@ -874,6 +876,36 @@ mod tests {
                     .expect("a projected record must survive its own schema check");
             }
         }
+    }
+
+    /// ADR-0109: a bot's group mention is published, with `bot_id` as the
+    /// sender when the post has no `user`; an edit still is not.
+    #[test]
+    fn a_bot_mention_is_published_and_an_edit_is_not() {
+        let deliver = |event: Value| {
+            let Projection::Publish(published) = project(
+                Endpoint::Events,
+                &json!({"type": "event_callback", "event": event}),
+                Registration { user_id: "U_ME" },
+                "2026-09-13T00:00:00Z",
+            ) else {
+                panic!("expected a publish decision");
+            };
+            published
+        };
+        let bot = deliver(json!({
+            "type": "message", "subtype": "bot_message", "bot_id": "B0DEPLOY",
+            "channel": "C1", "ts": "1.0", "text": "<!subteam^S0MINE> 承認申請",
+        }));
+        assert_eq!(bot.len(), 1);
+        assert_eq!(bot[0].record.user, "B0DEPLOY");
+        assert_eq!(bot[0].record.subteam_ids, ["S0MINE"]);
+
+        let edit = deliver(json!({
+            "type": "message", "subtype": "message_changed", "user": "U_X",
+            "channel": "C1", "ts": "2.0", "text": "<@U_ME> 直しました",
+        }));
+        assert!(edit.is_empty());
     }
 
     /// `reaction.rs` refuses non-message items, so storing them would keep

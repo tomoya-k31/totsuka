@@ -1,7 +1,7 @@
 > 🌐 [English](event-gateway-setup.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/event-gateway-setup.md sha256:48b2591089c7b11eb18d9b02cc6307cb2089d6775c4a5edc7a0acc93649fcefc -->
+<!-- generated-from: ai-docs/operations/event-gateway-setup.md sha256:4865d2551e9a36eb4e41d354ecd6c339fb11f6fd03fff483e4a0f1092f9bef8a -->
 
 # Event Gateway 構築手順
 
@@ -217,7 +217,7 @@ totsuka は**この identity で**キューを読む。起動時に各キュー�
 | `gcloud auth application-default login` を促す行 | 資格情報が切れている、または受理されない | そのコマンドを実行する |
 | **`never delivered anything`（黄色）** | **Slack から Gateway までが繋がっていない** | Slack アプリの Request URL が **2 箇所とも**入っているか確認する。`tofu output request_urls` が入れるべき値を印字する |
 | `delivered nothing for N days`（黄色） | 動いた実績はある。**静かなだけかもしれない** | 静かなはずがないなら、Request URL がまだ有効か・Slack が購読を無効化していないかを確認する |
-| `plugin:slack` が緑 | この側は正常 | 送ったメンションが判定を通っているかを疑う（自分宛か、bot からでないか） |
+| `plugin:slack` が緑 | この側は正常 | 送ったメンションが判定を通っているかを疑う（自分宛か、編集でないか、totsuka 自身の bot の投稿でないか。他の bot の投稿は通るが、それを publish する版の Gateway をデプロイしている必要がある。古ければ再デプロイする） |
 
 **「一度も受信していない」と「しばらく静か」は別の行になる。** 前者は構築が終わっていない形で、
 後者は正常でありうる。この 2 つが同じ見え方をしていると、動いている設定を何度も疑うことになる。

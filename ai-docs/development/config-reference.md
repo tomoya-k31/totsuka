@@ -4,7 +4,7 @@ title: 設定リファレンス（config.toml）
 description: "config.toml の全キー・デフォルト値・意味の一覧。設定ファイルは 1 本で、プラグイン個別設定もトップレベルの [<name>] テーブルに入る。シークレット参照、設定スキーマのバージョニング方針、[[projects]] の domain 宣言とワークフローからの参照、プラグインが定義する追加プロパティ、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-github の [github]、task-source-notion の [notion]、task-source-slack の [slack]、agent-ide-herdr の [herdr] を含む。"
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
 tags: [config, reference, toml, secrets, workflow, worktree, github, notion, slack, hooks, versioning]
-generated: { by: claude-code/opus-5.5, at: 2026-09-30T14:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-03T12:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -394,7 +394,7 @@ agent = "herdr"
 - bot 投稿は `user` を持たないので、pane に出る送信者名は `bot_id` そのものになる（表示名の解決はしない）
 - **グローバル設定にしていない。** `[slack]` に 1 本置くと既存の全絵文字がその bot へ一斉に開き、1 つ自動化の入口を足しただけで手持ちの絵文字の意味が変わる
 - `reaction` を伴わない `from_bot`、および `channel`（監視トリガ）との併記は `initialize` が `CONFIG_INVALID` で弾く。**どちらも有効キーの組み合わせなので未知キー検査では捕まらず**、放置すると「bot を許可したのに無反応」として現れる。空配列 `[]`、および **`B…` の形をしていない値**（`U…` のユーザー id、アプリの表示名）も同じ理由で拒否する —— どれも文字列としては正しいので通ってしまい、その後どの `bot_id` とも一致しないまま黙って効かなくなる
-- **メンション経路・チャンネル監視経路は変わらない。** bot 投稿は従来どおり一切タスクにならない。緩和はリアクション経路だけである
+- **チャンネル監視経路は変わらない。** bot 投稿は一切タスクにならない。メンション経路は `from_bot` と無関係に、自アプリ以外の bot のメンションをすべてタスクにする（[ADR-0109](/decisions/adr-0109-slack-bot-mentions.md)）
 
 **定義順の危険は #554 で消えた。** 以前は「リアクション workflow を catch-all より前に書け」という制約があり、後ろに置くと絵文字が無反応になった。これは Orchestrator が 1 本のリストを first-match していたことに由来する。今は Slack プラグインが判定し、**メンションとリアクションは別のイベント経路**なので、順序で隠れることがない。`reaction` の値が文字列でないときの「逆方向に 2 つ壊れる」状態も同様に消えた —— core にはもう `reaction` という語彙が無い。
 
