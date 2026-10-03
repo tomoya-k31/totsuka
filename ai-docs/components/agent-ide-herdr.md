@@ -4,7 +4,7 @@ title: agent-ide-herdr プラグイン
 description: herdr を Agent IDE として接続する公式 agent_ide プラグイン（v1 参照実装）。Orchestrator の JSON-RPC ↔ herdr Socket API（NDJSON）のアダプタで、dispatch/セッション管理/状態ストリーム/plan モード/pane レイアウトを担う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/agent-ide-herdr
 tags: [rust, crate, plugin, agent-ide, herdr, socket-api, streaming, hook, deadman, layout]
-generated: { by: claude-code/opus-5, at: 2026-09-26T16:30:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-01T23:10:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -396,3 +396,9 @@ manifest（`plugins/agent-ide-herdr/plugin.toml`）と `initialize` 応答で `k
 - [Spec §4.3 Agent IDE 連携 / F-30〜F-38・§4.11 F-100〜F-107](/product/orchestrator-spec.ja.md)
 - [ADR-0004 フック完了シグナルの受信配置](/decisions/adr-0004-hook-completion-signal.md) / [フックシグナルフロー](/architecture/hook-signal-flow.md)
 - [ADR-0002 Rust workspace 構成と CI 品質ゲート](/decisions/adr-0002-rust-workspace-ci.md)
+
+# 設定スキーマ（`config/schema`、[ADR-0113](/decisions/adr-0113-native-menubar-app.md)）
+
+マニフェストで `config_schema = true` を宣言し、`initialize` より前の `config/schema` に `[herdr]` のスキーマ（`plugin_sdk::config_schema::of::<HerdrConfig>()`）で答える。実装はSDK の `AgentIdeHandler::config_schema`。スキーマは serde が読む `HerdrConfig` から schemars で導出するので、受け付けないキーは載らない。全キー（入れ子を含む）に `x-title` / `x-help` があり、ヘルプに既定値を書いていないことを `config.rs` の `schema_tests` が、`initialize` 前に答えることを適合キットの検査 10 が確かめる。`x-secret` を付けたフィールド: なし。
+
+workflow のオプションは 1 つも claim しない（`claimed_options` が空）ので、答えの `workflow` には空のスキーマ（`no_keys()`）を載せる。設定画面はこれで、このエージェントを使う workflow に残ったプラグイン所有でないキーを「使われていない」と示せる（ADR-0113 §5）。

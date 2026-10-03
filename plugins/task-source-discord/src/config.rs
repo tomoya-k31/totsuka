@@ -19,34 +19,66 @@ fn default_max_retries() -> u32 {
 }
 
 /// This plugin's settings.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-category" = "Discord"))]
 #[serde(deny_unknown_fields)]
 pub struct DiscordConfig {
     /// Bot token (`Bot <token>` is added by the transport). Required: Discord
     /// has no other supported identity for an app — automating a human
     /// account is forbidden by its Terms of Service, so there is deliberately
     /// no user-token option here.
+    #[schemars(extend(
+        "x-title" = "Bot token",
+        "x-help" = "The Discord bot's token.",
+        "x-secret" = true
+    ))]
     pub bot_token: String,
     /// The operator's own Discord user id (a snowflake). The author gate
     /// compares posts against this, and it is what makes "only my own posts
     /// trigger" the default.
+    #[schemars(extend(
+        "x-title" = "Your user ID",
+        "x-help" = "Your own Discord user ID. Only your posts become tasks."
+    ))]
     pub operator_user_id: String,
     /// REST base URL, overridable for tests.
     #[serde(default = "default_api_url")]
+    #[schemars(extend(
+        "x-title" = "API URL",
+        "x-help" = "The API's base URL."
+    ))]
     pub api_url: String,
     /// This source instance's name, as used in `Task.source`.
     #[serde(default = "default_source_name")]
+    #[schemars(extend(
+        "x-title" = "Source name",
+        "x-help" = "This source's name on tasks. Change it only to run two of this plugin."
+    ))]
     pub source_name: String,
     /// Max retry attempts for retryable REST failures.
     #[serde(default = "default_max_retries")]
+    #[schemars(extend(
+        "x-title" = "Retries",
+        "x-help" = "How many times a failed API call that can be retried is retried."
+    ))]
     pub max_retries: u32,
     /// Most messages the startup backfill recovers per watched channel.
     /// Omitted means [`plugin_sdk::watch::DEFAULT_BACKFILL_COUNT`].
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Backfill limit",
+        "x-placeholder" = "100",
+        "x-help" = "How many missed posts per watched channel are recovered on start."
+    ))]
     pub watch_backfill_limit: Option<u32>,
     /// How old a missed post may be and still be recovered, in hours.
     /// Omitted means [`plugin_sdk::watch::DEFAULT_BACKFILL_MAX_AGE_HOURS`].
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Backfill age (hours)",
+        "x-placeholder" = "24",
+        "x-help" = "How old a missed post may be and still be recovered."
+    ))]
     pub watch_backfill_max_age_hours: Option<u64>,
 }
 
@@ -129,5 +161,20 @@ mod tests {
         let value = json!({ "bot_token": "  ", "operator_user_id": "" });
         let errors = static_config_errors(&parse(value).unwrap());
         assert_eq!(errors.len(), 2, "got {errors:?}");
+    }
+}
+
+#[cfg(test)]
+mod schema_tests {
+    /// Every key of `[discord]`, at any depth, carries an `x-title` and `x-help`
+    /// for the settings window, and no help states a default (ADR-0113).
+    #[test]
+    fn every_key_has_title_and_help() {
+        let schema = plugin_sdk::config_schema::of::<super::DiscordConfig>().schema;
+        let missing = plugin_sdk::config_schema::missing_help(&schema);
+        assert!(missing.is_empty(), "{}", missing.join("\n"));
+        let stated = plugin_sdk::config_schema::help_stating_defaults(&schema);
+        assert!(stated.is_empty(), "help states a default: {stated:?}");
+        assert!(schema["x-category"].is_string(), "{schema}");
     }
 }

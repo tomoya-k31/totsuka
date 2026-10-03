@@ -8,7 +8,7 @@ use plugin_protocol::methods::NotifierEvent;
 use serde::Deserialize;
 
 /// The notification delivery backend (F-94).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Backend {
     /// AppleScript `display notification` — always available, but a click
@@ -21,55 +21,104 @@ pub enum Backend {
 }
 
 /// macOS notifier settings.
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Default, schemars::JsonSchema)]
+#[schemars(extend("x-category" = "Notifications"))]
 #[serde(deny_unknown_fields)]
 pub struct NotifierConfig {
     /// Which delivery backend to use. Defaults to `osascript` for backward
     /// compatibility; set `terminal_notifier` for click-to-focus (F-94).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Backend",
+        "x-help" = "osascript or terminal_notifier (needed for click-to-focus)."
+    ))]
     pub backend: Backend,
     /// The `osascript` executable (name on PATH or absolute path).
     #[serde(default = "default_osascript")]
+    #[schemars(extend(
+        "x-title" = "osascript command",
+        "x-help" = "A name on PATH or an absolute path."
+    ))]
     pub osascript_bin: String,
     /// The `terminal-notifier` executable (name on PATH or absolute path).
     #[serde(default = "default_terminal_notifier")]
+    #[schemars(extend(
+        "x-title" = "terminal-notifier command",
+        "x-help" = "A name on PATH or an absolute path."
+    ))]
     pub terminal_notifier_bin: String,
     /// Bundle id of the GUI app a click brings to the front (`-activate`),
     /// e.g. `org.alacritty`. Environment-specific; unset ⇒ no `-activate`
     /// (only the pane focus via `click_command` remains).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "App to activate",
+        "x-help" = "Bundle id of the app a click brings to the front, e.g. org.alacritty."
+    ))]
     pub activate_bundle_id: Option<String>,
     /// Shell command template a click runs (`-execute`). `{task_id}` is
     /// replaced with the notification's task id, **shell-quoted** (injection
     /// safety). Empty ⇒ no `-execute`.
     #[serde(default = "default_click_command")]
+    #[schemars(extend(
+        "x-title" = "Click command",
+        "x-help" = "The command a click runs; {task_id} is replaced."
+    ))]
     pub click_command: String,
     /// The delivery filter (F-92).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Filter",
+        "x-help" = "Which events are notified, for every workflow and per workflow."
+    ))]
     pub filter: Filter,
 }
 
 /// Per-event on/off toggles. `None` means "inherit" (unspecified).
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EventToggles {
     /// Toggle for `waiting_input` (F-35).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Notify: waits for input",
+        "x-help" = "Whether to notify when a task waits for input. Empty means on."
+    ))]
     pub waiting_input: Option<bool>,
     /// Toggle for `done`.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Notify: is done",
+        "x-help" = "Whether to notify when a task is done. Empty means on."
+    ))]
     pub done: Option<bool>,
     /// Toggle for `failed`.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Notify: fails",
+        "x-help" = "Whether to notify when a task fails. Empty means on."
+    ))]
     pub failed: Option<bool>,
     /// Toggle for `pending` (F-14).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Notify: waits for a repository choice",
+        "x-help" = "Whether to notify when a task waits for a repository choice. Empty means on."
+    ))]
     pub pending: Option<bool>,
     /// Toggle for `escalated` (#131 D-02/D-03: a task handed to a human).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Notify: is handed to you",
+        "x-help" = "Whether to notify when a task is handed to you. Empty means on."
+    ))]
     pub escalated: Option<bool>,
     /// Toggle for `verification_pending` (#131 D-01: awaiting `task verify`).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Notify: waits for your verification",
+        "x-help" = "Whether to notify when a task waits for your verification. Empty means on."
+    ))]
     pub verification_pending: Option<bool>,
 }
 
@@ -89,14 +138,22 @@ impl EventToggles {
 
 /// The workflow × event delivery filter (F-92). Precedence: a per-workflow
 /// toggle wins over the global toggle, which wins over the default (all on).
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Filter {
     /// Global per-event toggles applied to every workflow.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "All workflows",
+        "x-help" = "The events notified for every workflow."
+    ))]
     pub events: EventToggles,
     /// Per-workflow overrides, keyed by workflow name.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Per workflow",
+        "x-help" = "Overrides keyed by workflow name."
+    ))]
     pub workflows: HashMap<String, EventToggles>,
 }
 
@@ -268,5 +325,20 @@ mod tests {
         let err =
             serde_json::from_value::<NotifierConfig>(serde_json::json!({ "typo": 1 })).unwrap_err();
         assert!(err.to_string().contains("typo"), "got {err}");
+    }
+}
+
+#[cfg(test)]
+mod schema_tests {
+    /// Every key of `[macos]`, at any depth, carries an `x-title` and `x-help`
+    /// for the settings window, and no help states a default (ADR-0113).
+    #[test]
+    fn every_key_has_title_and_help() {
+        let schema = plugin_sdk::config_schema::of::<super::NotifierConfig>().schema;
+        let missing = plugin_sdk::config_schema::missing_help(&schema);
+        assert!(missing.is_empty(), "{}", missing.join("\n"));
+        let stated = plugin_sdk::config_schema::help_stating_defaults(&schema);
+        assert!(stated.is_empty(), "help states a default: {stated:?}");
+        assert!(schema["x-category"].is_string(), "{schema}");
     }
 }

@@ -101,6 +101,13 @@ impl<F: SenderFactory> Server<F> {
         match method {
             method::INITIALIZE => self.initialize(id, params),
             method::CONFIG_VALIDATE => self.config_validate(id, params).await,
+            // ADR-0113: `[macos]` as the settings window's schema. Needs no
+            // state, so it is answered before `initialize` like the above.
+            method::CONFIG_SCHEMA => Reply::respond(Response::result(
+                id,
+                serde_json::to_value(plugin_sdk::config_schema::of::<NotifierConfig>())
+                    .expect("a schema serializes"),
+            )),
             method::SHUTDOWN => Reply {
                 line: to_line(&Response::result(id, Value::Null)).ok(),
                 shutdown: true,
@@ -254,7 +261,10 @@ fn capabilities_result() -> Value {
         claimed_options: Vec::new(),
         plugin_version: plugin_version(),
         claimed_repos: Vec::new(),
-        capabilities: Capabilities::default(),
+        capabilities: Capabilities {
+            config_schema: true,
+            ..Capabilities::default()
+        },
     })
     .unwrap_or(Value::Null)
 }

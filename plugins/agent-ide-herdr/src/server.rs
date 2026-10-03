@@ -121,6 +121,20 @@ where
         Ok(capabilities_result())
     }
 
+    /// `config/schema` (ADR-0113): this plugin's table as the settings
+    /// window's schema. Answered before `initialize`; needs no state.
+    async fn config_schema(
+        &mut self,
+        _params: plugin_protocol::methods::ConfigSchemaParams,
+    ) -> Result<plugin_protocol::methods::ConfigSchemaResult, Error> {
+        Ok(plugin_protocol::methods::ConfigSchemaResult {
+            // No workflow option is claimed (`claimed_options` is empty), so a
+            // key left on a workflow this agent runs is nobody's.
+            workflow: Some(plugin_sdk::config_schema::no_keys()),
+            ..plugin_sdk::config_schema::of::<HerdrConfig>()
+        })
+    }
+
     async fn config_validate(
         &mut self,
         params: ConfigValidateParams,
@@ -283,6 +297,7 @@ fn capabilities_result() -> InitializeResult {
             // ever read as half of a de-facto OR (#496).
             hook_completion: true,
             diagnostics_snapshot: true,
+            config_schema: true,
             ..Capabilities::default()
         },
     }

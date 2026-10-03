@@ -17,6 +17,8 @@ workspace = true
 plugin-protocol.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+# `config_schema::of`: a plugin's config table as JSON Schema (ADR-0113).
+schemars.workspace = true
 # `io-std` (stdin/stdout) is on top of the workspace tokio feature set.
 tokio = { workspace = true, features = ["io-std"] }
 tracing.workspace = true

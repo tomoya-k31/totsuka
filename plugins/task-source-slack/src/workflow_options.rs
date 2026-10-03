@@ -32,6 +32,23 @@ use plugin_protocol::methods::{WorkflowInfo, WorkflowOption};
 /// The key this plugin claims on a workflow.
 const PUBLISH: &str = "publish";
 
+/// The workflow options this plugin claims, as the settings window's schema
+/// (ADR-0113) — keyed by the same `PUBLISH` that [`claims`] reads.
+pub fn option_schemas() -> serde_json::Map<String, serde_json::Value> {
+    let mut options = serde_json::Map::new();
+    options.insert(
+        PUBLISH.into(),
+        serde_json::json!({
+            "type": "string",
+            "enum": ["draft", "direct"],
+            "x-title": "Publish",
+            "x-help": "How the result reaches you: draft (shown for approval first) or direct (posted at once).",
+            "x-placeholder": "draft",
+        }),
+    );
+    options
+}
+
 /// How a published result reaches the human.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Delivery {

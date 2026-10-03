@@ -13,4 +13,7 @@ version = "0.2.0"
 protocol_version = ">=0.6.0, <0.8"
 
 [capabilities]
+# ADR-0113: answers `config/schema` before `initialize` (protocol 0.7.7), so
+# the menu bar app's settings window can render this table as a form.
+config_schema = true
 outputs = ["source"]

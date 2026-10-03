@@ -4,7 +4,7 @@ title: task-source-notion プラグイン
 description: Notion データベースをタスクソースとして接続する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。プロパティマッピングで任意の DB 構造を Task へ正規化し、ステータス書き戻しとページ本文への結果追記を行う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-notion
 tags: [rust, crate, plugin, task-source, notion, rest, property-mapping]
-generated: { by: claude-code/opus-5, at: 2026-09-21T18:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-01T23:10:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -86,3 +86,9 @@ manifest（`plugins/task-source-notion/plugin.toml`、`protocol_version = ">=0.7
 - [ADR-0008 task/submit push 取り込み](/decisions/adr-0008-task-submit-push-ingestion.md)
 - [Spec §4.2 タスクソース / F-01・F-03・F-07・F-08・F-84](/product/orchestrator-spec.ja.md)
 - [ADR-0002 Rust workspace 構成と CI 品質ゲート](/decisions/adr-0002-rust-workspace-ci.md)
+
+# 設定スキーマ（`config/schema`、[ADR-0113](/decisions/adr-0113-native-menubar-app.md)）
+
+マニフェストで `config_schema = true` を宣言し、`initialize` より前の `config/schema` に `[notion]` のスキーマ（`plugin_sdk::config_schema::of::<NotionConfig>()`）で答える。実装はSDK の `TaskSourceHandler::config_schema`。スキーマは serde が読む `NotionConfig` から schemars で導出するので、受け付けないキーは載らない。全キー（入れ子を含む）に `x-title` / `x-help` があり、ヘルプに既定値を書いていないことを `config.rs` の `schema_tests` が、`initialize` 前に答えることを適合キットの検査 10 が確かめる。`x-secret` を付けたフィールド: `token`。
+
+答えには `[[projects]]` 要素のキー（`project`: `DatabaseOptions` から導出 —— `database_id` / `triage_status`）と、`[[workflows]]` の `trigger` のキー（`workflow`: `client::workflow_schema()`。`status` / `filter` / `assignee` / `exclude`。`filter` は Notion へそのまま送るので `x-raw` の JSON 欄）も載せる。`TRIGGER_KEYS` / `EXCLUDE_KEYS` とキーが一致することをテストで検査する（ADR-0113 §5）。

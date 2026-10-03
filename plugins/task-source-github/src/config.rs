@@ -50,27 +50,47 @@ struct EmbeddedPrompts {
 /// Built-in values live in the embedded `defaults.toml`, not in Rust string
 /// literals, so rewording is a data edit. Field names are the config keys under
 /// `[github.prompts]` in config.toml.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct GithubPrompts {
     /// Sent when the workflow's profile is `triage`.
     #[serde(default = "default_triage_instructions")]
+    #[schemars(extend(
+        "x-title" = "Triage",
+        "x-help" = "Instructions for triage workflows. Remove the key to use the built-in text (an empty value is used as is)."
+    ))]
     pub triage_instructions: String,
     /// Sent when the workflow's profile is `design`.
     #[serde(default = "default_design_instructions")]
+    #[schemars(extend(
+        "x-title" = "Design",
+        "x-help" = "Instructions for design workflows. Remove the key to use the built-in text (an empty value is used as is)."
+    ))]
     pub design_instructions: String,
     /// Sent when the workflow's profile is `implement`.
     #[serde(default = "default_implement_instructions")]
+    #[schemars(extend(
+        "x-title" = "Implement",
+        "x-help" = "Instructions for implement workflows. Remove the key to use the built-in text (an empty value is used as is)."
+    ))]
     pub implement_instructions: String,
     /// Sent instead of [`design_instructions`](Self::design_instructions) when
     /// the task **is a pull request** (#734).
     #[serde(default = "default_design_pr_instructions")]
+    #[schemars(extend(
+        "x-title" = "Design (pull request)",
+        "x-help" = "Design instructions when the task is a pull request. Remove the key to use the built-in text (an empty value is used as is)."
+    ))]
     pub design_pr_instructions: String,
     /// Sent instead of
     /// [`implement_instructions`](Self::implement_instructions) when the task
     /// **is a pull request** (#734) — the issue text ends in "open a pull
     /// request", which on a pull request's own branch means a second one.
     #[serde(default = "default_implement_pr_instructions")]
+    #[schemars(extend(
+        "x-title" = "Implement (pull request)",
+        "x-help" = "Implement instructions when the task is a pull request. Remove the key to use the built-in text (an empty value is used as is)."
+    ))]
     pub implement_pr_instructions: String,
 }
 
@@ -139,7 +159,7 @@ impl GithubPrompts {
 
 /// Whether the project owner is a user or an organization (GraphQL requires
 /// choosing the right root field).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum OwnerType {
     /// A user account (`user(login:)`).
@@ -164,15 +184,27 @@ impl OwnerType {
 /// `name` and `source` are the Orchestrator's keys and never reach here;
 /// `deny_unknown_fields` is what turns a typo in the rest into an
 /// `initialize` failure instead of a setting that quietly does nothing.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ProjectOptions {
     /// Project owner login (user or org).
+    #[schemars(extend(
+        "x-title" = "Owner",
+        "x-help" = "The user or organization that owns the project (its login)."
+    ))]
     pub owner: String,
     /// Whether `owner` is a user or an organization.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Owner type",
+        "x-help" = "Whether the owner is a user or an organization."
+    ))]
     pub owner_type: OwnerType,
     /// ProjectsV2 number under `owner`.
+    #[schemars(extend(
+        "x-title" = "Project number",
+        "x-help" = "The number in the project's URL (…/projects/<number>)."
+    ))]
     pub project_number: i64,
     /// The Status option a triage-filed item should land in (#548 follow-up).
     ///
@@ -188,6 +220,10 @@ pub struct ProjectOptions {
     ///
     /// Per board, not top-level: option names belong to a board.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Triage status",
+        "x-help" = "The status an item filed by a triage workflow lands in. Without it the item has no status; a status some trigger picks up sends filed items straight into an unattended run."
+    ))]
     pub triage_status: Option<String>,
 }
 
@@ -320,11 +356,17 @@ impl ProjectConfig {
 }
 
 /// GitHub task-source settings.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-category" = "GitHub"))]
 #[serde(deny_unknown_fields)]
 pub struct GithubConfig {
     /// API token (resolved by the orchestrator, F-65). Never touched by us
     /// beyond sending it as a bearer token.
+    #[schemars(extend(
+        "x-title" = "Token",
+        "x-help" = "A GitHub token that can read and write the project boards and issues.",
+        "x-secret" = true
+    ))]
     pub token: String,
     /// The boards this plugin polls.
     ///
@@ -337,30 +379,59 @@ pub struct GithubConfig {
     pub projects: Vec<ProjectConfig>,
     /// SingleSelect field name holding the status column (F-02).
     #[serde(default = "default_status_field")]
+    #[schemars(extend(
+        "x-title" = "Status field",
+        "x-help" = "The board's single-select field holding the status."
+    ))]
     pub status_field: String,
     /// The operator's own login: detects self-assigned tasks (F-08) and is
     /// the login the claim self-assigns (#556). One login = one totsuka
     /// instance — assignees carry only the login, so two instances sharing
     /// one are indistinguishable to the adjudication (unsupported).
+    #[schemars(extend(
+        "x-title" = "Your login",
+        "x-help" = "Your own GitHub login. Tasks are claimed by assigning them to it."
+    ))]
     pub github_login: String,
     /// Status names treated as "in progress" and therefore excluded from
     /// ingest (F-08).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "In-progress statuses",
+        "x-help" = "Statuses that mean someone is already working on it; such tasks are not picked up."
+    ))]
     pub in_progress_statuses: Vec<String>,
     /// The plugin instance name stamped onto each `Task.source`.
     #[serde(default = "default_source_name")]
+    #[schemars(extend(
+        "x-title" = "Source name",
+        "x-help" = "This source's name on tasks. Change it only to run two of this plugin."
+    ))]
     pub source_name: String,
     /// GraphQL endpoint (overridable for GitHub Enterprise / tests).
     #[serde(default = "default_api_url")]
+    #[schemars(extend(
+        "x-title" = "API URL",
+        "x-help" = "The GraphQL endpoint. Change it for GitHub Enterprise."
+    ))]
     pub api_url: String,
     /// Max retry attempts for retryable API failures.
     #[serde(default = "default_max_retries")]
+    #[schemars(extend(
+        "x-title" = "Retries",
+        "x-help" = "How many times a failed API call that can be retried is retried."
+    ))]
     pub max_retries: u32,
     /// Internal fetch cadence of the poll loop, in seconds (F-06). Moved
     /// here from `[plugins.github]` in 0.6.0 (#554): the Orchestrator only
     /// ever forwarded it, so it is this plugin's own key. `0` is treated as
     /// unset (busy-spin guard, applied in the server).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Poll interval (seconds)",
+        "x-placeholder" = "60",
+        "x-help" = "How often to look for new tasks."
+    ))]
     pub poll_interval_secs: Option<u64>,
     /// Milliseconds to wait between writing the exclusion claim and reading
     /// it back (#556). The read-back is what detects both the race and the
@@ -369,10 +440,19 @@ pub struct GithubConfig {
     /// Phase 0). `0` is honoured (no wait): useful for tests, harmless in
     /// production because a too-early read only costs one extra retry.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Claim check delay (ms)",
+        "x-placeholder" = "750",
+        "x-help" = "How long to wait before reading back a claim."
+    ))]
     pub claim_verify_delay_ms: Option<u64>,
     /// Instruction text overrides (#398). Every key falls back to the embedded
     /// default when omitted.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Instructions",
+        "x-help" = "The instructions given to the agent, by profile."
+    ))]
     pub prompts: GithubPrompts,
 }
 
@@ -623,5 +703,42 @@ mod tests {
             "got {}",
             claims[2].destination
         );
+    }
+}
+
+#[cfg(test)]
+mod schema_tests {
+    /// The `[[projects]]` keys carry help too, and are exactly what
+    /// `ProjectOptions` accepts (it is the struct serde reads).
+    #[test]
+    fn project_keys_have_title_and_help() {
+        let schema = plugin_sdk::config_schema::schema_for::<super::ProjectOptions>();
+        let missing = plugin_sdk::config_schema::missing_help(&schema);
+        assert!(missing.is_empty(), "{}", missing.join("\n"));
+        let stated = plugin_sdk::config_schema::help_stating_defaults(&schema);
+        assert!(stated.is_empty(), "help states a default: {stated:?}");
+        let mut keys: Vec<&str> = schema["properties"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            ["owner", "owner_type", "project_number", "triage_status"]
+        );
+    }
+
+    /// Every key of `[github]`, at any depth, carries an `x-title` and `x-help`
+    /// for the settings window, and no help states a default (ADR-0113).
+    #[test]
+    fn every_key_has_title_and_help() {
+        let schema = plugin_sdk::config_schema::of::<super::GithubConfig>().schema;
+        let missing = plugin_sdk::config_schema::missing_help(&schema);
+        assert!(missing.is_empty(), "{}", missing.join("\n"));
+        let stated = plugin_sdk::config_schema::help_stating_defaults(&schema);
+        assert!(stated.is_empty(), "help states a default: {stated:?}");
+        assert!(schema["x-category"].is_string(), "{schema}");
     }
 }

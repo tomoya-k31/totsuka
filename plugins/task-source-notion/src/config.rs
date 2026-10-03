@@ -55,17 +55,29 @@ struct EmbeddedPrompts {
 /// Built-in values live in the embedded `defaults.toml`, not in Rust string
 /// literals, so rewording is a data edit. Field names are the config keys under
 /// `[notion.prompts]` in config.toml.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct NotionPrompts {
     /// Sent when the workflow's profile is `triage`.
     #[serde(default = "default_triage_instructions")]
+    #[schemars(extend(
+        "x-title" = "Triage",
+        "x-help" = "Instructions for triage workflows. Remove the key to use the built-in text (an empty value is used as is)."
+    ))]
     pub triage_instructions: String,
     /// Sent when the workflow's profile is `design`.
     #[serde(default = "default_design_instructions")]
+    #[schemars(extend(
+        "x-title" = "Design",
+        "x-help" = "Instructions for design workflows. Remove the key to use the built-in text (an empty value is used as is)."
+    ))]
     pub design_instructions: String,
     /// Sent when the workflow's profile is `implement`.
     #[serde(default = "default_implement_instructions")]
+    #[schemars(extend(
+        "x-title" = "Implement",
+        "x-help" = "Instructions for implement workflows. Remove the key to use the built-in text (an empty value is used as is)."
+    ))]
     pub implement_instructions: String,
 }
 
@@ -132,7 +144,7 @@ impl OwnerType {
 
 /// The Notion property type backing the status column. The write-back body
 /// (F-84) and option lookup differ between the two.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum StatusKind {
     /// A `status` property (the dedicated Notion status type).
@@ -153,7 +165,7 @@ impl StatusKind {
 }
 
 /// Where a task's body text comes from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum BodySource {
     /// No body is ingested.
@@ -169,32 +181,60 @@ pub enum BodySource {
 /// Maps the shared [`Task`](plugin_protocol::Task) fields onto this database's
 /// Notion property names (F-03). Only [`title`](Self::title) is mandatory;
 /// unset optional fields are simply not extracted.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PropertyMap {
     /// The `title` property (Notion's default is `Name`).
     #[serde(default = "default_title_prop")]
+    #[schemars(extend(
+        "x-title" = "Title",
+        "x-help" = "The title property."
+    ))]
     pub title: String,
     /// The status property (`status` or `select`, see [`status_kind`]).
     ///
     /// [`status_kind`]: Self::status_kind
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Status",
+        "x-help" = "The status property."
+    ))]
     pub status: Option<String>,
     /// The Notion property type backing [`status`](Self::status).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Status type",
+        "x-help" = "Whether the status property is a status or a select."
+    ))]
     pub status_kind: StatusKind,
     /// A `people` property holding assignees (F-08).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Assignee",
+        "x-help" = "A people property holding assignees."
+    ))]
     pub assignee: Option<String>,
     /// A `number`/`select`/`status` property holding priority.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Priority",
+        "x-help" = "A number, select or status property holding priority."
+    ))]
     pub priority: Option<String>,
     /// A property carrying a repository hint (`rich_text`/`select`/`url`, F-10).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Repository hint",
+        "x-help" = "A property naming the task's repository."
+    ))]
     pub repo_hint: Option<String>,
     /// A `rich_text` property carrying the body, when
     /// [`body_source`](NotionConfig::body_source) is `property`.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Body",
+        "x-help" = "A rich_text property holding the body, when the body comes from a property."
+    ))]
     pub body: Option<String>,
 }
 
@@ -217,10 +257,14 @@ impl Default for PropertyMap {
 /// `name` and `source` are the Orchestrator's keys and never reach here;
 /// `deny_unknown_fields` turns a typo in the rest into an `initialize`
 /// failure rather than a setting that quietly does nothing.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DatabaseOptions {
     /// The database queried for tasks.
+    #[schemars(extend(
+        "x-title" = "Database ID",
+        "x-help" = "The Notion database to take tasks from (the ID in its URL)."
+    ))]
     pub database_id: String,
     /// The status option a triage-filed page should be created with (#548
     /// follow-up).
@@ -234,6 +278,10 @@ pub struct DatabaseOptions {
     /// never validated starts fine and silently omits the status instruction
     /// from the destination, because there is no column to name.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Triage status",
+        "x-help" = "The status a page filed by a triage workflow is created with. Needs the status column mapped; a status some trigger picks up sends filed pages straight into an unattended run."
+    ))]
     pub triage_status: Option<String>,
 }
 
@@ -322,11 +370,17 @@ impl DatabaseConfig {
 }
 
 /// Notion task-source settings.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-category" = "Notion"))]
 #[serde(deny_unknown_fields)]
 pub struct NotionConfig {
     /// Integration token (resolved by the orchestrator, F-65). Never touched by
     /// us beyond sending it as a bearer token.
+    #[schemars(extend(
+        "x-title" = "Token",
+        "x-help" = "The Notion integration's token.",
+        "x-secret" = true
+    ))]
     pub token: String,
     /// The databases this plugin polls.
     ///
@@ -341,47 +395,96 @@ pub struct NotionConfig {
     /// (F-08). When unset, self-detection is disabled: only *unassigned* tasks
     /// are ingestable (any assigned task is treated as someone else's).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Your user ID",
+        "x-help" = "Your own Notion user ID, to recognise tasks assigned to you. Empty: only unassigned tasks are picked up."
+    ))]
     pub notion_user_id: Option<String>,
     /// Property-name mapping onto the common schema (F-03).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Properties",
+        "x-help" = "Which database properties hold the title, status, assignee and so on."
+    ))]
     pub property_map: PropertyMap,
     /// Where a task body comes from (F-03).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Body source",
+        "x-help" = "Where a task's body comes from: the page content or a property."
+    ))]
     pub body_source: BodySource,
     /// Status option names treated as "in progress" and therefore excluded from
     /// ingest (F-08).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "In-progress statuses",
+        "x-help" = "Statuses that mean someone is already working on it; such tasks are not picked up."
+    ))]
     pub in_progress_statuses: Vec<String>,
     /// Maps a priority option name (for `select`/`status` priority properties)
     /// to a numeric priority. Higher runs first. A `number` priority property is
     /// used directly and ignores this map.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Priority values",
+        "x-help" = "Numbers for priority options; higher runs first, e.g. High = 3."
+    ))]
     pub priority_map: HashMap<String, i64>,
     /// The plugin instance name stamped onto each `Task.source`.
     #[serde(default = "default_source_name")]
+    #[schemars(extend(
+        "x-title" = "Source name",
+        "x-help" = "This source's name on tasks. Change it only to run two of this plugin."
+    ))]
     pub source_name: String,
     /// REST base URL (overridable for tests).
     #[serde(default = "default_api_url")]
+    #[schemars(extend(
+        "x-title" = "API URL",
+        "x-help" = "The API's base URL."
+    ))]
     pub api_url: String,
     /// Pinned Notion API version header (`Notion-Version`).
     #[serde(default = "default_api_version")]
+    #[schemars(extend(
+        "x-title" = "API version",
+        "x-help" = "The Notion-Version header."
+    ))]
     pub api_version: String,
     /// Max retry attempts for retryable API failures.
     #[serde(default = "default_max_retries")]
+    #[schemars(extend(
+        "x-title" = "Retries",
+        "x-help" = "How many times a failed API call that can be retried is retried."
+    ))]
     pub max_retries: u32,
     /// Internal fetch cadence of the poll loop, in seconds (F-06). Moved
     /// here from `[plugins.notion]` in 0.6.0 (#554): the Orchestrator only
     /// ever forwarded it, so it is this plugin's own key. `0` is treated as
     /// unset (busy-spin guard, applied in the server).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Poll interval (seconds)",
+        "x-placeholder" = "60",
+        "x-help" = "How often to look for new tasks."
+    ))]
     pub poll_interval_secs: Option<u64>,
     /// Client-side request rate cap (requests/second) for the built-in
     /// throttle. Notion's public limit is ~3 rps.
     #[serde(default = "default_rate_limit")]
+    #[schemars(extend(
+        "x-title" = "Requests per second",
+        "x-help" = "The most requests per second (Notion allows about 3)."
+    ))]
     pub rate_limit_rps: u32,
     /// Instruction text overrides (#398). Every key falls back to the embedded
     /// default when omitted.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Instructions",
+        "x-help" = "The instructions given to the agent, by profile."
+    ))]
     pub prompts: NotionPrompts,
     /// Named lookups a `trigger.filter` may reference as `@<name>` (#606).
     ///
@@ -392,6 +495,10 @@ pub struct NotionConfig {
     /// that resolves to one page id per poll, so the config holds the *rule*
     /// instead of this fortnight's answer.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Dynamic lookups",
+        "x-help" = "Named lookups a trigger filter can use as @name, e.g. the current sprint."
+    ))]
     pub dynamic: HashMap<String, DynamicRef>,
 }
 
@@ -402,16 +509,24 @@ pub struct NotionConfig {
 /// no knowledge of the property's type (`status` vs `select` vs `date`), so
 /// there is no type key here to keep in step with Notion's vocabulary — the
 /// operator writes the filter Notion documents.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DynamicRef {
     /// The database to look in. Need not be one of the polled `[[projects]]`
     /// databases — a sprint list usually is not — but the token must be able
     /// to read it.
+    #[schemars(extend(
+        "x-title" = "Database ID",
+        "x-help" = "The database to look in."
+    ))]
     pub database_id: String,
     /// The Notion filter that selects **exactly one** page. Zero and
     /// two-or-more are both errors: see `NotionClient::resolve_dynamic_ref`
     /// for why neither may degrade into "no condition".
+    #[schemars(extend(
+        "x-title" = "Filter",
+        "x-help" = "A Notion filter that selects exactly one page."
+    ))]
     pub filter: Value,
 }
 
@@ -811,5 +926,33 @@ mod tests {
         }));
         assert_eq!(cfg.priority_value("High"), 10);
         assert_eq!(cfg.priority_value("Unknown"), 0);
+    }
+}
+
+#[cfg(test)]
+mod schema_tests {
+    /// The `[[projects]]` keys carry help, and are exactly what
+    /// `DatabaseOptions` accepts.
+    #[test]
+    fn project_keys_have_title_and_help() {
+        let schema = plugin_sdk::config_schema::schema_for::<super::DatabaseOptions>();
+        let missing = plugin_sdk::config_schema::missing_help(&schema);
+        assert!(missing.is_empty(), "{}", missing.join("\n"));
+        assert_eq!(
+            plugin_sdk::config_schema::keys(&schema, ""),
+            ["database_id", "triage_status"]
+        );
+    }
+
+    /// Every key of `[notion]`, at any depth, carries an `x-title` and `x-help`
+    /// for the settings window, and no help states a default (ADR-0113).
+    #[test]
+    fn every_key_has_title_and_help() {
+        let schema = plugin_sdk::config_schema::of::<super::NotionConfig>().schema;
+        let missing = plugin_sdk::config_schema::missing_help(&schema);
+        assert!(missing.is_empty(), "{}", missing.join("\n"));
+        let stated = plugin_sdk::config_schema::help_stating_defaults(&schema);
+        assert!(stated.is_empty(), "help states a default: {stated:?}");
+        assert!(schema["x-category"].is_string(), "{schema}");
     }
 }

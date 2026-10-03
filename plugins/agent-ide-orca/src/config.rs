@@ -9,27 +9,44 @@
 use serde::Deserialize;
 
 /// orca agent_ide settings.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-category" = "orca"))]
 #[serde(deny_unknown_fields)]
 pub struct OrcaConfig {
     /// The `orca` executable (name on PATH or absolute path).
     #[serde(default = "default_orca_bin")]
+    #[schemars(extend(
+        "x-title" = "orca command",
+        "x-help" = "The orca executable: a name on PATH or an absolute path."
+    ))]
     pub orca_bin: String,
     /// The longest a single `orca` invocation may run before it is killed. A
     /// `terminal wait` is given its own `--timeout-ms` on top of this.
     #[serde(default = "default_request_timeout")]
+    #[schemars(extend(
+        "x-title" = "Request timeout (seconds)",
+        "x-help" = "How long one orca command may take."
+    ))]
     pub request_timeout_secs: u64,
     /// How the agent's terminal tab is arranged.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Layout",
+        "x-help" = "How the agent's terminal tab is arranged."
+    ))]
     pub layout: LayoutConfig,
     /// Whether the dispatch names the worktree after the task in orca's
     /// sidebar.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Worktree names",
+        "x-help" = "Whether the worktree is named after the task in orca's sidebar."
+    ))]
     pub identity: IdentityConfig,
 }
 
 /// `[orca.layout]`: the agent's tab.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct LayoutConfig {
     /// Split a companion shell off the agent's terminal (herdr's
@@ -40,16 +57,24 @@ pub struct LayoutConfig {
     /// already shows the task's worktree in its sidebar, where a terminal is
     /// one click away. The split also takes orca's focus into the new pane.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Shell split",
+        "x-help" = "Split a shell off the agent's terminal."
+    ))]
     pub shell: bool,
     /// `terminal split --direction`. Unset leaves orca's default. A closed
     /// set, so a typo fails `initialize` instead of silently leaving the tab
     /// unsplit (the split itself is best-effort).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Split direction",
+        "x-help" = "The split's direction. Empty leaves orca's default."
+    ))]
     pub direction: Option<SplitDirection>,
 }
 
 /// orca's `terminal split --direction` vocabulary.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum SplitDirection {
     /// `horizontal`.
@@ -69,13 +94,17 @@ impl SplitDirection {
 }
 
 /// `[orca.identity]`: what the dispatch tells orca about the task.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct IdentityConfig {
     /// Set the worktree's orca display name to `{repo}: {title}` (herdr's
     /// `[herdr.identity]`, #417). Best-effort: a refusal never fails the
     /// dispatch.
     #[serde(default = "default_true")]
+    #[schemars(extend(
+        "x-title" = "Enabled",
+        "x-help" = "Show the worktree as \"repo: title\"."
+    ))]
     pub enabled: bool,
 }
 
@@ -201,5 +230,20 @@ mod tests {
         }
         assert!(removed_keys_in(&serde_json::json!({ "orca_bin": "orca" })).is_empty());
         assert!(removed_keys_in(&serde_json::json!("not an object")).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod schema_tests {
+    /// Every key of `[orca]`, at any depth, carries an `x-title` and `x-help`
+    /// for the settings window, and no help states a default (ADR-0113).
+    #[test]
+    fn every_key_has_title_and_help() {
+        let schema = plugin_sdk::config_schema::of::<super::OrcaConfig>().schema;
+        let missing = plugin_sdk::config_schema::missing_help(&schema);
+        assert!(missing.is_empty(), "{}", missing.join("\n"));
+        let stated = plugin_sdk::config_schema::help_stating_defaults(&schema);
+        assert!(stated.is_empty(), "help states a default: {stated:?}");
+        assert!(schema["x-category"].is_string(), "{schema}");
     }
 }

@@ -75,6 +75,38 @@ pub const EXCLUDE_KEYS: &[&str] = &["assignee", "label", "status"];
 /// it.
 pub const TRIGGER_KEYS: &[&str] = &["assignee", "exclude", "label", "status"];
 
+/// The `workflow` part of this source's `config/schema` answer (ADR-0113):
+/// the trigger keys [`TRIGGER_KEYS`] / [`EXCLUDE_KEYS`] name, for the settings
+/// window. A test holds the two lists and this schema to the same keys.
+pub fn workflow_schema() -> Value {
+    use plugin_sdk::config_schema::{
+        assignee, exclude, exclude_assignee, field, one_or_many, workflow,
+    };
+    let status = || {
+        field(
+            json!({ "type": "string" }),
+            "Status",
+            "The status (column) a task must be in.",
+        )
+    };
+    let label = || {
+        one_or_many(
+            "Label",
+            "A label the task must carry; with several, any one of them.",
+        )
+    };
+    let mut excluded = serde_json::Map::new();
+    excluded.insert("status".into(), one_or_many("Status", "Statuses to skip."));
+    excluded.insert("label".into(), one_or_many("Label", "Labels to skip."));
+    excluded.insert("assignee".into(), exclude_assignee("GitHub logins"));
+    let mut trigger = serde_json::Map::new();
+    trigger.insert("status".into(), status());
+    trigger.insert("label".into(), label());
+    trigger.insert("assignee".into(), assignee("GitHub logins"));
+    trigger.insert("exclude".into(), exclude(excluded));
+    workflow(trigger, serde_json::Map::new())
+}
+
 impl TriggerFilter {
     /// `Err` only for a malformed `assignee`; everything else is parsed
     /// leniently because `initialize` has already rejected unknown keys (#574).
@@ -1342,6 +1374,32 @@ const UPDATE_STATUS_MUTATION: &str = r#"mutation($project: ID!, $item: ID!, $fie
 }"#;
 
 const VIEWER_QUERY: &str = "query { viewer { login } }";
+
+#[cfg(test)]
+mod workflow_schema_tests {
+    use super::*;
+    use plugin_sdk::config_schema::{help_stating_defaults, keys, missing_help};
+
+    /// The settings window offers exactly the trigger keys `initialize`
+    /// accepts — a key added to the parser without the schema (or the other
+    /// way round) fails here.
+    #[test]
+    fn trigger_schema_names_the_keys_this_source_reads() {
+        let schema = workflow_schema();
+        let sorted = |list: &[&str]| {
+            let mut v: Vec<String> = list.iter().map(|k| k.to_string()).collect();
+            v.sort_unstable();
+            v
+        };
+        assert_eq!(keys(&schema, "/properties/trigger"), sorted(TRIGGER_KEYS));
+        assert_eq!(
+            keys(&schema, "/properties/trigger/properties/exclude"),
+            sorted(EXCLUDE_KEYS)
+        );
+        assert_eq!(missing_help(&schema), Vec::<String>::new());
+        assert_eq!(help_stating_defaults(&schema), Vec::<String>::new());
+    }
+}
 
 #[cfg(test)]
 mod tests {

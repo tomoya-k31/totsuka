@@ -87,7 +87,7 @@ impl LlmConfig {
 }
 
 /// `[llm].api` as written.
-#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 enum LlmApiKind {
     #[default]
@@ -96,18 +96,43 @@ enum LlmApiKind {
 }
 
 /// `[llm]` as written, before the per-API keys are checked.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct RawLlmConfig {
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "API",
+        "x-help" = "chat (an OpenAI-compatible chat API) or decisions."
+    ))]
     api: LlmApiKind,
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Base URL",
+        "x-help" = "For chat: the API's base URL."
+    ))]
     base_url: Option<String>,
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Endpoint",
+        "x-help" = "For decisions: the Decisions API's full URL."
+    ))]
     endpoint: Option<String>,
+    #[schemars(extend(
+        "x-title" = "Model",
+        "x-help" = "The model name."
+    ))]
     model: String,
+    #[schemars(extend(
+        "x-title" = "API key",
+        "x-help" = "The API key.",
+        "x-secret" = true
+    ))]
     api_key: String,
     #[serde(default = "default_confidence_threshold")]
+    #[schemars(extend(
+        "x-title" = "Confidence threshold",
+        "x-help" = "Below this, you are asked in the thread instead."
+    ))]
     confidence_threshold: f64,
 }
 
@@ -166,7 +191,7 @@ impl TryFrom<RawLlmConfig> for LlmConfig {
 /// serde's diagnostic on a value that is neither shape ("data did not match
 /// any variant"), which is why [`ChannelPrefixes::is_empty`] and
 /// [`ChannelPrefixes::blank_entries`] carry the actionable checks instead.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(untagged)]
 pub enum ChannelPrefixes {
     /// A single prefix.
@@ -236,29 +261,49 @@ impl ChannelPrefixes {
 
 /// A channel-name prefix rule narrowing repository candidates (first match in
 /// declaration order wins).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ChannelGroup {
     /// Channel-name prefix, or a list of them (e.g. `"dev-frontend-"`,
     /// `["dev-", "team-"]`).
+    #[schemars(extend(
+        "x-title" = "Channel prefix",
+        "x-help" = "A channel-name prefix, or a list of them, e.g. \"dev-\"."
+    ))]
     pub prefix: ChannelPrefixes,
     /// Candidate repository names; each must exist in [`SlackConfig::repos`].
+    #[schemars(extend(
+        "x-title" = "Repositories",
+        "x-help" = "The candidate repositories for those channels."
+    ))]
     pub repos: Vec<String>,
 }
 
 /// A candidate repository the plugin may resolve a mention to. `name` must
 /// match a `[[repositories]].name` in the orchestrator's `config.toml`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RepoInfo {
     /// Repository name (as known to the orchestrator).
+    #[schemars(extend(
+        "x-title" = "Name",
+        "x-help" = "The repository's name."
+    ))]
     pub name: String,
     /// One-line description fed to the LLM classifier.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Summary",
+        "x-help" = "What the repository is about, for the classifier."
+    ))]
     pub summary: Option<String>,
     /// Local checkout path; when set, the README head is added as classifier
     /// material.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Path",
+        "x-help" = "The local clone; its README helps the classifier."
+    ))]
     pub path: Option<String>,
 }
 
@@ -324,59 +369,115 @@ struct EmbeddedPrompts {
 /// Everything here is LLM-facing: a bad override degrades classification or
 /// produces a weaker draft, but cannot break completion detection the way the
 /// core prompts can.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SlackPrompts {
     /// Reply-crafting directions carried as `Task.instructions`.
     #[serde(default = "default_reply_instructions")]
+    #[schemars(extend(
+        "x-title" = "Reply instructions",
+        "x-help" = "Instructions for drafting a reply. Remove the key to use the built-in text (an empty value is used as is)."
+    ))]
     pub reply_instructions: String,
     /// Sent instead of [`reply_instructions`](Self::reply_instructions) when
     /// the matched workflow's profile is `implement` (#397/#398).
     #[serde(default = "default_implement_instructions")]
+    #[schemars(extend(
+        "x-title" = "Implement",
+        "x-help" = "Instructions for implement workflows. Remove the key to use the built-in text (an empty value is used as is)."
+    ))]
     pub implement_instructions: String,
     /// Sent instead of [`reply_instructions`](Self::reply_instructions) when
     /// the matched workflow's profile is `triage` (#450) — the `:books:` flow
     /// files an issue instead of answering or implementing.
     #[serde(default = "default_triage_instructions")]
+    #[schemars(extend(
+        "x-title" = "Triage",
+        "x-help" = "Instructions for triage workflows. Remove the key to use the built-in text (an empty value is used as is)."
+    ))]
     pub triage_instructions: String,
     /// Appended to [`reply_instructions`](Self::reply_instructions) only when
     /// [`SlackConfig::reply_style`] is set. Placeholder: `{style}`.
     #[serde(default = "default_reply_style_suffix")]
+    #[schemars(extend(
+        "x-title" = "Reply style text",
+        "x-help" = "Added when a reply style is set; {style} is replaced. Remove the key to use the built-in text (an empty value is used as is)."
+    ))]
     pub reply_style_suffix: String,
     /// The visible task body. Placeholders: `{sender}` `{channel}` `{text}`.
     #[serde(default = "default_body_template")]
+    #[schemars(extend(
+        "x-title" = "Task body",
+        "x-help" = "The task's body; {sender} {channel} {text} are replaced. Remove the key to use the built-in text (an empty value is used as is)."
+    ))]
     pub body_template: String,
     /// Attachment-section header, emitted only when the message carried
     /// files. Placeholder: `{count}`. States that the content was **not**
     /// fetched — the plugin has no `files:read` scope.
     #[serde(default = "default_body_attachment_header")]
+    #[schemars(extend(
+        "x-title" = "Attachments header",
+        "x-help" = "Heads the attachment list; {count} is replaced. Remove the key to use the built-in text (an empty value is used as is)."
+    ))]
     pub body_attachment_header: String,
     /// One attachment line. Placeholder: `{file}` (name, MIME type, size and
     /// permalink, already composed).
     #[serde(default = "default_body_attachment_line")]
+    #[schemars(extend(
+        "x-title" = "Attachment line",
+        "x-help" = "One attachment; {file} is replaced. Remove the key to use the built-in text (an empty value is used as is)."
+    ))]
     pub body_attachment_line: String,
     /// The parent thread's permalink section, emitted only when the mention
     /// is a reply inside a thread (#683). Placeholder: `{url}`.
     #[serde(default = "default_body_thread_permalink")]
+    #[schemars(extend(
+        "x-title" = "Thread link",
+        "x-help" = "The parent thread's link; {url} is replaced. Remove the key to use the built-in text (an empty value is used as is)."
+    ))]
     pub body_thread_permalink: String,
     /// Thread-context section header. Placeholder: `{count}`.
     #[serde(default = "default_body_thread_header")]
+    #[schemars(extend(
+        "x-title" = "Thread header",
+        "x-help" = "Heads the thread context; {count} is replaced. Remove the key to use the built-in text (an empty value is used as is)."
+    ))]
     pub body_thread_header: String,
     /// One thread-context line. Placeholder: `{line}`.
     #[serde(default = "default_body_thread_line")]
+    #[schemars(extend(
+        "x-title" = "Thread line",
+        "x-help" = "One thread message; {line} is replaced. Remove the key to use the built-in text (an empty value is used as is)."
+    ))]
     pub body_thread_line: String,
     /// Emitted instead of the thread-context section when the fetch failed.
     #[serde(default = "default_body_thread_unavailable")]
+    #[schemars(extend(
+        "x-title" = "Thread unavailable",
+        "x-help" = "Shown when the thread could not be read. Remove the key to use the built-in text (an empty value is used as is)."
+    ))]
     pub body_thread_unavailable: String,
     /// Classifier system prompt. Placeholder: `{repo_names}`.
     #[serde(default = "default_classifier_system")]
+    #[schemars(extend(
+        "x-title" = "Classifier system prompt",
+        "x-help" = "The classifier's system prompt; {repo_names} is replaced. Remove the key to use the built-in text (an empty value is used as is)."
+    ))]
     pub classifier_system: String,
     /// Classifier user message. Placeholders: `{mention_text}`
     /// `{thread_context}` `{catalog}`.
     #[serde(default = "default_classifier_user")]
+    #[schemars(extend(
+        "x-title" = "Classifier message",
+        "x-help" = "The classifier's message; {mention_text} {thread_context} {catalog} are replaced. Remove the key to use the built-in text (an empty value is used as is)."
+    ))]
     pub classifier_user: String,
     /// Retry turn after a malformed answer.
     #[serde(default = "default_classifier_correction")]
+    #[schemars(extend(
+        "x-title" = "Classifier retry",
+        "x-help" = "Sent when the classifier's answer could not be read. Remove the key to use the built-in text (an empty value is used as is)."
+    ))]
     pub classifier_correction: String,
 }
 
@@ -529,7 +630,7 @@ fn default_classifier_correction() -> String {
 /// which is why nothing here changes it automatically: a gateway outage that
 /// silently reconnected over Socket Mode would need a Slack-side change this
 /// process cannot make, and pretending otherwise would just hide the outage.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum EventSource {
     /// The resident WebSocket (`socket_mode.rs`). The default, and what every
@@ -542,23 +643,43 @@ pub enum EventSource {
 }
 
 /// Pub/Sub coordinates for [`EventSource::Gateway`].
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct GatewayConfig {
     /// GCP project holding the subscriptions.
+    #[schemars(extend(
+        "x-title" = "GCP project",
+        "x-help" = "The GCP project holding the subscriptions."
+    ))]
     pub project: String,
     /// Subscription carrying messages and reactions.
+    #[schemars(extend(
+        "x-title" = "Subscription",
+        "x-help" = "The subscription for messages and reactions."
+    ))]
     pub subscription: String,
     /// Subscription carrying button presses. Separate because its retention
     /// has to clear `response_url`'s ~30-minute life while the other's is
     /// measured in days (ADR-0072 decision 5).
+    #[schemars(extend(
+        "x-title" = "Button subscription",
+        "x-help" = "The subscription for button presses."
+    ))]
     pub block_actions_subscription: String,
     /// Pub/Sub base URL. Overridable so tests need no network.
     #[serde(default = "default_pubsub_url")]
+    #[schemars(extend(
+        "x-title" = "Pub/Sub URL",
+        "x-help" = "The Pub/Sub API's base URL."
+    ))]
     pub pubsub_url: String,
     /// Messages requested per `pull`. Pub/Sub caps the response at this many;
     /// it is not a promise that many exist.
     #[serde(default = "default_pull_max_messages")]
+    #[schemars(extend(
+        "x-title" = "Messages per pull",
+        "x-help" = "Messages requested per pull."
+    ))]
     pub pull_max_messages: u32,
 }
 
@@ -581,47 +702,92 @@ impl GatewayConfig {
 }
 
 /// Slack task-source settings.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-category" = "Slack"))]
 #[serde(deny_unknown_fields)]
 pub struct SlackConfig {
     /// App-Level Token (`xapp-`) for Socket Mode. Required under
     /// [`EventSource::Socket`]; unused — and omittable — under
     /// [`EventSource::Gateway`], which opens no WebSocket.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "App token",
+        "x-help" = "The xapp- token, for Socket Mode.",
+        "x-secret" = true
+    ))]
     pub app_token: Option<String>,
     /// User OAuth Token (`xoxp-`); replies are posted as the operator.
+    #[schemars(extend(
+        "x-title" = "User token",
+        "x-help" = "The xoxp- token. Replies are posted as you.",
+        "x-secret" = true
+    ))]
     pub user_token: String,
     /// Bot User OAuth Token (`xoxb-`); when set, the bot DMs the operator a
     /// notification nudge for drafts and pickers — surfaces that generate no
     /// Slack notification of their own. Absent = nudges disabled (#305).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Bot token",
+        "x-help" = "The xoxb- token. When set, the bot DMs you about drafts and choices.",
+        "x-secret" = true
+    ))]
     pub bot_token: Option<String>,
     /// The operator's own Slack user id (`U…`). Mentions of this user become
     /// tasks, and the TokenGuard refuses a token belonging to anyone else.
+    #[schemars(extend(
+        "x-title" = "Your user ID",
+        "x-help" = "Your own Slack user ID (U…). Mentions of you become tasks."
+    ))]
     pub target_user_id: String,
     /// The user groups (`S…`) whose mentions this plugin answers, regardless
     /// of workflow (ADR-0110). Absent = every group the operator belongs to;
     /// `[]` = no group mentions at all, personal mentions only. Each listed
     /// group must be one the operator belongs to (checked at `initialize`).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Mention groups",
+        "x-help" = "The user group IDs (S…) whose mentions are answered. Leave it out to answer every group you belong to; an empty list answers personal mentions only."
+    ))]
     pub mention_groups: Option<Vec<String>>,
     /// How many recent thread messages to include as context.
     #[serde(default = "default_thread_context_limit")]
+    #[schemars(extend(
+        "x-title" = "Thread context",
+        "x-help" = "How many recent thread messages are included."
+    ))]
     pub thread_context_limit: u32,
     /// Optional tone/style instruction injected into the task body.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Reply style",
+        "x-help" = "An optional tone or style for replies."
+    ))]
     pub reply_style: Option<String>,
     /// The plugin instance name stamped onto each `Task.source`.
     #[serde(default = "default_source_name")]
+    #[schemars(extend(
+        "x-title" = "Source name",
+        "x-help" = "This source's name on tasks. Change it only to run two of this plugin."
+    ))]
     pub source_name: String,
     /// Repository-selection LLM. Required when more than one repository
     /// candidate ends up declared (with a single candidate there is nothing
     /// to classify) — but optional since #119: when omitted, the
     /// orchestrator's `[llm]` (supplied at `initialize`) fills in.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Repository classification",
+        "x-help" = "An LLM for this source only. Empty uses the global repository classification."
+    ))]
+    #[schemars(with = "Option<RawLlmConfig>")]
     pub llm: Option<LlmConfig>,
     /// Channel-prefix rules, checked before the LLM (first match wins).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Channel rules",
+        "x-help" = "Channel-name prefixes mapped to repositories, checked first."
+    ))]
     pub channel_groups: Vec<ChannelGroup>,
     /// The repository a mention falls back to when no [`ChannelGroup`] covers
     /// its channel. Being a single candidate it resolves without an LLM call,
@@ -641,25 +807,50 @@ pub struct SlackConfig {
     /// which paths are reachable, and the count is deliberately blunter than
     /// that.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Fallback repository",
+        "x-help" = "The repository for channels no rule covers."
+    ))]
     pub fallback_repo: Option<String>,
     /// Candidate repositories. Optional since #109: when omitted, the
     /// orchestrator's `[[repositories]]` (supplied at `initialize`) become
     /// the candidates; an explicit list here always wins.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Repositories",
+        "x-help" = "Candidate repositories. Empty uses the global repositories."
+    ))]
     pub repos: Vec<RepoInfo>,
     /// Slack Web API base URL (overridable for tests).
     #[serde(default = "default_api_url")]
+    #[schemars(extend(
+        "x-title" = "API URL",
+        "x-help" = "The API's base URL."
+    ))]
     pub api_url: String,
     /// State-directory root for the persisted draft store (#122), replacing
     /// `${XDG_STATE_HOME:-~/.local/state}/totsuka` (overridable for tests).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "State directory",
+        "x-help" = "Where drafts are kept. Empty means the default."
+    ))]
     pub state_dir: Option<std::path::PathBuf>,
     /// Max retry attempts for retryable API failures.
     #[serde(default = "default_max_retries")]
+    #[schemars(extend(
+        "x-title" = "Retries",
+        "x-help" = "How many times a failed API call that can be retried is retried."
+    ))]
     pub max_retries: u32,
     /// Most messages the startup backfill recovers per watched channel
     /// (#617). Omitted means [`plugin_sdk::watch::DEFAULT_BACKFILL_COUNT`].
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Backfill limit",
+        "x-placeholder" = "100",
+        "x-help" = "How many missed posts per watched channel are recovered on start."
+    ))]
     pub watch_backfill_limit: Option<u32>,
     /// How old a missed post may be and still be recovered, in hours (#617).
     /// Omitted means [`plugin_sdk::watch::DEFAULT_BACKFILL_MAX_AGE_HOURS`].
@@ -668,9 +859,18 @@ pub struct SlackConfig {
     /// turning its recent history into tasks — without it, the first startup
     /// would recover the last `watch_backfill_limit` posts however old.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Backfill age (hours)",
+        "x-placeholder" = "24",
+        "x-help" = "How old a missed post may be and still be recovered."
+    ))]
     pub watch_backfill_max_age_hours: Option<u64>,
     /// Which transport delivers Slack events (#652). Default [`EventSource::Socket`].
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Event source",
+        "x-help" = "socket (Socket Mode) or gateway (the Event Gateway)."
+    ))]
     pub event_source: EventSource,
     /// Where the Event Gateway's Pub/Sub queues live. Required under
     /// [`EventSource::Gateway`], meaningless otherwise.
@@ -679,6 +879,10 @@ pub struct SlackConfig {
     /// never sees these names. They are totsuka's own wiring, so they belong
     /// with the consumer rather than with the schema both sides must agree on.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Event Gateway",
+        "x-help" = "Where the Event Gateway's queues are. Needed for the gateway event source."
+    ))]
     pub gateway: Option<GatewayConfig>,
     /// How old a queued event may be and still be filed, in hours.
     /// `None` means [`DEFAULT_DRAIN_MAX_AGE_HOURS`].
@@ -690,10 +894,20 @@ pub struct SlackConfig {
     /// redeploy. Events outside the window are acked and dropped.
     /// Only meaningful under [`EventSource::Gateway`].
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Queue age (hours)",
+        "x-placeholder" = "24",
+        "x-help" = "How old a queued event may be and still be filed."
+    ))]
     pub drain_max_age_hours: Option<u64>,
     /// Most queued events filed per drain pass, `None` meaning
     /// [`DEFAULT_DRAIN_LIMIT`]. Only meaningful under [`EventSource::Gateway`].
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Queue batch",
+        "x-placeholder" = "100",
+        "x-help" = "The most queued events filed at a time."
+    ))]
     pub drain_limit: Option<u32>,
     /// Seconds between `conversations.history` polls of watched channels,
     /// `None` meaning [`DEFAULT_WATCH_POLL_INTERVAL_SECS`].
@@ -705,10 +919,19 @@ pub struct SlackConfig {
     /// is that watching stops working *silently*. Only meaningful under
     /// [`EventSource::Gateway`]; Socket Mode gets these posts pushed to it.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Watch interval (seconds)",
+        "x-placeholder" = "60",
+        "x-help" = "How often watched channels are checked."
+    ))]
     pub watch_poll_interval_secs: Option<u64>,
     /// Prompt text overrides (#318). Every key falls back to the embedded
     /// default when omitted.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Texts",
+        "x-help" = "The texts of instructions, task bodies and the classifier."
+    ))]
     pub prompts: SlackPrompts,
 }
 
@@ -1786,5 +2009,20 @@ mod tests {
         let errors = static_config_errors(&parse(value));
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert!(errors[0].contains("@oncall"), "{errors:?}");
+    }
+}
+
+#[cfg(test)]
+mod schema_tests {
+    /// Every key of `[slack]`, at any depth, carries an `x-title` and `x-help`
+    /// for the settings window, and no help states a default (ADR-0113).
+    #[test]
+    fn every_key_has_title_and_help() {
+        let schema = plugin_sdk::config_schema::of::<super::SlackConfig>().schema;
+        let missing = plugin_sdk::config_schema::missing_help(&schema);
+        assert!(missing.is_empty(), "{}", missing.join("\n"));
+        let stated = plugin_sdk::config_schema::help_stating_defaults(&schema);
+        assert!(stated.is_empty(), "help states a default: {stated:?}");
+        assert!(schema["x-category"].is_string(), "{schema}");
     }
 }

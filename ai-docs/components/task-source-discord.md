@@ -4,7 +4,7 @@ title: task-source-discord プラグイン
 description: "Discord のチャンネル監視をタスクソースとして接続する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。Gateway WebSocket で MESSAGE_CREATE を受け、監視チャンネルへのトップレベル投稿を Task へ正規化し、結果を bot 名義でその投稿のスレッドへ返す。self-bot 禁止により本人名義投稿・承認フローは持たない薄い設計。"
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-discord
 tags: [rust, crate, plugin, task-source, discord, gateway, websocket, channel-watch]
-generated: { by: claude-code/opus-5, at: 2026-09-26T22:30:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-01T23:10:00+09:00 }
 status: stable
 owner: tomoya-k31
 sources:
@@ -82,3 +82,9 @@ REST はルート別バケット + グローバル 50 req/s[^discord-rate-limits
 [^discord-self-bots]: Discord — Automated User Accounts (Self-Bots)
 [^discord-gateway]: Discord — Gateway（接続・intent・RESUME）
 [^discord-rate-limits]: Discord — Rate Limits
+
+# 設定スキーマ（`config/schema`、[ADR-0113](/decisions/adr-0113-native-menubar-app.md)）
+
+マニフェストで `config_schema = true` を宣言し、`initialize` より前の `config/schema` に `[discord]` のスキーマ（`plugin_sdk::config_schema::of::<DiscordConfig>()`）で答える。実装はSDK の `TaskSourceHandler::config_schema`。スキーマは serde が読む `DiscordConfig` から schemars で導出するので、受け付けないキーは載らない。全キー（入れ子を含む）に `x-title` / `x-help` があり、ヘルプに既定値を書いていないことを `config.rs` の `schema_tests` が、`initialize` 前に答えることを適合キットの検査 10 が確かめる。`x-secret` を付けたフィールド: `bot_token`。
+
+答えには `[[workflows]]` の `trigger` のキー（`workflow`: チャンネル監視の `channel` / `channel_name` / `repo` / `from`、SDK の `watch_trigger()`）と、`[[projects]]` 要素について「読むキーは無い」（`project`: `no_keys()`）も載せる。`TRIGGER_KEYS` とキーが一致することをテストで検査する（ADR-0113 §5）。
