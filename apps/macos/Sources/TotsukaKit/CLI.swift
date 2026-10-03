@@ -36,14 +36,17 @@ public struct TotsukaCLI: Sendable {
     }
 
     /// Run `totsuka <arguments>` to completion, feeding `stdin` if given.
-    public func run(_ arguments: [String], stdin: Data? = nil) async throws -> CommandResult {
+    /// With a `timeout`, the process is terminated once it passes.
+    public func run(
+        _ arguments: [String], stdin: Data? = nil, timeout: TimeInterval? = nil
+    ) async throws -> CommandResult {
         let binary = binary
         let environment = environment
         return try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global().async {
                 do {
                     continuation.resume(
-                        returning: try Self.runBlocking(binary, arguments, environment, stdin))
+                        returning: try Self.runBlocking(binary, arguments, environment, stdin, timeout))
                 } catch {
                     continuation.resume(throwing: error)
                 }
@@ -52,7 +55,8 @@ public struct TotsukaCLI: Sendable {
     }
 
     private static func runBlocking(
-        _ binary: URL, _ arguments: [String], _ environment: [String: String], _ stdin: Data?
+        _ binary: URL, _ arguments: [String], _ environment: [String: String], _ stdin: Data?,
+        _ timeout: TimeInterval?
     ) throws -> CommandResult {
         let process = Process()
         process.executableURL = binary
@@ -65,6 +69,11 @@ public struct TotsukaCLI: Sendable {
         let input = Pipe()
         process.standardInput = stdin == nil ? FileHandle.nullDevice : input
         try process.run()
+        if let timeout {
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
+                if process.isRunning { process.terminate() }
+            }
+        }
         if let stdin {
             input.fileHandleForWriting.write(stdin)
             try? input.fileHandleForWriting.close()

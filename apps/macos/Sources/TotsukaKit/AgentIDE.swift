@@ -12,18 +12,26 @@ public func herdrSocketPath(config: JSONValue, environment: [String: String]) ->
     let xdg = environment["XDG_CONFIG_HOME"].flatMap { $0.isEmpty ? nil : $0 }
     let dir = (xdg ?? (environment["HOME"] ?? NSHomeDirectory()) + "/.config") + "/herdr"
     func session(_ name: String) -> String { "\(dir)/sessions/\(name)/herdr.sock" }
-    if let path = config["herdr"]?["socket_path"]?.string {
-        return (expandEnv(path, environment) as NSString).expandingTildeInPath
-    }
+    // No `~` expansion: the plugin passes the path through as written.
+    if let path = config["herdr"]?["socket_path"]?.string { return path }
     if let name = config["herdr"]?["session"]?.string { return session(name) }
     if let path = environment["HERDR_SOCKET_PATH"] { return path }
     if let name = environment["HERDR_SESSION"] { return session(name) }
     return dir + "/herdr.sock"
 }
 
-/// `${VAR}` expanded from `environment`, as the CLI expands config values
-/// before handing them to a plugin (`config get` returns them unexpanded).
-/// An unset variable is left as written: the path then does not resolve.
+/// Every string in `config` with `${VAR}` expanded from `environment`, as a
+/// plugin receives its table (`config get` returns the file as written). An
+/// unset variable is left as written: the value then does not resolve.
+public func expandingEnv(_ config: JSONValue, _ environment: [String: String]) -> JSONValue {
+    switch config {
+    case .string(let s): return .string(expandEnv(s, environment))
+    case .array(let items): return .array(items.map { expandingEnv($0, environment) })
+    case .object(let map): return .object(map.mapValues { expandingEnv($0, environment) })
+    default: return config
+    }
+}
+
 func expandEnv(_ text: String, _ environment: [String: String]) -> String {
     var out = ""
     var rest = Substring(text)

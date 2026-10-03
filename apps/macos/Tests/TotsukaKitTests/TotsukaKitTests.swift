@@ -265,7 +265,10 @@ import Testing
         #expect(herdrSocketPath(config: explicit, environment: env) == "/s.sock")
         // `config get` hands `${VAR}` back unexpanded.
         let templated = JSONValue.parse(#"{"herdr":{"socket_path":"${HOME}/x/${NOPE}.sock"}}"#)!
-        #expect(herdrSocketPath(config: templated, environment: env) == "/h/x/${NOPE}.sock")
+        #expect(herdrSocketPath(config: expandingEnv(templated, env), environment: env) == "/h/x/${NOPE}.sock")
+        // The plugin leaves `~` alone, so the probe does too.
+        let tilde = JSONValue.parse(#"{"herdr":{"socket_path":"~/h.sock"}}"#)!
+        #expect(herdrSocketPath(config: tilde, environment: env) == "~/h.sock")
     }
 
     @Test func aMissingSocketDoesNotAccept() {
@@ -283,5 +286,16 @@ import Testing
         #expect(focusApp(workflow: "impl", config: config) == .bundleID("org.alacritty"))
         #expect(focusApp(workflow: nil, config: config) == .bundleID("org.alacritty"))
         #expect(focusApp(workflow: "impl", config: .object([:])) == nil)
+    }
+}
+
+@Suite struct CLITimeoutTests {
+    /// A stalled health check must not hold the poll forever.
+    @Test func aCallPastItsTimeoutIsTerminated() async throws {
+        let cli = TotsukaCLI(binary: URL(fileURLWithPath: "/bin/sleep"), environment: [:])
+        let start = Date()
+        let result = try await cli.run(["30"], timeout: 0.2)
+        #expect(Date().timeIntervalSince(start) < 5)
+        #expect(result.status != 0)
     }
 }

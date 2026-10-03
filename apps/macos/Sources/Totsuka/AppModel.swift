@@ -499,8 +499,9 @@ final class AppModel: ObservableObject {
         checkingIDEs = true
         defer { checkingIDEs = false }
         guard let result = try? await cli.run(["config", "get"]),
-            let config = (try? ConfigDocument.decode(result.stdout))?.config
+            let raw = (try? ConfigDocument.decode(result.stdout))?.config
         else { return }
+        let config = expandingEnv(raw, cli.environment)
         self.config = config
         var checked: [(name: String, up: Bool)] = []
         for name in enabledAgentIDEs(in: config) {
@@ -514,7 +515,7 @@ final class AppModel: ObservableObject {
                     named: bin, override: bin.contains("/") ? bin : nil, environment: cli.environment)
                 var up = false
                 if let orca, let status = try? await TotsukaCLI(binary: orca, environment: cli.environment)
-                    .run(["status", "--json"])
+                    .run(["status", "--json"], timeout: 10)
                 {
                     up = orcaRuntimeReachable(status.stdout)
                 }
