@@ -1,10 +1,10 @@
 ---
 type: Environment
 title: Homebrew tap（tomoya-k31/homebrew-tap）
-description: "totsuka を brew install で配れるようにするための tap リポジトリ。formula のインストールレイアウトがなぜ bundled plugins の探索順と一致するのか、リリースジョブが何を書き換えるのか、HOMEBREW_TAP_TOKEN のスコープ、bump が失敗したときの復旧、そして public 化までステップを止めている可視性ゲート。"
+description: "totsuka を brew install で配れるようにするための tap リポジトリ。formula のインストールレイアウトがなぜ bundled plugins の探索順と一致するのか、メニューバーアプリ（Totsuka.app）を formula で入れる理由と入れ方、リリースジョブが何を書き換えるのか、HOMEBREW_TAP_TOKEN のスコープ、bump が失敗したときの復旧、そして public 化までステップを止めている可視性ゲート。"
 resource: https://github.com/tomoya-k31/homebrew-tap
 tags: [infrastructure, homebrew, distribution, release, token]
-generated: { by: claude-code/opus-5.5, at: 2026-10-01T23:32:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-04T01:19:00+09:00 }
 status: stable
 owner: tomoya-k31
 sources:
@@ -34,7 +34,7 @@ brew tap tomoya-k31/homebrew-tap         # 以後は素の名前で扱える
 brew install totsuka
 ```
 
-更新はどちらで入れても `brew upgrade totsuka`。
+更新はどちらで入れても `brew upgrade totsuka`。メニューバーアプリ（`Totsuka.app`）も同じ formula で入り、同じ `brew upgrade` で追従する（→ [メニューバーアプリ](#メニューバーアプリadr-0113)）。
 
 `tomoya-k31/tap` と `tomoya-k31/homebrew-tap` は同じ tap を指す（`Tap.fetch` が先頭の `homebrew-` を落とす）。リポジトリ名の `homebrew-` 接頭辞は必須で、これが短縮形を成立させている。
 
@@ -166,21 +166,25 @@ Homebrew の formula は `url` を**素の `curl`（GitHub 認証なし）**で�
 
 tarball の最上位に `Totsuka.app` が入る（[release runbook](/operations/release-runbook.md)）。formula がこれを `prefix` に置くと、**formula の入れたファイルには quarantine が付かない**ので、公証していない ad-hoc 署名のアプリでも Gatekeeper に止められずに開く（cask は 2026-09-01 以降この経路を持たない）。
 
-formula に足すもの（tap リポジトリ側の変更。本リポジトリの PR では入らない）:
+formula は次の 2 か所でこれを入れる（homebrew-tap PR #3・#4、2026-10-04）。`install` に 1 行:
 
 ```ruby
 prefix.install "Totsuka.app" if File.exist?("Totsuka.app")
 ```
 
-```ruby
-def caveats
-  <<~CAVEATS
-    The menu bar app is at #{opt_prefix}/Totsuka.app. To open it from
-    Spotlight and Launchpad:
-      ln -sf #{opt_prefix}/Totsuka.app ~/Applications/Totsuka.app
-  CAVEATS
-end
+と、既存の `caveats`（herdr / orca と `totsuka setup` の案内）の末尾に 1 段落:
+
+```text
+The menu bar app is at #{opt_prefix}/Totsuka.app. To open it from
+Spotlight and Launchpad:
+  mkdir -p ~/Applications && ln -sf #{opt_prefix}/Totsuka.app ~/Applications/Totsuka.app
 ```
+
+利用者の手順は `brew install totsuka` の後にこの 1 行を 1 回打つだけで（`~/Applications` は macOS が最初から作るとは限らず、無いと `ln -sf` が `No such file or directory` で失敗するので `mkdir -p` を前に置く）、以後は `brew upgrade totsuka` がアプリも差し替える（リンク先の `opt` が新しい版を指す）。
+
+実測（0.10.5、この formula で `brew reinstall totsuka`）: `/opt/homebrew/opt/totsuka/Totsuka.app` に入り、拡張属性は `com.apple.provenance` だけで `com.apple.quarantine` は付かなかった。署名は ad-hoc、bundle ID は `io.github.tomoya-k31.totsuka`。
+
+リリースの bump ジョブが書き換えるのは `version` と `sha256` の 2 行だけなので（→ [リリース時に何が起きるか](#リリース時に何が起きるか)）、この 2 か所は手で足したまま残る。
 
 - `opt_prefix` を指すリンクにするのは、Cellar のパスが版ごとに変わるため。ログイン項目は登録時のパス（リンクを辿った先の Cellar）を覚えるが、アプリは起動のたびに登録し直して新しい場所へ移す
 - `if File.exist?` は、アプリを含まない古い tarball を指す formula でも install が壊れないようにするため
