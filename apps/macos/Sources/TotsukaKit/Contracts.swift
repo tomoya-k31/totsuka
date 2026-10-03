@@ -29,14 +29,12 @@ public struct MenuRow: Decodable, Equatable, Hashable, Sendable, Identifiable {
 
     public var id: Int64 { taskId }
 
-    /// The row's second line: repository, workflow, state and how long ago
-    /// the task came in, leaving out whatever is not known.
+    /// The row's second line: state, how long ago the task came in,
+    /// repository and workflow — most telling first, since a narrow panel
+    /// truncates the tail — leaving out whatever is not known.
     public func detail(now: Date = Date()) -> String {
-        var parts = [repo, workflow, state].compactMap { $0 }
-        if let created = createdAt.flatMap(parseTimestamp) {
-            parts.append(elapsedText(from: created, to: now))
-        }
-        return parts.joined(separator: " · ")
+        let elapsed = createdAt.flatMap(parseTimestamp).map { elapsedText(from: $0, to: now) }
+        return [state, elapsed, repo, workflow].compactMap { $0 }.joined(separator: " · ")
     }
 }
 

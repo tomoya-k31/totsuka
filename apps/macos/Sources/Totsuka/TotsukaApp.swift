@@ -55,26 +55,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 }
 
-/// The menu bar item: the template icon (the asset catalog's; an SF Symbol in
-/// a development build without one) and the number of tasks waiting on you.
+/// The menu bar item: the template icon alone (the asset catalog's; an SF
+/// Symbol in a development build without one). The tasks waiting on you are
+/// listed in the panel, not counted beside the icon.
 struct MenuLabel: View {
     @ObservedObject var app: AppModel
 
     var body: some View {
-        HStack(spacing: 2) {
-            // Dimmed while `run` is not running, so the state reads at a glance.
-            Group {
-                if let image = NSImage(named: "StatusBarTemplate") {
-                    Image(nsImage: image)
-                } else {
-                    Image(systemName: "bolt.circle")
-                }
-            }
-            .opacity(app.runState == .running ? 1 : 0.45)
-            if let count = app.menu?.attentionCount, count > 0 {
-                Text("\(count)")
+        Group {
+            if let image = NSImage(named: "StatusBarTemplate") {
+                Image(nsImage: image)
+            } else {
+                Image(systemName: "bolt.circle")
             }
         }
+        // Dimmed while `run` is not running, so the state reads at a glance.
+        .opacity(app.runState == .running ? 1 : 0.45)
     }
 }
 

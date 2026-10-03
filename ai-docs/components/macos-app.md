@@ -32,7 +32,7 @@ owner: tomoya-k31
 - **停止**: SIGTERM、300 秒待っても終わらなければ SIGKILL（メニューの「すぐに停止」でも）。起動中（設定の検証を待っている間）やバックオフ待ちの停止も効く。終了の通知は stdout / stderr の両方が EOF になってから出すので、exit 4 の理由の行が先に届く
 - **外部の run**: exit 5 の後は `menu --json` がロックの解放（`down`）を見たところで引き継ぐ
 - **通知**: `run` の stdout の `notify` 行を、`config get` で読んだ `[macos]` のフィルタ（ワークフロー別 → 全体 → 既定オン）に通してから `UserNotifications` で出す。クリックは `totsuka focus <task_id>`
-- **メニュー**: 10 秒ごとと通知のたびに `menu --json`。要対応・作業中の各行は 1 行目が `#<ID> <タイトル>`、2 行目がリポジトリ · workflow · 状態 · 取り込みからの経過時間（`MenuRow.detail`。古い CLI で `repo` / `created_at` が無ければ省く）。各行に focus / retry / cancel（確認付き）。verify は置かない
+- **メニュー**: 10 秒ごとと通知のたびに `menu --json`。要対応・作業中の各行は 1 行目が `#<ID> <タイトル>`、2 行目が状態 · 取り込みからの経過時間 · リポジトリ · workflow（`MenuRow.detail`。パネルの幅で末尾が切れるので、重要なものから並べる。古い CLI で `repo` / `created_at` が無ければ省く）。各行に focus / retry / cancel（確認付き）。verify は置かない
 - **設定**: 設定画面は無い（ADR-0109 §5）。Settings… は `config get` が返す config.toml を `$TERMINAL -e $EDITOR <path>` で開く（どちらもログインシェルの環境の値をシェル断片として使う。どちらかが無ければ `open -t`）。ファイルがまだ無ければ `totsuka init` を案内する。`$TERMINAL` が見つからない（シェルが 126 / 127 で終わる）ときはメニューに出す。`$EDITOR` の失敗はシェルがターミナルに置き換わった後なので、ターミナルの中に出る。変更は次の起動から効く
 - **ログ**: `run` の stderr を `$XDG_STATE_HOME/totsuka/app-run.log` に書き（起動ごとに見出し行、5 MB を超えたら次の起動で書き直す）、Logs は `$TERMINAL -e tail -n 200 -F` で開く（`$TERMINAL` が無ければ Console）
 - **その他のメニュー**: ログイン項目のオン・オフと、Keychain のマップを空にする「Forget saved secrets…」（次の起動でまた尋ねる）。`totsuka` の場所と `PATH` は `defaults write <bundle ID> totsukaPath` / `pathOverride` で上書きできる

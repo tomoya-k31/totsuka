@@ -16,6 +16,7 @@
 * **Update**: [ADR-0109](/decisions/adr-0109-native-menubar-app.md) / [Totsuka.app](/components/macos-app.md) — config に `secret:` が無ければ `run` を `--secrets-stdin` なしで起動し、`op://` / `cmd:` / `bw:` を `run` 自身に解決させる。1Password / Bitwarden をアプリ側で解決する案を採らない理由を記録した。
 * **Update**: [orchestrator-cli](/components/orchestrator-cli.md) / [Totsuka.app](/components/macos-app.md) — `menu --json` の各行に `repo` と `created_at` を足し、アプリの行にリポジトリと経過時間を出した。
 * **Update**: [Totsuka.app](/components/macos-app.md) — Quit 以外の経路でアプリが終わっても `run` に SIGTERM を送る（取り残された `run` が次の起動をロック競合にしていた）。
+* **Update**: [Totsuka.app](/components/macos-app.md) — メニューバーのアイコン横の件数をやめ、行の 2 行目を「状態 · 経過時間 · リポジトリ · workflow」の順にした（パネルの幅で末尾が切れるため）。
 * **Creation**: [ADR-0111 返信案の却下をモーダルで受け、代わりの返信を記録する](/decisions/adr-0111-reject-modal-alt-reply.md) — 却下押下でモーダルを開き、代わりの返信を記録する
 * **Update**: [task-source-slack](/components/task-source-slack.md) — `approval` / `socket_mode` / `draft` に却下モーダルと `alt_reply` を追記
 * **Creation**: [ADR-0109 Slack のメンション経路で bot と人間を区別しない](/decisions/adr-0109-slack-bot-mentions.md) — bot 投稿のメンション（個人・グループ）もタスクにする。自アプリの bot だけは除外

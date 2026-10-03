@@ -185,9 +185,9 @@ import Testing
         """#.utf8)
         let menu = try MenuModel.decode(data)
         let now = try #require(parseTimestamp("2026-10-03T12:00:40Z"))
-        #expect(menu.working[0].detail(now: now) == "web · github-task · running · 12m")
+        #expect(menu.working[0].detail(now: now) == "running · 12m · web · github-task")
         // An older CLI sends neither field: the row still renders.
-        #expect(menu.working[1].detail(now: now) == "w · queued")
+        #expect(menu.working[1].detail(now: now) == "queued · w")
     }
 
     @Test func elapsedIsShortAndNeverNegative() {
