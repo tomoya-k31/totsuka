@@ -11,6 +11,27 @@ Note: the plugin protocol is versioned independently of the application (see
 `crates/plugin-protocol`); a totsuka release does not imply a protocol-version
 change.
 
+## [0.10.4](https://github.com/tomoya-k31/totsuka/compare/v0.10.3...v0.10.4) (2026-10-03)
+
+
+### Features
+
+* **cli:** 設定画面向けに config schema / get / set / unset を追加する ([#845](https://github.com/tomoya-k31/totsuka/issues/845)) ([74ad41c](https://github.com/tomoya-k31/totsuka/commit/74ad41c0ce257bf5f437c9350969a418bdc62e30))
+* **cli:** 通知を stdout の JSON 行で流す run --events-jsonl を追加する ([#847](https://github.com/tomoya-k31/totsuka/issues/847)) ([9f7f023](https://github.com/tomoya-k31/totsuka/commit/9f7f02372be7947fda92054eb2705c01d9d779b6))
+* **gateway:** Event Gateway が却下モーダルを開き、その送信を中継する ([#854](https://github.com/tomoya-k31/totsuka/issues/854)) ([5ef50e2](https://github.com/tomoya-k31/totsuka/commit/5ef50e26187944d52d719f32f9d713cb24c3d079))
+* **macos:** メニューバーアプリ Totsuka.app を追加する ([439dd2c](https://github.com/tomoya-k31/totsuka/commit/439dd2c49bd2d7ef83d201f8132662f112ac009b))
+* **menu:** 許可を求めて止まっているタスクを要対応に出す ([#857](https://github.com/tomoya-k31/totsuka/issues/857)) ([e43030a](https://github.com/tomoya-k31/totsuka/commit/e43030ac5be5797dfd978edc58b1b22d4f45d837))
+* **plugins:** 同梱 7 プラグインが設定スキーマを config/schema で返す ([#848](https://github.com/tomoya-k31/totsuka/issues/848)) ([0868fe3](https://github.com/tomoya-k31/totsuka/commit/0868fe30437ca230a2a760cec496cf2dca8021ac))
+* **protocol:** 設定スキーマを返す config/schema と capability config_schema を追加する ([#844](https://github.com/tomoya-k31/totsuka/issues/844)) ([115a6ea](https://github.com/tomoya-k31/totsuka/commit/115a6eacdcc881b37b47c3d12ad854ed27388ff7))
+* **slack:** [slack] mention_groups で反応するグループメンションを事前に限定する ([#851](https://github.com/tomoya-k31/totsuka/issues/851)) ([15f9a58](https://github.com/tomoya-k31/totsuka/commit/15f9a58ee4527fe41d8f588fc0f6b4aefd2756f1))
+* **slack:** メンション経路で bot 投稿も人間と同じくタスクにする ([#850](https://github.com/tomoya-k31/totsuka/issues/850)) ([6432e14](https://github.com/tomoya-k31/totsuka/commit/6432e148cc5596f7a74b0e45432223bd9af648bc))
+* **slack:** 返信案の却下をモーダルで受け、代わりの返信を記録・任意で送信する ([#853](https://github.com/tomoya-k31/totsuka/issues/853)) ([9b5fdd3](https://github.com/tomoya-k31/totsuka/commit/9b5fdd33b3cb5f221bf309b610eee11b1d7f9785))
+
+
+### Performance
+
+* **slack:** Gateway 構成の押下用購読は空振り後の待ちを 1 秒で止める ([#856](https://github.com/tomoya-k31/totsuka/issues/856)) ([29511b2](https://github.com/tomoya-k31/totsuka/commit/29511b20c210996d1995f504a641aaa39f643b31))
+
 ## [0.10.3](https://github.com/tomoya-k31/totsuka/compare/v0.10.2...v0.10.3) (2026-09-29)
 
 
