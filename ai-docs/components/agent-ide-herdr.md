@@ -400,3 +400,5 @@ manifest（`plugins/agent-ide-herdr/plugin.toml`）と `initialize` 応答で `k
 # 設定スキーマ（`config/schema`、[ADR-0109](/decisions/adr-0109-native-menubar-app.md)）
 
 マニフェストで `config_schema = true` を宣言し、`initialize` より前の `config/schema` に `[herdr]` のスキーマ（`plugin_sdk::config_schema::of::<HerdrConfig>()`）で答える。実装はSDK の `AgentIdeHandler::config_schema`。スキーマは serde が読む `HerdrConfig` から schemars で導出するので、受け付けないキーは載らない。全キー（入れ子を含む）に `x-title` / `x-help` があり、ヘルプに既定値を書いていないことを `config.rs` の `schema_tests` が、`initialize` 前に答えることを適合キットの検査 10 が確かめる。`x-secret` を付けたフィールド: なし。
+
+workflow のオプションは 1 つも claim しない（`claimed_options` が空）ので、答えの `workflow` には空のスキーマ（`no_keys()`）を載せる。設定画面はこれで、このエージェントを使う workflow に残ったプラグイン所有でないキーを「使われていない」と示せる（ADR-0109 §5）。
