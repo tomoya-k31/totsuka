@@ -745,6 +745,10 @@ pub struct SlackConfig {
     /// `[]` = no group mentions at all, personal mentions only. Each listed
     /// group must be one the operator belongs to (checked at `initialize`).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Mention groups",
+        "x-help" = "The user group IDs (S…) whose mentions are answered. Leave it out to answer every group you belong to; an empty list answers personal mentions only."
+    ))]
     pub mention_groups: Option<Vec<String>>,
     /// How many recent thread messages to include as context.
     #[serde(default = "default_thread_context_limit")]
