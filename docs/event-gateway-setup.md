@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](event-gateway-setup.ja.md)
 
-<!-- generated-from: ai-docs/operations/event-gateway-setup.md sha256:48b2591089c7b11eb18d9b02cc6307cb2089d6775c4a5edc7a0acc93649fcefc -->
+<!-- generated-from: ai-docs/operations/event-gateway-setup.md sha256:4865d2551e9a36eb4e41d354ecd6c339fb11f6fd03fff483e4a0f1092f9bef8a -->
 
 # Event Gateway setup
 
@@ -241,7 +241,7 @@ first — the `plugin:slack` line carries the answer.
 | A line telling you to run `gcloud auth application-default login` | The credentials expired, or are not accepted | Run that command |
 | **`never delivered anything`** (advisory) | **Slack is not reaching the gateway at all** | Check that the Slack app has a Request URL in **both** places. `tofu output request_urls` prints what to paste |
 | `delivered nothing for N days` (advisory) | It has worked before, so this may just be quiet | If it should not be quiet, check the Request URLs are still set and that Slack has not disabled the subscription |
-| `plugin:slack` is green | This side is fine | Look at whether the message you sent passes the mention test — addressed to you, and not from a bot |
+| `plugin:slack` is green | This side is fine | Look at whether the message you sent passes the mention test — addressed to you, not an edit, and not posted by totsuka's own bot. Other bots' posts do pass, but only with a gateway deployed from a version that publishes them — redeploy an older one |
 
 **"Never received anything" and "quiet for a while" are different lines.** The
 first is what an unfinished setup looks like; the second can be perfectly

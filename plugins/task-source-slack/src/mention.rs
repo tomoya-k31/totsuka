@@ -3,8 +3,10 @@
 //!
 //! Filter order (first hit wins, per issue #105):
 //!
-//! 1. `subtype` / `bot_id` present → ignore (edits, deletions, system and
-//!    bot posts)
+//! 1. a `subtype` other than `bot_message` → ignore (edits, deletions,
+//!    system messages); a post by this app's own bot → ignore. **Any other
+//!    bot is a sender like a human** (ADR-0109): its `bot_id` stands in for
+//!    `user` when the post has none
 //! 2. sender is the operator → ignore (self posts; breaks the loop after an
 //!    approved auto-reply)
 //! 3. the operator's own DM channel → ignore (defense in depth; since
@@ -168,6 +170,10 @@ pub struct MentionFilter {
     /// mentions keep working and a startup warning says group ones will not.
     subteams: HashSet<String>,
     self_dm_channel: Option<String>,
+    /// This app's own `bot_id` (filter row 1, ADR-0109). Its posts quote
+    /// mentions back — approval cards, watch results — so admitting them
+    /// would loop. `None` without a bot token, where nothing posts as a bot.
+    own_bot_id: Option<String>,
     /// Where a mention goes, in the order the routes are tried (ADR-0081).
     /// Empty means no workflow answers mentions, and they are dropped rather
     /// than submitted to a workflow nobody named.
@@ -189,6 +195,7 @@ impl MentionFilter {
             tags: MentionTags::new(target_user_id),
             subteams: HashSet::new(),
             self_dm_channel: None,
+            own_bot_id: None,
             mention_routes,
             processed: HashSet::new(),
             processed_order: VecDeque::new(),
@@ -198,6 +205,11 @@ impl MentionFilter {
     /// Register the resolved self-DM channel (filter row 3).
     pub fn set_self_dm_channel(&mut self, channel: String) {
         self.self_dm_channel = Some(channel);
+    }
+
+    /// Register this app's own `bot_id` (filter row 1, ADR-0109).
+    pub fn set_own_bot_id(&mut self, bot_id: String) {
+        self.own_bot_id = Some(bot_id);
     }
 
     /// Register the user groups the operator belongs to (filter row 4, #658).
@@ -262,12 +274,18 @@ impl MentionFilter {
     pub fn assess(&mut self, event: &Value) -> Option<Mention> {
         let text_of = |field: &str| event.get(field).and_then(Value::as_str);
 
-        // 1. edits / deletions / system messages / bot posts
-        if event.get("subtype").is_some() || event.get("bot_id").is_some() {
+        // 1. edits / deletions / system messages, and this app's own posts.
+        //    Other bots pass (ADR-0109); a classic bot post carries
+        //    `subtype: bot_message` and no `user`, so `bot_id` stands in.
+        if text_of("subtype").is_some_and(|s| s != "bot_message") {
+            return None;
+        }
+        let bot_id = text_of("bot_id");
+        if bot_id.is_some() && bot_id == self.own_bot_id.as_deref() {
             return None;
         }
         // A message without sender/channel/ts is nothing we can act on.
-        let user = text_of("user")?;
+        let user = text_of("user").or(bot_id)?;
         let channel = text_of("channel")?;
         let ts = text_of("ts")?;
         // 2. self posts (includes our own approved auto-replies)
@@ -674,10 +692,6 @@ mod tests {
     /// A group mention is still a mention: every earlier filter row applies.
     #[test]
     fn the_earlier_filter_rows_still_outrank_a_group_mention() {
-        let mut bot = said("<!subteam^S0MINE> deploy finished");
-        bot["bot_id"] = json!("B0DEPLOY");
-        assert!(filter_in_group().assess(&bot).is_none());
-
         let mut edited = said("<!subteam^S0MINE> 直しました");
         edited["subtype"] = json!("message_changed");
         assert!(filter_in_group().assess(&edited).is_none());
@@ -690,6 +704,24 @@ mod tests {
         let mut once = filter_in_group();
         assert!(once.assess(&said("<!subteam^S0MINE> hi")).is_some());
         assert!(once.assess(&said("<!subteam^S0MINE> hi")).is_none());
+    }
+
+    /// ADR-0109: another bot's mention is a mention, in both of Slack's bot
+    /// post shapes — a classic one has no `user`, so `bot_id` is the sender.
+    #[test]
+    fn another_bots_mention_becomes_a_task() {
+        let mut classic = said("<!subteam^S0MINE> リリース承認申請が届きました");
+        classic.as_object_mut().unwrap().remove("user");
+        classic["subtype"] = json!("bot_message");
+        classic["bot_id"] = json!("B0DEPLOY");
+        let mention = filter_in_group().assess(&classic).expect("a bot mention");
+        assert_eq!(mention.user, "B0DEPLOY");
+
+        let mut app = said("<@U_ME> deploy finished");
+        app["user"] = json!("U_BOTUSER");
+        app["bot_id"] = json!("B0APP");
+        let mention = filter().assess(&app).expect("an app bot mention");
+        assert_eq!(mention.user, "U_BOTUSER");
     }
 
     #[test]
@@ -762,14 +794,16 @@ mod tests {
     }
 
     #[test]
-    fn subtype_and_bot_posts_are_ignored() {
+    fn edits_and_our_own_bot_posts_are_ignored() {
         let mut event = mention_event();
         event["subtype"] = json!("message_changed");
         assert!(filter().assess(&event).is_none());
 
+        let mut f = filter();
+        f.set_own_bot_id("B1".to_string());
         let mut event = mention_event();
         event["bot_id"] = json!("B1");
-        assert!(filter().assess(&event).is_none());
+        assert!(f.assess(&event).is_none());
     }
 
     #[test]

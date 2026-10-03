@@ -4,7 +4,7 @@ title: live-e2e-herdr スキル
 description: 実 Slack / 実 GitHub / 実 herdr + 実 Claude Code に対して totsuka を通しで動かす実機検証の手順・設定雛形・駆動スクリプト一式（herdr 版、旧名 live-e2e）。自動／手動／目視の区分と、別環境での一からの構築手順を含む。GitHub / Slack の駆動スクリプトと $E2E_HOME は orca 版の live-e2e-orca と共用する。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/.claude/skills/live-e2e-herdr
 tags: [testing, e2e, skill, tooling, slack, github, herdr]
-generated: { by: claude-code/opus-5, at: 2026-09-19T05:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-03T12:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -49,10 +49,12 @@ D-03 アンカー）。いずれも実機で走らせるまで検出されてい
 ストアも本番側を触るため使えない。ただし `XDG_CONFIG_HOME` を `export` すると `gh` が
 `$XDG_CONFIG_HOME/gh` を読んで認証が壊れるので、`tt()` が `env` で totsuka の起動時にだけ被せる。
 
-**`slack.sh` に投稿コマンドが無いのは意図的である。** `chat.postMessage` は user token で
-投稿しても `bot_id` が付き、[task-source-slack](/components/task-source-slack.md) の
-メンション判定表①が必ず除外する。メンションもリアクションの対象メッセージも、**人間が
-クライアントで打つ以外に作れない**。持たせると「なぜか起動しない」を再生産する。
+**`slack.sh` に投稿コマンドは無い。** `chat.postMessage` は user token で投稿しても
+投稿元アプリの `bot_id` が付く。[ADR-0109](/decisions/adr-0109-slack-bot-mentions.md) 以降、
+[task-source-slack](/components/task-source-slack.md) のメンション判定表が落とすのは
+**被テストアプリ自身の** `bot_id` だけなので、駆動用アプリ（B）からの API 投稿メンションは
+タスクになるはずである（未実機確認）。**リアクションの対象メッセージ**は従来どおり人間が
+クライアントで打つ必要がある（リアクション経路は `from_bot` の許可リスト制のまま、ADR-0079）。
 
 **承認ボタンの押下は自動化できない。** Slack に block_actions を発火させる API は無く、
 Socket Mode は Slack → アプリの一方向。合成するには `api_url` をプロキシへ向けて envelope を

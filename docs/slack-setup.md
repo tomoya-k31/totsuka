@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](slack-setup.ja.md)
 
-<!-- generated-from: ai-docs/operations/slack-quickstart.md sha256:8c75052ce93b9713938c22aa470061429551319fae65edf9d1ea5ff944cbbfe0 -->
+<!-- generated-from: ai-docs/operations/slack-quickstart.md sha256:afb55e7de1b60b66f38088d6945f77bb683999d93bb210827fb27fcfbe585958 -->
 
 # Setting up the Slack source
 
@@ -244,7 +244,7 @@ To try it end to end, have someone mention you. After the agent finishes, a draf
 |---|---|
 | `doctor` reports `invalid_auth` or `token_revoked` | The token was revoked. Reissue it and update wherever you stored it |
 | `doctor` reports an identity mismatch | The token belongs to someone else, or `target_user_id` is wrong. This is refused on purpose, to prevent posting as another person |
-| Mentions do not become tasks | Check that the mention is `@you` (only channels you are in are visible), that `run --watch` is running, and that the message is a plain post — edits and bot posts are ignored |
+| Mentions do not become tasks | Check that the mention is `@you` (only channels you are in are visible), that `run --watch` is running, and that the message is a plain post — edits and totsuka's own bot posts are ignored (other bots' mentions do count) |
 | Reacting does not create a task | Check that a workflow has `trigger = { reaction = "…" }` (**order in the file does not matter** — mentions and reactions arrive on separate event paths, so a reaction workflow written after the catch-all is not hidden by it), that the emoji name matches (👀 is `eyes`, 👁 is `eye`; a custom emoji arrives under the name actually clicked, so list aliases too), that **you** were the one who reacted, that the app was reinstalled with a manifest containing `reactions:read` — without that scope the event never arrives **and nothing reports an error** — and that the message was not **already handled as a mention**: both paths share one set of processed messages, so reacting to a message that already became a task does nothing |
 | Re-adding a reaction does not re-run it | Intended. A message that was handled successfully is not handled again, so removing and re-adding a reaction cannot start a second agent. A message whose fetch **failed** can be retried this way |
 | The draft arrives but the buttons no longer work | They expire after 24 hours, or were evicted once more than 1024 drafts accumulated. If you configured `bot_token`, the notification DM still holds a copy of the reply text — reply by hand from that, or mention again. Drafts survive a restart |

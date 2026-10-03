@@ -4,7 +4,7 @@ title: Event Gateway 構築手順（event_source = "gateway"）
 description: GCP 側の構築手順。着手前の組織ポリシー確認、OpenTofu による Cloud Run / Pub/Sub / Secret Manager / IAM の一括構築、Slack の Request URL 2 箇所の設定、totsuka 側の config、人を増やす手順、破棄、費用の前提。Socket Mode を使う読者はこのページを読む必要がない。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/services/slack-event-gateway/tofu
 tags: [slack, gateway, gcp, cloud-run, pubsub, secret-manager, opentofu, runbook, cost]
-generated: { by: claude-code/opus-5, at: 2026-09-17T12:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-03T12:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -234,7 +234,7 @@ identity 違い・権限の欠落・名前の打ち間違いをその場で落�
 | `gcloud auth application-default login` を促す行 | ADC が切れている、または受理されない | そのコマンドを実行する |
 | **`never delivered anything`（黄色）** | **Slack から Gateway までが繋がっていない** | Slack アプリの Request URL が **2 箇所とも**入っているか確認する。`tofu output request_urls` が入れるべき値を印字する |
 | `delivered nothing for N days`（黄色） | 経路は動いた実績がある。**静かなだけかもしれない** | 静かなはずがないなら、Request URL がまだ有効か・Slack が購読を無効化していないかを確認する |
-| `plugin:slack` が緑 | totsuka 側は正常 | 送ったメンションが判定を通っているかを疑う（自分宛か、`bot_id` が付いていないか） |
+| `plugin:slack` が緑 | totsuka 側は正常 | 送ったメンションが判定を通っているかを疑う（自分宛か、編集の subtype が付いていないか、totsuka 自身の bot の投稿でないか。他の bot の投稿は通る — ADR-0109。Gateway が ADR-0109 より前の版なら bot 投稿は publish されないので再デプロイする） |
 
 **「一度も受信していない」と「しばらく静か」は別の行になる。** 前者は構築が終わっていない形で、
 後者は正常でありうる —— この 2 つが同じ見え方をしていると、動いている設定を何度も疑うことになる。

@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:02517202674fc77719d3ed1d26ee18f9be578f91b5808a8af1106e25e3613a9e -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:87f931dc4e685cd2ea0e10a594f52114063b2f59fc36d0c0d5ca6e4985fa27cf -->
 
 # 設定リファレンス
 
@@ -378,7 +378,7 @@ agent = "herdr"
 - bot の投稿には送信者の user id が無いので、pane に出る送信者名は `bot_id` がそのまま入る
 - **ワークフローごとに書く。全体設定は無い。** 1 箇所に書けるようにすると、手元の絵文字が全部その bot へ一斉に開いてしまう
 - `reaction` を伴わない `from_bot`、`channel`（チャンネル監視）との併記、空の `[]`、そして **`B…` の形をしていない値**（`U…` のユーザー id やアプリの表示名）は、いずれも起動時エラーになる。どれも「bot を許可したのに無反応」という形で黙って壊れる書き方なので、起動を止める
-- **メンションとチャンネル監視では、bot の投稿は従来どおりタスクにならない。** この設定が効くのはリアクションだけである
+- **チャンネル監視では bot の投稿はタスクにならない。** メンションにはこの設定は要らない。自分や所属ユーザーグループへのメンションは、人間の投稿でも bot の投稿でもタスクになる（totsuka 自身の bot の投稿は除く）
 
 ### `initial_prompt`
 

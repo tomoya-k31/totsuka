@@ -206,11 +206,13 @@ fn project_event(payload: &Value, operator: &str, received_at: &str) -> Projecti
 fn project_message(event: &Value, operator: &str, received_at: &str) -> Option<Record> {
     let field = |name: &str| event.get(name).and_then(Value::as_str);
 
-    // Edits, deletions, system posts, bot posts.
-    if event.get("subtype").is_some() || event.get("bot_id").is_some() {
+    // Edits, deletions, system posts. Bot posts pass (ADR-0109): a classic
+    // one is `subtype: bot_message` with no `user`, so `bot_id` stands in.
+    // This app's own bot cannot be told apart here; the plugin drops it.
+    if field("subtype").is_some_and(|s| s != "bot_message") {
         return None;
     }
-    let user = field("user")?;
+    let user = field("user").or_else(|| field("bot_id"))?;
     let channel = field("channel")?;
     let ts = field("ts")?;
     // The operator's own posts, including their approved auto-replies — the

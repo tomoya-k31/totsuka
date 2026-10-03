@@ -1,6 +1,6 @@
 {
-  "name": "message-from-bot",
-  "why": "bot の投稿でもメンションなら通ること（ADR-0109）。アプリ bot は `user` と `bot_id` を両方持ち、送信者は `user`。自アプリの bot は Gateway では見分けられないので、プラグインが落とす。",
+  "name": "message-from-classic-bot-subteam",
+  "why": "`subtype: bot_message` で `user` を持たない古典的な bot 投稿のグループメンションが通ること（ADR-0109）。送信者は `bot_id` で埋める。",
   "delivery": {
     "endpoint": "events",
     "content_type": "application/json",
@@ -14,10 +14,10 @@
       "event": {
         "type": "message",
         "channel": "C0LOBBY",
-        "user": "U_BOTUSER",
         "ts": "1757640000.000100",
-        "text": "<@U_ME> デプロイが完了しました",
-        "bot_id": "B0DEPLOY"
+        "text": "<!subteam^S0TEAM> リリース承認申請が届きました",
+        "bot_id": "B0DEPLOY",
+        "subtype": "bot_message"
       }
     }
   },
@@ -31,11 +31,13 @@
         "channel": "C0LOBBY",
         "ts": "1757640000.000100",
         "thread_ts": null,
-        "user": "U_BOTUSER",
+        "user": "B0DEPLOY",
         "flags": {
-          "mentions_me": true
+          "mentions_me": false
         },
-        "subteam_ids": [],
+        "subteam_ids": [
+          "S0TEAM"
+        ],
         "received_at": "2026-09-13T00:00:00Z"
       }
     }

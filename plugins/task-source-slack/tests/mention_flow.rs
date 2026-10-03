@@ -507,6 +507,45 @@ async fn low_confidence_asks_via_ephemeral_and_the_answer_submits_the_task() {
     assert_eq!(posted[0].body["replace_original"], true);
 }
 
+/// ADR-0109: another bot's mention becomes a task, and this app's own bot —
+/// identified by the TokenGuard's bot `auth.test` — never does, since its
+/// posts quote mentions back.
+#[tokio::test]
+async fn another_bots_mention_is_a_task_but_our_own_bot_is_not() {
+    let (listener, url) = ws_listener().await;
+    let shared = Shared::default();
+    canned_web_api(&shared, &url);
+    shared.push_for(
+        "auth.test",
+        Canned::Data(json!({ "ok": true, "user_id": "U_BOT", "bot_id": "B_SELF" })),
+    );
+    shared.push_for(
+        "conversations.open",
+        Canned::Data(json!({ "ok": true, "channel": { "id": "D_BOT" } })),
+    );
+    let (mut srv, mut harness) = server(&shared);
+
+    let mut params = init_params();
+    params["config"]["bot_token"] = json!("xoxb-bot-test");
+    call(&mut srv, 1, "initialize", params).await;
+    let mut ws = accept_with_hello(&listener).await;
+
+    let from_bot = |envelope_id: &str, ts: &str, bot_id: &str| {
+        let mut envelope = mention_envelope(envelope_id, ts);
+        let event = &mut envelope["payload"]["event"];
+        event.as_object_mut().unwrap().remove("user");
+        event["subtype"] = json!("bot_message");
+        event["bot_id"] = json!(bot_id);
+        envelope
+    };
+    send_and_await_ack(&mut ws, from_bot("e1", "100.2", "B_SELF")).await;
+    harness.assert_no_task(Duration::from_millis(300)).await;
+
+    send_and_await_ack(&mut ws, from_bot("e2", "100.3", "B_OTHER")).await;
+    let task = harness.next_task().await;
+    assert_eq!(task["message_key"], "C1:100.3");
+}
+
 #[tokio::test]
 async fn picker_posts_a_bot_nudge_when_configured() {
     let (listener, url) = ws_listener().await;
@@ -516,7 +555,7 @@ async fn picker_posts_a_bot_nudge_when_configured() {
     // the TokenGuard's bot probe and the startup bot-DM open.
     shared.push_for(
         "auth.test",
-        Canned::Data(json!({ "ok": true, "user_id": "U_BOT" })),
+        Canned::Data(json!({ "ok": true, "user_id": "U_BOT", "bot_id": "B_SELF" })),
     );
     shared.push_for(
         "conversations.open",
@@ -568,7 +607,7 @@ async fn picker_post_failure_submits_hintless_without_a_nudge() {
     shared.push_for("chat.postEphemeral", Canned::Network);
     shared.push_for(
         "auth.test",
-        Canned::Data(json!({ "ok": true, "user_id": "U_BOT" })),
+        Canned::Data(json!({ "ok": true, "user_id": "U_BOT", "bot_id": "B_SELF" })),
     );
     shared.push_for(
         "conversations.open",

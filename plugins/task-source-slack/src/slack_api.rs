@@ -543,12 +543,18 @@ impl<T: SlackTransport> SlackApi<T> {
     /// identity, unlike the user token whose holder must be
     /// `target_user_id`. Every `ok: false` is credential-class, exactly as
     /// in [`auth_test`](Self::auth_test).
-    pub async fn auth_test_bot(&self) -> Result<(), SlackError> {
+    ///
+    /// Returns the app's own `bot_id` (`B…`), which the mention filter needs
+    /// to tell this plugin's bot posts from any other bot's (ADR-0109).
+    /// **Required**: without it the filter would admit the plugin's own bot
+    /// posts — which quote mentions back — while bot posting stays on, so a
+    /// response lacking it fails startup rather than opening that loop.
+    pub async fn auth_test_bot(&self) -> Result<String, SlackError> {
         let response = self
             .transport
             .call(TokenKind::Bot, "auth.test", None, true)
             .await?;
-        expect_ok("auth.test", response).map_err(|e| match e {
+        let response = expect_ok("auth.test", response).map_err(|e| match e {
             SlackError::Api { error, .. } => {
                 let guided = bot_auth_failure(&error);
                 tracing::error!(method = "auth.test", "{guided}");
@@ -556,7 +562,12 @@ impl<T: SlackTransport> SlackApi<T> {
             }
             other => other,
         })?;
-        Ok(())
+        match string_field(&response, "auth.test", "bot_id")? {
+            id if id.is_empty() => Err(SlackError::InvalidResponse(
+                "`auth.test` response has an empty `bot_id`".into(),
+            )),
+            id => Ok(id),
+        }
     }
 
     /// `conversations.info` — the channel's name (`#general` without the
