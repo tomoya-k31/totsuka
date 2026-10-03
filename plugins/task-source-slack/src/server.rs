@@ -783,6 +783,24 @@ where
         let (workflow_options, mut option_errors) =
             crate::workflow_options::WorkflowOptions::resolve(&init.workflows);
         errors.append(&mut option_errors);
+        // A `to_group` outside `[slack] mention_groups` (ADR-0110) is a route
+        // the list has already closed. Offline, so it is reported with the
+        // other config errors before the TokenGuard spends a Slack call.
+        if let Some(allowed) = &config.mention_groups {
+            let closed: Vec<&str> = reaction_triggers
+                .claimed_groups()
+                .filter(|g| !allowed.iter().any(|a| a == g))
+                .collect();
+            if !closed.is_empty() {
+                errors.push(format!(
+                    "`trigger.to_group` names user group(s) {} that `[slack] mention_groups` \
+                     does not list → mentions of them are ignored before any workflow is \
+                     chosen, so the workflow could never run; add them to `mention_groups`, \
+                     or drop them from `to_group`",
+                    closed.join(", ")
+                ));
+            }
+        }
         if !errors.is_empty() {
             return Err(Error::new(error_code::CONFIG_INVALID, errors.join("; ")));
         }
@@ -814,26 +832,7 @@ where
         //
         // `[slack] mention_groups` (ADR-0110) joins the same check: a listed
         // group the operator is not in would answer nothing, just as a
-        // `to_group` would. And a `to_group` outside the list is a route the
-        // list has already closed, so it is refused offline first.
-        if let Some(allowed) = &config.mention_groups {
-            let closed: Vec<&str> = reaction_triggers
-                .claimed_groups()
-                .filter(|g| !allowed.iter().any(|a| a == g))
-                .collect();
-            if !closed.is_empty() {
-                return Err(Error::new(
-                    error_code::CONFIG_INVALID,
-                    format!(
-                        "`trigger.to_group` names user group(s) {} that `[slack] mention_groups` \
-                         does not list → mentions of them are ignored before any workflow is \
-                         chosen, so the workflow could never run; add them to \
-                         `mention_groups`, or drop them from `to_group`",
-                        closed.join(", ")
-                    ),
-                ));
-            }
-        }
+        // `to_group` would.
         let claimed: Vec<&str> = reaction_triggers
             .claimed_groups()
             .chain(config.mention_groups.iter().flatten().map(String::as_str))

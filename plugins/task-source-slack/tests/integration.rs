@@ -735,7 +735,6 @@ async fn initialize_refuses_a_group_the_operator_is_not_in() {
 #[tokio::test]
 async fn initialize_refuses_a_to_group_outside_mention_groups() {
     let shared = Shared::default();
-    push_guard_ok(&shared);
     let (mut srv, _harness) = server(&shared);
 
     let mut config = init_config();
@@ -758,6 +757,7 @@ async fn initialize_refuses_a_to_group_outside_mention_groups() {
     );
     assert!(message.contains("S0OTHER"), "{message}");
     assert!(message.contains("mention_groups"), "{message}");
+    assert!(shared.requests().is_empty(), "{:?}", shared.requests());
 }
 
 /// …and a listed group the operator is not in is refused like a `to_group`.
