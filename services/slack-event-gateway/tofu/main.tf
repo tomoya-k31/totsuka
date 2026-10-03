@@ -41,6 +41,7 @@ locals {
         signing_secret      = local.operators[key].signing_secret
         topic               = google_pubsub_topic.events[key].id
         block_actions_topic = google_pubsub_topic.block_actions[key].id
+        bot_token           = local.operators[key].bot_token
       }
     ]
   })

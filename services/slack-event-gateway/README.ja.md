@@ -17,7 +17,9 @@ WebSocket を握るので、**totsuka が止まっている間のメンション
 
 **本文を保存しない・転送しない・ログに出さない。** 本文に対してやってよいのは定数文字列との
 一致判定だけである。メッセージを解釈するために外部 API を呼ばない（LLM を含め、何も）。
-外向きの通信は Pub/Sub への publish 1 本だけで、それがこのプロセスの目的である。
+外向きの通信は Pub/Sub への publish（それがこのプロセスの目的である）と、登録表の行に
+`bot_token` がある利用者に限った却下モーダルの `views.open` の 2 つで、後者が Slack に渡すのは
+押下自身の座標から作ったモーダルだけで、メッセージの本文は含まない。
 
 レコードのスキーマには本文を運べるフィールドが無いが、**それは保証ではない** ——
 プロセスは文字列をメモリに保持することも、出力することも、別の宛先へ送ることもできる。
@@ -59,6 +61,7 @@ Slack は IAM プリンシパルになれず、許可リストに使える安定
 | `REGISTRATIONS` | 登録表を直接。簡単だが、全利用者の signing secret がリビジョンの設定に載る |
 | `PORT` | 待ち受けポート。Cloud Run が設定する。既定 8080 |
 | `PUBSUB_URL` | Pub/Sub のベース URL。テスト用 |
+| `SLACK_API_URL` | Slack Web API のベース URL（`views.open` に使う）。テスト用 |
 
 登録表は利用者ごとに 1 行:
 
@@ -70,11 +73,18 @@ Slack は IAM プリンシパルになれず、許可リストに使える安定
       "slack_user_id": "U0123456",
       "signing_secret": "<Slack アプリの Basic Information ページから>",
       "topic": "projects/<project>/topics/<operator>-events",
-      "block_actions_topic": "projects/<project>/topics/<operator>-presses"
+      "block_actions_topic": "projects/<project>/topics/<operator>-presses",
+      "bot_token": "<任意: アプリの Bot User OAuth Token、xoxb-…>"
     }
   ]
 }
 ```
+
+`bot_token` は任意である。あると、下書きの「却下」の押下でゲートウェイが却下モーダルを開く。
+`trigger_id` は押下から 3 秒で失効し、Pub/Sub を経由した押下では間に合わないため、ここで開く。
+開けたら押下そのものは publish せず、代わりにモーダルの送信を `view_submission` レコードとして
+publish する（ADR-0112）。無い場合やモーダルが開けない場合は、従来どおり押下を publish し、
+totsuka がその場で却下する。空文字の `bot_token` は起動時に拒否するので、使わないなら項目ごと省く。
 
 `path_token` は **32 文字以上**でなければならない（`openssl rand -hex 24` で生成する）。
 IAM の無いエンドポイントのルーティング資格情報そのものなので、短いものは総当たりで

@@ -133,6 +133,10 @@ variable "operators" {
     - `google_principal`  — the identity that may pull *their* subscriptions,
                             e.g. `user:someone@example.com`. Each operator is
                             granted their own two subscriptions and nothing else
+    - `bot_token`         — optional: their Slack app's Bot User OAuth Token
+                            (`xoxb-…`). With it, the gateway opens the reject
+                            modal itself (ADR-0112); without it, a reject press
+                            rejects on the spot as before
 
     **These values land in the OpenTofu state file, and this module offers no
     way around that** — it builds the registration table from them, which is
@@ -146,6 +150,7 @@ variable "operators" {
     path_token       = string
     signing_secret   = string
     google_principal = string
+    bot_token        = optional(string)
   }))
   sensitive = true
 
@@ -183,6 +188,13 @@ variable "operators" {
     # operator can write by hand into Secret Manager. Change one, change both.
     condition     = alltrue([for o in var.operators : length(o.path_token) >= 32])
     error_message = "A path_token must be at least 32 characters. It is the routing credential on an endpoint with no IAM in front of it; generate one with `openssl rand -hex 24`."
+  }
+
+  validation {
+    # Same rule as `Registry::validate`: caught here, a blank token fails the
+    # plan instead of deploying a revision that refuses to start.
+    condition     = alltrue([for o in var.operators : o.bot_token == null ? true : trimspace(o.bot_token) != ""])
+    error_message = "A bot_token, when given, must not be blank — omit the field instead."
   }
 }
 

@@ -18,8 +18,10 @@ The design is recorded in `ai-docs/decisions/adr-0072-slack-event-gateway.md`.
 
 **It does not store, forward, or log the message body.** The only thing it does
 with the text is compare it against constant strings. It calls no external API
-to interpret a message — no LLM, nothing. The one outbound call is the Pub/Sub
-publish, which is the point of the process.
+to interpret a message — no LLM, nothing. The outbound calls are the Pub/Sub
+publish, which is the point of the process, and — only for an operator whose
+row has a `bot_token` — `views.open` for the reject modal, which sends Slack a
+modal built from the press's own coordinates and nothing of any message.
 
 The record schema has no field that could carry a body, but *that is not the
 guarantee*: a process can keep a string in memory, print it, or post it
@@ -66,6 +68,7 @@ not worth guessing at.
 | `REGISTRATIONS` | The table inline. Simpler, but it puts every operator's signing secret in the revision's configuration |
 | `PORT` | Listen port. Cloud Run sets this; defaults to 8080 |
 | `PUBSUB_URL` | Pub/Sub base URL. For tests |
+| `SLACK_API_URL` | Slack Web API base URL, used for `views.open`. For tests |
 
 The registration table, one row per operator:
 
@@ -77,11 +80,20 @@ The registration table, one row per operator:
       "slack_user_id": "U0123456",
       "signing_secret": "<from the Slack app's Basic Information page>",
       "topic": "projects/<project>/topics/<operator>-events",
-      "block_actions_topic": "projects/<project>/topics/<operator>-presses"
+      "block_actions_topic": "projects/<project>/topics/<operator>-presses",
+      "bot_token": "<optional: the app's Bot User OAuth Token, xoxb-…>"
     }
   ]
 }
 ```
+
+`bot_token` is optional. With it, a press of a draft's reject button opens the
+reject modal from here — inside the 3 seconds a `trigger_id` lives, which a
+press queued through Pub/Sub cannot reach — and the press itself is not
+published; the modal's submission is published instead, as a
+`view_submission` record (ADR-0112). Without it, or whenever the modal cannot
+open, the press is published as before and totsuka rejects on the spot. A
+blank `bot_token` is refused at startup: omit the field instead.
 
 A `path_token` must be **at least 32 characters** — `openssl rand -hex 24`
 generates one. It is the routing credential on an endpoint with no IAM in

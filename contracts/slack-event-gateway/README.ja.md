@@ -101,6 +101,9 @@ Slack の再送も Pub/Sub の配送も at-least-once なので、`kind` ごと�
 | `message` | `message:{channel}:{ts}` |
 | `reaction` | `reaction:{channel}:{ts}:{user}:{reaction}` |
 | `block_actions` | `block_actions:{container_channel}:{action_ts}:{action_id}` |
+| `view_submission` | `view_submission:{view_id}` |
+
+`view_submission`（ADR-0112）は却下モーダルの送信である。自由記述を持つ唯一の種別で、`alt_text` は運用者がこの経路に渡すつもりで書いた代わりの返信。保持期間が `response_url` の寿命に合わせてある `block_actions` トピックに載せる。
 
 `message` の接頭辞を除いた部分は totsuka の `Mention::message_key()` と
 **バイト単位で一致する**ので、既存の重複排除がゲートウェイ経由と Socket Mode 経由の

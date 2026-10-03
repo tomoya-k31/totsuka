@@ -1,0 +1,73 @@
+{
+  "name": "view-submission-reject-modal",
+  "why": "却下モーダルの送信（ADR-0112）。送信には会話の座標が無いので、`channel` / `ts` は `private_metadata` から取る。`value` はメタデータそのまま、`response_url` はその中の `r`。`alt_text` は運用者が書いた文面で、レコードが持つ唯一の自由記述。",
+  "delivery": {
+    "endpoint": "interactivity",
+    "content_type": "application/x-www-form-urlencoded",
+    "payload": {
+      "type": "view_submission",
+      "user": {
+        "id": "U_ME",
+        "username": "tomoya"
+      },
+      "api_app_id": "A_APP",
+      "team": {
+        "id": "T_WS"
+      },
+      "view": {
+        "id": "V0REJECT01",
+        "type": "modal",
+        "callback_id": "reject_reply_modal",
+        "private_metadata": "{\"c\":\"C0LOBBY\",\"d\":\"draft-1\",\"r\":\"https://hooks.slack.com/actions/T_WS/1111/abcdef\",\"ts\":\"1757640000.000100\"}",
+        "state": {
+          "values": {
+            "alt_reply": {
+              "alt_text": {
+                "type": "plain_text_input",
+                "value": "木曜でお願いします"
+              }
+            },
+            "send_alt": {
+              "send": {
+                "type": "checkboxes",
+                "selected_options": [
+                  {
+                    "text": {
+                      "type": "plain_text",
+                      "text": "代わりの返信をスレッドに送信する（本人名義）"
+                    },
+                    "value": "send"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "expect": [
+    {
+      "topic": "block_actions",
+      "identity": "view_submission:V0REJECT01",
+      "record": {
+        "v": 1,
+        "kind": "view_submission",
+        "channel": "C0LOBBY",
+        "ts": "1757640000.000100",
+        "thread_ts": null,
+        "user": "U_ME",
+        "flags": {
+          "mentions_me": false
+        },
+        "subteam_ids": [],
+        "received_at": "2026-09-13T00:00:00Z",
+        "value": "{\"c\":\"C0LOBBY\",\"d\":\"draft-1\",\"r\":\"https://hooks.slack.com/actions/T_WS/1111/abcdef\",\"ts\":\"1757640000.000100\"}",
+        "response_url": "https://hooks.slack.com/actions/T_WS/1111/abcdef",
+        "view_id": "V0REJECT01",
+        "alt_text": "木曜でお願いします",
+        "send_alt": true
+      }
+    }
+  ]
+}

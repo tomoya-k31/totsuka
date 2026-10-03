@@ -54,6 +54,9 @@ pub enum RecordKind {
     Reaction,
     /// A Block Kit button press, flattened out of `actions[0]`.
     BlockActions,
+    /// A reject modal's submission (ADR-0112): what the operator typed, plus
+    /// the draft coordinates the modal carried.
+    ViewSubmission,
 }
 
 /// Boolean verdicts the gateway reached by comparing against constant
@@ -140,6 +143,17 @@ pub struct GatewayRecord {
     /// whose identity key needs a field it forbids contradicts itself.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action_ts: Option<String>,
+    /// `view_submission` only: Slack's `view.id`, the delivery identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view_id: Option<String>,
+    /// `view_submission` only: the alternative reply the operator typed.
+    /// **The one free-text field a record carries** — the operator's own
+    /// words, typed for exactly this purpose (ADR-0112).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alt_text: Option<String>,
+    /// `view_submission` only: the "also post it" box was ticked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub send_alt: Option<bool>,
 }
 
 /// Why a record was refused.
@@ -220,6 +234,17 @@ impl GatewayRecord {
             ("action_ts", self.action_ts.is_some()),
         ];
         let press_required = ["action_id", "container_channel", "action_ts"];
+        let submission_fields = [
+            ("view_id", self.view_id.is_some()),
+            ("alt_text", self.alt_text.is_some()),
+            ("send_alt", self.send_alt.is_some()),
+        ];
+        // `value` is the modal metadata: without the draft id in it the
+        // decision cannot be applied, only acked away.
+        let submission_required_fields = [
+            ("view_id", self.view_id.is_some()),
+            ("value", self.value.is_some()),
+        ];
         let refuse = |problem: String| {
             Err(ContractError::KindMismatch {
                 kind: self.kind,
@@ -246,6 +271,7 @@ impl GatewayRecord {
                 let extra: Vec<String> = present(&reaction_fields)
                     .into_iter()
                     .chain(present(&press_fields))
+                    .chain(present(&submission_fields))
                     .collect();
                 if !extra.is_empty() {
                     return refuse(format!(
@@ -259,7 +285,10 @@ impl GatewayRecord {
                 if !absent.is_empty() {
                     return refuse(format!("is missing {}", absent.join(", ")));
                 }
-                let extra = present(&press_fields);
+                let extra: Vec<String> = present(&press_fields)
+                    .into_iter()
+                    .chain(present(&submission_fields))
+                    .collect();
                 if !extra.is_empty() {
                     return refuse(format!(
                         "carries fields of another kind: {}",
@@ -272,7 +301,10 @@ impl GatewayRecord {
                 if !absent.is_empty() {
                     return refuse(format!("is missing {}", absent.join(", ")));
                 }
-                let extra = present(&reaction_fields);
+                let extra: Vec<String> = present(&reaction_fields)
+                    .into_iter()
+                    .chain(present(&submission_fields))
+                    .collect();
                 if !extra.is_empty() {
                     return refuse(format!(
                         "carries fields of another kind: {}",
@@ -288,6 +320,28 @@ impl GatewayRecord {
                         "has channel `{}` but container_channel {:?}; they name the same \
                          conversation and must agree",
                         self.channel, self.container_channel
+                    ));
+                }
+            }
+            RecordKind::ViewSubmission => {
+                let absent = missing(&submission_required_fields, &["view_id", "value"]);
+                if !absent.is_empty() {
+                    return refuse(format!("is missing {}", absent.join(", ")));
+                }
+                // `value` (the modal metadata) and `response_url` are shared
+                // with a press; the rest of a press is not.
+                let extra: Vec<String> = present(&reaction_fields)
+                    .into_iter()
+                    .chain(
+                        present(&press_fields)
+                            .into_iter()
+                            .filter(|f| f != "value" && f != "response_url"),
+                    )
+                    .collect();
+                if !extra.is_empty() {
+                    return refuse(format!(
+                        "carries fields of another kind: {}",
+                        extra.join(", ")
                     ));
                 }
             }
@@ -315,6 +369,10 @@ impl GatewayRecord {
                 self.container_channel.as_deref().unwrap_or(&self.channel),
                 self.action_ts.as_deref().unwrap_or_default(),
                 self.action_id.as_deref().unwrap_or_default()
+            ),
+            RecordKind::ViewSubmission => format!(
+                "view_submission:{}",
+                self.view_id.as_deref().unwrap_or_default()
             ),
         }
     }
@@ -363,6 +421,33 @@ impl GatewayRecord {
                 "value": self.value,
                 "action_ts": self.action_ts,
             }],
+        }))
+    }
+
+    /// Rebuild the `view_submission` payload `approval::handle_view_submission`
+    /// reads: `view.callback_id`, `view.private_metadata` and the two
+    /// `state.values` entries of the reject modal (ADR-0112).
+    pub fn view_submission_payload(&self) -> Option<Value> {
+        if self.kind != RecordKind::ViewSubmission {
+            return None;
+        }
+        let selected = if self.send_alt == Some(true) {
+            json!([{ "value": "send" }])
+        } else {
+            json!([])
+        };
+        Some(json!({
+            "type": "view_submission",
+            "user": { "id": self.user },
+            "view": {
+                "id": self.view_id,
+                "callback_id": crate::approval::REJECT_MODAL_CALLBACK_ID,
+                "private_metadata": self.value,
+                "state": { "values": {
+                    "alt_reply": { "alt_text": { "value": self.alt_text } },
+                    "send_alt": { "send": { "selected_options": selected } },
+                } },
+            },
         }))
     }
 }
@@ -531,6 +616,7 @@ pub fn project(
     match endpoint {
         Endpoint::Interactivity => Projection::Publish(
             project_press(payload, registration, received_at)
+                .or_else(|| project_submission(payload, received_at))
                 .map(|record| Published {
                     topic: Topic::BlockActions,
                     record,
@@ -625,6 +711,9 @@ fn project_message(
         response_url: None,
         container_channel: None,
         action_ts: None,
+        view_id: None,
+        alt_text: None,
+        send_alt: None,
     })
 }
 
@@ -671,6 +760,68 @@ fn project_reaction(
         response_url: None,
         container_channel: None,
         action_ts: None,
+        view_id: None,
+        alt_text: None,
+        send_alt: None,
+    })
+}
+
+/// The reject modal's submission (ADR-0112). Any other modal is dropped: the
+/// reject modal is the only one this system opens.
+///
+/// `channel` / `ts` come from the modal's metadata — the thread the draft
+/// belongs to — because a submission names no conversation of its own.
+/// `value` carries that metadata verbatim and `response_url` the press's URL
+/// inside it, so the consumer reads them where a press keeps them.
+fn project_submission(payload: &Value, received_at: &str) -> Option<GatewayRecord> {
+    if payload.get("type").and_then(Value::as_str) != Some("view_submission") {
+        return None;
+    }
+    let view = payload.get("view")?;
+    if view.get("callback_id").and_then(Value::as_str)
+        != Some(crate::approval::REJECT_MODAL_CALLBACK_ID)
+    {
+        return None;
+    }
+    let raw = view.get("private_metadata").and_then(Value::as_str)?;
+    let metadata: Value = serde_json::from_str(raw).ok()?;
+    let field = |name: &str| {
+        metadata
+            .get(name)
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    };
+    Some(GatewayRecord {
+        v: SCHEMA_VERSION,
+        kind: RecordKind::ViewSubmission,
+        channel: field("c")?,
+        ts: field("ts")?,
+        thread_ts: None,
+        user: payload
+            .pointer("/user/id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        flags: Flags { mentions_me: false },
+        subteam_ids: Vec::new(),
+        received_at: received_at.to_string(),
+        reaction: None,
+        item_user: None,
+        action_id: None,
+        value: Some(raw.to_string()),
+        response_url: field("r"),
+        container_channel: None,
+        action_ts: None,
+        view_id: Some(view.get("id").and_then(Value::as_str)?.to_string()),
+        alt_text: view
+            .pointer("/state/values/alt_reply/alt_text/value")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        send_alt: Some(
+            view.pointer("/state/values/send_alt/send/selected_options")
+                .and_then(Value::as_array)
+                .is_some_and(|o| o.iter().any(|o| o["value"] == "send")),
+        ),
     })
 }
 
@@ -720,6 +871,9 @@ fn project_press(
             .map(str::to_string),
         container_channel: Some(channel.to_string()),
         action_ts: Some(action.get("action_ts").and_then(Value::as_str)?.to_string()),
+        view_id: None,
+        alt_text: None,
+        send_alt: None,
     })
 }
 
@@ -745,6 +899,9 @@ mod tests {
             response_url: None,
             container_channel: None,
             action_ts: None,
+            view_id: None,
+            alt_text: None,
+            send_alt: None,
         }
     }
 
@@ -760,6 +917,9 @@ mod tests {
             response_url: Some("https://hooks.slack.com/actions/1".into()),
             container_channel: Some("D0SELFDM".into()),
             action_ts: Some("1757640200.111111".into()),
+            view_id: None,
+            alt_text: None,
+            send_alt: None,
             ..message_record()
         }
     }
@@ -938,6 +1098,49 @@ mod tests {
             GatewayRecord::from_value(&value),
             Err(ContractError::UnsupportedVersion { found: 2 })
         );
+    }
+
+    /// A submission needs its identity, and may share a press's `value` /
+    /// `response_url` but nothing else of it (ADR-0112).
+    #[test]
+    fn a_submission_record_is_checked_like_the_other_kinds() {
+        let submission = || {
+            let mut value = serde_json::to_value(message_record()).unwrap();
+            value["kind"] = json!("view_submission");
+            value["view_id"] = json!("V0REJECT01");
+            value["value"] = json!("{}");
+            value["response_url"] = json!("https://hooks.slack.test/r/1");
+            value["alt_text"] = json!("別案");
+            value["send_alt"] = json!(false);
+            value
+        };
+        let parsed = GatewayRecord::from_value(&submission()).unwrap();
+        assert_eq!(parsed.delivery_id(), "view_submission:V0REJECT01");
+
+        for required in ["view_id", "value"] {
+            let mut without = submission();
+            without.as_object_mut().unwrap().remove(required);
+            assert!(
+                matches!(
+                    GatewayRecord::from_value(&without),
+                    Err(ContractError::KindMismatch { .. })
+                ),
+                "{required} is required"
+            );
+        }
+        let mut with_press = submission();
+        with_press["action_id"] = json!("reject_reply");
+        assert!(matches!(
+            GatewayRecord::from_value(&with_press),
+            Err(ContractError::KindMismatch { .. })
+        ));
+        // And the other way round: a message may not carry submission fields.
+        let mut message = serde_json::to_value(message_record()).unwrap();
+        message["alt_text"] = json!("別案");
+        assert!(matches!(
+            GatewayRecord::from_value(&message),
+            Err(ContractError::KindMismatch { .. })
+        ));
     }
 
     #[test]

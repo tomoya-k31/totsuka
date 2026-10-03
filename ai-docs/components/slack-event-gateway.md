@@ -4,7 +4,7 @@ title: slack-event-gateway
 description: Slack の配信を HTTPS で受け、署名を検証し、本文を保存せずに座標へ射影して Pub/Sub へ publish する常駐しないサービス。event_source = "gateway" のときだけ経路に入る。同一リポジトリの workspace 外に置き、適合テストスイートだけを totsuka と共有する。公式イメージは ghcr.io にリリースごとに公開する。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/services/slack-event-gateway
 tags: [rust, service, slack, gateway, cloud-run, pubsub, hmac, security]
-generated: { by: claude-code/opus-5, at: 2026-09-15T14:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-03T21:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -24,8 +24,10 @@ Socket Mode では `totsuka run` のプロセス自身が WebSocket を握る。
 
 **本文を保存しない・外部送信しない・ログに出さない。** 本文に対してやってよいのは
 定数文字列との一致判定だけで、メッセージを解釈するための外部 API 呼び出し（LLM を
-含む）を行わない。外向きの通信は Pub/Sub への publish 1 本だけで、それがこのプロセスの
-目的である。
+含む）を行わない。外向きの通信は Pub/Sub への publish（それがこのプロセスの目的）と、
+登録表の行に `bot_token` がある利用者に限った却下モーダルの `views.open`
+（[ADR-0112](/decisions/adr-0112-gateway-reject-modal.md)）の 2 つで、後者が渡すのは押下自身の
+座標から作ったモーダルだけである。
 
 **レコードのスキーマに本文フィールドが無いことは、この振る舞いを保証しない** ——
 プロセスは文字列をメモリに保持することも、出力することも、別の宛先へ送ることもできる。
@@ -84,9 +86,10 @@ JSON として読むと全押下がパースエラーになる（症状は「ボ
 
 | モジュール | 責務 |
 |---|---|
-| `registry` | 登録表（`path_token` → signing secret / slack user id / トピック 2 本）。**リポジトリには入らない** —— 利用者の Secret Manager にあり、マウントファイルか環境変数で届く。起動時に、空の表・`path_token` 重複・空フィールド・トピック 2 本が同名・**`path_token` が 32 文字未満**（#677）・**トピックの行またぎ重複**（#678）、を拒否する（どれも実行時の症状が「無言で動かない」もの）。32 文字の下限は `tofu/variables.tf` の `operators` 検証と**同じ数字を 2 箇所に書いている**（双方にコメントで他方を指してある）。OpenTofu 側の検査が守るのは「構築を自動化した人」だけで、登録表は `REGISTRATIONS_PATH` / `REGISTRATIONS` の 2 経路から来られる —— 運用者が Secret Manager に手で置いた表は OpenTofu を一度も通らない。`path_token` は IAM の無いエンドポイントのルーティング資格情報そのもの（決定 11）で、短いトークンは総当たりできてしまい、しかも**当たるまで症状が出ない**。行またぎの重複検査は `topic` と `block_actions_topic` を **1 つの集合**に入れる —— 列ごとに分けると「A の `topic` が B の `block_actions_topic` と同じ」が素通りし、押下が保持期間の日オーダーなトピックに入って決定 5 の前提が崩れる。**トピック重複のほうは OpenTofu 経由では踏まない**（`tofu/main.tf` がトピック名を `key` から導出する）ので、対象は登録表を手で書いた場合である。**どちらの検査も、コンテナが最後の防壁である**という同じ理由でここに居る |
+| `registry` | 登録表（`path_token` → signing secret / slack user id / トピック 2 本 / 任意の `bot_token`（ADR-0112。空文字は拒否））。**リポジトリには入らない** —— 利用者の Secret Manager にあり、マウントファイルか環境変数で届く。起動時に、空の表・`path_token` 重複・空フィールド・トピック 2 本が同名・**`path_token` が 32 文字未満**（#677）・**トピックの行またぎ重複**（#678）、を拒否する（どれも実行時の症状が「無言で動かない」もの）。32 文字の下限は `tofu/variables.tf` の `operators` 検証と**同じ数字を 2 箇所に書いている**（双方にコメントで他方を指してある）。OpenTofu 側の検査が守るのは「構築を自動化した人」だけで、登録表は `REGISTRATIONS_PATH` / `REGISTRATIONS` の 2 経路から来られる —— 運用者が Secret Manager に手で置いた表は OpenTofu を一度も通らない。`path_token` は IAM の無いエンドポイントのルーティング資格情報そのもの（決定 11）で、短いトークンは総当たりできてしまい、しかも**当たるまで症状が出ない**。行またぎの重複検査は `topic` と `block_actions_topic` を **1 つの集合**に入れる —— 列ごとに分けると「A の `topic` が B の `block_actions_topic` と同じ」が素通りし、押下が保持期間の日オーダーなトピックに入って決定 5 の前提が崩れる。**トピック重複のほうは OpenTofu 経由では踏まない**（`tofu/main.tf` がトピック名を `key` から導出する）ので、対象は登録表を手で書いた場合である。**どちらの検査も、コンテナが最後の防壁である**という同じ理由でここに居る |
 | `signature` | Slack の署名方式（`v0:{ts}:{body}` の HMAC-SHA256）と 5 分の窓。`verify` が定数時間比較を使っていることはテストがソースに対して固定する |
-| `project` | 生の配信 → publish されるレコード。**totsuka 側の `gateway_contract::project` と独立した実装**で、両者を突き合わせるのが適合スイート。`mentions_user` / `extract_subteam_ids` / `delivery_id` / `decode_interactivity_payload` を持つ |
+| `project` | 生の配信 → publish されるレコード。**totsuka 側の `gateway_contract::project` と独立した実装**で、両者を突き合わせるのが適合スイート。`mentions_user` / `extract_subteam_ids` / `delivery_id` / `decode_interactivity_payload` を持つ。却下モーダルの送信は `view_submission` 種別として押下用トピックへ写す（ADR-0112。ほかのモーダルは捨てる） |
+| `modal` | 却下モーダル（[ADR-0112](/decisions/adr-0112-gateway-reject-modal.md)）。`reject_reply` の押下に `trigger_id` とボタン値が揃い、登録表の行に `bot_token` があれば `views.open` で開き、**開けたら押下は publish しない**。失敗・トークン無し・1 秒（`MODAL_BUDGET`）超過は従来どおり押下を publish する。`ModalOpener` トレイトで差し替え可能（テストは偽物）。モーダルの `callback_id` / `block_id` / `action_id` はプラグインとの契約 |
 | `publish` | Pub/Sub REST への publish と、メタデータサーバからのトークン取得。**サービスアカウントキーは存在しない**（Cloud Run のリビジョンの SA でトークンが降ってくる）。base64 エンコードは自前 |
 | `http` | 経路・検証・射影・publish の順序と、応答の組み立て。`received_at` の RFC 3339 生成も自前（日付ライブラリを 1 つも足さないため） |
 

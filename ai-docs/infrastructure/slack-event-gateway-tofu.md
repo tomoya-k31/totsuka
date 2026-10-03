@@ -4,7 +4,7 @@ title: Event Gateway の OpenTofu モジュール
 description: services/slack-event-gateway/tofu/ の構成。Cloud Run 1 サービス・利用者ごとの Pub/Sub トピックとサブスクリプション 2 組・Secret Manager の登録表・利用者を自分のキューだけに閉じる IAM を tofu apply で立てる。min-instances 0 と max-instances 上限が費用の前提であること、invoker_iam_disabled が組織ポリシーを緩めずに公開する唯一の手段であること、IP 制限と VPC Service Controls を既定に入れない理由を含む。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/services/slack-event-gateway/tofu
 tags: [gcp, cloud-run, pubsub, secret-manager, iam, opentofu, terraform, slack, cost]
-generated: { by: claude-code/opus-5, at: 2026-09-13T23:16:36+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-03T22:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -92,7 +92,7 @@ gcloud org-policies describe \
 
 # 運用上の注意
 
-- **`terraform.tfvars` と state ファイルの両方に全利用者の signing secret が入り、このモジュールに逃げ道は無い**（登録表を変数から組み立てることが「1 人足して apply」を成立させている当のものだから）。OpenTofu は state を暗号化しないので、デプロイ担当だけが読めるバケットに置き、**そのバケットへのアクセス = 全利用者の Slack アプリへのアクセス**とみなす。`.gitignore` は `terraform.tfvars` という名前ではなく `*.tfvars` を弾く ——`prod.auto.tfvars` のような名前はごく普通で、守りたいのは名前ではなく中身である
+- **`terraform.tfvars` と state ファイルの両方に全利用者の signing secret が入り、このモジュールに逃げ道は無い**。`bot_token`（任意、[ADR-0112](/decisions/adr-0112-gateway-reject-modal.md)）を書いた利用者の分は**ボットトークン（`xoxb-`）も入る** —— ボット名義の操作しかできないが、そのバケットに置く資格情報が 1 種類増える。本人名義で投稿できるユーザートークンは入らない（登録表を変数から組み立てることが「1 人足して apply」を成立させている当のものだから）。OpenTofu は state を暗号化しないので、デプロイ担当だけが読めるバケットに置き、**そのバケットへのアクセス = 全利用者の Slack アプリへのアクセス**とみなす。`.gitignore` は `terraform.tfvars` という名前ではなく `*.tfvars` を弾く ——`prod.auto.tfvars` のような名前はごく普通で、守りたいのは名前ではなく中身である
 - **`.terraform.lock.hcl` は commit する。** 秘密は入らず、プロバイダの版とハッシュだけである。`Cargo.lock` を commit しているのと同じ理由で、手元の `tofu init` が CI の検証したものと同じ版を引くようにする（`versions.tf` の制約も `~> 6.0` で上限を切ってある）
 - リソースは**位置ではなく `key`** で識別しているので、利用者を 1 人足しても既存の
   リソースは作り直されない

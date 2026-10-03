@@ -367,7 +367,7 @@ pub async fn handle_approval_action<T: SlackTransport>(
 
 /// `callback_id` of the reject modal, which is how a `view_submission` is
 /// recognised as one.
-const REJECT_MODAL_CALLBACK_ID: &str = "reject_reply_modal";
+pub(crate) const REJECT_MODAL_CALLBACK_ID: &str = "reject_reply_modal";
 
 /// Longest alternative reply the modal accepts — with its label it still
 /// fits one section block on the nudge record.

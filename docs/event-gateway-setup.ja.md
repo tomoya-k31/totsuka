@@ -1,7 +1,7 @@
 > 🌐 [English](event-gateway-setup.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/event-gateway-setup.md sha256:4865d2551e9a36eb4e41d354ecd6c339fb11f6fd03fff483e4a0f1092f9bef8a -->
+<!-- generated-from: ai-docs/operations/event-gateway-setup.md sha256:83fffaa7a51e06d834caebfcaf8cff835d69a36345c0f8e40e52af1be9202e45 -->
 
 # Event Gateway 構築手順
 
@@ -98,6 +98,11 @@ gcloud config set project <PROJECT_ID>
 | signing secret | Slack アプリ → Basic Information → App Credentials → Signing Secret |
 | パストークン | **生成する。考えない** —— `openssl rand -hex 24` |
 | Google プリンシパル | その人のキューを読める identity —— 手順 5 で `gcloud auth application-default login` を実行するアカウントを、`user:alice@example.com` の形で書く |
+
+任意でもう 1 つ。**Bot User OAuth Token（`xoxb-…`）**を `bot_token` に入れると、返信案の「却下」を
+押したときにダイアログが開き、代わりに送りたかった返信を書けるようになる。入れなければ「却下」は
+押した瞬間に確定する。Slack アプリの OAuth & Permissions ページにあり、通知 DM 用に totsuka の
+`[slack] bot_token` に入れるものと同じトークンである。
 
 **パストークンは資格情報である。** 公開エンドポイントの手前には IAM も IP 許可リストも無く、
 立ちはだかるのは推測不能なパス・署名・5 分のタイムスタンプ窓だけである。選んだ単語ではなく
@@ -271,6 +276,10 @@ ack 期限は 3 秒である。
 **VPC Service Controls は既定で有効にしない。** **読む**側を社内ネットワークに閉じたいなら
 Pub/Sub にペリメータを張るのが方法だが、意図して足すこと —— 自宅や出張先からキューを引けなくなり、
 それは totsuka がまさに想定している使い方である。
+
+**`bot_token` を入れるとクラウドに置く資格情報が増える。** 既定では signing secret だけだが、
+`bot_token` を入れた人の分はボットトークンも登録表（Secret Manager と OpenTofu の state）に入る。
+できるのはボット名義の操作だけで、本人名義で投稿できるユーザートークンは置かない。
 
 **ドメイン制限共有は有効のまま維持する。** この構成は、組織ポリシーを緩めずに動くように作ってある。
 

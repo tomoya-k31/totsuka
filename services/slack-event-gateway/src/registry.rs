@@ -36,6 +36,11 @@ pub struct Registration {
     /// retention has to clear `response_url`'s ~30-minute life while the
     /// other's is measured in days (decision 5).
     pub block_actions_topic: String,
+    /// The Slack app's bot token (`xoxb-`), optional. With it, a reject press
+    /// opens the reject modal from here (ADR-0112); without it, presses are
+    /// published as before and totsuka rejects on the spot.
+    #[serde(default)]
+    pub bot_token: Option<String>,
 }
 
 /// Every registered operator.
@@ -134,6 +139,14 @@ impl Registry {
             // 11). A short token can be guessed, and the symptom until it is
             // guessed is nothing at all — which is what puts this check here
             // rather than only in the OpenTofu module.
+            // Present but blank would fail every `views.open` and fall back
+            // forever with nothing pointing at the typo but a log line.
+            if user.bot_token.as_ref().is_some_and(|t| t.trim().is_empty()) {
+                return Err(RegistryError::Invalid(format!(
+                    "`{}` has an empty `bot_token`; omit the field instead",
+                    user.slack_user_id
+                )));
+            }
             if user.path_token.chars().count() < MIN_PATH_TOKEN_CHARS {
                 return Err(RegistryError::Invalid(format!(
                     "`{}` has a `path_token` shorter than {MIN_PATH_TOKEN_CHARS} characters; it \
@@ -228,6 +241,25 @@ mod tests {
     fn tok(seed: &str) -> String {
         let pad = MIN_PATH_TOKEN_CHARS.saturating_sub(seed.chars().count());
         format!("{seed}{}", "0".repeat(pad))
+    }
+
+    /// `bot_token` is optional, but a blank one is refused: it would fail
+    /// every reject modal and fall back with only a log line to show for it.
+    #[test]
+    fn a_blank_bot_token_is_refused_and_an_omitted_one_is_fine() {
+        let a = tok("tok-a");
+        assert!(Registry::parse(&table(&row(&a, "U_A"))).is_ok(), "omitted");
+        let with_token = |token: &str| {
+            row(&a, "U_A").replace(
+                r#""signing_secret":"s","#,
+                &format!(r#""signing_secret":"s","bot_token":"{token}","#),
+            )
+        };
+        assert!(Registry::parse(&table(&with_token("xoxb-1"))).is_ok());
+        for blank in ["", "  "] {
+            let err = Registry::parse(&table(&with_token(blank))).unwrap_err();
+            assert!(err.to_string().contains("empty `bot_token`"), "{err}");
+        }
     }
 
     #[test]
