@@ -16,7 +16,7 @@ owner: tomoya-k31
 
 stable。#584（エピック）の設計決定。実装は #585（`totsuka menu`）と #586（`health.json` と `⚠`）の 2 段で、**どちらも実装済み**。
 
-**一部を [ADR-0109](/decisions/adr-0109-native-menubar-app.md) が覆した。** 下の「却下した案」のうち「独立した Swift/AppKit `.app`」の行は、アプリ名義のネイティブ通知と config の GUI 編集が要件になったため採用に転じた。`totsuka menu` と SwiftBar の経路はそのまま残り、アプリも状態の取得に `menu --json` を使う。
+**一部を [ADR-0113](/decisions/adr-0113-native-menubar-app.md) が覆した。** 下の「却下した案」のうち「独立した Swift/AppKit `.app`」の行は、アプリ名義のネイティブ通知と config の GUI 編集が要件になったため採用に転じた。`totsuka menu` と SwiftBar の経路はそのまま残り、アプリも状態の取得に `menu --json` を使う。
 
 **実機（SwiftBar 2.1.1 / macOS）で検収完了。** 何を確認したかを明示する —— `verified` はこの範囲についてのものである。
 
