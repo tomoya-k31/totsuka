@@ -86,7 +86,7 @@ public func reference(for segments: [String]) -> (Reference, multiple: Bool)? {
     case "workflows/*/projects": return (.project, true)
     case "repositories/*/project": return (.project, false)
     case "projects/*/source": return (.source, false)
-    case "slack/fallback_repo": return (.repository, false)
+    case "slack/fallback_repo", "workflows/*/trigger/repo": return (.repository, false)
     case "slack/channel_groups/*/repos": return (.repository, true)
     default: return nil
     }

@@ -375,10 +375,16 @@ struct SettingsView: View {
     }
 
     /// One entry of a collection (`repositories/2`, `tools/claude-fast`).
+    /// A project or a workflow shows the keys of the plugins it uses, and the
+    /// keys nothing reads with them.
     @ViewBuilder private func element(_ id: String) -> some View {
         let parts = id.split(separator: "/", maxSplits: 1).map(String.init)
-        if parts.count == 2, let schema = model.elementSchema(parts[0]) {
-            FieldEditor(model: model, segments: parts, schema: schema, required: true, depth: 0)
+        if parts.count == 2, let item = model.elementSchema(parts[0]) {
+            let form = entryForm(
+                collection: parts[0], item: item,
+                element: model.value(at: parts) ?? .object([:]), config: model.config)
+            FieldEditor(model: model, segments: parts, schema: form.schema, required: true, depth: 0)
+            UnusedKeys(model: model, entry: parts, form: form)
             Section {
                 Button("Delete", role: .destructive) {
                     Task {
@@ -386,6 +392,37 @@ struct SettingsView: View {
                         selection = parts[0]
                     }
                 }
+            }
+        }
+    }
+}
+
+/// The keys on a project or workflow that nothing reads with its current
+/// source and agent, each with a way to remove it: what is left after
+/// switching the source, or a typo.
+struct UnusedKeys: View {
+    @ObservedObject var model: SettingsModel
+    let entry: [String]
+    let form: EntryForm
+
+    var body: some View {
+        let paths = form.unused.map { [$0] } + form.unusedTrigger.map { ["trigger", $0] }
+        if !paths.isEmpty {
+            Section {
+                ForEach(paths, id: \.self) { path in
+                    LabeledContent {
+                        Button("Remove", role: .destructive) {
+                            Task { await model.unset(entry + path) }
+                        }
+                    } label: {
+                        Text(path.joined(separator: ".")).font(.system(.body, design: .monospaced))
+                    }
+                }
+            } header: {
+                Text("Not used")
+            } footer: {
+                Text("Nothing reads these keys with the current source and agent: they are left over from another one, or a typo.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
         }
     }
@@ -776,7 +813,8 @@ struct FieldEditor: View {
     }
 
     private func listText(_ value: JSONValue?) -> String {
-        (value?.array ?? []).compactMap(\.string).joined(separator: ", ")
+        if let one = value?.string { return one }
+        return (value?.array ?? []).compactMap(\.string).joined(separator: ", ")
     }
 
     private func commitScalar() async {
@@ -808,6 +846,8 @@ struct FieldEditor: View {
             .filter { !$0.isEmpty }
         if items.isEmpty && !required {
             await model.unset(segments)
+        } else if items.count == 1, acceptsOneOrMany(schema) {
+            await model.set(segments, .string(items[0]))
         } else {
             await model.set(segments, .array(items.map(JSONValue.string)))
         }

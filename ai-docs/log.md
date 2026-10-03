@@ -12,6 +12,7 @@
 * **Update**: [Event Gateway 構築手順](/operations/event-gateway-setup.md) — 任意の `bot_token` と、それで増える資格情報
 * **Update**: [ADR-0109](/decisions/adr-0109-native-menubar-app.md) — 実機での確認を受けて、アプリとスキーマの文言を英語だけにした。
 * **Update**: [Totsuka.app](/components/macos-app.md) — 設定画面の構成（固定のサイドバー、＋での追加、Form、Advanced、placeholder、参照の選択、複数行の入力）。
+* **Update**: [Totsuka.app](/components/macos-app.md) — project / workflow のページに、選んだ source・agent のキー（`x-by-source` / `x-by-agent`）をフォームとして出し、使われていないキーに Remove を付けた。
 * **Creation**: [ADR-0111 返信案の却下をモーダルで受け、代わりの返信を記録する](/decisions/adr-0111-reject-modal-alt-reply.md) — 却下押下でモーダルを開き、代わりの返信を記録する
 * **Update**: [task-source-slack](/components/task-source-slack.md) — `approval` / `socket_mode` / `draft` に却下モーダルと `alt_reply` を追記
 * **Creation**: [ADR-0109 Slack のメンション経路で bot と人間を区別しない](/decisions/adr-0109-slack-bot-mentions.md) — bot 投稿のメンション（個人・グループ）もタスクにする。自アプリの bot だけは除外

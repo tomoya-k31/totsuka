@@ -63,6 +63,7 @@ public func fieldKind(_ schema: JSONValue) -> FieldKind {
     if s["x-raw"]?.bool == true { return .raw(reason: s["x-schema-error"]?.string) }
     if s["x-secret"]?.bool == true { return .secret }
     if let choices = enumChoices(s) { return .choice(choices) }
+    if acceptsOneOrMany(s) { return .stringList }
     if let alternatives = s["anyOf"]?.array, alternatives.count == 2,
         let choices = alternatives.lazy.compactMap(enumChoices).first,
         let object = alternatives.first(where: { $0["properties"] != nil })
@@ -99,6 +100,21 @@ public func fieldKind(_ schema: JSONValue) -> FieldKind {
     default:
         return .raw(reason: nil)
     }
+}
+
+/// Whether `schema` takes one string or a list of them (`anyOf` of a string
+/// and an array of strings) — a trigger's `label` or `assignee`. Edited as a
+/// list; a single entry is written as a plain string, since the reader treats
+/// the two alike and some values (`assignee = "@any"`) are only valid alone.
+public func acceptsOneOrMany(_ schema: JSONValue) -> Bool {
+    guard let alternatives = nonNull(schema)["anyOf"]?.array, alternatives.count == 2 else {
+        return false
+    }
+    let string = alternatives.contains { $0["type"]?.string == "string" }
+    let list = alternatives.contains {
+        $0["type"]?.string == "array" && $0["items"]?["type"]?.string == "string"
+    }
+    return string && list
 }
 
 /// The allowed strings of an enum node (`enum`, or `oneOf` of `const`s).

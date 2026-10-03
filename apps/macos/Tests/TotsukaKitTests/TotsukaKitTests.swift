@@ -259,3 +259,83 @@ import Testing
         #expect(!isAdvanced(bare))
     }
 }
+
+@Suite struct EntryFormTests {
+    private func json(_ text: String) -> JSONValue { JSONValue.parse(text)! }
+
+    /// A projects item schema as `config schema` sends it, with github's and
+    /// slack's project keys attached.
+    private var projectItem: JSONValue {
+        json(#"""
+        {"type":"object","required":["name","source"],
+         "properties":{"name":{"type":"string"},"source":{"type":"string"}},
+         "x-by-source":{
+           "github":{"type":"object","required":["owner"],
+                     "properties":{"owner":{"type":"string"},"project_number":{"type":"integer"}}},
+           "slack":{"type":"object","properties":{}}}}
+        """#)
+    }
+
+    @Test func aProjectShowsItsSourcesKeysOnly() {
+        let form = entryForm(
+            collection: "projects", item: projectItem,
+            element: json(#"{"name":"b","source":"github","owner":"me"}"#), config: .object([:]))
+        let keys = Set(form.schema["properties"]?.object?.keys.map { $0 } ?? [])
+        #expect(keys == ["name", "source", "owner", "project_number"])
+        #expect(form.schema["required"] == json(#"["name","owner","source"]"#))
+        #expect(form.schema["x-by-source"] == nil)
+        #expect(form.unused.isEmpty)
+    }
+
+    /// Switching the source leaves the old source's keys behind; they are
+    /// listed, not hidden.
+    @Test func keysFromAnotherSourceAreUnused() {
+        let form = entryForm(
+            collection: "projects", item: projectItem,
+            element: json(#"{"name":"b","source":"slack","owner":"me","project_number":7}"#),
+            config: .object([:]))
+        #expect(form.unused == ["owner", "project_number"])
+    }
+
+    /// A source that did not describe its keys might read any of them, so
+    /// nothing is called unused.
+    @Test func anUndescribedSourceFlagsNothing() {
+        for source in ["notion", ""] {
+            let form = entryForm(
+                collection: "projects", item: projectItem,
+                element: json(#"{"name":"b","source":"\#(source)","owner":"me"}"#),
+                config: .object([:]))
+            #expect(form.unused.isEmpty, "\(source)")
+        }
+    }
+
+    @Test func aWorkflowUsesTheSourceOfItsProjectsAndItsAgent() {
+        let item = json(#"""
+        {"type":"object",
+         "properties":{"name":{"type":"string"},"projects":{"type":"array"},"agent":{"type":"string"},
+                       "trigger":{"type":"object","additionalProperties":true}},
+         "x-by-source":{"github":{"type":"object","properties":{
+             "trigger":{"type":"object","properties":{"status":{"type":"string"}}}}}},
+         "x-by-agent":{"herdr":{"type":"object","properties":{}}}}
+        """#)
+        let config = json(#"{"projects":[{"name":"board","source":"github"}]}"#)
+        let form = entryForm(
+            collection: "workflows", item: item,
+            element: json(#"""
+            {"name":"w","projects":["board"],"agent":"herdr","publish":"direct",
+             "trigger":{"status":"Todo","reaction":"eyes"}}
+            """#),
+            config: config)
+        #expect(form.schema["properties"]?["trigger"]?["properties"]?["status"] != nil)
+        #expect(form.unused == ["publish"])
+        #expect(form.unusedTrigger == ["reaction"])
+        #expect(workflowSource(json(#"{"projects":["nope","board"]}"#), config: config) == "github")
+    }
+
+    @Test func oneOrManyIsAList() {
+        let schema = json(#"{"anyOf":[{"type":"string"},{"type":"array","items":{"type":"string"}}]}"#)
+        #expect(acceptsOneOrMany(schema))
+        #expect(fieldKind(schema) == .stringList)
+        #expect(!acceptsOneOrMany(json(#"{"type":"array","items":{"type":"string"}}"#)))
+    }
+}
