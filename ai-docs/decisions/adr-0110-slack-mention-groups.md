@@ -15,7 +15,7 @@ stable。[ADR-0081](/decisions/adr-0081-slack-group-mention-routing.md) の `to_
 
 # Context
 
-所属グループ宛のメンションは、`to_group` で名指ししていなくても catch-all（素の `mention = true`）に落ちてタスクになる。人数の多い全体連絡用グループに入っていると、そのメンションがすべてタスクになる。ADR-0109（PR #850）で bot のメンションも通るようになるので、この問題は大きくなった。
+所属グループ宛のメンションは、`to_group` で名指ししていなくても catch-all（素の `mention = true`）に落ちてタスクになる。人数の多い全体連絡用グループに入っていると、そのメンションがすべてタスクになる。[ADR-0109](/decisions/adr-0109-slack-bot-mentions.md) で bot のメンションも通るようになったので、この問題は大きくなった。
 
 workflow 側だけで止める方法は catch-all を外すことしかなく、それをすると個人メンションも止まる。「個人メンションは全部受け、グループは指定したものだけ」は、workflow の設定では書けなかった。
 
