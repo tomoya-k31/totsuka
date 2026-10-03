@@ -22,12 +22,12 @@ use serde::de::{DeserializeOwned, IgnoredAny};
 
 use crate::method;
 use crate::methods::{
-    ConfigValidateParams, ConfigValidateResult, DiagnosticsSnapshotParams,
-    DiagnosticsSnapshotResult, InitializeParams, InitializeResult, ResultPublishParams,
-    SessionAttachParams, SessionAttachResult, SessionFocusParams, SessionFocusResult,
-    SessionListParams, SessionListResult, SessionReleaseParams, SessionReleaseResult,
-    StateSubscribeParams, TaskCancelParams, TaskClaimParams, TaskClaimResult, TaskDispatchParams,
-    TaskDispatchResult, TaskUpdateLabelsParams, TaskUpdateStatusParams,
+    ConfigSchemaParams, ConfigSchemaResult, ConfigValidateParams, ConfigValidateResult,
+    DiagnosticsSnapshotParams, DiagnosticsSnapshotResult, InitializeParams, InitializeResult,
+    ResultPublishParams, SessionAttachParams, SessionAttachResult, SessionFocusParams,
+    SessionFocusResult, SessionListParams, SessionListResult, SessionReleaseParams,
+    SessionReleaseResult, StateSubscribeParams, TaskCancelParams, TaskClaimParams, TaskClaimResult,
+    TaskDispatchParams, TaskDispatchResult, TaskUpdateLabelsParams, TaskUpdateStatusParams,
 };
 
 /// A JSON-RPC request method: its name and the types it carries each way.
@@ -64,6 +64,8 @@ methods! {
     Initialize = INITIALIZE, InitializeParams => InitializeResult;
     /// `config/validate` (O→P, F-59).
     ConfigValidate = CONFIG_VALIDATE, ConfigValidateParams => ConfigValidateResult;
+    /// `config/schema` (O→P, 0.7.7, ADR-0113).
+    ConfigSchema = CONFIG_SCHEMA, ConfigSchemaParams => ConfigSchemaResult;
     /// `task/update_status` (O→P, F-84).
     TaskUpdateStatus = TASK_UPDATE_STATUS, TaskUpdateStatusParams => IgnoredAny;
     /// `task/update_labels` (O→P, 0.7.6).
@@ -103,6 +105,7 @@ mod tests {
         let pairs = [
             (Initialize::NAME, "initialize"),
             (ConfigValidate::NAME, "config/validate"),
+            (ConfigSchema::NAME, "config/schema"),
             (TaskUpdateStatus::NAME, "task/update_status"),
             (TaskClaim::NAME, "task/claim"),
             (ResultPublish::NAME, "result/publish"),

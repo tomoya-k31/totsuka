@@ -47,7 +47,7 @@ set -euo pipefail
 #
 # このリストの存在が検査の主眼である: 放置された宣言と、意図した猶予とを
 # 区別できるようにするためにある。理由なしで足さないこと。
-DECLARATION_EXEMPT=""
+DECLARATION_EXEMPT="config_schema=ネイティブアプリのスタック（ADR-0113）の core 層が読む。その層でこの行を消す"
 
 PLUGIN_ALLOWED_NORMAL="plugin-protocol plugin-sdk repo-classifier"
 PLUGIN_ALLOWED_DEV="plugin-protocol plugin-sdk repo-classifier test-support plugin-conformance"

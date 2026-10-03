@@ -27,6 +27,13 @@ pub mod method {
     pub const SHUTDOWN: &str = "shutdown";
     /// Validate plugin-specific config (O→P, F-59).
     pub const CONFIG_VALIDATE: &str = "config/validate";
+    /// Describe the plugin's own config table as a JSON Schema (O→P, 0.7.7,
+    /// ADR-0113). Answered **before** `initialize`, like `config/validate`,
+    /// and only sent to plugins whose [`Capabilities`] declare
+    /// [`config_schema`](crate::Capabilities::config_schema).
+    ///
+    /// [`Capabilities`]: crate::Capabilities
+    pub const CONFIG_SCHEMA: &str = "config/schema";
 
     // task_source.
     /// Submit one task for ingestion (P→O request, 0.1.6). The Orchestrator
@@ -95,9 +102,9 @@ pub mod method {
 /// One kind-specific O→P request: which kind serves it, and whether the host
 /// sends it to a given plugin at all.
 ///
-/// The common three (`initialize`, `config/validate`, `shutdown`) are not
-/// here — every kind serves them, and the first two are the ones a plugin
-/// answers *before* `initialize`.
+/// The common requests (`initialize`, `config/validate`, `config/schema`,
+/// `shutdown`) are not here — they are not kind-specific, and all but
+/// `shutdown` are ones a plugin answers *before* `initialize`.
 #[derive(Debug, Clone, Copy)]
 pub struct HostRequest {
     /// The wire method name (one of the [`method`] constants).
@@ -539,6 +546,55 @@ pub struct ConfigValidateResult {
     /// cannot act on is noise, and noise is how a diagnostic stops being read.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
+}
+
+/// `config/schema` params (O→P, 0.7.7, ADR-0113). Empty: the schema describes
+/// the plugin's config *table*, not any particular value of it, so there is
+/// nothing to send.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConfigSchemaParams {}
+
+/// `config/schema` result (P→O, 0.7.7, ADR-0113).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConfigSchemaResult {
+    /// A JSON Schema (draft 2020-12) for the plugin's own `[<name>]` table —
+    /// the value `initialize` and `config/validate` receive as `config`.
+    ///
+    /// **Every subschema inline — no `$ref`.** The host embeds the answer
+    /// under the plugin's name in a larger document, where a local reference
+    /// such as `#/$defs/Field` would resolve against the wrong root; a schema
+    /// that uses `$ref` is shown as raw TOML instead of a form.
+    ///
+    /// Besides the standard keywords, the settings GUI reads four extension
+    /// keywords on any property (ADR-0113): `x-title`, `x-help` and
+    /// `x-category` (a group label) as English strings, and `x-secret` (`true`
+    /// for a value that is a secret reference). Unknown keywords are ignored, so a schema without them is
+    /// still valid — the field is shown by its key with no help text.
+    pub schema: serde_json::Value,
+    /// The keys this plugin reads on a `[[projects]]` entry whose `source` is
+    /// this plugin — what [`ProjectInfo::options`] carries — as an object
+    /// schema (same rules as [`schema`](Self::schema): inline, the same
+    /// extension keywords). `name` and `source` are the Orchestrator's and are
+    /// not in it.
+    ///
+    /// A **task_source**'s field. Absent means "not described": the settings
+    /// window then shows only the Orchestrator's two keys for this source's
+    /// projects, and edits nothing else.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<serde_json::Value>,
+    /// The keys this plugin reads on a `[[workflows]]` entry, as an object
+    /// schema: for a task_source its `trigger` table (one property named
+    /// `trigger`) and any flat option it claims ([`WorkflowInfo::options`],
+    /// e.g. Slack's `publish`); for an agent plugin only the options it
+    /// claims. Keys the Orchestrator owns (`name`, `profile`, `on_*`, …) are
+    /// never in it.
+    ///
+    /// The settings window shows a workflow's form as the Orchestrator's keys
+    /// plus this schema from the source its `projects` resolve to and from its
+    /// `agent`, so a field appears only where it means something (ADR-0113).
+    /// Absent means "not described", as for [`project`](Self::project).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<serde_json::Value>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1287,6 +1343,32 @@ mod tests {
                  Request URL in the Slack app"
                     .into(),
             ],
+        });
+        round_trip(&ConfigSchemaParams {});
+        round_trip(&ConfigSchemaResult {
+            schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "token": {
+                        "type": "string",
+                        "x-secret": true,
+                        "x-help": "API token",
+                    },
+                },
+            }),
+            project: None,
+            workflow: None,
+        });
+        round_trip(&ConfigSchemaResult {
+            schema: serde_json::json!({ "type": "object" }),
+            project: Some(serde_json::json!({
+                "type": "object",
+                "properties": { "board": { "type": "integer", "x-help": "Board number" } },
+            })),
+            workflow: Some(serde_json::json!({
+                "type": "object",
+                "properties": { "trigger": { "type": "object", "x-help": "Which tasks" } },
+            })),
         });
     }
 

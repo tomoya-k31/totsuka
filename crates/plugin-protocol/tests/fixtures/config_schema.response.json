@@ -1,0 +1,52 @@
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "result": {
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "token": {
+          "type": "string",
+          "x-secret": true,
+          "x-category": "Authentication",
+          "x-title": "API token",
+          "x-help": "A secret reference such as secret:github.token."
+        }
+      },
+      "required": [
+        "token"
+      ]
+    },
+    "project": {
+      "type": "object",
+      "properties": {
+        "board": {
+          "type": "integer",
+          "x-title": "Board",
+          "x-help": "The board number."
+        }
+      },
+      "required": [
+        "board"
+      ]
+    },
+    "workflow": {
+      "type": "object",
+      "properties": {
+        "trigger": {
+          "type": "object",
+          "x-title": "Trigger",
+          "x-help": "Which tasks this workflow picks up.",
+          "properties": {
+            "status": {
+              "type": "string",
+              "x-title": "Status",
+              "x-help": "The status a task must be in."
+            }
+          }
+        }
+      }
+    }
+  }
+}

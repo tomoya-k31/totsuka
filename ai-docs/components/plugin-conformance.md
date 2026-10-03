@@ -1,10 +1,10 @@
 ---
 type: Library
 title: plugin-conformance
-description: プラグインのバイナリを起動して stdio の NDJSON で話し、全プラグイン共通のプロトコルの約束事（initialize 前の拒否・PARSE_ERROR・METHOD_NOT_FOUND・空行と通知への無応答・INVALID_PARAMS・config/validate の未知キー・shutdown と EOF での終了・task_source の未知トリガーキー）への違反を全部返す黒箱の適合キット。公式プラグインの tests/conformance.rs と、外部のプラグイン開発者が使う。
+description: プラグインのバイナリを起動して stdio の NDJSON で話し、全プラグイン共通のプロトコルの約束事（initialize 前の拒否・PARSE_ERROR・METHOD_NOT_FOUND・空行と通知への無応答・INVALID_PARAMS・config/validate の未知キー・shutdown と EOF での終了・task_source の未知トリガーキー・config_schema を宣言したプラグインの initialize 前の config/schema）への違反を全部返す黒箱の適合キット。公式プラグインの tests/conformance.rs と、外部のプラグイン開発者が使う。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/plugin-conformance
 tags: [rust, crate, plugin, protocol, testing, conformance]
-generated: { by: claude-code/opus-5.5, at: 2026-09-26T17:30:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-01T21:40:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -39,6 +39,10 @@ owner: tomoya-k31
 task_source のみ:
 
 9. 最初のワークフローの trigger に未知のキーを足した `initialize` は `CONFIG_INVALID` で失敗し、メッセージがそのキー名を含む
+
+マニフェストで `config_schema` を宣言したプラグインのみ（0.7.7、[ADR-0113](/decisions/adr-0113-native-menubar-app.md)）:
+
+10. initialize 前の `config/schema` に、`schema` が `"type": "object"` の JSON オブジェクトである result で答える
 
 エラーは**コードだけ**を見る（メッセージの文言はプロトコルではない）。例外が 6・9 のキー名で、運用者が設定を直すための唯一の手がかりなので要求する。
 

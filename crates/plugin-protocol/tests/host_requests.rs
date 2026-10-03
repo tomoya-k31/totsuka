@@ -16,6 +16,7 @@ use plugin_protocol::methods::HOST_REQUESTS;
 const COMMON: &[&str] = &[
     method::INITIALIZE,
     method::CONFIG_VALIDATE,
+    method::CONFIG_SCHEMA,
     method::SHUTDOWN,
 ];
 /// P→O requests: the plugin sends them, the host answers.

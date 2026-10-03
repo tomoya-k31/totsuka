@@ -52,6 +52,12 @@
 //!    a typo, and dropping it *widens* the trigger instead of narrowing it
 //!    (#574).
 //!
+//! Plugins whose manifest declares `config_schema` only:
+//!
+//! 10. A plugin whose manifest declares `config_schema` answers
+//!     `config/schema` before `initialize` with a `schema` that is a JSON
+//!     object of `"type": "object"` — the shape of the table it describes.
+//!
 //! Error **messages** are never compared, only codes: the wording is not part
 //! of the protocol. The unknown key in 6 and 9 is the exception because it is
 //! the one thing the operator needs from the error to fix their config.
@@ -121,7 +127,7 @@ pub fn check(
     violations
 }
 
-/// Checks 1–7 and 9, in one process that is never initialized. An `Err` is
+/// Checks 1–7, 9 and 10, in one process that is never initialized. An `Err` is
 /// a lost conversation (no answer, or an answer to the wrong request), after
 /// which nothing further on this process can be read reliably.
 fn before_initialize(
@@ -218,6 +224,16 @@ fn before_initialize(
             } else if !result["errors"].to_string().contains(UNKNOWN_KEY) {
                 violations.push(format!("[6] no error names the unknown key: {reply}"));
             }
+        }
+    }
+
+    // 10
+    if manifest.capabilities.config_schema {
+        let reply = session.request(method::CONFIG_SCHEMA, json!({}))?;
+        if reply["result"]["schema"]["type"] != "object" {
+            violations.push(format!(
+                "[10] config/schema before initialize did not answer an object schema: {reply}"
+            ));
         }
     }
 

@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](plugin-dev-guide.ja.md)
 
-<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:82d1c599701af61a6b7c3049e32a001c35f2f4554b149b3081d17eddd5ad2547 -->
+<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:b4e83171e621aa6792c2709b83c4a18280d076647a275447fc84eb0cf096625d -->
 
 # Plugin development guide
 
@@ -43,6 +43,7 @@ diagnostics_snapshot = true         # agent: answers diagnostics/snapshot
 outputs = ["source"]                # declare it only if you implement
                                    # result/publish; without it, a workflow
                                    # asking for output = "source" is rejected
+config_schema = true                # any kind: answers config/schema
 ```
 
 Before starting your plugin, the orchestrator checks `protocol_version` for compatibility and only asks for the capabilities you declared.
@@ -71,6 +72,7 @@ The cases that *don't* line up show the rule better. In 0.4.0 only the herdr plu
 |---|---|---|
 | `initialize` | O→P | Passes resolved config and the protocol version; you return your version and capabilities |
 | `config/validate` | O→P | Validates your plugin's configuration. The same workflows, projects and repositories from `initialize` come with it, so you validate what you are being asked about rather than what you remembered. **`warnings` is the channel for "the config is fine, but you should know this"**: it does not affect `valid`, `totsuka doctor` renders it as an advisory check, and it appears in `--json`. Write it in the same "cause → next action" shape as `errors` — a warning nobody can act on is noise, and noise is how a diagnostic stops being read. It is optional, so a plugin that sends none produces exactly the `doctor` output it always did |
+| `config/schema` | O→P | Returns your own config table as a JSON Schema (draft 2020-12): `{}` → `{ schema, project?, workflow? }`. **Write every subschema inline — no `$ref`**: your answer is embedded in a larger document, where a reference such as `#/$defs/…` would resolve against the wrong root, so a schema with `$ref` is shown as raw TOML. **Answer it before `initialize`** — the menu bar app's settings window asks while no secret exists yet. Sent only if your manifest declares `config_schema = true`; without it, the settings window shows your table as raw TOML (not an error). Put `x-title`, `x-help` and `x-category` (each an English string) on each property, and `x-secret: true` on fields that hold a secret reference: the settings window uses them for labels, help, grouping and password fields. **A task_source may also return `project`** (the keys it reads on a `[[projects]]` entry whose `source` is this plugin) **and `workflow`** (the keys it reads on a `[[workflows]]` entry: `trigger` and any flat option it claims); an agent plugin puts only the options it claims in `workflow`. Same rules (inline, same keywords); leaving one out means "not described" |
 | `shutdown` | O→P | Asks you to exit, with a grace period |
 
 `initialize` also hands a `task_source` several things it would otherwise have to configure twice. All are optional — ignore what you do not use.
@@ -165,11 +167,11 @@ You do not have to write the JSON-RPC line handling yourself (parse errors, sile
 
 | Kind | Trait to implement | How to put it on stdio |
 |---|---|---|
-| `task_source` | `TaskSourceHandler` (initialize / config_validate / update_status / result_publish, optionally task_claim / update_labels) | `serve(TaskSourceServer(handler), &stdio)`. If your server is itself the handler, implement `LineHandler` with `plugin_sdk::dispatch::handle_line(self, line)` |
-| `agent_ide` | `AgentIdeHandler` (initialize / config_validate / task_dispatch / session_attach / task_cancel / state_subscribe, optionally session_focus / session_release / session_list / diagnostics_snapshot) | `serve(AgentIdeServer::new(handler, stdio.writer.clone()), &stdio)` |
+| `task_source` | `TaskSourceHandler` (initialize / config_validate / update_status / result_publish, optionally task_claim / update_labels / config_schema) | `serve(TaskSourceServer(handler), &stdio)`. If your server is itself the handler, implement `LineHandler` with `plugin_sdk::dispatch::handle_line(self, line)` |
+| `agent_ide` | `AgentIdeHandler` (initialize / config_validate / task_dispatch / session_attach / task_cancel / state_subscribe, optionally session_focus / session_release / session_list / diagnostics_snapshot / config_schema) | `serve(AgentIdeServer::new(handler, stdio.writer.clone()), &stdio)` |
 
 - Each method receives its params type and returns its result type or a `plugin_protocol::jsonrpc::Error`. Return `plugin_sdk::not_initialized()` for calls that arrive before `initialize`. Override `initialized()` as well, so that a request with malformed params arriving before `initialize` gets the same "initialize first" answer instead of `INVALID_PARAMS`.
-- **Methods gated on a capability answer `METHOD_NOT_FOUND` by default** (`task_claim`, `update_labels` (`label_writeback`), `session_focus` / `session_release` / `session_list`, `diagnostics_snapshot`). If you override one, declare its capability; if you declare the capability, override the method.
+- **Methods gated on a capability answer `METHOD_NOT_FOUND` by default** (`task_claim`, `update_labels` (`label_writeback`), `session_focus` / `session_release` / `session_list`, `diagnostics_snapshot`, `config_schema` (`config_schema`)). If you override one, declare its capability; if you declare the capability, override the method.
 - **`state_subscribe` only has to return a receiver of state changes.** `AgentIdeServer` guarantees the order: the reply first, then the `state/notification`s.
 - For `{placeholder}` substitution in configurable prompts and instructions, use `plugin_sdk::template::render`. It substitutes in a single pass, so `{...}` written inside external content is never expanded. An agent_ide can build the prompt it hands the agent with `plugin_sdk::compose_prompt`.
 
@@ -270,7 +272,7 @@ fn the_binary_conforms_to_the_protocol() {
 
 The kit never sends `init` as it is: a successful `initialize` would reach real services, so it only sends broken copies. Test what your plugin does after a successful `initialize` in your own tests.
 
-It checks the nine rules below and reports every violation at once. **If you write your plugin in another language, this is the list of rules to follow.**
+It checks the ten rules below and reports every violation at once. **If you write your plugin in another language, this is the list of rules to follow.**
 
 | # | Applies to | Rule |
 |---|---|---|
@@ -283,6 +285,7 @@ It checks the nine rules below and reports every violation at once. **If you wri
 | 7 | every kind | Answer `shutdown` with a result, then exit with status 0 |
 | 8 | every kind | Exit when stdin reaches EOF |
 | 9 | task_source | `initialize` with an unknown key in a trigger fails with `CONFIG_INVALID` (-32003), and the message names the key |
+| 10 | declares `config_schema` | Before `initialize`, `config/schema` is answered with a result whose `schema` is a JSON object of `"type": "object"` |
 
 Only error **codes** are checked, never the message wording. The exception is the key name in rules 6 and 9: it is the one thing an operator needs from the error to fix their config.
 

@@ -4,7 +4,7 @@ title: ADR-0065 メニューバー表示は SwiftBar プラグイン + totsuka m
 description: "常時視界に入る面へ totsuka の状態を出すために、GUI を自前で描かず SwiftBar のプラグイン書式を吐く `totsuka menu` サブコマンドを足す。可用性と要対応件数を 2 チャネルに分け、要対応から終端状態を外し、行の整形（特に `|` のエスケープ）を Rust 側に置く。却下した 8 案（run 自身の描画・メニューからの run 起動・doctor のポーリング・ログ文言マッチ・Swift アプリ・objc2 常駐・jq 整形・state.db 直読み）とその理由を記録する。"
 resource: https://github.com/tomoya-k31/totsuka/issues/584
 tags: [decision, menu, swiftbar, macos, observability, attention, adr]
-generated: { by: claude-code/opus-5, at: 2026-08-28T08:50:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-01T21:40:00+09:00 }
 verified:
   - { by: human:tomoya-k31, at: 2026-08-28T07:32:00+09:00 }
   - { by: human:tomoya-k31, at: 2026-08-28T08:44:00+09:00 }
@@ -15,6 +15,8 @@ owner: tomoya-k31
 # Status
 
 stable。#584（エピック）の設計決定。実装は #585（`totsuka menu`）と #586（`health.json` と `⚠`）の 2 段で、**どちらも実装済み**。
+
+**一部を [ADR-0113](/decisions/adr-0113-native-menubar-app.md) が覆した。** 下の「却下した案」のうち「独立した Swift/AppKit `.app`」の行は、アプリ名義のネイティブ通知と config の GUI 編集が要件になったため採用に転じた。`totsuka menu` と SwiftBar の経路はそのまま残り、アプリも状態の取得に `menu --json` を使う。
 
 **実機（SwiftBar 2.1.1 / macOS）で検収完了。** 何を確認したかを明示する —— `verified` はこの範囲についてのものである。
 

@@ -203,6 +203,7 @@ fn main() {
                             diagnostics_snapshot: flag("diagnostics_snapshot"),
                             task_claim: flag("task_claim"),
                             label_writeback: flag("label_writeback"),
+                            config_schema: flag("config_schema"),
                             outputs: vec![OutputCapability::Source],
                             // No `..Default::default()`: removing
                             // `design_preview` in 0.4.0 (#411) made this

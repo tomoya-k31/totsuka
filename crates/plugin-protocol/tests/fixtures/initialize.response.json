@@ -10,7 +10,8 @@
       "diagnostics_snapshot": true,
       "outputs": [],
       "task_claim": false,
-      "label_writeback": false
+      "label_writeback": false,
+      "config_schema": false
     },
     "claimed_repos": [
       {
