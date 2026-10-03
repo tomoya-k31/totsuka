@@ -14,7 +14,39 @@
           "x-help": "A secret reference such as secret:github.token."
         }
       },
-      "required": ["token"]
+      "required": [
+        "token"
+      ]
+    },
+    "project": {
+      "type": "object",
+      "properties": {
+        "board": {
+          "type": "integer",
+          "x-title": "Board",
+          "x-help": "The board number."
+        }
+      },
+      "required": [
+        "board"
+      ]
+    },
+    "workflow": {
+      "type": "object",
+      "properties": {
+        "trigger": {
+          "type": "object",
+          "x-title": "Trigger",
+          "x-help": "Which tasks this workflow picks up.",
+          "properties": {
+            "status": {
+              "type": "string",
+              "x-title": "Status",
+              "x-help": "The status a task must be in."
+            }
+          }
+        }
+      }
     }
   }
 }

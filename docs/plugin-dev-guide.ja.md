@@ -1,7 +1,7 @@
 > 🌐 [English](plugin-dev-guide.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:61078d0f0e64a3df1977a2279c3de1bc62e0d20370f74ed823e2248faa341a21 -->
+<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:5a1e23c23448a3308eac31ea9861ba8a6d720cef8cc7725b001c545341d77ef7 -->
 
 # プラグイン開発ガイド
 
@@ -75,7 +75,7 @@ Orchestrator は起動前に `protocol_version` の互換性を検査し、宣�
 |---|---|---|
 | `initialize` | O→P | 解決済みの設定とプロトコル版を渡す。プラグインは自分の版と capability を返す |
 | `config/validate` | O→P | プラグイン設定を検証する。`initialize` と同じ workflows / projects / repositories も一緒に届くので、記憶ではなく「今聞かれているもの」を検証する。**`warnings` は「設定は正しいが伝えたいこと」の口**で、`valid` には影響せず、`totsuka doctor` が黄色のチェックとして描き `--json` にも出る。`errors` と同じ「原因 → 次のアクション」の形で書くこと —— 行動できない警告は雑音で、雑音は診断が読まれなくなる原因そのものである。省略できるので、送らないプラグインの `doctor` 出力は 1 バイトも変わらない |
-| `config/schema` | O→P | 自分の設定テーブルを JSON Schema（draft 2020-12）で返す（`{}` → `{ schema }`）。**サブスキーマはすべてインラインで書き、`$ref` を使わないこと** —— 答えは大きな文書の中に埋め込まれるので、`#/$defs/…` のような参照は別の根に対して解決されてしまう。`$ref` を含むスキーマは生の TOML 欄になる。**`initialize` より前に答えること** —— メニューバーアプリの設定画面は、機密がまだ無い状態で尋ねる。マニフェストで `config_schema = true` を宣言したときだけ送られ、宣言しなければそのテーブルは設定画面で生の TOML 欄になる（エラーにはならない）。各プロパティに `x-title` / `x-help` / `x-category`（いずれも `{"en": "…", "ja": "…"}`）と、機密の参照を持つフィールドには `x-secret: true` を付けると、設定画面がラベル・ヘルプ・カテゴリ分け・パスワード入力欄に使う |
+| `config/schema` | O→P | 自分の設定テーブルを JSON Schema（draft 2020-12）で返す（`{}` → `{ schema, project?, workflow? }`）。**サブスキーマはすべてインラインで書き、`$ref` を使わないこと** —— 答えは大きな文書の中に埋め込まれるので、`#/$defs/…` のような参照は別の根に対して解決されてしまう。`$ref` を含むスキーマは生の TOML 欄になる。**`initialize` より前に答えること** —— メニューバーアプリの設定画面は、機密がまだ無い状態で尋ねる。マニフェストで `config_schema = true` を宣言したときだけ送られ、宣言しなければそのテーブルは設定画面で生の TOML 欄になる（エラーにはならない）。各プロパティに `x-title` / `x-help` / `x-category`（いずれも英語の文字列）と、機密の参照を持つフィールドには `x-secret: true` を付けると、設定画面がラベル・ヘルプ・カテゴリ分け・パスワード入力欄に使う。**task_source は任意で `project`**（自分が `source` の `[[projects]]` 要素に読むキー）と **`workflow`**（`[[workflows]]` に読むキー: `trigger` と、claim する平置きのオプション）のスキーマも返せる。agent プラグインは `workflow` に claim するオプションだけを載せる。どちらも同じ規則（インライン、同じ拡張キーワード）で、省略すれば「説明なし」の意味になる |
 | `shutdown` | O→P | 猶予付きで終了を要求する |
 
 `initialize` は `task_source` に対して、二重に設定せずに済むものをいくつか渡す。いずれも任意なので、使わないなら無視してよい。
