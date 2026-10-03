@@ -1,4 +1,4 @@
 * **Update**: [要対応（Attention）](/glossary/attention.md) / [orchestrator-cli](/components/orchestrator-cli.md) — 許可を求めて止まっている `running` タスクを要対応に入れ、`menu --json` の行に `waiting_for: "approval"` を付ける（SwiftBar では `awaiting_approval` と ⏸）。
 * **Update**: [orchestrator-core](/components/orchestrator-core.md) / [フックのトラブルシューティング](/operations/hook-troubleshooting.md) / [フックのセキュリティ](/security/hook-security.md) — `PostToolUse` フック（`on-post-tool-use.sh`）で許可待ちの印を外し、許可待ちのタスクを `health.json` の `awaiting_approval` に載せる。`on-notification.sh` がプロンプトごとに `prompt_id` を付け、同じセッションの 2 回目以降の許可プロンプトが重複として捨てられていた不具合を直した。
-* **Update**: [ADR-0109](/decisions/adr-0109-native-menubar-app.md) — 許可待ちをメニューの「Needs you」に出す決定と、DB の最後の信号から推す案を採らない理由を記録した。
+* **Update**: [ADR-0113](/decisions/adr-0113-native-menubar-app.md) — 許可待ちをメニューの「Needs you」に出す決定と、DB の最後の信号から推す案を採らない理由を記録した。
 * **Update**: [codex の設定](/operations/codex-tool-setup.md) — codex の管理フックに `PostToolUse` を足した（既存の利用者は増えたエントリを一度 trust し直す。未 trust は `doctor` が報告する）。opencode の許可待ちは次の信号まで残ることを記した。
