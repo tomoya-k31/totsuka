@@ -4,7 +4,7 @@ title: ADR-0111 返信案の却下をモーダルで受け、代わりの返信�
 description: 承認フローの「却下」押下で views.open のモーダルを開き、送信（view_submission）で却下を確定して、運用者が書いた「代わりの返信」を下書き・ナッジ DM の判定記録・ログに残し、チェックしたときだけ本人名義でスレッドにも投稿する決定。モーダルが開けない押下（trigger_id が無い Gateway 経由・期限切れ）は従来どおりその場で却下にし、却下そのものは失わない。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/plugins/task-source-slack/src/approval.rs
 tags: [decision, slack, approval, modal, adr]
-generated: { by: claude-code/opus-5.5, at: 2026-10-03T22:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-03T23:00:00+09:00 }
 verified: { by: human:tomoya-k31, at: 2026-10-03T10:34:54Z }
 status: stable
 owner: tomoya-k31
@@ -67,4 +67,4 @@ stable。[ADR-0074](/decisions/adr-0074-single-draft-surface.md)（下書きの�
 - 送信を選んだ却下は、承認と違い「スレッドに出た文面は運用者が書いたもの」になる。記録上は `Rejected` なので、承認率の集計に混ざらない
 - 却下は 1 クリックから 2 クリック（押下 → 送信）になる。代わりの返信を書かなくても「却下する」の 1 押しが増える
 - モーダルを開いたまま承認ボタンを押すと承認が先に確定し、後から届いた送信は「決定済み」の経路で表面の掃除だけをする
-- Gateway 経由では totsuka がモーダルを開けない（押下が届くまで最大 20 秒かかり、`trigger_id` の 3 秒に間に合わない）。[ADR-0112](/decisions/adr-0112-gateway-reject-modal.md) でゲートウェイが代わりに開き、送信を中継する
+- Gateway 経由では totsuka がモーダルを開けない（押下が Pub/Sub 経由で届くので、`trigger_id` の 3 秒に間に合う保証がない）。[ADR-0112](/decisions/adr-0112-gateway-reject-modal.md) でゲートウェイが代わりに開き、送信を中継する

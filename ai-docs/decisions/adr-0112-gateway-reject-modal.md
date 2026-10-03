@@ -4,7 +4,7 @@ title: ADR-0112 Event Gateway が却下モーダルを開き、その送信を�
 description: Event Gateway 構成でも却下モーダル（ADR-0111）を使えるよう、ゲートウェイに任意のボットトークンを持たせて却下の押下で views.open を呼び、開けたら押下は publish せず、view_submission を新しいレコード種別として押下用トピックへ中継する決定。ADR-0072 の「クラウドに置く資格情報は signing secret だけ」「レコードに本文を載せない」を、この 1 経路に限って改める。開けなければ従来どおり押下を publish し、その場で却下する。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/services/slack-event-gateway/src/modal.rs
 tags: [decision, slack, gateway, modal, approval, security, adr]
-generated: { by: claude-code/opus-5.5, at: 2026-10-03T21:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-03T23:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -15,7 +15,7 @@ stable。[ADR-0111](/decisions/adr-0111-reject-modal-alt-reply.md) の却下モ�
 
 # Context
 
-モーダルは押下の `trigger_id` でしか開けず、`trigger_id` は押下から **3 秒**で失効する。Gateway 構成では押下が Slack → Cloud Run → Pub/Sub → totsuka と渡り、totsuka の pull は空振りのたびに最大 20 秒まで間隔を広げる（`gateway.rs` の `backoff_max`）。**totsuka がモーダルを開くことは原理的に間に合わない。** 3 秒以内に押下を見ているのはゲートウェイだけである。
+モーダルは押下の `trigger_id` でしか開けず、`trigger_id` は押下から **3 秒**で失効する。Gateway 構成では押下が Slack → Cloud Run → Pub/Sub → totsuka と渡り、totsuka の pull は空振りのたびに最大 20 秒まで間隔を広げていた（`gateway.rs` の `backoff_max`。押下用の購読は後に最大約 1 秒（`press_empty_max`）へ縮めたが、Cloud Run の起動・publish・pull の往復が加わるので 3 秒以内は保証できない）。**totsuka がモーダルを開くことは間に合う保証がない。** 3 秒以内に押下を見ているのはゲートウェイだけである。
 
 加えて、モーダルの送信（`view_submission`）はゲートウェイの射影対象に無く、totsuka に届く経路が無かった。
 
