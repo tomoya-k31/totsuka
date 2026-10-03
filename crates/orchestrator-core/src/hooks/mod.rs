@@ -1,7 +1,7 @@
 //! Static hook scripts + per-workflow `orchestrator-<workflow>.json` rendering
 //! (#131 H-01/H-03, #137).
 //!
-//! The seven hook scripts are baked into the binary with [`include_str!`] and
+//! The eight hook scripts are baked into the binary with [`include_str!`] and
 //! written to `$XDG_DATA_HOME/totsuka/hooks/` at `totsuka run` / `totsuka
 //! doctor` startup (0700, idempotent by content hash so a version bump refreshes
 //! them but an unchanged run touches nothing). `doctor --no-repair` is the one
@@ -66,6 +66,7 @@ const HOOK_SCRIPTS: &[(&str, &str)] = &[
         "on-user-prompt-submit.sh",
         include_str!("on-user-prompt-submit.sh"),
     ),
+    ("on-post-tool-use.sh", include_str!("on-post-tool-use.sh")),
 ];
 
 /// Directory holding the scripts and rendered settings.
@@ -229,6 +230,12 @@ pub fn render_settings(dir: &Path, wf: &WorkflowConfig) -> String {
             }],
             "SessionEnd": [{
                 "hooks": [{ "type": "command", "command": script("on-session-end.sh"), "timeout": 10 }]
+            }],
+            // After a permission prompt, the first sign the human answered: it
+            // clears the task's awaiting-approval mark (the menu's "Needs
+            // you"), which nothing else would until the turn ends.
+            "PostToolUse": [{
+                "hooks": [{ "type": "command", "command": script("on-post-tool-use.sh"), "timeout": 10 }]
             }],
             // Invisible prompt-context injection: rendered for every workflow;
             // the script no-ops when TOTSUKA_PROMPT_CONTEXT is unset.
@@ -434,10 +441,23 @@ mod tests {
         // must stay empty (any output would decide the approval).
         let spool = unique_dir("permreq");
         let input = r#"{"session_id":"s1","turn_id":"t1","hook_event_name":"PermissionRequest","tool_name":"Bash","tool_use_id":"tu1","tool_input":{"command":"rm -rf /tmp/x"}}"#;
+        let out = run_spooled("on-notification.sh", input, &spool);
+        assert!(out.status.success());
+        assert!(out.stdout.is_empty(), "stdout would decide the approval");
+        let events = spooled_json(&spool);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["hook_event_name"], "Notification");
+        assert_eq!(events[0]["message"], "permission_prompt: Bash");
+        // The tool_use_id names the prompt (idempotency key component).
+        assert_eq!(events[0]["prompt_id"], "tu1");
+    }
+
+    /// Run a hook script with `input` on stdin, spooling instead of posting.
+    fn run_spooled(script: &str, input: &str, spool: &Path) -> std::process::Output {
         let mut cmd = Command::new(tool("bash"));
-        cmd.arg(script_dir().join("on-notification.sh"))
+        cmd.arg(script_dir().join(script))
             .env("TOTSUKA_JOB_ID", "job-test")
-            .env("TOTSUKA_HOOK_SPOOL_DIR", &spool)
+            .env("TOTSUKA_HOOK_SPOOL_DIR", spool)
             .env_remove("TOTSUKA_HOOK_ENDPOINT")
             .env_remove("TOTSUKA_HOOK_TOKEN")
             .stdin(Stdio::piped())
@@ -450,13 +470,53 @@ mod tests {
             .unwrap()
             .write_all(input.as_bytes())
             .unwrap();
-        let out = child.wait_with_output().unwrap();
+        child.wait_with_output().unwrap()
+    }
+
+    /// Claude Code's Notification carries no id of its own; each prompt must
+    /// still get a distinct one, or every prompt after the first in a session
+    /// shares its idempotency key and is dropped as a duplicate.
+    #[test]
+    fn each_permission_prompt_gets_its_own_prompt_id() {
+        let spool = unique_dir("notify-ids");
+        let input = r#"{"session_id":"s1","hook_event_name":"Notification","message":"Claude needs your permission"}"#;
+        assert!(
+            run_spooled("on-notification.sh", input, &spool)
+                .status
+                .success()
+        );
+        assert!(
+            run_spooled("on-notification.sh", input, &spool)
+                .status
+                .success()
+        );
+        let events = spooled_json(&spool);
+        assert_eq!(events.len(), 2);
+        let ids: Vec<&str> = events
+            .iter()
+            .map(|e| e["prompt_id"].as_str().unwrap())
+            .collect();
+        assert!(ids.iter().all(|id| id.starts_with("n-")), "{ids:?}");
+        assert_ne!(ids[0], ids[1]);
+    }
+
+    /// PostToolUse is a bare signal (normalized to a heartbeat) whose stdout
+    /// stays empty — a PostToolUse hook's output is fed back to the model.
+    #[test]
+    fn post_tool_use_relays_a_bare_signal() {
+        let spool = unique_dir("posttool");
+        let input = r#"{"session_id":"s1","hook_event_name":"PostToolUse","tool_name":"Bash","tool_response":{"stdout":"secret"}}"#;
+        let out = run_spooled("on-post-tool-use.sh", input, &spool);
         assert!(out.status.success());
-        assert!(out.stdout.is_empty(), "stdout would decide the approval");
+        assert!(out.stdout.is_empty());
         let events = spooled_json(&spool);
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0]["hook_event_name"], "Notification");
-        assert_eq!(events[0]["message"], "permission_prompt: Bash");
+        assert_eq!(events[0]["hook_event_name"], "PostToolUse");
+        assert_eq!(events[0]["session_id"], "s1");
+        assert!(
+            events[0].get("tool_response").is_none(),
+            "only the signal is sent"
+        );
     }
 
     #[test]
@@ -1481,5 +1541,12 @@ output = "source"
             v["hooks"]["SessionEnd"][0]["hooks"][0]["command"],
             "/xdg/data/totsuka/hooks/on-session-end.sh"
         );
+        // Every tool, no matcher: any tool finishing after a prompt is the
+        // sign it was answered.
+        assert_eq!(
+            v["hooks"]["PostToolUse"][0]["hooks"][0]["command"],
+            "/xdg/data/totsuka/hooks/on-post-tool-use.sh"
+        );
+        assert!(v["hooks"]["PostToolUse"][0].get("matcher").is_none());
     }
 }

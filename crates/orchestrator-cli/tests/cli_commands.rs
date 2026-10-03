@@ -2009,6 +2009,7 @@ fn write_health_at(
                 .format(&time::format_description::well_known::Rfc3339)
                 .unwrap(),
             degraded,
+            awaiting_approval: Vec::new(),
         },
     )
     .unwrap();
