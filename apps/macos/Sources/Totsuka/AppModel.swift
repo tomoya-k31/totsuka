@@ -560,22 +560,27 @@ final class AppModel: ObservableObject {
     /// IDE; nil looks the task up in the menu.
     func focus(_ id: String, workflow: String? = nil) {
         let row = ((menu?.attention ?? []) + (menu?.working ?? [])).first { String($0.taskId) == id }
-        if let config, let app = focusApp(workflow: workflow ?? row?.workflow, config: config) {
-            activate(app)
+        let app = config.flatMap { focusApp(workflow: workflow ?? row?.workflow, config: $0) }
+        Task {
+            await act(["focus", id])
+            // After `act`, which clears the notice on success.
+            if let app { activate(app) }
         }
-        Task { await act(["focus", id]) }
     }
 
     private func activate(_ app: FocusApp) {
         let url: URL?
+        let missing: String
         switch app {
         case .bundleID(let id):
             url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id)
+            missing = "No app has the bundle ID \(id) → check [macos].activate_bundle_id"
         case .named(let name):
             url = NSWorkspace.shared.runningApplications.first { $0.localizedName == name }?.bundleURL
+            missing = "\(name) is not running → start it"
         }
         guard let url else {
-            notice = "Could not find the app to bring forward → check [macos].activate_bundle_id"
+            notice = missing
             return
         }
         // Opening a running app activates it.

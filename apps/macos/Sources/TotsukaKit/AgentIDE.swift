@@ -13,12 +13,26 @@ public func herdrSocketPath(config: JSONValue, environment: [String: String]) ->
     let dir = (xdg ?? (environment["HOME"] ?? NSHomeDirectory()) + "/.config") + "/herdr"
     func session(_ name: String) -> String { "\(dir)/sessions/\(name)/herdr.sock" }
     if let path = config["herdr"]?["socket_path"]?.string {
-        return (path as NSString).expandingTildeInPath
+        return (expandEnv(path, environment) as NSString).expandingTildeInPath
     }
     if let name = config["herdr"]?["session"]?.string { return session(name) }
     if let path = environment["HERDR_SOCKET_PATH"] { return path }
     if let name = environment["HERDR_SESSION"] { return session(name) }
     return dir + "/herdr.sock"
+}
+
+/// `${VAR}` expanded from `environment`, as the CLI expands config values
+/// before handing them to a plugin (`config get` returns them unexpanded).
+/// An unset variable is left as written: the path then does not resolve.
+func expandEnv(_ text: String, _ environment: [String: String]) -> String {
+    var out = ""
+    var rest = Substring(text)
+    while let start = rest.range(of: "${"), let end = rest[start.upperBound...].firstIndex(of: "}") {
+        let name = String(rest[start.upperBound..<end])
+        out += rest[..<start.lowerBound] + (environment[name] ?? "${\(name)}")
+        rest = rest[rest.index(after: end)...]
+    }
+    return out + rest
 }
 
 /// Whether something accepts connections on the Unix socket at `path` — a

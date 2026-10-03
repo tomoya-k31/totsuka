@@ -263,6 +263,9 @@ import Testing
         #expect(herdrSocketPath(config: session, environment: env) == "/h/.config/herdr/sessions/work/herdr.sock")
         let explicit = JSONValue.parse(#"{"herdr":{"socket_path":"/s.sock","session":"work"}}"#)!
         #expect(herdrSocketPath(config: explicit, environment: env) == "/s.sock")
+        // `config get` hands `${VAR}` back unexpanded.
+        let templated = JSONValue.parse(#"{"herdr":{"socket_path":"${HOME}/x/${NOPE}.sock"}}"#)!
+        #expect(herdrSocketPath(config: templated, environment: env) == "/h/x/${NOPE}.sock")
     }
 
     @Test func aMissingSocketDoesNotAccept() {
