@@ -57,7 +57,7 @@ Apple Developer Program には**加入しない**。それでも友人に配り�
 
 ## 4. 通知
 
-- **`run --events-jsonl`** を足す。`notify` と同じ `NotifyParams` を 1 行 1 JSON で stdout に書く。通知の経路（`deliver_notification`）は 1 か所しかないので、そこで書く
+- **`run --events-jsonl`** を足す。`notify` と同じ `NotifyParams` に `type: "notify"` を足して 1 行 1 JSON で stdout に書き、終了時に要約を `type: "summary"` の 1 行で書く（stdout を JSON 行だけにするため。契約は [run --events-jsonl](/apis/run-events-jsonl.md)）。通知の経路（`deliver_notification`）は 1 か所しかないので、そこで書く
 - `--events-jsonl` と `--json` は排他（`--json` の stdout は要約 1 文書という契約がある）
 - `--events-jsonl` のとき **notifier プラグインは起動しない**。親プロセスが通知者なので、残すと二重に出る
 - 絞り込み（workflow × イベント種別、F-92）は **`[macos]` の設定をアプリが読んで適用する**。core が `[macos]` を読むのはプラグインの所有物に触ることになる（[ADR-0058](/decisions/adr-0058-config-ownership-boundary.md)）

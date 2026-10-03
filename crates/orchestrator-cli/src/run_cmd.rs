@@ -39,6 +39,9 @@ pub struct RunArgs {
     pub one_shot_grace_ms: Option<u64>,
     /// Take secret values from stdin's first line, never from a store (#754).
     pub secrets_stdin: bool,
+    /// Notifications as JSON lines on stdout, notifier plugins not started
+    /// (ADR-0113).
+    pub events_jsonl: bool,
     /// Emit the summary as JSON on stdout instead of prose (#462).
     pub json: bool,
 }
@@ -56,6 +59,7 @@ async fn run_async(cx: &Cx, args: RunArgs) -> Result<(), CliError> {
         debug,
         one_shot_grace_ms,
         secrets_stdin,
+        events_jsonl,
         json,
     } = args;
     let paths = &cx.paths;
@@ -67,6 +71,9 @@ async fn run_async(cx: &Cx, args: RunArgs) -> Result<(), CliError> {
     // plugins, and an unread pipe would block or EPIPE the launcher's write.
     if secrets_stdin {
         crate::common::install_supplied_secrets().map_err(needs_fix)?;
+    }
+    if events_jsonl {
+        orchestrator_core::run::emit_events_jsonl();
     }
 
     // Config load (incl. `TOTSUKA_*` overrides, F-66 layer 2) + full
@@ -161,7 +168,7 @@ async fn run_async(cx: &Cx, args: RunArgs) -> Result<(), CliError> {
     };
 
     let db = StateDb::open(&paths.state_dir().join("state.db"))?;
-    let plugins = launch_plugins(cx, &cfg, &env).await?;
+    let plugins = launch_plugins(cx, &cfg, &env, events_jsonl).await?;
 
     // Repository classifier (F-12), if configured.
     let llm = match &cfg.llm {
@@ -276,7 +283,12 @@ async fn run_async(cx: &Cx, args: RunArgs) -> Result<(), CliError> {
         .run(watch, stop.expect("installed for every non-dry run"))
         .await?;
     engine.shutdown(SHUTDOWN_GRACE).await;
-    print_summary(&summary, json)?;
+    if events_jsonl {
+        // stdout is JSON lines only under this flag, the summary included.
+        orchestrator_core::run::write_event_line("summary", &summary);
+    } else {
+        print_summary(&summary, json)?;
+    }
     Ok(())
 }
 
@@ -318,11 +330,18 @@ async fn launch_plugins(
     cx: &Cx,
     cfg: &RootConfig,
     env: &HashMap<String, String>,
+    events_jsonl: bool,
 ) -> Result<PluginSet, CliError> {
     let mut set = PluginSet::default();
     let mut claims: BTreeMap<String, Vec<plugin_protocol::methods::WorkflowOption>> =
         BTreeMap::new();
     for (name, plugin_cfg) in cfg.plugins.iter().filter(|(_, p)| p.enabled) {
+        // Under `--events-jsonl` the parent is the notifier (ADR-0113): a
+        // notifier plugin as well would notify every event twice.
+        if events_jsonl && plugin_cfg.kind == PluginKind::Notifier {
+            tracing::info!(plugin = %name, "notifier not started: --events-jsonl delivers notifications");
+            continue;
+        }
         let spec = plugin_spec(&cx.store(), cfg, name, env).map_err(needs_fix)?;
         // Keep the spec: it is everything a relaunch needs (#495), and
         // re-deriving it later would re-resolve the plugin's secrets — a

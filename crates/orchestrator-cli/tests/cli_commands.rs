@@ -2383,3 +2383,15 @@ fn config_unset_without_a_file_creates_nothing() {
     assert!(!base.join("cfg/totsuka/config.toml").exists());
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// `--events-jsonl` promises JSON lines only on stdout, so the flags whose
+/// stdout is something else are refused with it (exit 2, usage).
+#[test]
+fn run_events_jsonl_refuses_json_and_dry_run() {
+    let base = scratch("events-jsonl-conflicts");
+    for other in ["--json", "--dry-run"] {
+        let out = run(&base, &["run", "--events-jsonl", other]);
+        assert_eq!(out.status.code(), Some(2), "{other}: {}", stderr(&out));
+    }
+    let _ = std::fs::remove_dir_all(&base);
+}

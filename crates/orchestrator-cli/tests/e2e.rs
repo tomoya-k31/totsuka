@@ -332,6 +332,45 @@ fn e2e_run_json_emits_only_the_summary_document() {
     let _ = std::fs::remove_dir_all(&env.base);
 }
 
+/// `--events-jsonl` (ADR-0113): every stdout line is one JSON object — the
+/// `notify` events as they happen, then the `summary` — and the notifier
+/// plugin is not started, so nothing is notified twice.
+#[test]
+fn e2e_run_events_jsonl_streams_notifications_instead_of_the_notifier() {
+    let env = setup(
+        "eventsjsonl",
+        "stream_states = [\"running\", \"waiting_input\"]\n",
+        "none",
+        "implement",
+    );
+    let out = env.run(&[&["run", "--events-jsonl"], GRACE].concat());
+    assert!(
+        out.status.success(),
+        "run failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let lines: Vec<serde_json::Value> = stdout(&out)
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap_or_else(|e| panic!("not JSON ({e}): {l}")))
+        .collect();
+    let waiting = lines
+        .iter()
+        .find(|l| l["type"] == "notify" && l["event"] == "waiting_input")
+        .unwrap_or_else(|| panic!("no waiting_input event: {lines:?}"));
+    assert_eq!(waiting["title"], "e2e task", "{waiting}");
+    assert!(waiting["task_id"].is_string(), "{waiting}");
+    let last = lines.last().expect("at least the summary");
+    assert_eq!(last["type"], "summary", "{last}");
+    assert!(last["stats"].is_object(), "{last}");
+    assert!(
+        read_log(&env.notify_log).is_empty(),
+        "the notifier plugin must not be started"
+    );
+
+    let _ = std::fs::remove_dir_all(&env.base);
+}
+
 #[test]
 fn e2e_waiting_input_leaves_task_and_status_shows_it() {
     let env = setup(

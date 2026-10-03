@@ -3,7 +3,7 @@ type: Spec
 title: totsuka — Local AI-Agent Orchestrator Requirements (v1)
 description: Requirements specification for the totsuka orchestrator CLI — task-source/agent-IDE/notifier plugins, git-worktree lifecycle, workflows, parallel execution control, and v1 scope.
 tags: [orchestrator, requirements, plugin, worktree, cli, rust]
-generated: { by: claude-code/opus-5.5, at: 2026-10-01T22:32:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-01T22:41:00+09:00 }
 status: draft
 owner: tomoya-k31
 ---
@@ -294,6 +294,7 @@ The path to a surface that is **always in view**, such as the macOS menu bar. No
 |---|---|
 | `setup` | First-time setup: install the plugins you pick and write a configuration with every setting in it, commented out (added after this table was first written; see the setup playbook) |
 | `run [--watch] [--json]` | Main loop from task intake (push, `task/submit`) to dispatch (one-shot by default; `--watch` stays up receiving pushes until shutdown — see Open Question #2, resolved) |
+| `run --events-jsonl` | For the menu bar app that launches `run` as its child: every stdout line is one JSON object — each notification (`type: "notify"`) and the final summary (`type: "summary"`); notifier plugins are not started. Not combinable with `--json` (ADR-0113) |
 | `status [--json]` | List running / queued / waiting tasks and worktrees, plus what the live run cannot currently do (F-110) |
 | `menu [--json]` | The menu-bar view (F-109). SwiftBar plugin format by default, the display model with `--json`. Always exits 0 |
 | `task list / show <id> / cancel <id> / retry <id>` | Individual task operations |
