@@ -31,6 +31,7 @@ final class AppModel: ObservableObject {
     /// without pause (100% CPU, memory growing past 2 GB).
     @Published private(set) var iconTick = 0
     private var iconTimer: Timer?
+    private var refreshing = false
     /// The last lines of `run`'s stderr, for the failure message. The full
     /// stream goes to `runLog`, which Logs follows in `$TERMINAL`.
     private var logLines: [String] = []
@@ -478,6 +479,11 @@ final class AppModel: ObservableObject {
     }
 
     func refreshMenu() async {
+        // One `menu --json` at a time: the CLI call has no timeout, so a hung
+        // one would otherwise stack a new child every 2 seconds.
+        guard !refreshing else { return }
+        refreshing = true
+        defer { refreshing = false }
         guard let cli, let result = try? await cli.run(["menu", "--json"]) else { return }
         menu = try? MenuModel.decode(result.stdout)
         animateIcon(!(menu?.attention.isEmpty ?? true) || !(menu?.working.isEmpty ?? true))
