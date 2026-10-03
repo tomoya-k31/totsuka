@@ -4,7 +4,7 @@ title: ADR-0114 メニューバーアプリは github.token の secret を起動
 description: "メニューバーアプリ（ADR-0113）が --secrets-stdin で run を起動する構成で、[github].token の secret: を PAT の発行なしに埋めるため、入力ダイアログに「Use gh auth token」を足す決定。選ぶと UserDefaults に印だけを置き、Start のたびに gh auth token --hostname <api_url のホスト> --user <github_login> を実行して map に入れる（Keychain には保存しない）。gho_ に有効期限は無いが 10 本の上限・承認の取り消し・1 年未使用で失効するので、コピーは持たない。CLI は従来どおり cmd:gh auth token を使う。OAuth device flow・値のコピー・--secrets-stdin で cmd: を許す案は却下した。"
 resource: https://github.com/tomoya-k31/totsuka/issues/858
 tags: [decision, macos, menubar, secrets, github, adr]
-generated: { by: claude-code/opus-5.5, at: 2026-10-03T12:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-04T00:25:00+09:00 }
 verified: { by: claude-code/opus-5.5, at: 2026-10-04T00:20:00+09:00 }
 status: stable
 owner: tomoya-k31
