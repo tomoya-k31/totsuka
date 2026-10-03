@@ -4,7 +4,7 @@ title: リリース手順（release-please / ユニバーサルバイナリ / Gi
 description: "totsuka のリリース運用。release-please による Release PR、macOS ユニバーサルバイナリと同梱プラグインの自動ビルド・署名・GitHub Releases 配布、リリースごとの Homebrew tap 自動 bump と 2 本のトークン運用、Release PR の CI/ブランチ保護を通すトークン運用（GitHub App / PAT / admin）、Gatekeeper（ad-hoc 署名）の扱い。"
 resource: https://github.com/tomoya-k31/totsuka/tree/main/.github/workflows
 tags: [release, ci, distribution, homebrew, gatekeeper, semver, github-app, pat, branch-protection]
-generated: { by: claude-code/opus-5.5, at: 2026-10-01T23:32:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-04T01:29:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -169,7 +169,7 @@ Packages → slack-event-gateway → Package settings → Change visibility → 
 | secret | スコープ | 用途 | 失効日 |
 |---|---|---|---|
 | `RELEASE_PLEASE_TOKEN` | `totsuka` のみ / Contents + Pull requests: RW | Release PR を実 identity で作り CI を走らせる | （記録なし） |
-| `HOMEBREW_TAP_TOKEN` | `homebrew-tap` のみ / Contents: RW | tap へ formula の bump を push する | **2026-09-30**（2026-08-31 発行 / 30 日） |
+| `HOMEBREW_TAP_TOKEN` | `homebrew-tap` のみ / Contents: RW | tap へ formula の bump を push する | **未確認**（2026-08-31 発行。2026-09-30 と記録していたが、secret を更新しないまま 2026-10-03 / 10-04 の bump が push に成功しており、実際と合わない。GitHub の PAT 設定で確かめて書き直すこと） |
 
 **2 本を兼用しない。** `RELEASE_PLEASE_TOKEN` を tap まで届くよう広げると、リリーストークンの爆発半径とローテーション周期が tap に結合する。
 
