@@ -730,6 +730,61 @@ async fn initialize_refuses_a_group_the_operator_is_not_in() {
     assert!(message.contains("does not belong to"), "{message}");
 }
 
+/// ADR-0110: `mention_groups` closes every group it does not list, so a
+/// `to_group` outside it could never fire — refused before any API call.
+#[tokio::test]
+async fn initialize_refuses_a_to_group_outside_mention_groups() {
+    let shared = Shared::default();
+    push_guard_ok(&shared);
+    let (mut srv, _harness) = server(&shared);
+
+    let mut config = init_config();
+    config["mention_groups"] = json!(["S0MINE"]);
+    let params = json!({
+        "protocol_version": "0.1.0",
+        "config": config,
+        "workflows": [
+            { "workflow": "slack-oncall",
+              "trigger": { "mention": true, "to_group": ["S0OTHER"] } },
+            { "workflow": "slack-reply", "trigger": { "mention": true } },
+        ],
+    });
+    let resp = call(&mut srv, 1, "initialize", params).await;
+    let (code, message) = error_of(&resp);
+    assert_eq!(
+        code,
+        plugin_protocol::error_code::CONFIG_INVALID,
+        "{message}"
+    );
+    assert!(message.contains("S0OTHER"), "{message}");
+    assert!(message.contains("mention_groups"), "{message}");
+}
+
+/// …and a listed group the operator is not in is refused like a `to_group`.
+#[tokio::test]
+async fn initialize_refuses_mention_groups_the_operator_is_not_in() {
+    let shared = Shared::default();
+    push_guard_ok(&shared);
+    shared.push(Canned::Data(usergroups_ok(&["S0MINE"])));
+    let (mut srv, _harness) = server(&shared);
+
+    let mut config = init_config();
+    config["mention_groups"] = json!(["S0MINE", "S0THEIRS"]);
+    let params = json!({
+        "protocol_version": "0.1.0",
+        "config": config,
+        "workflows": [{ "workflow": "slack-reply", "trigger": { "mention": true } }],
+    });
+    let resp = call(&mut srv, 1, "initialize", params).await;
+    let (code, message) = error_of(&resp);
+    assert_eq!(
+        code,
+        plugin_protocol::error_code::CONFIG_INVALID,
+        "{message}"
+    );
+    assert!(message.contains("S0THEIRS"), "{message}");
+}
+
 /// …and a group the operator *is* in initializes.
 #[tokio::test]
 async fn initialize_accepts_a_group_the_operator_is_in() {

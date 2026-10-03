@@ -453,6 +453,11 @@ where
                 }
             }
         }
+        // `[slack] mention_groups` (ADR-0110): answer only the listed groups,
+        // whichever workflow would have claimed them.
+        if let Some(allowed) = &config.mention_groups {
+            filter.restrict_subteams(allowed);
+        }
         // Resolve the bot↔operator DM the notification nudges go to (#305).
         // Also once, also non-fatal: without it the nudges are skipped and
         // the draft/picker surfaces still work — the operator just gets no

@@ -4,7 +4,7 @@ title: 設定リファレンス（config.toml）
 description: "config.toml の全キー・デフォルト値・意味の一覧。設定ファイルは 1 本で、プラグイン個別設定もトップレベルの [<name>] テーブルに入る。シークレット参照、設定スキーマのバージョニング方針、[[projects]] の domain 宣言とワークフローからの参照、プラグインが定義する追加プロパティ、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-github の [github]、task-source-notion の [notion]、task-source-slack の [slack]、agent-ide-herdr の [herdr] を含む。"
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
 tags: [config, reference, toml, secrets, workflow, worktree, github, notion, slack, hooks, versioning]
-generated: { by: claude-code/opus-5.5, at: 2026-10-03T12:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-03T15:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -1248,6 +1248,7 @@ kind = "task_source"
 | `drain_limit` | int? | 100 | 同、1 回の取り込みで起票する件数の上限。**`0` は拒否される**。`socket` 方式では読まれない |
 | `watch_poll_interval_secs` | int? | 60 | `gateway` 方式での[チャンネル監視](/glossary/channel-watch.md)のポーリング間隔（秒）。**監視はゲートウェイに載せられない** —— ADR-0072 決定 4 で publish 対象を「自分に関係しうるもの」に絞ったため、監視チャンネルへの（メンションを含まない）投稿はそもそも流れてこない。ゲートウェイに監視チャンネル一覧を持たせると設定が 2 箇所に分かれ、ずれたときの症状が「監視が黙って効かない」になるので採らなかった。代わりに `conversations.history` を定期ポーリングする（[ADR-0068](/decisions/adr-0068-channel-watch-trigger.md) の起動時バックフィルを周期実行に広げるだけ）。**遅くなるのは監視経路だけ**で、メンション・リアクション・承認ボタンはキューの取り込みのままである。ただし**そちらも「1〜2 秒」の保証ではない** —— REST の `pull` は「メッセージが得られるまで**有界時間だけ待つことがある**」という規定で、待つことは保証されておらず、空応答が続くと取り込み側がバックオフする。**`0` は拒否される**。`socket` 方式では読まれない（Slack が push してくる） |
 | `thread_context_limit` | int | 6 | タスク本文に含めるスレッド直近メッセージ数 |
+| `mention_groups` | string[]? | なし | **反応するユーザーグループを workflow と無関係に限定する**（[ADR-0110](/decisions/adr-0110-slack-mention-groups.md)）。書いたグループ（`S…`）宛のメンションだけがタスクになり、それ以外の所属グループ宛はどの workflow にも渡らず捨てられる。**省略時は所属する全グループ**（従来どおり）、`[]` は**グループメンション無効**（個人メンションのみ）。個人メンション（`<@自分>`）には効かない。`S…` の形をしていない値（ハンドル `@oncall`・`U…`）は `config validate` で拒否、**所属していないグループ**と、**ここに無いグループを名指す `to_group`** は `initialize` で `CONFIG_INVALID`（どちらも黙って効かない設定になるため）。非空のときは所属照合のため `usergroups:read` が必須 |
 | `reply_style` | string? | なし | 返信トーンの指示（タスク本文へ注入、例 `"丁寧語で簡潔に"`） |
 | `[prompts]` | テーブル | — | このプラグインが送るプロンプト文の上書き（下記、#318） |
 | `source_name` | string | `slack` | `Task.source` に刻印するソース名 |

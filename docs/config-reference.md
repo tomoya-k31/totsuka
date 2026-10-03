@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:87f931dc4e685cd2ea0e10a594f52114063b2f59fc36d0c0d5ca6e4985fa27cf -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:a2827abb90affa09df9089c52af0432806d17ffde7e5cb07b640fbdb3316b43e -->
 
 # Configuration reference
 
@@ -1166,6 +1166,7 @@ kind = "task_source"
 | `drain_limit` | int? | 100 | Under `gateway`, how many queued events become tasks per drain pass. **`0` is rejected.** Unread under `socket` |
 | `watch_poll_interval_secs` | int? | 60 | Under `gateway`, seconds between polls of watched channels. **Channel watching cannot ride the gateway**: the gateway only forwards things that name you, and an ordinary post in a watched channel does not. Giving the gateway a copy of the watch list would split the setting across two places, and when the two drift the symptom is that watching silently stops working — so totsuka polls the channel history instead. **Only the watch path gets slower**; mentions, reactions and approval buttons still come off the queue. That is not a one-to-two-second guarantee either, though: the queue read is specified as *allowed* to wait for a message, not required to, and the reader backs off when it keeps answering empty. **`0` is rejected.** Unread under `socket`, where Slack pushes these posts |
 | `thread_context_limit` | int | 6 | How many recent thread messages to include in the task body |
+| `mention_groups` | string[]? | none | **Limits which user groups you answer, independent of workflows.** Only mentions of the listed groups (`S…`) become tasks; mentions of your other groups reach no workflow. **Absent means every group you belong to**; `[]` turns **group mentions off** (personal mentions only). Personal mentions (`<@you>`) are unaffected. A value not shaped like a group id (a handle such as `@oncall`, or a user id), **a group you do not belong to**, and **a `to_group` naming a group missing from this list** all fail startup, since each would otherwise silently do nothing. A non-empty list needs the `usergroups:read` scope on the user token |
 | `reply_style` | string? | none | Tone instructions injected into the task body |
 | `[slack.prompts]` | table | — | Overrides for the prompts this plugin sends |
 | `source_name` | string | `slack` | The source name stamped on each task |
