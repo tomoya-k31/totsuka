@@ -185,6 +185,8 @@ pub async fn publish_draft<T: SlackTransport>(
         created_at: std::time::SystemTime::now(),
         // Filled in below, once the nudge that announces this draft exists.
         nudge_ts: None,
+        alt_reply: None,
+        alt_reply_sent: false,
     };
     let draft_id = state.insert_draft(draft.clone());
     let blocks = draft_blocks(&draft, &draft_id, &config.source_name, Surface::Message);
@@ -271,43 +273,14 @@ pub async fn handle_approval_action<T: SlackTransport>(
     let Some(draft) = state.draft(draft_id) else {
         // Restart, TTL expiry, or eviction: the button outlived its draft.
         tracing::info!(draft_id, action_id, "button pressed for an unknown draft");
-        let text = "この下書きは期限切れです（再起動などで失われた可能性があります）。\
-                    必要なら新しいメンションから再実行してください。";
-        let mut thread_notified = false;
-        if let Some((channel, ts)) = &coords {
-            // #121: answer inside the original mention thread, where the
-            // conversation lives — not only at the surface the press came from.
-            let posted = api
-                .chat_post_ephemeral(&PostEphemeral {
-                    channel,
-                    user: &config.target_user_id,
-                    text,
-                    thread_ts: Some(ts),
-                    blocks: None,
-                })
-                .await;
-            match posted {
-                Ok(()) => thread_notified = true,
-                Err(e) => tracing::warn!(draft_id, error = %e, "could not post the expiry \
-                     notice into the thread; falling back to the pressed surface"),
-            }
-        }
-        if !thread_notified {
-            // Old-format value (no coordinates) or the thread post failed.
-            notice(api, response_url, text).await;
-        } else if press_channel(payload) != coords.as_ref().map(|(c, _)| c.as_str()) {
-            // Pressed from somewhere other than the mention's thread — a
-            // button that outlived a surface this build no longer creates,
-            // or one carried into another channel. Without this the press
-            // would look dead there, since the ephemeral above is only
-            // visible inside the thread.
-            notice(
-                api,
-                response_url,
-                "この下書きは期限切れです。元のスレッドに案内を投稿しました。",
-            )
-            .await;
-        }
+        answer_expired(
+            api,
+            config,
+            press_channel(payload),
+            coords.as_ref(),
+            response_url,
+        )
+        .await;
         return;
     };
     if draft.status != DraftStatus::Pending {
@@ -323,6 +296,27 @@ pub async fn handle_approval_action<T: SlackTransport>(
         tracing::info!(draft_id, action_id, ?draft.status, "draft already handled");
         finalize_surface(api, state, config, &draft, draft_id, response_url).await;
         return;
+    }
+
+    // A reject press with a `trigger_id` asks for the alternative reply in a
+    // modal; the decision then waits for its submission
+    // (`handle_view_submission`). Without one (a gateway press), or when the
+    // modal cannot be opened, the press rejects on the spot as it always did
+    // — losing the alternative reply, never the rejection.
+    if action_id == "reject_reply"
+        && let Some(trigger_id) = payload.get("trigger_id").and_then(Value::as_str)
+    {
+        let view = reject_modal(&draft, &modal_metadata(draft_id, &draft, response_url));
+        match api.views_open(trigger_id, view).await {
+            Ok(()) => {
+                tracing::info!(draft_id, "reject modal opened; waiting for its submission");
+                return;
+            }
+            Err(e) => tracing::warn!(
+                draft_id, error = %e,
+                "could not open the reject modal; rejecting without an alternative reply"
+            ),
+        }
     }
 
     let status = match action_id {
@@ -368,6 +362,234 @@ pub async fn handle_approval_action<T: SlackTransport>(
 
     let finalized = Draft { status, ..draft };
     finalize_surface(api, state, config, &finalized, draft_id, response_url).await;
+}
+
+/// `callback_id` of the reject modal, which is how a `view_submission` is
+/// recognised as one.
+const REJECT_MODAL_CALLBACK_ID: &str = "reject_reply_modal";
+
+/// Longest alternative reply the modal accepts — with its label it still
+/// fits one section block on the nudge record.
+const ALT_REPLY_MAX_CHARS: usize = 2900;
+
+/// A reject modal's submission: reject the draft and keep what the operator
+/// typed as the reply they would have sent (ADR-0111). The modal's metadata
+/// carries the draft id, the thread coordinates and the press's
+/// `response_url`, since a submission carries none of them itself.
+pub async fn handle_view_submission<T: SlackTransport>(
+    api: &SlackApi<T>,
+    state: &SharedState,
+    config: &SlackConfig,
+    payload: &Value,
+) {
+    let view = payload.get("view").unwrap_or(&Value::Null);
+    if view.get("callback_id").and_then(Value::as_str) != Some(REJECT_MODAL_CALLBACK_ID) {
+        tracing::debug!("ignoring a view submission of an unknown modal");
+        return;
+    }
+    let metadata = view
+        .get("private_metadata")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let (draft_id, coords) = parse_button_value(metadata);
+    let draft_id = draft_id.as_str();
+    let response_url = serde_json::from_str::<Value>(metadata)
+        .ok()
+        .and_then(|m| m.get("r").and_then(Value::as_str).map(str::to_string));
+    let response_url = response_url.as_deref();
+    let alt_reply = view
+        .pointer("/state/values/alt_reply/alt_text/value")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .map(str::to_string);
+
+    let Some(draft) = state.draft(draft_id) else {
+        tracing::info!(draft_id, "reject modal submitted for an unknown draft");
+        // The modal was opened from the thread ephemeral, so the thread is
+        // the pressed surface: one notice there is enough.
+        let thread = coords.as_ref().map(|(c, _)| c.as_str());
+        answer_expired(api, config, thread, coords.as_ref(), response_url).await;
+        return;
+    };
+    if draft.status != DraftStatus::Pending {
+        // Approved from a second press while the modal was open, or a
+        // redelivery: the first decision stands.
+        tracing::info!(draft_id, ?draft.status, "reject modal submitted for a decided draft");
+        finalize_surface(api, state, config, &draft, draft_id, response_url).await;
+        return;
+    }
+    let wants_send = view
+        .pointer("/state/values/send_alt/send/selected_options")
+        .and_then(Value::as_array)
+        .is_some_and(|options| options.iter().any(|o| o["value"] == "send"));
+    let mut sent = false;
+    if let (true, Some(alt)) = (wants_send, &alt_reply) {
+        // Addressed like an approved reply: the draft opens with the
+        // mechanical asker mention whenever there is someone to address.
+        let text = format!("{}{alt}", leading_mention(&draft.text));
+        let posted = api
+            .chat_post_message(&PostMessage {
+                channel: &draft.channel,
+                text: &text,
+                thread_ts: Some(&draft.reply_ts),
+                unfurl_links: None,
+                blocks: reply_markdown_block(&text).map(|b| Value::Array(vec![b])),
+            })
+            .await;
+        match posted {
+            Ok(_) => sent = true,
+            Err(e) => {
+                // The rejection and the record still stand; only the post is
+                // missing, and the text is on the record to send by hand.
+                tracing::warn!(draft_id, error = %e, "the alternative reply could not be posted");
+                notice(
+                    api,
+                    response_url,
+                    &format!(
+                        "代わりの返信の送信に失敗しました: {e}\n却下と文面の記録は残っています。"
+                    ),
+                )
+                .await;
+            }
+        }
+    }
+    // The log line is part of the record: it outlives the draft store's TTL.
+    tracing::info!(
+        draft_id,
+        task_id = %draft.task_id,
+        alt_reply = alt_reply.as_deref().unwrap_or_default(),
+        alt_reply_sent = sent,
+        "draft rejected"
+    );
+    state.reject_draft(draft_id, alt_reply.clone(), sent);
+    let finalized = Draft {
+        status: DraftStatus::Rejected,
+        alt_reply,
+        alt_reply_sent: sent,
+        ..draft
+    };
+    finalize_surface(api, state, config, &finalized, draft_id, response_url).await;
+}
+
+/// The reject modal's `private_metadata`: the button value plus the press's
+/// `response_url`, the only way back to the ephemeral once the modal closes.
+fn modal_metadata(draft_id: &str, draft: &Draft, response_url: Option<&str>) -> String {
+    json!({ "d": draft_id, "c": draft.channel, "ts": draft.reply_ts, "r": response_url })
+        .to_string()
+}
+
+/// The modal a reject press opens: the draft being rejected, and an optional
+/// field for the reply the operator would have sent instead.
+fn reject_modal(draft: &Draft, metadata: &str) -> Value {
+    json!({
+        "type": "modal",
+        "callback_id": REJECT_MODAL_CALLBACK_ID,
+        "private_metadata": metadata,
+        "title": { "type": "plain_text", "text": "返信案を却下" },
+        "submit": { "type": "plain_text", "text": "却下する" },
+        "close": { "type": "plain_text", "text": "やめる" },
+        "blocks": [
+            {
+                "type": "context",
+                "elements": [{ "type": "mrkdwn", "text": "*却下する返信案*" }]
+            },
+            {
+                "type": "section",
+                "text": { "type": "mrkdwn", "text": clipped(&draft.text, DraftStatus::Rejected) }
+            },
+            {
+                "type": "input",
+                "block_id": "alt_reply",
+                "optional": true,
+                "label": { "type": "plain_text", "text": "代わりの返信" },
+                "hint": {
+                    "type": "plain_text",
+                    "text": "本来こう返したかった文面。記録に残り、後から見返せます。下の「送信」にチェックしたときだけスレッドにも投稿します。"
+                },
+                "element": {
+                    "type": "plain_text_input",
+                    "action_id": "alt_text",
+                    "multiline": true,
+                    "max_length": ALT_REPLY_MAX_CHARS
+                }
+            },
+            {
+                "type": "input",
+                "block_id": "send_alt",
+                "optional": true,
+                "label": { "type": "plain_text", "text": "送信" },
+                "element": {
+                    "type": "checkboxes",
+                    "action_id": "send",
+                    "options": [{
+                        "text": { "type": "plain_text", "text": "代わりの返信をスレッドに送信する（本人名義）" },
+                        "value": "send"
+                    }]
+                }
+            }
+        ]
+    })
+}
+
+/// The alternative reply as a display block, when there is one.
+fn alt_reply_block(draft: &Draft) -> Option<Value> {
+    draft.alt_reply.as_deref().map(|alt| {
+        json!({
+            "type": "section",
+            "text": { "type": "mrkdwn", "text": format!("*代わりの返信*\n{alt}") },
+        })
+    })
+}
+
+/// Answer a press (or a modal submission) whose draft is gone: inside the
+/// original mention thread when the coordinates are known (#121), at the
+/// pressed surface otherwise. `pressed_in` is the channel of the pressed
+/// surface, when known.
+async fn answer_expired<T: SlackTransport>(
+    api: &SlackApi<T>,
+    config: &SlackConfig,
+    pressed_in: Option<&str>,
+    coords: Option<&(String, String)>,
+    response_url: Option<&str>,
+) {
+    let text = "この下書きは期限切れです（再起動などで失われた可能性があります）。\
+                    必要なら新しいメンションから再実行してください。";
+    let mut thread_notified = false;
+    if let Some((channel, ts)) = coords {
+        // #121: answer inside the original mention thread, where the
+        // conversation lives — not only at the surface the press came from.
+        let posted = api
+            .chat_post_ephemeral(&PostEphemeral {
+                channel,
+                user: &config.target_user_id,
+                text,
+                thread_ts: Some(ts),
+                blocks: None,
+            })
+            .await;
+        match posted {
+            Ok(()) => thread_notified = true,
+            Err(e) => tracing::warn!(error = %e, "could not post the expiry \
+                     notice into the thread; falling back to the pressed surface"),
+        }
+    }
+    if !thread_notified {
+        // Old-format value (no coordinates) or the thread post failed.
+        notice(api, response_url, text).await;
+    } else if pressed_in != coords.map(|(c, _)| c.as_str()) {
+        // Pressed from somewhere other than the mention's thread — a
+        // button that outlived a surface this build no longer creates,
+        // or one carried into another channel. Without this the press
+        // would look dead there, since the ephemeral above is only
+        // visible inside the thread.
+        notice(
+            api,
+            response_url,
+            "この下書きは期限切れです。元のスレッドに案内を投稿しました。",
+        )
+        .await;
+    }
 }
 
 /// Clear the pressed surface once a draft is decided — **delete the ephemeral
@@ -424,11 +646,13 @@ async fn finalize_surface<T: SlackTransport>(
                 &nudge_decision_line(draft),
                 // A `chat.update` is a message surface, so the rich block applies
                 // — the same rendering the nudge was posted with.
-                vec![reply_preview_block(
+                std::iter::once(reply_preview_block(
                     &draft.text,
                     Surface::Message,
                     draft.status,
-                )],
+                ))
+                .chain(alt_reply_block(draft))
+                .collect(),
             )
             .await
         }
@@ -455,7 +679,7 @@ async fn finalize_surface<T: SlackTransport>(
     } else {
         json!({
             "replace_original": true,
-            "text": final_fallback(draft.status),
+            "text": final_fallback(draft),
             "blocks": draft_blocks(draft, draft_id, &config.source_name, Surface::ResponseUrl),
         })
     };
@@ -473,7 +697,7 @@ async fn finalize_surface<T: SlackTransport>(
 fn nudge_decision_line(draft: &Draft) -> String {
     let mut line = format!(
         "{} — {} さんへの返信案",
-        final_fallback(draft.status),
+        final_fallback(draft),
         draft.sender_name
     );
     if let Some(link) = &draft.permalink {
@@ -595,11 +819,20 @@ fn reply_preview_block(text: &str, surface: Surface, status: DraftStatus) -> Val
 }
 
 /// The notification-fallback text of a finalized draft view.
-fn final_fallback(status: DraftStatus) -> &'static str {
-    match status {
+fn final_fallback(draft: &Draft) -> &'static str {
+    match draft.status {
         DraftStatus::Sent => "✅ 返信を送信しました",
+        _ if draft.alt_reply_sent => "❌ 返信案を却下し、代わりの返信を送信しました",
         _ => "❌ 返信案を却下しました",
     }
+}
+
+/// The mechanical `<@…> ` an approved reply opens with, taken back off the
+/// draft — `asker_prefix` put it there, so it is either that or nothing.
+fn leading_mention(text: &str) -> &str {
+    text.strip_prefix("<@")
+        .and_then(|rest| rest.find("> "))
+        .map_or("", |end| &text[..end + 4])
 }
 
 /// The Block Kit rendering of a draft: detection header, reply text,
@@ -677,13 +910,20 @@ fn draft_blocks(draft: &Draft, draft_id: &str, source_name: &str, surface: Surfa
                 "text": "✅ *送信済み* — 本人名義でスレッドに返信しました"
             }]
         })),
-        DraftStatus::Rejected => blocks.push(json!({
-            "type": "context",
-            "elements": [{
-                "type": "mrkdwn",
-                "text": "❌ *却下済み* — 返信は送信されていません"
-            }]
-        })),
+        DraftStatus::Rejected => {
+            blocks.extend(alt_reply_block(draft));
+            blocks.push(json!({
+                "type": "context",
+                "elements": [{
+                    "type": "mrkdwn",
+                    "text": if draft.alt_reply_sent {
+                        "❌ *却下済み* — 代わりの返信をスレッドに送信しました"
+                    } else {
+                        "❌ *却下済み* — 返信は送信されていません"
+                    }
+                }]
+            }));
+        }
     }
     blocks.push(json!({
         "type": "context",
@@ -912,6 +1152,13 @@ fn starts_with_iso_date(text: &str) -> bool {
 mod tests {
     use super::asker_prefix;
 
+    #[test]
+    fn leading_mention_is_the_asker_prefix_or_nothing() {
+        assert_eq!(leading_mention("<@U_OTHER> 調査しました"), "<@U_OTHER> ");
+        assert_eq!(leading_mention("調査しました <@U_OTHER> "), "");
+        assert_eq!(leading_mention("<@U_OTHER>"), "");
+    }
+
     /// The prefix addresses a human and nobody else. A bot-raised task
     /// (ADR-0079) carries a `B…` sender, and `<@B…>` is not a mention Slack
     /// resolves — it renders as literal characters at the head of the reply.
@@ -936,6 +1183,8 @@ mod tests {
             status,
             created_at: std::time::SystemTime::now(),
             nudge_ts: None,
+            alt_reply: None,
+            alt_reply_sent: false,
         }
     }
 
@@ -1186,6 +1435,8 @@ DEBUG: shutting down
             status: DraftStatus::Pending,
             created_at: std::time::SystemTime::now(),
             nudge_ts: None,
+            alt_reply: None,
+            alt_reply_sent: false,
         };
         let value = button_value("18f3-1", &draft);
         assert_eq!(

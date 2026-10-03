@@ -35,6 +35,10 @@ pub enum SocketEvent {
     /// A Block Kit interaction — the full `block_actions` payload (actions /
     /// user / container / response_url …).
     BlockActions(Value),
+    /// A modal submission — the full `view_submission` payload (`view` with
+    /// its `callback_id`, `private_metadata` and `state.values`). The
+    /// envelope's plain ack is what closes the modal.
+    ViewSubmission(Value),
     /// An Events API `reaction_added` event (#319) — the payload's `event`
     /// object (`user` / `reaction` / `item: {type, channel, ts}` /
     /// `item_user` / `event_ts`).
@@ -385,10 +389,10 @@ fn normalize(mut envelope: Value) -> Option<SocketEvent> {
         }
         "interactive" => {
             let payload = envelope.get_mut("payload")?.take();
-            if payload.get("type").and_then(Value::as_str) == Some("block_actions") {
-                Some(SocketEvent::BlockActions(payload))
-            } else {
-                None
+            match payload.get("type").and_then(Value::as_str) {
+                Some("block_actions") => Some(SocketEvent::BlockActions(payload)),
+                Some("view_submission") => Some(SocketEvent::ViewSubmission(payload)),
+                _ => None,
             }
         }
         other => {
@@ -512,10 +516,24 @@ mod tests {
         assert!(
             normalize(json!({
                 "type": "interactive",
-                "payload": { "type": "view_submission" }
+                "payload": { "type": "view_closed" }
             }))
             .is_none()
         );
         assert!(normalize(json!({ "type": "hello" })).is_none());
+    }
+
+    /// The reject modal's submission (ADR-0111) comes down the same
+    /// `interactive` envelope as a press.
+    #[test]
+    fn view_submissions_are_passed_through() {
+        let envelope = json!({
+            "type": "interactive",
+            "payload": { "type": "view_submission", "view": { "callback_id": "x" } }
+        });
+        let Some(SocketEvent::ViewSubmission(payload)) = normalize(envelope) else {
+            panic!("a view_submission becomes a ViewSubmission event");
+        };
+        assert_eq!(payload["view"]["callback_id"], "x");
     }
 }

@@ -719,6 +719,19 @@ impl<T: SlackTransport> SlackApi<T> {
         Ok(())
     }
 
+    /// `views.open` — show a modal to whoever produced `trigger_id`. The
+    /// trigger expires 3 seconds after the press, so this is called first and
+    /// never retried: a late retry can only fail with `expired_trigger_id`.
+    pub async fn views_open(&self, trigger_id: &str, view: Value) -> Result<(), SlackError> {
+        self.call(
+            "views.open",
+            Some(json!({ "trigger_id": trigger_id, "view": view })),
+            false,
+        )
+        .await?;
+        Ok(())
+    }
+
     /// POST to an interaction's `response_url` — rewrites the ephemeral the
     /// button lived in. The URL is valid for 30 minutes / 5 uses, so failures
     /// are surfaced, never retried.

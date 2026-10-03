@@ -79,6 +79,16 @@ pub struct Draft {
     /// its nudge, if any, is no longer addressable.
     #[serde(default)]
     pub nudge_ts: Option<String>,
+    /// What the operator would have sent instead, typed into the reject
+    /// modal — the record a rejection is kept for, so the reply that should
+    /// have been written can be looked up later. `None` for an approval, a
+    /// rejection with the field left empty, or one decided without a modal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alt_reply: Option<String>,
+    /// The alternative reply was also posted to the thread, because the
+    /// operator ticked the modal's send box.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub alt_reply_sent: bool,
 }
 
 /// The on-disk shape of the store: schema version, the id counter, and the
@@ -223,6 +233,16 @@ impl DraftStore {
         }
     }
 
+    /// Reject `draft_id`, keeping the operator's alternative reply with it.
+    pub fn reject(&mut self, draft_id: &str, alt_reply: Option<String>, sent: bool) {
+        if let Some(draft) = self.entries.get_mut(draft_id) {
+            draft.status = DraftStatus::Rejected;
+            draft.alt_reply = alt_reply;
+            draft.alt_reply_sent = sent;
+            self.save();
+        }
+    }
+
     /// Record the `ts` of the nudge DM that announced `draft_id`. Written
     /// after the insert because the nudge names the draft, so the draft has
     /// to exist first.
@@ -308,6 +328,8 @@ mod tests {
             status: DraftStatus::Pending,
             created_at,
             nudge_ts: None,
+            alt_reply: None,
+            alt_reply_sent: false,
         }
     }
 
