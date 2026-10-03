@@ -79,7 +79,9 @@ pub const TRIGGER_KEYS: &[&str] = &["assignee", "exclude", "label", "status"];
 /// the trigger keys [`TRIGGER_KEYS`] / [`EXCLUDE_KEYS`] name, for the settings
 /// window. A test holds the two lists and this schema to the same keys.
 pub fn workflow_schema() -> Value {
-    use plugin_sdk::config_schema::{assignee, exclude, field, one_or_many, workflow};
+    use plugin_sdk::config_schema::{
+        assignee, exclude, exclude_assignee, field, one_or_many, workflow,
+    };
     let status = || {
         field(
             json!({ "type": "string" }),
@@ -96,11 +98,11 @@ pub fn workflow_schema() -> Value {
     let mut excluded = serde_json::Map::new();
     excluded.insert("status".into(), one_or_many("Status", "Statuses to skip."));
     excluded.insert("label".into(), one_or_many("Label", "Labels to skip."));
-    excluded.insert("assignee".into(), assignee());
+    excluded.insert("assignee".into(), exclude_assignee("GitHub logins"));
     let mut trigger = serde_json::Map::new();
     trigger.insert("status".into(), status());
     trigger.insert("label".into(), label());
-    trigger.insert("assignee".into(), assignee());
+    trigger.insert("assignee".into(), assignee("GitHub logins"));
     trigger.insert("exclude".into(), exclude(excluded));
     workflow(trigger, serde_json::Map::new())
 }

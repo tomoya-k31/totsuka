@@ -97,14 +97,31 @@ pub fn one_or_many(title: &str, help: &str) -> Value {
 }
 
 /// `trigger.assignee`, as [`AssigneeFilter`](crate::assignee::AssigneeFilter)
-/// reads it.
-pub fn assignee() -> Value {
+/// reads it. `who` names what a person is written as in this source
+/// (`GitHub logins`, `Notion user IDs`) — the filter compares names, but
+/// which names is the source's.
+pub fn assignee(who: &str) -> Value {
     let mut schema = one_or_many(
         "Assignee",
-        "Who may hold the task: logins, @me (you) and @none (nobody); @any alone admits anyone.",
+        &format!(
+            "Who may hold the task: {who}, @me (you) and @none (nobody); @any alone admits anyone."
+        ),
     );
+    // The gate a missing key falls back to (`AssigneeFilter::default`).
     schema["x-placeholder"] = json!("@me, @none");
     schema
+}
+
+/// `trigger.exclude.assignee` (`AssigneeFilter::parse_exclude`): the same
+/// vocabulary, read the other way — a match drops the task, and a missing key
+/// drops nothing, so there is no default to show.
+pub fn exclude_assignee(who: &str) -> Value {
+    one_or_many(
+        "Assignee",
+        &format!(
+            "Skip a task held by any of these: {who}, @me (you) or @none (nobody); @any alone skips every task."
+        ),
+    )
 }
 
 /// `trigger.exclude` (ADR-0091): the given keys, any one of which drops a
@@ -129,7 +146,7 @@ pub fn watch_trigger() -> Map<String, Value> {
         field(
             string(),
             "Channel ID",
-            "The channel to watch, by ID; every post there starts this workflow.",
+            "The channel to watch, by ID; a post there by you (or by Also from) starts this workflow.",
         ),
     );
     keys.insert(
@@ -145,7 +162,7 @@ pub fn watch_trigger() -> Map<String, Value> {
         field(
             string(),
             "Repository",
-            "The repository this channel's tasks belong to.",
+            "The [[repositories]] entry, by name, these tasks belong to.",
         ),
     );
     keys.insert(
@@ -256,15 +273,19 @@ fn walk(value: &Value, path: &str, missing: &mut Vec<String>) {
 mod tests {
     use super::*;
 
+    fn trigger_assignee_has_default(schema: &Value) -> bool {
+        schema["properties"]["trigger"]["properties"]["assignee"]["x-placeholder"] == "@me, @none"
+    }
+
     /// The shared trigger pieces carry help everywhere, state no default, and
     /// `workflow` puts the trigger under its own key beside the options.
     #[test]
     fn trigger_helpers_have_help_and_nest_under_trigger() {
         let mut trigger = watch_trigger();
-        trigger.insert("assignee".into(), assignee());
+        trigger.insert("assignee".into(), assignee("logins"));
         trigger.insert("label".into(), one_or_many("Label", "A label."));
         let mut excluded = Map::new();
-        excluded.insert("assignee".into(), assignee());
+        excluded.insert("assignee".into(), exclude_assignee("logins"));
         trigger.insert("exclude".into(), exclude(excluded));
         let mut options = Map::new();
         options.insert(
@@ -275,6 +296,10 @@ mod tests {
         assert_eq!(missing_help(&schema), Vec::<String>::new());
         assert_eq!(help_stating_defaults(&schema), Vec::<String>::new());
         assert!(schema["properties"]["publish"].is_object());
+        // A missing `exclude.assignee` excludes nobody: no default to show.
+        let ex = &schema["properties"]["trigger"]["properties"]["exclude"]["properties"];
+        assert!(ex["assignee"].get("x-placeholder").is_none());
+        assert!(trigger_assignee_has_default(&schema));
         let keys = schema["properties"]["trigger"]["properties"]
             .as_object()
             .unwrap();

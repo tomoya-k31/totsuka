@@ -75,10 +75,12 @@ pub const TRIGGER_KEYS: &[&str] = &["assignee", "exclude", "filter", "status"];
 /// the trigger keys [`TRIGGER_KEYS`] / [`EXCLUDE_KEYS`] name. `filter` goes to
 /// Notion verbatim, so it is edited as JSON (`x-raw`).
 pub fn workflow_schema() -> Value {
-    use plugin_sdk::config_schema::{assignee, exclude, field, one_or_many, workflow};
+    use plugin_sdk::config_schema::{
+        assignee, exclude, exclude_assignee, field, one_or_many, workflow,
+    };
     let mut excluded = serde_json::Map::new();
     excluded.insert("status".into(), one_or_many("Status", "Statuses to skip."));
-    excluded.insert("assignee".into(), assignee());
+    excluded.insert("assignee".into(), exclude_assignee("Notion user IDs"));
     let mut trigger = serde_json::Map::new();
     trigger.insert(
         "status".into(),
@@ -96,7 +98,7 @@ pub fn workflow_schema() -> Value {
             "A Notion database filter, sent as is; @name refers to [notion.dynamic.name].",
         ),
     );
-    trigger.insert("assignee".into(), assignee());
+    trigger.insert("assignee".into(), assignee("Notion user IDs"));
     trigger.insert("exclude".into(), exclude(excluded));
     workflow(trigger, serde_json::Map::new())
 }
