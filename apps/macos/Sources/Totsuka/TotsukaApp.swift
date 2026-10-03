@@ -57,20 +57,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
 /// The menu bar item: the template icon alone (the asset catalog's; an SF
 /// Symbol in a development build without one). The tasks waiting on you are
-/// listed in the panel, not counted beside the icon.
+/// listed in the panel, not counted beside the icon: it blinks while there are
+/// any, and a glint runs up the blade while a task is working.
 struct MenuLabel: View {
     @ObservedObject var app: AppModel
 
+    /// A glint running up the blade, then a pause. Frame by frame rather than
+    /// a symbol effect, so the custom icon itself moves; each frame wakes the
+    /// app, so keep the rate low (4 fps, `AppModel.iconTick`).
+    private static let frames: [NSImage] = (1...8).compactMap {
+        NSImage(named: "StatusBarWorking\($0)Template")
+    }
+
     var body: some View {
-        Group {
-            if let image = NSImage(named: "StatusBarTemplate") {
-                Image(nsImage: image)
-            } else {
-                Image(systemName: "bolt.circle")
-            }
+        let needsYou = !(app.menu?.attention.isEmpty ?? true)
+        let working = !(app.menu?.working.isEmpty ?? true)
+        let tick = app.iconTick
+        // Waiting on you outranks working: blink the still icon.
+        let frame = !needsYou && working && !Self.frames.isEmpty
+            ? Self.frames[tick % Self.frames.count]
+            : NSImage(named: "StatusBarTemplate")
+                ?? NSImage(systemSymbolName: "bolt.circle", accessibilityDescription: nil)
+        if let frame {
+            // Half a second on, half a second faint. Dimmed while no `run` is
+            // running, so the state reads at a glance; an outside `run`
+            // (another terminal) counts as running.
+            Image(nsImage: Self.faded(frame,
+                (needsYou && tick % 4 >= 2 ? 0.2 : 1)
+                    * (app.runState == .running || app.runState == .external ? 1 : 0.45)))
+        } else {
+            Image(systemName: "bolt.circle")
         }
-        // Dimmed while `run` is not running, so the state reads at a glance.
-        .opacity(app.runState == .running ? 1 : 0.45)
+    }
+
+    /// `image` drawn at `alpha`, baked into the image itself: the label's
+    /// `.opacity` does not reach the status bar button.
+    private static func faded(_ image: NSImage, _ alpha: CGFloat) -> NSImage {
+        guard alpha < 1 else { return image }
+        let faded = NSImage(size: image.size, flipped: false) { rect in
+            image.draw(in: rect, from: .zero, operation: .sourceOver, fraction: alpha)
+            return true
+        }
+        faded.isTemplate = true
+        return faded
     }
 }
 

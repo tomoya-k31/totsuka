@@ -25,6 +25,13 @@ final class AppModel: ObservableObject {
     /// The bundle this process was started from is gone (`brew upgrade` +
     /// cleanup): offer a restart into the new one.
     @Published private(set) var needsRestart = false
+    /// The menu bar icon's frame counter, advanced 4 times a second while
+    /// there is something to animate (`MenuLabel`). A timer here rather than a
+    /// `TimelineView` in the label: there, `MenuBarExtra` redrew the button
+    /// without pause (100% CPU, memory growing past 2 GB).
+    @Published private(set) var iconTick = 0
+    private var iconTimer: Timer?
+    private var refreshing = false
     /// The last lines of `run`'s stderr, for the failure message. The full
     /// stream goes to `runLog`, which Logs follows in `$TERMINAL`.
     private var logLines: [String] = []
@@ -463,7 +470,7 @@ final class AppModel: ObservableObject {
 
     private func startPolling() {
         Task { await refreshMenu() }
-        Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
+        Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 await self?.refreshMenu()
                 self?.checkBundle()
@@ -472,14 +479,33 @@ final class AppModel: ObservableObject {
     }
 
     func refreshMenu() async {
+        // One `menu --json` at a time: the CLI call has no timeout, so a hung
+        // one would otherwise stack a new child every 2 seconds.
+        guard !refreshing else { return }
+        refreshing = true
+        defer { refreshing = false }
         guard let cli, let result = try? await cli.run(["menu", "--json"]) else { return }
         menu = try? MenuModel.decode(result.stdout)
+        animateIcon(!(menu?.attention.isEmpty ?? true) || !(menu?.working.isEmpty ?? true))
         // The outside `run` (exit 5) has let go of the lock: take over if this
         // app was meant to be running it.
         if runState == .external, menu?.availability == "down" {
             runState = .stopped
             if defaults.bool(forKey: "wasRunning") { await start() }
         }
+    }
+
+    private func animateIcon(_ on: Bool) {
+        guard on != (iconTimer != nil) else { return }
+        iconTimer?.invalidate()
+        iconTimer = nil
+        guard on else { return }
+        let timer = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.iconTick += 1 }
+        }
+        timer.tolerance = 0.05
+        RunLoop.main.add(timer, forMode: .common)
+        iconTimer = timer
     }
 
     /// The task actions go through the CLI, which already knows the socket and
