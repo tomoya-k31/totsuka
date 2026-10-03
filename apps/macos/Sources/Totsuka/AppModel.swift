@@ -500,9 +500,15 @@ final class AppModel: ObservableObject {
     }
 
     func quit() {
-        // `run` finishes its graceful stop on its own; `wasRunning` is kept so
-        // the next launch starts it again.
-        process?.terminate()
         NSApp.terminate(nil)
+    }
+
+    /// The app is exiting by any route — Quit, logout, `osascript … quit`.
+    /// Hand `run` its SIGTERM here rather than in `quit`, or every other route
+    /// leaves it running unsupervised and the next launch finds the lock
+    /// taken. `run` finishes its graceful stop on its own; `wasRunning` is
+    /// kept so the next launch starts it again.
+    func willTerminate() {
+        process?.terminate()
     }
 }

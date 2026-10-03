@@ -28,6 +28,7 @@ owner: tomoya-k31
 # 振る舞い
 
 - **起動**: `config get` で読んだ config に `secret:` の参照があれば（`usesSuppliedSecrets`）、Keychain のマップを読み（新しい版での初回は「次の確認で『常に許可』を」と先に言う）、マップに無い名前をパスワード欄のダイアログで尋ねて保存し（取り消すと起動しない）、`config validate --secrets-stdin` が通ったら `run --secrets-stdin` を子プロセスとして起動し、stdin の 1 行目にマップを書いて開けたままにする。`secret:` が無ければ Keychain には触れず、`--secrets-stdin` なしで検証・起動して、`op://` / `cmd:` / `bw:` / `keychain:` を `run` 自身に解決させる。終了コードは `exitDecision`: 0 は停止、1 とシグナルは 2 秒から倍々で最大 5 分のバックオフ再起動（1 分以上健全に動いたら数え直す）、2 と 4 は止めて表示、5 は外部の `run` として監視だけ
+- **アプリの終了**: Quit に限らず、ログアウトや外からの quit でも `applicationWillTerminate` で `run` に SIGTERM を送る（`run` は自分で正常に止まる。送らないと監督されない `run` が残り、次の起動がロック競合（exit 5）になる）
 - **停止**: SIGTERM、300 秒待っても終わらなければ SIGKILL（メニューの「すぐに停止」でも）。起動中（設定の検証を待っている間）やバックオフ待ちの停止も効く。終了の通知は stdout / stderr の両方が EOF になってから出すので、exit 4 の理由の行が先に届く
 - **外部の run**: exit 5 の後は `menu --json` がロックの解放（`down`）を見たところで引き継ぐ
 - **通知**: `run` の stdout の `notify` 行を、`config get` で読んだ `[macos]` のフィルタ（ワークフロー別 → 全体 → 既定オン）に通してから `UserNotifications` で出す。クリックは `totsuka focus <task_id>`
