@@ -241,8 +241,10 @@ impl GatewayRecord {
         ];
         // `value` is the modal metadata: without the draft id in it the
         // decision cannot be applied, only acked away.
-        let submission_required = ["view_id"];
-        let submission_needs_value = self.value.is_none();
+        let submission_required_fields = [
+            ("view_id", self.view_id.is_some()),
+            ("value", self.value.is_some()),
+        ];
         let refuse = |problem: String| {
             Err(ContractError::KindMismatch {
                 kind: self.kind,
@@ -322,10 +324,7 @@ impl GatewayRecord {
                 }
             }
             RecordKind::ViewSubmission => {
-                let mut absent = missing(&submission_fields, &submission_required);
-                if submission_needs_value {
-                    absent.push("value".into());
-                }
+                let absent = missing(&submission_required_fields, &["view_id", "value"]);
                 if !absent.is_empty() {
                     return refuse(format!("is missing {}", absent.join(", ")));
                 }
