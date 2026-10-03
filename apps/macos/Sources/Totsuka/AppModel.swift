@@ -352,10 +352,12 @@ final class AppModel: ObservableObject {
             return nil
         }
         let result = try? await TotsukaCLI(binary: gh, environment: cli.environment).run(arguments)
+        // A stop pressed while gh ran wins over its failure.
+        guard runState == .starting else { return nil }
         let token = result?.stdoutText.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard let result, result.status == 0, !token.isEmpty else {
             let reason = result?.stderrText.split(separator: "\n").first.map(String.init) ?? ""
-            fail("gh auth token failed → run gh auth login --hostname \(host)\n" + reason)
+            fail("gh auth token failed: \(reason)\n→ not logged in: gh auth login --hostname \(host); unknown flag --user: gh 2.40 or later is needed (brew upgrade gh)")
             return nil
         }
         return token
