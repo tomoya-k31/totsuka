@@ -68,7 +68,7 @@ final class AppModel: ObservableObject {
         let login = await Task.detached { loginShellEnvironment() }.value
         var env = runEnvironment(login: login, own: ProcessInfo.processInfo.environment)
         if !pathOverride.isEmpty { env["PATH"] = pathOverride }
-        guard let binary = locateTotsuka(override: binaryOverride, environment: env) else {
+        guard let binary = locateExecutable(named: "totsuka", override: binaryOverride, environment: env) else {
             notice = "totsuka was not found → install it with Homebrew, or `defaults write \(Bundle.main.bundleIdentifier ?? "") totsukaPath /path/to/totsuka`"
             return
         }
@@ -121,11 +121,24 @@ final class AppModel: ObservableObject {
         var secretMap: [String: String]?
         if usesSuppliedSecrets(document) {
             guard let stored = loadSecrets() else { return }
-            guard let asked = askForMissingSecrets(secretNames(in: document), in: stored) else {
+            let ghArguments = ghTokenArguments(in: document)
+            let githubSecret = githubTokenSecretName(in: document)
+            guard
+                let asked = askForMissingSecrets(
+                    secretNames(in: document), in: stored,
+                    github: githubSecret, ghOffered: ghArguments != nil)
+            else {
                 runState = .stopped
                 return
             }
             secretMap = asked
+            // ADR-0114: taken from `gh` at every start, never stored, so a
+            // token `gh` has since replaced or revoked is never handed on.
+            if defaults.bool(forKey: Self.githubTokenFromGh), let name = githubSecret {
+                guard let token = await tokenFromGh(ghArguments) else { return }
+                guard runState == .starting else { return }
+                secretMap?[name] = token
+            }
         }
         // The start gate (ADR-0113 §2): nothing runs until the config passes.
         let check = try? await cli.run(
@@ -258,13 +271,20 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// UserDefaults: `[github].token`'s secret comes from `gh auth token`.
+    private static let githubTokenFromGh = "githubTokenFromGh"
+
     /// Ask for each name the map lacks, save the map, and return it — or nil
     /// when the person cancels (or the Keychain refuses), and nothing starts.
+    /// `github` is the name `[github].token` refers to: with `ghOffered` its
+    /// question also offers `gh auth token`, and once chosen it is not asked
+    /// for again.
     private func askForMissingSecrets(
-        _ names: [String], in stored: [String: String]
+        _ names: [String], in stored: [String: String], github: String?, ghOffered: Bool
     ) -> [String: String]? {
         var map = stored
-        let missing = names.filter { map[$0] == nil }
+        let fromGh = defaults.bool(forKey: Self.githubTokenFromGh)
+        let missing = names.filter { map[$0] == nil && !(fromGh && $0 == github) }
         guard !missing.isEmpty else { return map }
         for name in missing {
             let alert = NSAlert()
@@ -274,9 +294,19 @@ final class AppModel: ObservableObject {
             alert.accessoryView = field
             alert.addButton(withTitle: "Save")
             alert.addButton(withTitle: "Cancel")
+            let offerGh = ghOffered && name == github
+            if offerGh {
+                alert.addButton(withTitle: "Use gh auth token")
+                alert.informativeText += "\n\nOr take it from gh at every start (nothing is stored). The board needs the project scope: gh auth refresh -s project"
+            }
             alert.window.initialFirstResponder = field
             NSApp.activate()
-            guard alert.runModal() == .alertFirstButtonReturn, !field.stringValue.isEmpty else {
+            let answer = alert.runModal()
+            if offerGh, answer == .alertThirdButtonReturn {
+                defaults.set(true, forKey: Self.githubTokenFromGh)
+                continue
+            }
+            guard answer == .alertFirstButtonReturn, !field.stringValue.isEmpty else {
                 notice = "Not started: secret:\(name) has no value"
                 return nil
             }
@@ -302,10 +332,33 @@ final class AppModel: ObservableObject {
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         do {
             try secrets.save([:])
+            defaults.removeObject(forKey: Self.githubTokenFromGh)
             notice = nil
         } catch {
             notice = "Keychain: " + String(describing: error)
         }
+    }
+
+    /// `gh auth token` for `[github]`'s host and login, or nil — with the
+    /// reason shown and nothing started. The token itself is never shown.
+    private func tokenFromGh(_ arguments: [String]?) async -> String? {
+        guard let cli, let arguments else {
+            fail("Cannot tell which GitHub host or account to ask gh for → set [github].api_url and github_login as plain values (Settings… opens config.toml), or Forget saved secrets… and enter the token")
+            return nil
+        }
+        let host = arguments[3]
+        guard let gh = locateExecutable(named: "gh", environment: cli.environment) else {
+            fail("gh was not found → install it (brew install gh) and run gh auth login --hostname \(host)")
+            return nil
+        }
+        let result = try? await TotsukaCLI(binary: gh, environment: cli.environment).run(arguments)
+        let token = result?.stdoutText.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard let result, result.status == 0, !token.isEmpty else {
+            let reason = result?.stderrText.split(separator: "\n").first.map(String.init) ?? ""
+            fail("gh auth token failed → run gh auth login --hostname \(host)\n" + reason)
+            return nil
+        }
+        return token
     }
 
     func secretsLine(_ map: [String: String]) -> Data {

@@ -146,9 +146,11 @@ public func parseEnv(_ text: String) -> [String: String] {
     return env
 }
 
-/// Where `totsuka` is: the configured path, else the first `totsuka` on the
-/// login `PATH`, else Homebrew's usual locations.
-public func locateTotsuka(override: String?, environment: [String: String]) -> URL? {
+/// Where the command `name` (`totsuka`, `gh`) is: the configured path, else
+/// the first `name` on the login `PATH`, else Homebrew's usual locations.
+public func locateExecutable(
+    named name: String, override: String? = nil, environment: [String: String]
+) -> URL? {
     let fm = FileManager.default
     if let override, !override.isEmpty {
         let url = URL(fileURLWithPath: (override as NSString).expandingTildeInPath)
@@ -156,7 +158,7 @@ public func locateTotsuka(override: String?, environment: [String: String]) -> U
     }
     let path = (environment["PATH"] ?? "").split(separator: ":").map(String.init)
     for dir in path + ["/opt/homebrew/bin", "/usr/local/bin"] {
-        let candidate = URL(fileURLWithPath: dir).appendingPathComponent("totsuka")
+        let candidate = URL(fileURLWithPath: dir).appendingPathComponent(name)
         if fm.isExecutableFile(atPath: candidate.path) { return candidate }
     }
     return nil

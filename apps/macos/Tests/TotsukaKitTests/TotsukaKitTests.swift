@@ -146,6 +146,49 @@ import Testing
         #expect(usesSuppliedSecrets(nested), "a misspelt name still counts")
     }
 
+    /// ADR-0114: only `[github].token`'s own `secret:` can come from `gh`.
+    @Test func theGithubTokenSecretIsTheOneGithubTokenNames() throws {
+        let config = try #require(JSONValue.parse(#"""
+        {"github":{"token":"secret:gh-token"},"slack":{"user_token":"secret:slack"}}
+        """#))
+        #expect(githubTokenSecretName(in: config) == "gh-token")
+        let other = try #require(JSONValue.parse(#"{"github":{"token":"cmd:gh auth token"}}"#))
+        #expect(githubTokenSecretName(in: other) == nil)
+        let bad = try #require(JSONValue.parse(#"{"github":{"token":"secret:bad name"}}"#))
+        #expect(githubTokenSecretName(in: bad) == nil)
+    }
+
+    @Test func ghHostnameFollowsTheAPIURL() {
+        #expect(ghHostname(apiURL: "https://api.github.com/graphql") == "github.com")
+        #expect(ghHostname(apiURL: "https://api.acme.ghe.com/graphql") == "acme.ghe.com")
+        #expect(ghHostname(apiURL: "https://ghes.example.com/api/graphql") == "ghes.example.com")
+        #expect(ghHostname(apiURL: "${GITHUB_API}") == nil)
+        #expect(ghHostname(apiURL: "secret:api") == nil)
+        #expect(ghHostname(apiURL: "op://v/i/f") == nil)
+        #expect(ghHostname(apiURL: "not a url") == nil)
+    }
+
+    @Test func ghIsAskedForTheConfiguredHostAndLogin() throws {
+        let plain = try #require(JSONValue.parse(#"{"github":{"github_login":"me"}}"#))
+        #expect(
+            ghTokenArguments(in: plain)
+                == ["auth", "token", "--hostname", "github.com", "--user", "me"])
+        let ghes = try #require(JSONValue.parse(#"""
+        {"github":{"github_login":"me_acme","api_url":"https://ghes.example.com/api/graphql"}}
+        """#))
+        #expect(
+            ghTokenArguments(in: ghes)
+                == ["auth", "token", "--hostname", "ghes.example.com", "--user", "me_acme"])
+        for github in [
+            #"{"github_login":"${LOGIN}"}"#, #"{"github_login":"secret:login"}"#,
+            #"{"github_login":""}"#, #"{}"#,
+            #"{"github_login":"me","api_url":"${API}"}"#,
+        ] {
+            let config = try #require(JSONValue.parse(#"{"github":"# + github + "}"))
+            #expect(ghTokenArguments(in: config) == nil, "\(github)")
+        }
+    }
+
     @Test func buildsTerminalCommandsFromTheEnvironment() {
         let env = ["TERMINAL": "alacritty", "EDITOR": "nvim -p"]
         #expect(
