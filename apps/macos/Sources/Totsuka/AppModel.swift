@@ -121,12 +121,12 @@ final class AppModel: ObservableObject {
         var secretMap: [String: String]?
         if usesSuppliedSecrets(document) {
             guard let stored = loadSecrets() else { return }
-            let ghArguments = ghTokenArguments(in: document)
+            let account = ghAccount(in: document)
             let githubSecret = githubTokenSecretName(in: document)
             guard
                 let asked = askForMissingSecrets(
                     secretNames(in: document), in: stored,
-                    github: githubSecret, ghOffered: ghArguments != nil)
+                    github: githubSecret, gh: account)
             else {
                 runState = .stopped
                 return
@@ -135,7 +135,7 @@ final class AppModel: ObservableObject {
             // ADR-0114: taken from `gh` at every start, never stored, so a
             // token `gh` has since replaced or revoked is never handed on.
             if defaults.bool(forKey: Self.githubTokenFromGh), let name = githubSecret {
-                guard let token = await tokenFromGh(ghArguments) else { return }
+                guard let token = await tokenFromGh(account) else { return }
                 guard runState == .starting else { return }
                 secretMap?[name] = token
             }
@@ -276,11 +276,12 @@ final class AppModel: ObservableObject {
 
     /// Ask for each name the map lacks, save the map, and return it — or nil
     /// when the person cancels (or the Keychain refuses), and nothing starts.
-    /// `github` is the name `[github].token` refers to: with `ghOffered` its
-    /// question also offers `gh auth token`, and once chosen it is not asked
-    /// for again.
+    /// `github` is the name `[github].token` refers to: with a `gh` account
+    /// its question also offers `gh auth token`, and once chosen it is not
+    /// asked for again.
     private func askForMissingSecrets(
-        _ names: [String], in stored: [String: String], github: String?, ghOffered: Bool
+        _ names: [String], in stored: [String: String], github: String?,
+        gh: (host: String, login: String)?
     ) -> [String: String]? {
         var map = stored
         let fromGh = defaults.bool(forKey: Self.githubTokenFromGh)
@@ -294,10 +295,11 @@ final class AppModel: ObservableObject {
             alert.accessoryView = field
             alert.addButton(withTitle: "Save")
             alert.addButton(withTitle: "Cancel")
-            let offerGh = ghOffered && name == github
-            if offerGh {
+            let offerGh = gh != nil && name == github
+            if let gh, offerGh {
                 alert.addButton(withTitle: "Use gh auth token")
-                alert.informativeText += "\n\nOr take it from gh at every start (nothing is stored). The board needs the project scope: gh auth refresh -s project"
+                // `gh auth refresh` only touches the active account.
+                alert.informativeText += "\n\nOr take \(gh.login)'s token from gh at every start (nothing is stored). The board needs the project scope: gh auth switch --hostname \(gh.host) --user \(gh.login), then gh auth refresh --hostname \(gh.host) -s project"
             }
             alert.window.initialFirstResponder = field
             NSApp.activate()
@@ -341,12 +343,13 @@ final class AppModel: ObservableObject {
 
     /// `gh auth token` for `[github]`'s host and login, or nil — with the
     /// reason shown and nothing started. The token itself is never shown.
-    private func tokenFromGh(_ arguments: [String]?) async -> String? {
-        guard let cli, let arguments else {
+    private func tokenFromGh(_ account: (host: String, login: String)?) async -> String? {
+        guard let cli, let account else {
             fail("Cannot tell which GitHub host or account to ask gh for → set [github].api_url and github_login as plain values (Settings… opens config.toml), or Forget saved secrets… and enter the token")
             return nil
         }
-        let host = arguments[3]
+        let host = account.host
+        let arguments = ["auth", "token", "--hostname", host, "--user", account.login]
         guard let gh = locateExecutable(named: "gh", environment: cli.environment) else {
             fail("gh was not found → install it (brew install gh) and run gh auth login --hostname \(host)")
             return nil

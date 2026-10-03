@@ -63,25 +63,32 @@ public func ghHostname(apiURL: String) -> String? {
         let host = url.host?.lowercased(), !host.isEmpty
     else { return nil }
     if host == "api.github.com" { return "github.com" }
-    if host.hasPrefix("api."), host.hasSuffix(".ghe.com") { return String(host.dropFirst(4)) }
+    if host.hasPrefix("api."), host.hasSuffix(".ghe.com"), host.count > "api..ghe.com".count {
+        return String(host.dropFirst(4))
+    }
     return host
 }
 
-/// `gh auth token --hostname <host> --user <github_login>` for the config's
-/// `[github]` table, so a `gh auth switch` never hands `run` another
-/// account's token. Nil when the host or the login cannot be told from the
-/// file as written (a reference, an empty login): then there is nothing safe
-/// to ask `gh` for.
-public func ghTokenArguments(in config: JSONValue) -> [String]? {
+/// The `gh` host and account of the config's `[github]` table, for
+/// `gh auth token --hostname <host> --user <login>` — so a `gh auth switch`
+/// never hands `run` another account's token. Nil when either cannot be told
+/// from the file as written (a reference, an empty login, an `api_url` that
+/// is not a string): then there is nothing safe to ask `gh` for.
+public func ghAccount(in config: JSONValue) -> (host: String, login: String)? {
     let github = config["github"]
-    let apiURL = github?["api_url"]?.string ?? "https://api.github.com/graphql"
+    let apiURL: String
+    switch github?["api_url"] {
+    case nil: apiURL = "https://api.github.com/graphql"
+    case .string(let s)?: apiURL = s
+    default: return nil
+    }
     guard let login = github?["github_login"]?.string, !login.isEmpty,
         login.unicodeScalars.allSatisfy({
             $0.isASCII && (CharacterSet.alphanumerics.contains($0) || "-_".unicodeScalars.contains($0))
         }),
         let host = ghHostname(apiURL: apiURL)
     else { return nil }
-    return ["auth", "token", "--hostname", host, "--user", login]
+    return (host, login)
 }
 
 private func isSecretName(_ name: String) -> Bool {

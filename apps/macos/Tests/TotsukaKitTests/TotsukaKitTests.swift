@@ -161,6 +161,7 @@ import Testing
     @Test func ghHostnameFollowsTheAPIURL() {
         #expect(ghHostname(apiURL: "https://api.github.com/graphql") == "github.com")
         #expect(ghHostname(apiURL: "https://api.acme.ghe.com/graphql") == "acme.ghe.com")
+        #expect(ghHostname(apiURL: "https://api.ghe.com/graphql") == "api.ghe.com", "no <sub>")
         #expect(ghHostname(apiURL: "https://ghes.example.com/api/graphql") == "ghes.example.com")
         #expect(ghHostname(apiURL: "${GITHUB_API}") == nil)
         #expect(ghHostname(apiURL: "secret:api") == nil)
@@ -170,22 +171,21 @@ import Testing
 
     @Test func ghIsAskedForTheConfiguredHostAndLogin() throws {
         let plain = try #require(JSONValue.parse(#"{"github":{"github_login":"me"}}"#))
-        #expect(
-            ghTokenArguments(in: plain)
-                == ["auth", "token", "--hostname", "github.com", "--user", "me"])
+        let a = try #require(ghAccount(in: plain))
+        #expect(a.host == "github.com" && a.login == "me")
         let ghes = try #require(JSONValue.parse(#"""
         {"github":{"github_login":"me_acme","api_url":"https://ghes.example.com/api/graphql"}}
         """#))
-        #expect(
-            ghTokenArguments(in: ghes)
-                == ["auth", "token", "--hostname", "ghes.example.com", "--user", "me_acme"])
+        let b = try #require(ghAccount(in: ghes))
+        #expect(b.host == "ghes.example.com" && b.login == "me_acme")
         for github in [
             #"{"github_login":"${LOGIN}"}"#, #"{"github_login":"secret:login"}"#,
             #"{"github_login":""}"#, #"{}"#,
             #"{"github_login":"me","api_url":"${API}"}"#,
+            #"{"github_login":"me","api_url":42}"#,
         ] {
             let config = try #require(JSONValue.parse(#"{"github":"# + github + "}"))
-            #expect(ghTokenArguments(in: config) == nil, "\(github)")
+            #expect(ghAccount(in: config) == nil, "\(github)")
         }
     }
 

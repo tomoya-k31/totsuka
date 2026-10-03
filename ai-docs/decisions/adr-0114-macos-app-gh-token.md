@@ -33,8 +33,8 @@ CLI から `totsuka run` を起動するなら `[github].token = "cmd:gh auth to
 2. **選ばれたら UserDefaults の `githubTokenFromGh` に `true` を置くだけ。** Keychain の map には何も入れない（番兵値を map に入れると、取り除き忘れたときにそのまま `run` へ渡るため）。印が立っている間は、その名前をダイアログで尋ねない
 3. **Start のたびに `gh auth token --hostname <host> --user <github_login>` を実行し、map の `<name>` を上書きして `config validate` と `run` に渡す。** 保存はしない。失敗後の自動再起動も Start を通るので、そのたびに取り直す。印があれば map の同名の値より gh を優先する
    - `--user` は `[github].github_login` から取る。`gh auth switch` で別のアカウントのトークンが渡るのを防ぐ
-   - `--hostname` は `[github].api_url` のホストから決める（`ghHostname`）: `api.github.com` → `github.com`、`api.<sub>.ghe.com` → `<sub>.ghe.com`、それ以外（GHES）はホストそのもの
-4. **決められないものは推測しない。** `api_url` が http(s) の URL として読めない（`${ENV}` や `secret:` を含む）、または `github_login` が空・参照のときはボタンを出さない。印が既にある場合は、Start で起動せずに理由を出す
+   - `--hostname` は `[github].api_url` のホストから決める（`ghHostname`）: `api.github.com` → `github.com`、`api.<sub>.ghe.com` → `<sub>.ghe.com`（`<sub>` が空の `api.ghe.com` は対象外）、それ以外（GHES）はホストそのもの
+4. **決められないものは推測しない。** `api_url` が文字列でない、または http(s) の URL として読めない（`${ENV}` や `secret:` を含む）、または `github_login` が空・参照のときはボタンを出さない。印が既にある場合は、Start で起動せずに理由を出す
 5. **`gh` が無い・非ゼロで終了した・出力が空のときは起動しない。** 状態表示に `gh auth login --hostname <host>` の案内と stderr の先頭行を出す。stdout（トークン）はどこにも出さない。印は残すので、gh にログインすれば次の Start でそのまま動く
 6. **「Forget saved secrets…」は印も消す。** 次の Start でダイアログが再び出るので、そこで値の入力に切り替えられる
 7. gh の探索と実行は既存の部品を使う。`locateTotsuka` を `locateExecutable(named:)` に一般化し、`TotsukaCLI` を gh のパスで作ってログインシェルの環境で実行する
@@ -52,9 +52,9 @@ CLI から `totsuka run` を起動するなら `[github].token = "cmd:gh auth to
 # Consequences
 
 - `secret:` を使う config でも、gh にログインしていれば PAT を発行せずに済む
-- 使える scope は gh のトークンのものになる。**`gh auth login` の既定の scope（`repo, read:org, gist`）には `project` が無い**ので、ボードを読むには `gh auth refresh -s project` で足しておく必要がある。足していないと Start は通るが、ボードの取得で失敗する。アプリはトークンの scope を検査せず、ボタンを出すダイアログの説明文で `gh auth refresh -s project` を案内するにとどめる。必要以上の scope を持つ点は、CLI で `cmd:gh auth token` を使うのと同じである
+- 使える scope は gh のトークンのものになる。**`gh auth login` の既定の scope（`repo, read:org, gist`）には `project` が無い**ので、ボードを読むには足しておく必要がある。足していないと Start は通るが、ボードの取得で失敗する。アプリはトークンの scope を検査せず、ボタンを出すダイアログの説明文で案内するにとどめる。**`gh auth refresh` はアクティブなアカウントにしか効かない**（`gh auth refresh --help`）ので、案内は設定したホストとアカウントを名指しして `gh auth switch --hostname <host> --user <login>` → `gh auth refresh --hostname <host> -s project` の順にする必要以上の scope を持つ点は、CLI で `cmd:gh auth token` を使うのと同じである
 - `run` の実行中にトークンが失効した場合は扱わない（`--secrets-stdin` は起動時にしか値を読まない）。次の Start で取り直される
-- 実機の UI（ダイアログのボタン、gh が見つからない場合の表示）にはテストが無い。純粋な部分（`githubTokenSecretName` / `ghHostname` / `ghTokenArguments`）は `apps/macos/test.sh` で試す
+- 実機の UI（ダイアログのボタン、gh が見つからない場合の表示）にはテストが無い。純粋な部分（`githubTokenSecretName` / `ghHostname` / `ghAccount`）は `apps/macos/test.sh` で試す
 - 関連: [ADR-0100](/decisions/adr-0100-secrets-stdin.md)、[ADR-0113](/decisions/adr-0113-native-menubar-app.md)、[macOS アプリ](/components/macos-app.md)
 
 [^gh-token-revocation]: GitHub Docs — Token expiration and revocation
