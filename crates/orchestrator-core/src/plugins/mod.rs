@@ -9,5 +9,8 @@ pub mod spec;
 pub mod store;
 
 pub use options::{OptionIssue, OptionIssueKind, check_workflow_options};
-pub use spec::{DEFAULT_PLUGIN_TIMEOUT, SpecError, plugin_init_config, plugin_spec};
+pub use spec::{
+    DEFAULT_PLUGIN_TIMEOUT, PluginSchema, SpecError, plugin_init_config, plugin_schemas,
+    plugin_spec,
+};
 pub use store::{InstallPlan, InstalledPlugin, Origin, PluginStore, StoreError};

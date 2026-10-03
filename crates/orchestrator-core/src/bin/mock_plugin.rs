@@ -214,6 +214,19 @@ fn main() {
                     .unwrap(),
                 )
             }
+            // Answered before `initialize`, like `config/validate` (ADR-0113);
+            // whether it is asked at all is the manifest's `config_schema`.
+            "config/schema" => Response::result(
+                request_id(&id),
+                serde_json::json!({ "schema": {
+                    "type": "object",
+                    "properties": { "greeting": {
+                        "type": "string",
+                        "x-title": "Greeting",
+                        "x-help": "Said on start.",
+                    } },
+                } }),
+            ),
             "config/validate" => {
                 let invalid = params
                     .get("config")

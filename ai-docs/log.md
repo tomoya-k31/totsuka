@@ -23,6 +23,11 @@
 
 ## 2026-10-01
 
+* **Creation**: [totsuka config schema / get / set / unset](/apis/config-cli.md) — メニューバーアプリの設定画面が config.toml を JSON で読み書きする CLI 契約。キーパスは JSON Pointer、プラグインのスキーマは並行に取得し、壊れたマニフェスト・予約名・`$ref` は個別に `x-raw` へ逃がす。プラグインが申告した project / workflow のキーは `x-by-source` / `x-by-agent` として要素のスキーマに添える。
+* **Update**: [orchestrator-core](/components/orchestrator-core.md) — `config::json_schema`（schemars による config の JSON Schema とラベル・ヘルプ）、`config::set_path` / `unset_path`、`plugins::plugin_schemas`（initialize 前の `config/schema`）。
+* **Update**: [orchestrator-cli](/components/orchestrator-cli.md) — `config schema` / `get` / `set` / `unset`。
+* **Update**: [ADR-0113](/decisions/adr-0113-native-menubar-app.md) — 5 層に分けたこと、`x-raw` / `x-schema-error`、書き込みの拒否条件、プラグイン所有の project / workflow キーを `x-by-source` / `x-by-agent` で要素のスキーマに添えること、`on_*` を `status` / `labels` として載せること。
+* **Update**: [config CLI 契約](/apis/config-cli.md) / [ADR-0113](/decisions/adr-0113-native-menubar-app.md) — 使えない申告スキーマを捨てた理由はどこにも出ないことを正しく書き、CLI が付ける拡張キーワードに `x-by-source` / `x-by-agent` を足した。
 * **Creation**: [ADR-0113 ネイティブ macOS メニューバーアプリが run を子プロセスとして監督し、通知と設定 GUI を持つ](/decisions/adr-0113-native-menubar-app.md) — SwiftUI のメニューバーアプリ（apps/macos/）の技術選定・監督方式・通知経路・設定 GUI・配布方式と、プロトタイプでの実測（Keychain の partition_id、/tmp の通知拒否、ログイン項目の追従）を記録。
 * **Update**: [plugin-protocol クレート](/components/plugin-protocol.md) — プロトコル 0.7.7。initialize 前に答える `config/schema` と、それを申告する `Capabilities.config_schema` を追加。答えには任意で `project`（`[[projects]]` 要素のキー）と `workflow`（`trigger` と claim するオプション）のスキーマを載せられ、設定画面は選んだ source のキーだけを出す。
 * **Update**: [plugin-sdk クレート](/components/plugin-sdk.md) / [plugin-conformance](/components/plugin-conformance.md) / [プラグイン開発ガイド](/development/plugin-dev-guide.md) — `config_schema` ハンドラの既定 METHOD_NOT_FOUND、適合検査 10、スキーマの拡張キーワード（`x-title` / `x-help` / `x-category` / `x-secret`）。

@@ -32,7 +32,7 @@ use crate::domain::Profile;
 
 /// The adapter family a `[tools.<name>]` entry belongs to. Determines argv
 /// assembly, capabilities, and (Phase 2/3) the completion-detection assets.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolKind {
     /// Claude Code (`claude`) — the reference adapter: `--settings` hooks,

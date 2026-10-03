@@ -2225,3 +2225,161 @@ fn a_health_file_from_another_pid_is_ignored() {
         "a document from a different process says nothing about this one: {text}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// config schema / get / set / unset (ADR-0113)
+// ---------------------------------------------------------------------------
+
+/// Install the mock plugin under `name`, declaring `config_schema` or not.
+fn install_mock(base: &Path, name: &str, config_schema: bool) {
+    let dir = base.join("data/totsuka/plugins").join(name);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mock = test_support::sibling_bin(&totsuka(), "orchestrator-core", "mock_plugin");
+    test_support::place_binary(&mock, &dir.join(name));
+    std::fs::write(
+        dir.join("plugin.toml"),
+        format!(
+            "name = \"{name}\"\nkind = \"notifier\"\nversion = \"0.1.0\"\n\
+             protocol_version = \">=0.7.7, <0.8\"\n\n[capabilities]\nconfig_schema = {config_schema}\n"
+        ),
+    )
+    .unwrap();
+}
+
+/// The core keys and each installed plugin's table come back as one schema;
+/// a plugin that does not declare `config_schema` is never started and gets
+/// `x-raw` instead.
+#[test]
+fn config_schema_merges_plugin_tables() {
+    let base = scratch("config-schema");
+    install_mock(&base, "withschema", true);
+    install_mock(&base, "noschema", false);
+    let out = run(&base, &["config", "schema"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let doc: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
+    let props = &doc["schema"]["properties"];
+    assert_eq!(props["workflows"]["x-category"], "Workflows");
+    assert_eq!(
+        props["withschema"]["properties"]["greeting"]["x-title"],
+        "Greeting"
+    );
+    assert_eq!(props["withschema"]["x-category"], "withschema");
+    assert_eq!(props["noschema"]["x-raw"], true);
+    assert!(
+        doc["config_path"]
+            .as_str()
+            .unwrap()
+            .ends_with("config.toml")
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// One broken plugin does not take the schema down, and a plugin named like a
+/// core key cannot replace that key's schema (Copilot on #845).
+#[test]
+fn config_schema_survives_a_broken_manifest_and_a_reserved_name() {
+    let base = scratch("config-schema-broken");
+    install_mock(&base, "log", true);
+    let broken = base.join("data/totsuka/plugins/broken");
+    std::fs::create_dir_all(&broken).unwrap();
+    std::fs::write(broken.join("plugin.toml"), "not toml {{{\n").unwrap();
+    let out = run(&base, &["config", "schema"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let doc: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
+    let props = &doc["schema"]["properties"];
+    assert_eq!(props["log"]["x-category"], "Logging", "core `log` kept");
+    assert_eq!(props["broken"]["x-raw"], true);
+    assert!(props["broken"]["x-schema-error"].is_string());
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// set → get → unset round trip on a file that does not exist yet, keeping a
+/// comment, and refusing an edit that would make the file unloadable.
+#[test]
+fn config_set_get_unset_round_trip() {
+    let base = scratch("config-set");
+    let ok = |args: &[&str]| {
+        let out = run(&base, args);
+        assert!(out.status.success(), "{args:?}: {}", stderr(&out));
+        stdout(&out)
+    };
+    let got: serde_json::Value = serde_json::from_str(&ok(&["config", "get"])).unwrap();
+    assert_eq!(got["exists"], false);
+
+    ok(&["config", "set", "/log/level", r#""debug""#]);
+    let path = base.join("cfg/totsuka/config.toml");
+    let text = std::fs::read_to_string(&path).unwrap();
+    // Attached to `version`, which stays (a comment above `[log]` would
+    // belong to that table and go with it).
+    std::fs::write(&path, format!("# keep me\nversion = 1\n{text}")).unwrap();
+    ok(&[
+        "config",
+        "set",
+        "/repositories/-",
+        r#"{"name":"a","path":"/tmp"}"#,
+    ]);
+    ok(&["config", "unset", "/log"]);
+
+    let got: serde_json::Value = serde_json::from_str(&ok(&["config", "get"])).unwrap();
+    assert_eq!(got["exists"], true);
+    assert_eq!(got["config"]["repositories"][0]["name"], "a");
+    assert!(got["config"].get("log").is_none());
+    assert!(
+        std::fs::read_to_string(&path)
+            .unwrap()
+            .starts_with("# keep me")
+    );
+
+    // A type error is refused with the JSON envelope, and nothing is written.
+    let before = std::fs::read_to_string(&path).unwrap();
+    let out = run(&base, &["config", "set", "/max_concurrency", r#""many""#]);
+    assert!(!out.status.success());
+    let envelope: serde_json::Value = serde_json::from_str(stderr(&out).trim()).unwrap();
+    assert!(envelope["error"]["message"].is_string(), "{envelope}");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// A config that is a symlink (a dotfiles checkout) stays a symlink: the
+/// write goes to the file it points at.
+#[test]
+fn config_set_writes_through_a_symlink() {
+    let base = scratch("config-symlink");
+    let real = base.join("dotfiles/config.toml");
+    std::fs::create_dir_all(real.parent().unwrap()).unwrap();
+    std::fs::write(&real, "version = 1\n").unwrap();
+    let link = base.join("cfg/totsuka/config.toml");
+    std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+
+    let out = run(&base, &["config", "set", "/max_concurrency", "2"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
+    assert!(
+        std::fs::read_to_string(&real)
+            .unwrap()
+            .contains("max_concurrency = 2")
+    );
+
+    // A dangling link is followed too: the file is created where it points.
+    std::fs::remove_file(&real).unwrap();
+    let out = run(&base, &["config", "set", "/max_concurrency", "3"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
+    assert!(
+        std::fs::read_to_string(&real)
+            .unwrap()
+            .contains("max_concurrency = 3")
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// `unset` with no config file is a no-op, not an empty file.
+#[test]
+fn config_unset_without_a_file_creates_nothing() {
+    let base = scratch("config-unset-none");
+    let out = run(&base, &["config", "unset", "/log/level"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(!base.join("cfg/totsuka/config.toml").exists());
+    let _ = std::fs::remove_dir_all(&base);
+}

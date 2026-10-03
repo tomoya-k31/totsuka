@@ -11,7 +11,9 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use plugin_protocol::manifest::PluginKind;
-use plugin_protocol::methods::{LlmApiKind, LlmInfo, ProjectInfo, RepoInfo, WorkflowInfo};
+use plugin_protocol::methods::{
+    ConfigSchemaResult, LlmApiKind, LlmInfo, ProjectInfo, RepoInfo, WorkflowInfo,
+};
 use serde_json::Value;
 
 use crate::adapters::plugin_host::PluginSpec;
@@ -98,6 +100,95 @@ pub fn plugin_spec(
         workflows,
         timeout,
     })
+}
+
+/// What one installed plugin said about its config table
+/// ([`plugin_schemas`]).
+#[derive(Debug)]
+pub enum PluginSchema {
+    /// The plugin's `config/schema` answer, with the kind its manifest
+    /// declares — which decides whether its `workflow` schema describes a
+    /// task source's keys or an agent's.
+    Schema {
+        answer: ConfigSchemaResult,
+        kind: PluginKind,
+    },
+    /// The manifest does not declare `config_schema`: the table is edited as
+    /// raw TOML. Not an error (ADR-0113).
+    Undeclared,
+    /// Declared, but asking failed (spawn, protocol, timeout, error reply).
+    Failed(String),
+}
+
+/// How long one plugin may take to answer `config/schema`. The answer is a
+/// constant the plugin builds without I/O, so this is a bound on a hung
+/// process, not on real work.
+const SCHEMA_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Ask every installed plugin that declares `config_schema` for the schema of
+/// its config table (ADR-0113) — **without** `initialize` and without reading
+/// `config.toml`, so it works before any secret exists and before the plugin
+/// is configured or enabled. The capability is read from the manifest, which
+/// is why a plugin that does not declare it is never started.
+///
+/// Each plugin's outcome is its own: an unreadable manifest is that plugin's
+/// [`PluginSchema::Failed`], not the whole call's error. The plugins are asked
+/// concurrently, so a hung one costs `SCHEMA_TIMEOUT` once, not per plugin.
+pub async fn plugin_schemas(
+    store: &PluginStore,
+) -> Result<Vec<(String, PluginSchema)>, StoreError> {
+    let mut asks = tokio::task::JoinSet::new();
+    let mut out = Vec::new();
+    for name in store.installed_names()? {
+        let spec = match store.manifest_of(&name) {
+            Ok(Some(manifest)) if manifest.capabilities.config_schema => {
+                let kind = manifest.kind;
+                store.resolved_dir(&name).map(|dir| {
+                    (
+                        kind,
+                        PluginSpec {
+                            name: name.clone(),
+                            program: dir.join(&manifest.name),
+                            args: vec![],
+                            manifest,
+                            init_config: Value::Null,
+                            repositories: vec![],
+                            projects: vec![],
+                            llm: None,
+                            workflows: vec![],
+                            timeout: SCHEMA_TIMEOUT,
+                        },
+                    )
+                })
+            }
+            Ok(_) => {
+                out.push((name, PluginSchema::Undeclared));
+                continue;
+            }
+            Err(e) => Err(e),
+        };
+        match spec {
+            Ok((kind, spec)) => {
+                asks.spawn(async move {
+                    let answer = match crate::adapters::plugin_host::config_schema(spec).await {
+                        Ok(answer) => PluginSchema::Schema { answer, kind },
+                        Err(e) => PluginSchema::Failed(e.to_string()),
+                    };
+                    (name, answer)
+                });
+            }
+            Err(e) => out.push((name, PluginSchema::Failed(e.to_string()))),
+        }
+    }
+    while let Some(joined) = asks.join_next().await {
+        // A panicking probe has no name to report under; it cannot happen
+        // short of a bug in the host, so it is dropped rather than invented.
+        if let Ok(answer) = joined {
+            out.push(answer);
+        }
+    }
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(out)
 }
 
 /// The status columns a workflow writes back to, in `on_start` →

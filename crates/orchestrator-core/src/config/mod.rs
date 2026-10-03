@@ -9,18 +9,21 @@
 //! - [`env_overrides`]: `TOTSUKA_*` overrides, layer 2 of the CLI > env >
 //!   config-file > config-default precedence (F-66).
 //! - [`mod@validate`]: static (offline) validation (F-63, F-58).
+//! - [`json_schema`]: the JSON Schema of the core keys, for the settings
+//!   window (ADR-0113).
 
 pub mod edit;
 pub mod env_file;
 pub mod env_overrides;
 pub mod interpret;
+pub mod json_schema;
 pub mod resolve;
 pub mod schema;
 pub mod validate;
 
 pub use edit::{
-    EditError, ProjectDraft, RepositoryDraft, WorkflowDraft, set_default_tool, set_llm,
-    set_plugin_enabled, set_tool, upsert_project, upsert_repository, upsert_workflow,
+    EditError, ProjectDraft, RepositoryDraft, WorkflowDraft, set_default_tool, set_llm, set_path,
+    set_plugin_enabled, set_tool, unset_path, upsert_project, upsert_repository, upsert_workflow,
 };
 
 pub use env_overrides::{ENV_PREFIX, apply_env_overrides, override_keys};

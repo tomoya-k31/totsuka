@@ -34,7 +34,7 @@ use plugin_protocol::manifest::{Capabilities, OutputCapability};
 use serde::Deserialize;
 
 /// Execution mode of a workflow (F-80, F-82).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkflowMode {
     /// Detailed design: worktree created, but no push/PR.
@@ -77,7 +77,7 @@ impl FromStr for WorkflowMode {
 /// agent's responsibility. Removing it rather than accepting-and-ignoring it is
 /// deliberate: silently treating it as `source` would keep the run going while
 /// no PR was ever opened, and that is not a failure anyone notices.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum OutputPolicy {
     /// Write back to the task source (`result/publish`).
@@ -97,7 +97,7 @@ impl OutputPolicy {
 }
 
 /// How a workflow's completion self-report is verified (D-01).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum VerificationMode {
     /// In-session LLM verification via a prompt-type Stop hook (default).
@@ -144,7 +144,7 @@ impl VerificationMode {
 /// [ADR-0023](https://github.com/tomoya-k31/totsuka/blob/main/ai-docs/decisions/adr-0023-configurable-prompt-surface.md)
 /// — a permission-bearing decision reachable through a config string is a
 /// privilege-escalation surface.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Profile {
     /// Answer a question. Worktree meant to stay read-only; the source plugin

@@ -3,7 +3,7 @@ type: Spec
 title: totsuka — Local AI-Agent Orchestrator Requirements (v1)
 description: Requirements specification for the totsuka orchestrator CLI — task-source/agent-IDE/notifier plugins, git-worktree lifecycle, workflows, parallel execution control, and v1 scope.
 tags: [orchestrator, requirements, plugin, worktree, cli, rust]
-generated: { by: claude-code/opus-5.5, at: 2026-10-01T21:40:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-01T22:32:00+09:00 }
 status: draft
 owner: tomoya-k31
 ---
@@ -300,6 +300,7 @@ The path to a surface that is **always in view**, such as the macOS menu bar. No
 | `task export [--since <event_id>] [--task <id>] [--no-detail]` | Stream the audit log (`events`) to stdout as NDJSON. The state of record lives in SQLite, so this is the way out in a form other tools can read; the table is append-only, which makes `--since` a complete incremental cursor |
 | `plugin list / install / uninstall / enable / disable` | Plugin management |
 | `config validate / show [--redacted]` | Config validation/display (secrets masked) |
+| `config schema / get / set <path> <json> / unset <path>` | JSON view of the config file for the menu bar app's settings window: schema of the core keys and plugin tables, the file as JSON, and one-key edits that keep comments (ADR-0113) |
 | `doctor` | Environment diagnosis (git version, orphan worktrees, plugin connectivity, API key connectivity) |
 | `logs [-f] [--task <id>]` | Log viewing / tailing |
 | `completion <shell>` | Shell completion generation |

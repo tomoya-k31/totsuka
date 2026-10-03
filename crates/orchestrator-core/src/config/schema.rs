@@ -45,7 +45,7 @@ pub const DEFAULT_WORKFLOW_TIMEOUT_SECS: u64 = 0;
 /// a leftover table is legitimate only when a plugin of that name is in the
 /// `[plugins.*]` roster, so `[worktre]` (a core-key typo) and `[slak]` (a
 /// plugin-name typo) both fail, where before only the first did.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct RootConfig {
     /// Schema version (§10.2). Startup validation rejects a mismatch; the
     /// config is never migrated automatically (#276).
@@ -57,43 +57,106 @@ pub struct RootConfig {
     /// default is a prerequisite for cutting v2; see the versioning policy in
     /// `ai-docs/development/config-reference.md`.
     #[serde(default = "default_version")]
+    #[schemars(extend(
+        "x-category" = "General",
+        "x-title" = "Config format version",
+        "x-help" = "The version of this file's format. Leave it at 1."
+    ))]
     pub version: u32,
     /// Global maximum concurrent tasks (F-40). Defaults to
     /// [`DEFAULT_GLOBAL_CONCURRENCY`] when omitted.
     #[serde(default)]
+    #[schemars(extend(
+        "x-category" = "General",
+        "x-title" = "Concurrent tasks",
+        "x-placeholder" = "4",
+        "x-help" = "How many tasks run at the same time, across all repositories."
+    ))]
     pub max_concurrency: Option<u32>,
     /// Registered local repositories (F-61).
     #[serde(default)]
+    #[schemars(extend(
+        "x-category" = "Repositories",
+        "x-title" = "Repositories",
+        "x-help" = "The local clones that tasks are worked on."
+    ))]
     pub repositories: Vec<RepositoryConfig>,
     /// Projects a repository can file into (#554): a GitHub Project, a Notion
     /// database, a Jira project.
     #[serde(default)]
+    #[schemars(extend(
+        "x-category" = "Projects",
+        "x-title" = "Projects",
+        "x-help" = "Named parts of a task source: a GitHub Project board, a Notion database, a Slack workspace. Workflows take tasks from them; repositories file new issues into them."
+    ))]
     pub projects: Vec<ProjectConfig>,
     /// Plugin roster + common fields, keyed by plugin instance name (F-56).
     #[serde(default)]
+    #[schemars(extend(
+        "x-category" = "Plugins",
+        "x-title" = "Plugins",
+        "x-help" = "Which installed plugins are used. Each plugin's own settings are in its own section."
+    ))]
     pub plugins: BTreeMap<String, PluginConfig>,
     /// Global default AI tool name when neither the workflow nor the selected
     /// repository picks one (#196). `None` means the built-in `"claude"`.
     #[serde(default)]
+    #[schemars(extend(
+        "x-category" = "AI tools",
+        "x-title" = "Default AI tool",
+        "x-placeholder" = "claude",
+        "x-help" = "The AI tool used when neither the workflow nor the repository names one."
+    ))]
     pub default_tool: Option<String>,
     /// AI-tool registry, keyed by tool name (#196). Built-in defaults exist
     /// for `claude`; an entry overrides/extends them (e.g. a
     /// `[tools.claude-fast]` profile with a different model flag).
     #[serde(default)]
+    #[schemars(extend(
+        "x-category" = "AI tools",
+        "x-title" = "AI tools",
+        "x-help" = "The AI tool commands started in the agent's pane. claude, codex and opencode are built in; an entry with the same name overrides one."
+    ))]
     pub tools: BTreeMap<String, ToolConfig>,
     /// Named workflows (parsed structurally here; semantics validated in #54).
     #[serde(default)]
+    #[schemars(extend(
+        "x-category" = "Workflows",
+        "x-title" = "Workflows",
+        "x-help" = "Which tasks to pick up, and which agent works on them, how. The first workflow that matches a task wins."
+    ))]
     pub workflows: Vec<WorkflowConfig>,
     /// AI Gateway settings (F-12, F-13).
+    #[schemars(extend(
+        "x-category" = "Repository classification",
+        "x-title" = "Repository classification",
+        "x-help" = "An LLM that decides which repository a task belongs to when the task does not say. Without it, such tasks wait for a person to choose."
+    ))]
+    #[schemars(with = "Option<RawLlmConfig>")]
     pub llm: Option<LlmConfig>,
     /// worktree placement defaults (consumed by #53).
     #[serde(default)]
+    #[schemars(extend(
+        "x-category" = "Worktrees",
+        "x-title" = "Worktrees",
+        "x-help" = "Where each task's git worktree is created, and when it is removed."
+    ))]
     pub worktree: WorktreeConfig,
     /// Logging settings (§5.2).
     #[serde(default)]
+    #[schemars(extend(
+        "x-category" = "Logging",
+        "x-title" = "Logging",
+        "x-help" = "Log level and how many daily log files to keep."
+    ))]
     pub log: LogSettings,
     /// Claude Code hook-event ingestion settings (#131: E-03, D-02, E-07).
     #[serde(default)]
+    #[schemars(extend(
+        "x-category" = "Agent hooks",
+        "x-title" = "Agent hooks",
+        "x-help" = "Where completion signals from the AI tool are received. The defaults rarely need changing."
+    ))]
     pub hooks: HooksConfig,
     /// `[prompts]` — **removed in #465** (an amend of ADR-0023). Prompt text is
     /// built-in only; the one surviving knob is [`WorkflowConfig::rubric`].
@@ -105,6 +168,7 @@ pub struct RootConfig {
     /// that it used to be a supported table, which is the worst outcome for an
     /// operator who wrote it on purpose (#465).
     #[serde(default)]
+    #[schemars(skip)]
     pub prompts: toml::Table,
     /// Every top-level table that is not one of the fields above: one
     /// plugin's own settings, held **uninterpreted** (#554).
@@ -118,6 +182,7 @@ pub struct RootConfig {
     /// A name in here that the `[plugins.*]` roster does not know is a
     /// validation error, which is what keeps a typo from being read as
     /// "settings for a plugin nobody enabled".
+    #[schemars(skip)]
     #[serde(flatten)]
     pub plugin_settings: BTreeMap<String, toml::Value>,
 }
@@ -126,7 +191,7 @@ pub struct RootConfig {
 ///
 /// All fields are optional: the consuming components (UDS server, hook
 /// rendering — later issues) apply the documented defaults.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct HooksConfig {
     /// Removed (#785): `totsuka run` generates the Bearer token itself
@@ -134,18 +199,32 @@ pub struct HooksConfig {
     /// fails with [`REMOVED_AUTH_TOKEN_REF`] instead of serde's generic
     /// "unknown field".
     #[serde(default, deserialize_with = "removed_auth_token_ref")]
+    #[schemars(skip)]
     pub auth_token_ref: (),
     /// Unix domain socket path the hook receiver listens on. `None` uses the
     /// built-in default path.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Socket path",
+        "x-help" = "The Unix socket that receives hook signals. Leave empty for the default."
+    ))]
     pub socket_path: Option<String>,
     /// Directory where hook events are spooled when the POST fails (E-07).
     /// `None` uses the built-in default path.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Spool directory",
+        "x-help" = "Where hook signals are kept when they cannot be delivered. Leave empty for the default."
+    ))]
     pub spool_dir: Option<String>,
     /// Max consecutive Stop-hook block re-asks before escalation (D-02).
     /// Defaults to [`DEFAULT_BLOCK_RETRY_LIMIT`].
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Re-ask limit",
+        "x-placeholder" = "3",
+        "x-help" = "How many times in a row an agent may be asked to finish its work before the task is escalated to you."
+    ))]
     pub block_retry_limit: Option<u32>,
 }
 
@@ -162,26 +241,50 @@ fn default_version() -> u32 {
 }
 
 /// A registered repository (F-61).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RepositoryConfig {
     /// Stable identifier used in the worktree path, the logs and `totsuka
     /// status`. Not in branch names — the agent picks those (ADR-0026).
+    #[schemars(extend(
+        "x-title" = "Name",
+        "x-help" = "A short, stable ID for the repository, used in logs and paths."
+    ))]
     pub name: String,
     /// Local clone path (may use `~` and `${ENV}`; expanded on validation).
+    #[schemars(extend(
+        "x-title" = "Path",
+        "x-help" = "The path to the local clone. ~ and ${VAR} are expanded."
+    ))]
     pub path: PathBuf,
     /// Free-text summary used for LLM repo selection (F-11).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Summary",
+        "x-help" = "What the repository is about. Repository classification reads it to choose a repository."
+    ))]
     pub summary: Option<String>,
     /// Default AI tool for tasks dispatched into this repo (#196). Overrides
     /// `default_tool`; overridden by an explicit `[[workflows]].tool` pin.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "AI tool",
+        "x-help" = "The AI tool for tasks in this repository, unless the workflow names one."
+    ))]
     pub tool: Option<String>,
     /// Per-repository concurrency cap (F-41).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Concurrent tasks",
+        "x-help" = "How many tasks run in this repository at the same time. Empty means no limit of its own."
+    ))]
     pub max_concurrency: Option<u32>,
     /// Overrides the global `[worktree].location` for this repo (F-22).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Worktree location",
+        "x-help" = "Overrides the worktree location template for this repository."
+    ))]
     pub worktree_location: Option<String>,
     /// Which project this repository files into: the `name` of a
     /// `[[projects]]` entry (#554).
@@ -197,6 +300,10 @@ pub struct RepositoryConfig {
     /// where two plugins could name the same repository and the Orchestrator
     /// had machinery to detect and report that. Here it cannot be written.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Project",
+        "x-help" = "The project new issues for this repository are filed into (a project name)."
+    ))]
     pub project: Option<String>,
 }
 
@@ -213,23 +320,32 @@ pub struct RepositoryConfig {
 /// `[[repositories]].project` → `[[projects]].name` → `[plugins.<source>]`
 /// walkable **without launching a plugin**, so a broken reference is caught by
 /// `config validate --offline` and by anyone reading the file.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct ProjectConfig {
     /// Stable identifier `[[repositories]].project` points at.
+    #[schemars(extend(
+        "x-title" = "Name",
+        "x-help" = "A stable ID that workflows and repositories refer to."
+    ))]
     pub name: String,
     /// The task_source plugin that owns this project.
+    #[schemars(extend(
+        "x-title" = "Task source",
+        "x-help" = "The task source plugin this project belongs to (github, notion, slack, …). Its other keys are that plugin's."
+    ))]
     pub source: String,
     /// Everything else on the entry, uninterpreted (#554).
     ///
     /// Unlike a workflow's options these need no claim handshake: an entry
     /// names exactly one plugin, so ownership is not in question and the
     /// plugin's own `deny_unknown_fields` is what rejects a typo.
+    #[schemars(skip)]
     #[serde(flatten)]
     pub options: toml::Table,
 }
 
 /// Plugin kind (F-50).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PluginKind {
     /// Task source (GitHub, Notion, ...).
@@ -252,19 +368,36 @@ impl PluginKind {
 }
 
 /// Common, Orchestrator-interpreted plugin fields from `[plugins.{name}]`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PluginConfig {
     /// Whether the plugin is active (F-56). Declarative roster flag.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Enabled",
+        "x-help" = "Whether the plugin is started."
+    ))]
     pub enabled: bool,
     /// Plugin kind.
+    #[schemars(extend(
+        "x-title" = "Kind",
+        "x-help" = "task_source, agent_ide or notifier. Must match the plugin."
+    ))]
     pub kind: PluginKind,
     /// Per-plugin concurrency cap (F-42).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Concurrent tasks",
+        "x-help" = "For an agent plugin: how many tasks it runs at the same time. Empty means no limit of its own."
+    ))]
     pub max_concurrency: Option<u32>,
     /// RPC timeout in seconds.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Call timeout (seconds)",
+        "x-placeholder" = "120",
+        "x-help" = "How long to wait for each answer from the plugin."
+    ))]
     pub timeout_secs: Option<u64>,
     /// Whether a crash of this plugin is followed by a relaunch (#495).
     /// Defaults to `true`.
@@ -275,12 +408,36 @@ pub struct PluginConfig {
     /// relaunch is suppressed, which is what someone debugging a plugin by
     /// hand wants — a process that stays dead so they can see why.
     #[serde(default = "default_true")]
+    #[schemars(extend(
+        "x-title" = "Restart on crash",
+        "x-help" = "Restart the plugin when it crashes (up to 5 times in 5 minutes)."
+    ))]
     pub restart: bool,
 }
 
 /// serde default for [`PluginConfig::restart`].
 fn default_true() -> bool {
     true
+}
+
+/// The settings window's schema of an `on_start` / `on_success` /
+/// `on_failure` table (ADR-0113). Schema only: serde reads the table raw, and
+/// `validate` holds its keys to
+/// [`OUTCOME_ACTION_KEYS`](super::interpret::OUTCOME_ACTION_KEYS) — which a
+/// test in `json_schema` ties these fields to, so the two cannot drift.
+#[derive(schemars::JsonSchema)]
+#[allow(dead_code)]
+pub(crate) struct OutcomeActionSchema {
+    #[schemars(extend(
+        "x-title" = "Status",
+        "x-help" = "The status (column) to move the task to."
+    ))]
+    status: Option<String>,
+    #[schemars(extend(
+        "x-title" = "Labels",
+        "x-help" = "Labels to add (+name) or remove (-name)."
+    ))]
+    labels: Option<Vec<String>>,
 }
 
 /// A named workflow (F-80). Parsed structurally; trigger/handoff semantics are
@@ -306,9 +463,13 @@ fn default_true() -> bool {
 /// The check moves to the plugins, which is the only place the answer exists.
 /// It is not weaker: a key **no** plugin claims is an error, so `profil` still
 /// fails — just at `initialize` rather than at parse.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct WorkflowConfig {
     /// Workflow name.
+    #[schemars(extend(
+        "x-title" = "Name",
+        "x-help" = "The workflow's name."
+    ))]
     pub name: String,
     /// The `[[projects]]` entries this workflow draws tasks from (#626), by
     /// `name`. Always a list, and never empty — validation rejects `[]`.
@@ -323,23 +484,48 @@ pub struct WorkflowConfig {
     /// All named entries must resolve to the same `source` — a workflow
     /// straddling two plugins has no single claimant for its unclaimed keys
     /// (see [`options`](Self::options)), so validation refuses it.
+    #[schemars(extend(
+        "x-title" = "Projects",
+        "x-help" = "The projects this workflow takes tasks from (project names)."
+    ))]
     pub projects: Vec<String>,
     /// Trigger condition; kept raw (interpreted in #54).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Trigger",
+        "x-help" = "Which tasks this workflow picks up, for example { status = \"Todo\" }. The keys are the task source's."
+    ))]
+    #[schemars(with = "serde_json::Map<String, serde_json::Value>")]
     pub trigger: toml::Table,
     /// One of the four archetypes (#393 D5). Supplies all three of `mode`,
     /// `output` and `verification`. `mode` and `verification` must then not
     /// also be written out; `output` may, and an explicit one wins.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Profile",
+        "x-help" = "answer, triage, design or implement. Sets the mode, output and verification together."
+    ))]
     pub profile: Option<Profile>,
     /// Execution mode. Required unless [`profile`](Self::profile) supplies it.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Mode",
+        "x-help" = "plan (design only) or implement. Required when there is no profile."
+    ))]
     pub mode: Option<WorkflowMode>,
     /// Agent plugin instance name (must be an enabled `agent_ide`).
+    #[schemars(extend(
+        "x-title" = "Agent",
+        "x-help" = "The agent plugin that runs the task (herdr, orca, …)."
+    ))]
     pub agent: String,
     /// Output policy. Required unless [`profile`](Self::profile) supplies it,
     /// and the one field a profile may be overridden on.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Output",
+        "x-help" = "source (write the result back to the task source) or none. Required when there is no profile."
+    ))]
     pub output: Option<OutputPolicy>,
     /// Source status transition when the task starts running (#556): applied
     /// right before dispatch. When the source supports an exclusion claim
@@ -348,18 +534,38 @@ pub struct WorkflowConfig {
     /// `None` writes nothing — exactly the pre-#556 behaviour — so existing
     /// configs are untouched.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "On start",
+        "x-help" = "What to change on the task when work starts: { status = \"…\", labels = [\"+a\", \"-b\"] }."
+    ))]
+    #[schemars(with = "Option<OutcomeActionSchema>")]
     pub on_start: Option<toml::Table>,
     /// Source status transition on success; kept raw (interpreted in #54).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "On success",
+        "x-help" = "What to change on the task when the work succeeds."
+    ))]
+    #[schemars(with = "Option<OutcomeActionSchema>")]
     pub on_success: Option<toml::Table>,
     /// Source status transition on failure; kept raw (interpreted in #54).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "On failure",
+        "x-help" = "What to change on the task when the work fails."
+    ))]
+    #[schemars(with = "Option<OutcomeActionSchema>")]
     pub on_failure: Option<toml::Table>,
     /// How completion self-reports are verified (D-01). Omitted means `llm`,
     /// same as before profiles existed — the `Option` distinguishes "omitted"
     /// from "written out" so validation can reject writing it out *alongside* a
     /// profile. Both resolve to the same value.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Verification",
+        "x-placeholder" = "llm",
+        "x-help" = "How finished work is checked: llm, human or none."
+    ))]
     pub verification: Option<VerificationMode>,
     /// Silence limit in seconds since the last hook signal before the task
     /// escalates (D-03). Defaults to [`DEFAULT_WORKFLOW_TIMEOUT_SECS`].
@@ -371,6 +577,11 @@ pub struct WorkflowConfig {
     /// `0` effectively escalated on the first sweep, which no config could
     /// have wanted.)
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Silence limit (seconds)",
+        "x-placeholder" = "0",
+        "x-help" = "Escalate when the agent has been silent this long. 0 turns it off."
+    ))]
     pub timeout_secs: Option<u64>,
     /// Criteria text embedded into the llm-verification prompt hook. Only
     /// meaningful with `verification = "llm"` (validation warns otherwise).
@@ -381,11 +592,16 @@ pub struct WorkflowConfig {
     /// set. It beats the profile's rubric, which is what makes it useful —
     /// see [`Prompts::resolve_for`](crate::prompts::Prompts::resolve_for).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Rubric",
+        "x-help" = "The criteria the llm verification checks the work against."
+    ))]
     pub rubric: Option<String>,
     /// `[[workflows]].prompts` — **removed in #465**, same treatment as
     /// [`RootConfig::prompts`]: parsed opaquely so validation can name each key
     /// instead of leaving a bare unknown-field error.
     #[serde(default)]
+    #[schemars(skip)]
     pub prompts: toml::Table,
     /// Explicit AI-tool pin for this workflow (#196) — the strongest level of
     /// the tool precedence (workflow > repo > `default_tool`). Use it when the
@@ -393,6 +609,10 @@ pub struct WorkflowConfig {
     /// needs Claude's prompt-type Stop hook). `None` falls through to the
     /// repository/global defaults.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "AI tool",
+        "x-help" = "Pin the AI tool for this workflow. Wins over the repository's and the default."
+    ))]
     pub tool: Option<String>,
     /// Extra instructions prepended to the task body the **first** time a
     /// conversation is started (#415).
@@ -406,6 +626,10 @@ pub struct WorkflowConfig {
     ///
     /// Empty or whitespace-only is treated as unset rather than rejected.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Initial prompt",
+        "x-help" = "Extra instructions given to the agent before the task, at the start of a new conversation."
+    ))]
     pub initial_prompt: Option<String>,
     /// Worktree cleanup override for this workflow's tasks (#548, ADR-0057).
     ///
@@ -417,6 +641,10 @@ pub struct WorkflowConfig {
     /// operator changed the config, and persisting overrides elsewhere just
     /// to survive that is not worth a second source of truth.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Worktree cleanup",
+        "x-help" = "Overrides the worktree cleanup for this workflow's tasks."
+    ))]
     pub cleanup: Option<CleanupPolicyConfig>,
     /// Every key on this workflow that is not one of the fields above: a
     /// plugin's own, held **uninterpreted** (#554).
@@ -435,6 +663,7 @@ pub struct WorkflowConfig {
     /// keys are its own (`InitializeResult::claimed_options`). **Exactly one**
     /// claimant is required — zero is a typo, two is an ambiguity the
     /// Orchestrator will not settle by picking.
+    #[schemars(skip)]
     #[serde(flatten)]
     pub options: toml::Table,
 }
@@ -486,27 +715,47 @@ impl WorkflowConfig {
 
 /// A `[tools.<name>]` registry entry (#196): how to launch one AI tool CLI.
 /// Interpreted into a [`ToolProfile`](crate::tool::ToolProfile).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ToolConfig {
     /// Adapter family (`claude` | `codex` | `opencode`) — determines argv
     /// assembly and completion detection.
+    #[schemars(extend(
+        "x-title" = "Kind",
+        "x-help" = "claude, codex or opencode."
+    ))]
     pub kind: ToolKind,
     /// Whitespace-split command line (first token = program, rest = base
     /// args). `None` uses the kind's name as the program.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Command",
+        "x-help" = "The command line to start, for example \"claude --model haiku\". Not run through a shell."
+    ))]
     pub command: Option<String>,
     /// Extra args appended in implement mode (overrides the kind default).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Implement arguments",
+        "x-help" = "Arguments added in implement mode."
+    ))]
     pub mode_args: Option<Vec<String>>,
     /// Extra args appended in plan mode (overrides the kind default).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Plan arguments",
+        "x-help" = "Arguments added in plan mode."
+    ))]
     pub plan_args: Option<Vec<String>>,
     /// A `KEY=value` file whose values are added to the env of every agent
     /// this tool launches (#744). `~` / `${VAR}` expand; the result must be
     /// absolute. Resolved once when `totsuka run` starts — see
     /// [`env_file`](crate::config::env_file).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Environment file",
+        "x-help" = "A file of KEY=value lines, added to the agent's environment."
+    ))]
     pub env_file: Option<String>,
 }
 
@@ -565,7 +814,7 @@ impl LlmApi {
 }
 
 /// `[llm].api` as written.
-#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 enum LlmApiKind {
     #[default]
@@ -574,23 +823,59 @@ enum LlmApiKind {
 }
 
 /// `[llm]` as written, before the per-API keys are checked.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct RawLlmConfig {
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "API",
+        "x-placeholder" = "chat",
+        "x-help" = "chat (an OpenAI-compatible chat API) or decisions (a model that only picks)."
+    ))]
     api: LlmApiKind,
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Base URL",
+        "x-help" = "For chat: the API's base URL, for example https://openrouter.ai/api/v1."
+    ))]
     base_url: Option<String>,
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Endpoint",
+        "x-help" = "For decisions: the full URL of the Decisions API. Empty means OpenRouter's."
+    ))]
     endpoint: Option<String>,
+    #[schemars(extend(
+        "x-title" = "Model",
+        "x-help" = "The model name."
+    ))]
     model: String,
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Max tokens",
+        "x-help" = "For chat: the maximum tokens per call. Empty means the provider's default."
+    ))]
     max_tokens: Option<u32>,
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Timeout (seconds)",
+        "x-placeholder" = "30",
+        "x-help" = "How long to wait for an answer."
+    ))]
     timeout_secs: Option<u64>,
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "API key",
+        "x-help" = "The API key.",
+        "x-secret" = true
+    ))]
     api_key_ref: Option<String>,
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Confidence threshold",
+        "x-placeholder" = "0.6",
+        "x-help" = "Below this confidence (0.0–1.0) the task waits for a person instead."
+    ))]
     confidence_threshold: Option<f64>,
 }
 
@@ -643,29 +928,48 @@ impl TryFrom<RawLlmConfig> for LlmConfig {
 }
 
 /// worktree placement defaults (F-22) and cleanup policies (F-23, F-85).
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct WorktreeConfig {
     /// Global placement template; overridable per repo.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Location",
+        "x-help" = "Where worktrees are created. A template with {repo_name}, {worktree_name} and others. Empty means the default."
+    ))]
     pub location: Option<String>,
     /// Cleanup policy for implement-mode worktrees (F-23). Defaults to
     /// `manual` (never lose committed-but-unpushed work).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Cleanup (implement)",
+        "x-placeholder" = "manual",
+        "x-help" = "When implement-mode worktrees are removed: manual, immediate, keep_7d, keep_28d, or after a number of days."
+    ))]
     pub cleanup: Option<CleanupPolicyConfig>,
     /// Cleanup policy for plan-mode worktrees (F-85). Defaults to `immediate`
     /// (design-only worktrees carry no unique work).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Cleanup (plan)",
+        "x-placeholder" = "immediate",
+        "x-help" = "When plan-mode worktrees are removed."
+    ))]
     pub plan_cleanup: Option<CleanupPolicyConfig>,
     /// Seconds a single git command may run before it is killed (#764).
     /// Omitted: `DEFAULT_GIT_TIMEOUT` (300). `0`: no limit.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "git timeout (seconds)",
+        "x-placeholder" = "300",
+        "x-help" = "Stop a git command that runs longer than this. 0 means no limit."
+    ))]
     pub git_timeout_secs: Option<u64>,
 }
 
 /// A worktree cleanup policy as written in config (F-23):
 /// `"immediate"`, `"manual"`, or `{ retention_days = 5 }`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
 #[serde(untagged)]
 pub enum CleanupPolicyConfig {
     /// A named policy (`immediate` / `manual`).
@@ -673,6 +977,10 @@ pub enum CleanupPolicyConfig {
     /// Keep for N days after the task finished, then remove.
     Retention {
         /// Days to keep a finished task's worktree.
+        #[schemars(extend(
+        "x-title" = "Days to keep",
+        "x-help" = "Days to keep a finished task's worktree."
+    ))]
         retention_days: u32,
     },
 }
@@ -685,7 +993,7 @@ pub enum CleanupPolicyConfig {
 /// `7d`/`28d` are exact where `week`/`month` would be ambiguous (28 days ≠ one
 /// month). NB the explicit `rename`s: `rename_all = "snake_case"` would turn
 /// `Keep7d` into `keep7d`, not `keep_7d`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum CleanupPolicyName {
     /// Remove as soon as the task finishes.
@@ -701,17 +1009,31 @@ pub enum CleanupPolicyName {
 }
 
 /// Logging settings from `[log]` (§5.2).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct LogSettings {
     /// Minimum level name (`error`/`warn`/`info`/`debug`/`trace`).
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Level",
+        "x-placeholder" = "info",
+        "x-help" = "error, warn, info, debug or trace."
+    ))]
     pub level: Option<String>,
     /// Whether prompt/RPC-payload fields are logged (debug+ only regardless).
     #[serde(default = "default_log_prompts")]
+    #[schemars(extend(
+        "x-title" = "Log prompts",
+        "x-help" = "Record prompts and payloads (only written at debug level or above)."
+    ))]
     pub log_prompts: bool,
     /// Number of daily log files to keep.
     #[serde(default)]
+    #[schemars(extend(
+        "x-title" = "Files to keep",
+        "x-placeholder" = "7",
+        "x-help" = "How many daily log files to keep."
+    ))]
     pub max_files: Option<usize>,
 }
 

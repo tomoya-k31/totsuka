@@ -1,9 +1,12 @@
-//! `totsuka config ...` — validation and display (F-59/63, §5.1).
+//! `totsuka config ...` — validation, display and editing (F-59/63, §5.1).
 //!
 //! `validate` runs the offline checks (schema, static references, workflow
 //! semantics) and — unless `--offline` — briefly launches each enabled plugin
 //! to delegate `config/validate` (F-59). `show` prints the effective files,
 //! masking secret-looking values with `--redacted`.
+//!
+//! `schema` / `get` / `set` / `unset` are the menu bar app's settings window's
+//! view of the file (ADR-0113): JSON out, one key per write, comments kept.
 
 use std::collections::{BTreeMap, HashMap};
 use std::io;
@@ -39,6 +42,35 @@ pub enum ConfigCommand {
         #[arg(long)]
         redacted: bool,
     },
+    /// Print the JSON Schema of config.toml: the core keys plus each installed
+    /// plugin's table (asked through `config/schema`, without `initialize`).
+    Schema,
+    /// Print the config file's path and contents as JSON.
+    Get,
+    /// Set one key, keeping the file's comments and layout.
+    Set {
+        /// Key path as a JSON Pointer: `/log/level`, `/repositories/0/tool`;
+        /// `-` appends to an array, `~1` is `/` inside a key.
+        path: String,
+        /// The value as JSON (`'"debug"'`, `4`, `true`, `{"name":"a"}`).
+        value: String,
+    },
+    /// Remove one key or array element.
+    Unset {
+        /// Key path as a JSON Pointer, as for `set`.
+        path: String,
+    },
+}
+
+impl ConfigCommand {
+    /// Whether errors go out as the JSON envelope: the app-facing commands
+    /// always (their output is JSON or nothing), `validate` / `show` never.
+    pub fn wants_json(&self) -> bool {
+        matches!(
+            self,
+            Self::Schema | Self::Get | Self::Set { .. } | Self::Unset { .. }
+        )
+    }
 }
 
 /// Dispatch a config subcommand.
@@ -54,7 +86,249 @@ pub fn run(cx: &Cx, command: ConfigCommand) -> Result<(), CliError> {
             validate(cx, offline)
         }
         ConfigCommand::Show { redacted } => show(cx, redacted),
+        ConfigCommand::Schema => schema(cx),
+        ConfigCommand::Get => get(cx),
+        ConfigCommand::Set { path, value } => {
+            let value: serde_json::Value = serde_json::from_str(&value).map_err(|e| {
+                format!("the value is not JSON ({e}) → quote a string as JSON, e.g. '\"debug\"'")
+            })?;
+            write_edit(cx, |text| config::set_path(text, &path, &value))
+        }
+        ConfigCommand::Unset { path } => write_edit(cx, |text| config::unset_path(text, &path)),
     }
+}
+
+/// `config schema`: the core schema with each installed plugin's table merged
+/// in under its name. A plugin that does not declare `config_schema`, or whose
+/// answer is unusable, gets `x-raw: true` (edit as TOML) instead of failing the
+/// command — one broken plugin must not take the whole settings window down.
+///
+/// A plugin named like a core key (`log`, `workflows`, …) is left out rather
+/// than allowed to replace that key's schema: config validation refuses the
+/// name anyway, and the core settings must stay editable meanwhile.
+///
+/// The keys plugins read on `[[projects]]` / `[[workflows]]` entries go beside
+/// the core's, keyed by plugin name, since which apply depends on the entry
+/// (ADR-0113 §5): `x-by-source` on a project (its `source`) and on a workflow
+/// (the source its `projects` resolve to), `x-by-agent` on a workflow (its
+/// `agent`). An unusable one (`$ref`, not an object) is left out, and the
+/// reason is reported nowhere — the entry just shows the core's keys. The
+/// bundled plugins' own tests are what keep their answers usable.
+fn schema(cx: &Cx) -> Result<(), CliError> {
+    use orchestrator_core::plugins::plugin_schemas;
+    use serde_json::json;
+
+    let mut schema = config::json_schema::core_schema();
+    let answers = tokio::runtime::Runtime::new()?.block_on(plugin_schemas(&cx.store()))?;
+    let mut entries = EntrySchemas::default();
+    let properties = schema["properties"]
+        .as_object_mut()
+        .expect("the core schema is an object schema");
+    for (name, answer) in answers {
+        if properties.contains_key(&name) {
+            continue;
+        }
+        entries.collect(&name, &answer);
+        let entry = plugin_property(&name, answer);
+        properties.insert(name, entry);
+    }
+    entries.attach(&mut schema);
+    crate::common::print_json(&json!({ "config_path": cx.config_path, "schema": schema }))
+}
+
+/// Why `schema` cannot be embedded in the merged document, if it cannot.
+fn unusable(schema: &serde_json::Value) -> Option<String> {
+    // Embedded in a larger document, a local `$ref` would resolve against the
+    // wrong root; the protocol asks for inline subschemas.
+    if schema.to_string().contains("\"$ref\"") {
+        return Some("the schema uses $ref → answer with every subschema inline".into());
+    }
+    (schema["type"] != "object").then(|| "the answer is not an object schema".into())
+}
+
+/// The schema property for one plugin's table: its answer, or `x-raw` (with
+/// the reason in `x-schema-error`) when there is no usable answer.
+fn plugin_property(
+    name: &str,
+    answer: orchestrator_core::plugins::PluginSchema,
+) -> serde_json::Value {
+    use orchestrator_core::plugins::PluginSchema;
+    use serde_json::json;
+
+    let category = json!(name);
+    let raw = |error: Option<String>| {
+        let mut entry = json!({ "type": "object", "x-category": category, "x-raw": true });
+        if let Some(error) = error {
+            entry["x-schema-error"] = json!(error);
+        }
+        entry
+    };
+    match answer {
+        PluginSchema::Schema { answer, .. } => match unusable(&answer.schema) {
+            Some(error) => raw(Some(error)),
+            None => {
+                let mut s = answer.schema;
+                if s.get("x-category").is_none() {
+                    s["x-category"] = category.clone();
+                }
+                s
+            }
+        },
+        PluginSchema::Undeclared => raw(None),
+        PluginSchema::Failed(e) => raw(Some(e)),
+    }
+}
+
+/// The per-plugin schemas of `[[projects]]` / `[[workflows]]` entries' keys,
+/// gathered from the answers and attached to those arrays' item schemas.
+#[derive(Default)]
+struct EntrySchemas {
+    project_by_source: serde_json::Map<String, serde_json::Value>,
+    workflow_by_source: serde_json::Map<String, serde_json::Value>,
+    workflow_by_agent: serde_json::Map<String, serde_json::Value>,
+}
+
+impl EntrySchemas {
+    fn collect(&mut self, name: &str, answer: &orchestrator_core::plugins::PluginSchema) {
+        use orchestrator_core::plugins::PluginSchema;
+        use plugin_protocol::manifest::PluginKind;
+
+        let PluginSchema::Schema { answer, kind } = answer else {
+            return;
+        };
+        let usable = |s: &Option<serde_json::Value>| s.clone().filter(|s| unusable(s).is_none());
+        match kind {
+            PluginKind::TaskSource => {
+                if let Some(s) = usable(&answer.project) {
+                    self.project_by_source.insert(name.to_string(), s);
+                }
+                if let Some(s) = usable(&answer.workflow) {
+                    self.workflow_by_source.insert(name.to_string(), s);
+                }
+            }
+            PluginKind::AgentIde => {
+                if let Some(s) = usable(&answer.workflow) {
+                    self.workflow_by_agent.insert(name.to_string(), s);
+                }
+            }
+            PluginKind::Notifier => {}
+        }
+    }
+
+    fn attach(self, schema: &mut serde_json::Value) {
+        for (array, keyword, map) in [
+            ("projects", "x-by-source", self.project_by_source),
+            ("workflows", "x-by-source", self.workflow_by_source),
+            ("workflows", "x-by-agent", self.workflow_by_agent),
+        ] {
+            if !map.is_empty() {
+                schema["properties"][array]["items"][keyword] = serde_json::Value::Object(map);
+            }
+        }
+    }
+}
+
+/// `config get`: the file as written (no `TOTSUKA_*` overrides folded in — the
+/// settings window edits the file), or `exists: false` before there is one.
+fn get(cx: &Cx) -> Result<(), CliError> {
+    let text = read_config_text(&cx.config_path)?;
+    let config = match &text {
+        Some(text) => serde_json::to_value(
+            text.parse::<toml::Table>()
+                .map_err(|e| format!("failed to parse TOML: {e}"))?,
+        )?,
+        None => serde_json::json!({}),
+    };
+    crate::common::print_json(&serde_json::json!({
+        "config_path": cx.config_path,
+        "exists": text.is_some(),
+        "config": config,
+    }))
+}
+
+/// The file's text, or `None` when there is none yet.
+fn read_config_text(path: &std::path::Path) -> Result<Option<String>, CliError> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(Some(text)),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Apply one edit to the config file and write it back atomically.
+///
+/// Refused when it turns a file that loaded into one that does not: one key
+/// at a time cannot always keep a config *valid* (a new workflow is missing
+/// keys until the next write), but it must never be the step that leaves
+/// `run` unable to read the file. A file that already failed to load can
+/// still be edited — refusing would lock the user out of fixing it.
+///
+/// Written through a symlink rather than over it (dotfiles are often Stow
+/// links) — a dangling one included, so the link is never replaced by a plain
+/// file — via a temporary file in the target's directory and a rename. An edit
+/// that changes nothing writes nothing (`unset` on a missing file creates no
+/// file).
+fn write_edit(
+    cx: &Cx,
+    edit: impl FnOnce(&str) -> Result<String, config::EditError>,
+) -> Result<(), CliError> {
+    let path = &cx.config_path;
+    let before = read_config_text(path)?;
+    let after = edit(before.as_deref().unwrap_or(""))?;
+    if after == before.as_deref().unwrap_or("") {
+        return Ok(());
+    }
+    let loaded = |text: &str| config::RootConfig::from_toml_str(text);
+    if before.as_deref().is_none_or(|t| loaded(t).is_ok())
+        && let Err(e) = loaded(&after)
+    {
+        return Err(format!("{e} → the file was left unchanged").into());
+    }
+    let target = write_target(path)?;
+    if let Some(dir) = target.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let file_name = target
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("config.toml");
+    let tmp = target.with_file_name(format!(".{file_name}.{}.tmp", std::process::id()));
+    let written = (|| {
+        std::fs::write(&tmp, &after)?;
+        if let Ok(meta) = std::fs::metadata(&target) {
+            std::fs::set_permissions(&tmp, meta.permissions())?;
+        }
+        std::fs::rename(&tmp, &target)
+    })();
+    if written.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    Ok(written?)
+}
+
+/// The file a write to `path` must land in: the end of its symlink chain,
+/// followed even when the last link dangles.
+fn write_target(path: &std::path::Path) -> io::Result<std::path::PathBuf> {
+    let mut target = path.to_path_buf();
+    // A bound, not a policy: a cycle would otherwise loop forever.
+    for _ in 0..40 {
+        match std::fs::symlink_metadata(&target) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                let link = std::fs::read_link(&target)?;
+                target = match target.parent() {
+                    Some(dir) => dir.join(link),
+                    None => link,
+                };
+            }
+            Ok(_) => return Ok(target),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(target),
+            Err(e) => return Err(e),
+        }
+    }
+    Err(io::Error::other(format!(
+        "too many symlinks at {}",
+        path.display()
+    )))
 }
 
 /// Whether validating plugin `name` online would resolve a `secret:`
@@ -311,6 +585,90 @@ fn redact_table(table: &mut toml::Table) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use plugin_protocol::manifest::PluginKind;
+
+    /// A plugin's local `$ref` would point into the wrong document once
+    /// embedded, so such an answer is shown raw (Copilot on #845).
+    #[test]
+    fn a_plugin_schema_with_ref_is_shown_raw() {
+        let with_ref = serde_json::json!({
+            "type": "object",
+            "properties": { "a": { "$ref": "#/$defs/A" } },
+            "$defs": { "A": { "type": "string" } },
+        });
+        let entry = plugin_property("p", answer(with_ref, None, None, PluginKind::Notifier));
+        assert_eq!(entry["x-raw"], true);
+        assert!(entry["x-schema-error"].as_str().unwrap().contains("$ref"));
+        let inline = serde_json::json!({ "type": "object", "properties": {} });
+        let entry = plugin_property("p", answer(inline, None, None, PluginKind::Notifier));
+        assert!(entry.get("x-raw").is_none());
+        assert_eq!(entry["x-category"], "p");
+    }
+
+    fn answer(
+        schema: serde_json::Value,
+        project: Option<serde_json::Value>,
+        workflow: Option<serde_json::Value>,
+        kind: PluginKind,
+    ) -> orchestrator_core::plugins::PluginSchema {
+        orchestrator_core::plugins::PluginSchema::Schema {
+            answer: plugin_protocol::methods::ConfigSchemaResult {
+                schema,
+                project,
+                workflow,
+            },
+            kind,
+        }
+    }
+
+    /// A source's project / workflow keys land under its name on the entry
+    /// schemas, an agent's workflow keys under `x-by-agent`, and an unusable
+    /// one nowhere (ADR-0113 §5).
+    #[test]
+    fn entry_schemas_are_keyed_by_plugin_and_role() {
+        use serde_json::json;
+        let object =
+            |key: &str| json!({ "type": "object", "properties": { key: { "type": "string" } } });
+        let mut entries = EntrySchemas::default();
+        entries.collect(
+            "gh",
+            &answer(
+                object("token"),
+                Some(object("owner")),
+                Some(object("trigger")),
+                PluginKind::TaskSource,
+            ),
+        );
+        entries.collect(
+            "ide",
+            &answer(
+                object("socket"),
+                Some(object("ignored")),
+                Some(object("layout")),
+                PluginKind::AgentIde,
+            ),
+        );
+        entries.collect(
+            "bad",
+            &answer(
+                object("x"),
+                Some(json!({ "$ref": "#/$defs/A" })),
+                Some(json!("no")),
+                PluginKind::TaskSource,
+            ),
+        );
+        let mut schema = config::json_schema::core_schema();
+        entries.attach(&mut schema);
+        let projects = &schema["properties"]["projects"]["items"];
+        let workflows = &schema["properties"]["workflows"]["items"];
+        assert_eq!(projects["x-by-source"], json!({ "gh": object("owner") }));
+        assert_eq!(workflows["x-by-source"], json!({ "gh": object("trigger") }));
+        assert_eq!(workflows["x-by-agent"], json!({ "ide": object("layout") }));
+        assert!(
+            projects.get("x-by-agent").is_none(),
+            "an agent has no project keys"
+        );
+    }
 
     #[test]
     fn redacts_secret_keys_recursively() {

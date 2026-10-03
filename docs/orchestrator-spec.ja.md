@@ -1,7 +1,7 @@
 > 🌐 [English](orchestrator-spec.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/product/orchestrator-spec.ja.md sha256:6286d3facfbbc6b8720850d4bd562a2f657ab61e9cba9d5249315ca8c993eb25 -->
+<!-- generated-from: ai-docs/product/orchestrator-spec.ja.md sha256:0e893fb174c1a08c757fac3789dadab9d3ecdf83f74a49f24bc0a593e5b5b0be -->
 
 # totsuka とは
 
@@ -98,6 +98,7 @@ worktree の置き場所は設定でき、ディレクトリ名はブランチ�
 | `task export` | 監査ログを NDJSON で標準出力へ流す |
 | `plugin list / install / uninstall / enable / disable` | プラグイン管理 |
 | `config validate / show [--redacted]` | 設定の検証・表示（秘密はマスクされる） |
+| `config schema / get / set <path> <json> / unset <path>` | メニューバーアプリの設定画面向けに、設定を JSON で扱う。全キーのスキーマ・ファイルの中身・コメントを保った 1 キーずつの書き換え |
 | `doctor` | 環境の診断 |
 | `logs [-f] [--task <id>]` | ログの表示・追尾 |
 | `completion <shell>` | シェル補完の生成 |
