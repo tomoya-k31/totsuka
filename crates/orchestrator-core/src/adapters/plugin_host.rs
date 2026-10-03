@@ -543,7 +543,7 @@ impl Plugin {
 
     /// Steps 1–2 of [`launch`](Self::launch): the F-54 check and the spawn,
     /// without `initialize` — for the requests a plugin answers before it
-    /// (`config/schema`, ADR-0109).
+    /// (`config/schema`, ADR-0113).
     fn spawn(spec: PluginSpec) -> Result<Self, HostError> {
         // 1. Protocol compatibility (F-54) — fail fast before spawning.
         let orchestrator = version::protocol_version();
@@ -777,7 +777,7 @@ pub fn launchable_plugin_names(config: &crate::config::RootConfig) -> Vec<String
 }
 
 /// Ask a plugin for the JSON Schema of its own config table (`config/schema`,
-/// ADR-0109) and shut it down — **without** `initialize`, so nothing is
+/// ADR-0113) and shut it down — **without** `initialize`, so nothing is
 /// resolved and nothing is started. `spec.init_config` and the lists are not
 /// sent; the caller decides from the manifest's `config_schema` capability
 /// whether to ask at all.

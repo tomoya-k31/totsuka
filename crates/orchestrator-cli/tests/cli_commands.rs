@@ -2227,7 +2227,7 @@ fn a_health_file_from_another_pid_is_ignored() {
 }
 
 // ---------------------------------------------------------------------------
-// config schema / get / set / unset (ADR-0109)
+// config schema / get / set / unset (ADR-0113)
 // ---------------------------------------------------------------------------
 
 /// Install the mock plugin under `name`, declaring `config_schema` or not.

@@ -1,7 +1,7 @@
 ---
 type: API Endpoint
 title: totsuka config schema / get / set / unset（設定画面向けの CLI 契約）
-description: メニューバーアプリの設定画面が config.toml を読み書きするための CLI 契約（ADR-0109）。schema は core（schemars）と各プラグイン（config/schema）のスキーマを 1 つのルートスキーマにまとめ、get はファイルの中身を JSON で返し、set / unset は JSON Pointer のキーパスで 1 キーずつコメントを保ったまま書き換える。読めていたファイルを読めなくする書き込みは拒否し、シンボリックリンクは辿って書く。
+description: メニューバーアプリの設定画面が config.toml を読み書きするための CLI 契約（ADR-0113）。schema は core（schemars）と各プラグイン（config/schema）のスキーマを 1 つのルートスキーマにまとめ、get はファイルの中身を JSON で返し、set / unset は JSON Pointer のキーパスで 1 キーずつコメントを保ったまま書き換える。読めていたファイルを読めなくする書き込みは拒否し、シンボリックリンクは辿って書く。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-cli/src/config_cmd.rs
 tags: [api, cli, config, json-schema, menubar, macos]
 generated: { by: claude-code/opus-5.5, at: 2026-10-01T22:56:00+09:00 }
@@ -11,7 +11,7 @@ owner: tomoya-k31
 
 # 概要
 
-メニューバーアプリ（[ADR-0109](/decisions/adr-0109-native-menubar-app.md)）は TOML を自分で扱わない。`config.toml` の読み書きは次の 4 つのサブコマンドを子プロセスとして呼んで行う。どれも `--config` と `hosts/<host>.toml` の選択（[ADR-0106](/decisions/adr-0106-per-host-config-file.md)）に従い、実際に読まれるファイルを対象にする。
+メニューバーアプリ（[ADR-0113](/decisions/adr-0113-native-menubar-app.md)）は TOML を自分で扱わない。`config.toml` の読み書きは次の 4 つのサブコマンドを子プロセスとして呼んで行う。どれも `--config` と `hosts/<host>.toml` の選択（[ADR-0106](/decisions/adr-0106-per-host-config-file.md)）に従い、実際に読まれるファイルを対象にする。
 
 エラーは常に stderr の 1 行の JSON エンベロープ `{"error":{"message":…,"action":…}}` で返る（`--json` を付けたほかのコマンドと同じ形）。
 
@@ -79,6 +79,6 @@ owner: tomoya-k31
 
 # 関連
 
-- [ADR-0109](/decisions/adr-0109-native-menubar-app.md)
+- [ADR-0113](/decisions/adr-0113-native-menubar-app.md)
 - [plugin-protocol](/components/plugin-protocol.md)（`config/schema`）
 - [orchestrator-cli](/components/orchestrator-cli.md)

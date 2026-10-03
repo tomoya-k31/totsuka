@@ -465,7 +465,7 @@ fn parse_fragment(
 }
 
 /// Set the value at a key path, preserving the formatting of everything
-/// else — the per-key write behind `totsuka config set` (ADR-0109).
+/// else — the per-key write behind `totsuka config set` (ADR-0113).
 ///
 /// The path is a JSON Pointer (RFC 6901): `/log/level`,
 /// `/repositories/0/tool`, `/tools/my.tool/kind`; `~1` stands for `/` and

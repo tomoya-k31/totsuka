@@ -114,7 +114,7 @@ pub enum PluginSchema {
         kind: PluginKind,
     },
     /// The manifest does not declare `config_schema`: the table is edited as
-    /// raw TOML. Not an error (ADR-0109).
+    /// raw TOML. Not an error (ADR-0113).
     Undeclared,
     /// Declared, but asking failed (spawn, protocol, timeout, error reply).
     Failed(String),
@@ -126,7 +126,7 @@ pub enum PluginSchema {
 const SCHEMA_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Ask every installed plugin that declares `config_schema` for the schema of
-/// its config table (ADR-0109) — **without** `initialize` and without reading
+/// its config table (ADR-0113) — **without** `initialize` and without reading
 /// `config.toml`, so it works before any secret exists and before the plugin
 /// is configured or enabled. The capability is read from the manifest, which
 /// is why a plugin that does not declare it is never started.

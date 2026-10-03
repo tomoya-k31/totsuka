@@ -6,7 +6,7 @@
 //! masking secret-looking values with `--redacted`.
 //!
 //! `schema` / `get` / `set` / `unset` are the menu bar app's settings window's
-//! view of the file (ADR-0109): JSON out, one key per write, comments kept.
+//! view of the file (ADR-0113): JSON out, one key per write, comments kept.
 
 use std::collections::{BTreeMap, HashMap};
 use std::io;
@@ -109,7 +109,7 @@ pub fn run(cx: &Cx, command: ConfigCommand) -> Result<(), CliError> {
 ///
 /// The keys plugins read on `[[projects]]` / `[[workflows]]` entries go beside
 /// the core's, keyed by plugin name, since which apply depends on the entry
-/// (ADR-0109 §5): `x-by-source` on a project (its `source`) and on a workflow
+/// (ADR-0113 §5): `x-by-source` on a project (its `source`) and on a workflow
 /// (the source its `projects` resolve to), `x-by-agent` on a workflow (its
 /// `agent`). An unusable one (`$ref`, not an object) is left out, and the
 /// reason is reported nowhere — the entry just shows the core's keys. The
@@ -623,7 +623,7 @@ mod tests {
 
     /// A source's project / workflow keys land under its name on the entry
     /// schemas, an agent's workflow keys under `x-by-agent`, and an unusable
-    /// one nowhere (ADR-0109 §5).
+    /// one nowhere (ADR-0113 §5).
     #[test]
     fn entry_schemas_are_keyed_by_plugin_and_role() {
         use serde_json::json;

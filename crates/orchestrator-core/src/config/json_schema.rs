@@ -1,5 +1,5 @@
 //! The JSON Schema of `config.toml`'s core keys, for the menu bar app's
-//! settings window (ADR-0109).
+//! settings window (ADR-0113).
 //!
 //! Derived with schemars from the same structs serde reads, so it cannot
 //! describe a key the loader does not accept. Each property carries the

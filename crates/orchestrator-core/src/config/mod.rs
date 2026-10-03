@@ -10,7 +10,7 @@
 //!   config-file > config-default precedence (F-66).
 //! - [`mod@validate`]: static (offline) validation (F-63, F-58).
 //! - [`json_schema`]: the JSON Schema of the core keys, for the settings
-//!   window (ADR-0109).
+//!   window (ADR-0113).
 
 pub mod edit;
 pub mod env_file;

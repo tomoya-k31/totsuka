@@ -421,7 +421,7 @@ fn default_true() -> bool {
 }
 
 /// The settings window's schema of an `on_start` / `on_success` /
-/// `on_failure` table (ADR-0109). Schema only: serde reads the table raw, and
+/// `on_failure` table (ADR-0113). Schema only: serde reads the table raw, and
 /// `validate` holds its keys to
 /// [`OUTCOME_ACTION_KEYS`](super::interpret::OUTCOME_ACTION_KEYS) — which a
 /// test in `json_schema` ties these fields to, so the two cannot drift.
