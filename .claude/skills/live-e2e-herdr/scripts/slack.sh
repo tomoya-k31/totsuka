@@ -9,8 +9,9 @@
 #   bash .claude/skills/live-e2e-herdr/scripts/slack.sh reply <ts>        # スレッドの返信（承認後の確認）
 #   bash .claude/skills/live-e2e-herdr/scripts/slack.sh watch [sec]       # slack タスクが終端に達するまで追う
 #
-# 「投稿」だけは意図的に無い。API 投稿には bot_id が付き、判定表①が必ず弾くため
-# （user token でも同じ）。メンションもリアクション対象も、人間が手で打つ必要がある。
+# 「投稿」は無い。API 投稿には投稿元アプリの bot_id が付く。ADR-0109 以降、メンション経路は
+# 被テストアプリ以外の bot を通すので B からの API 投稿でも起動できるはず（未実機確認）。
+# リアクション対象は from_bot 許可制のままなので、人間が手で打つ必要がある。
 set -euo pipefail
 # `tt` はシェル関数なので子プロセスには継承されない。共通定義を読む。
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_common.sh"

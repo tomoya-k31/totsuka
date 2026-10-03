@@ -15,7 +15,7 @@
 | dispatch が `agent_prompt_stalled` | herdr の 5 秒下限に Claude Code が間に合わなかった。**設定では変えられない** | プラグインが `agent.wait` で確認に回る。それでも駄目なら `tt task retry` |
 | dispatch が `is already occupied but is not recorded` | 前回の worktree が残っているのに state DB が消えている | `git worktree remove --force` してから retry |
 | dispatch 直後に `escalated` | D-03 の沈黙アンカーが前回実行のもの（#382） | 修正済み。古いバイナリなら入れ直す |
-| メンションしてもタスク化されない | **API で投稿した**（`bot_id` が付く）／ `run --watch` が止まっている／編集済み投稿（subtype 付き） | 人間に手で打ってもらう |
+| メンションしてもタスク化されない | 被テストアプリ自身のトークンで API 投稿した（自アプリの `bot_id` は弾かれる、ADR-0109）／ `run --watch` が止まっている／編集済み投稿（subtype 付き）／Gateway が ADR-0109 より前の版 | B（駆動用アプリ）から投稿するか、人間に手で打ってもらう |
 | リアクションを付けても無反応 | **`reactions:read` が無い**（無症状）／絵文字名の不一致／既に処理済み（dedup） | スコープを確認 → 現行マニフェストで再インストール |
 | prefix ルール（`channel_groups`）が効かない | `channels:read` / `groups:read` が無く `conversations.info` が失敗 | 同上 |
 | plan モードなのに PR が生えた | **plan は git を構造的に止めていない**（#378） | `profile` 記法に移行する。#395 の deny が `--settings` 経由で入り、リポジトリの `CLAUDE.md` の指示より**必ず強い**。明示記法（`mode = "plan"`）には deny が付かない |

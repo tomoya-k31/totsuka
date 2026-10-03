@@ -49,10 +49,12 @@ D-03 アンカー）。いずれも実機で走らせるまで検出されてい
 ストアも本番側を触るため使えない。ただし `XDG_CONFIG_HOME` を `export` すると `gh` が
 `$XDG_CONFIG_HOME/gh` を読んで認証が壊れるので、`tt()` が `env` で totsuka の起動時にだけ被せる。
 
-**`slack.sh` に投稿コマンドが無いのは意図的である。** `chat.postMessage` は user token で
-投稿すると送信者が操作者本人になり（`bot_id` も自アプリのものが付く）、
-[task-source-slack](/components/task-source-slack.md) のメンション判定表が必ず除外する。メンションもリアクションの対象メッセージも、**人間が
-クライアントで打つ以外に作れない**。持たせると「なぜか起動しない」を再生産する。
+**`slack.sh` に投稿コマンドは無い。** `chat.postMessage` は user token で投稿しても
+投稿元アプリの `bot_id` が付く。[ADR-0109](/decisions/adr-0109-slack-bot-mentions.md) 以降、
+[task-source-slack](/components/task-source-slack.md) のメンション判定表が落とすのは
+**被テストアプリ自身の** `bot_id` だけなので、駆動用アプリ（B）からの API 投稿メンションは
+タスクになるはずである（未実機確認）。**リアクションの対象メッセージ**は従来どおり人間が
+クライアントで打つ必要がある（リアクション経路は `from_bot` の許可リスト制のまま、ADR-0079）。
 
 **承認ボタンの押下は自動化できない。** Slack に block_actions を発火させる API は無く、
 Socket Mode は Slack → アプリの一方向。合成するには `api_url` をプロキシへ向けて envelope を
