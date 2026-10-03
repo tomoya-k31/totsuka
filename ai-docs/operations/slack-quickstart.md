@@ -4,7 +4,7 @@ title: Slack セットアップ Quickstart（task-source-slack）
 description: 受信方式（Socket Mode / Event Gateway）の選択から始まり、manifest からの Slack アプリ作成 → トークン発行 → トークン保管 → totsuka setup → config.toml の編集 → doctor → run --watch までの導入手順と、手で書く場合のフォールバック、トークン失効・スコープ変更時の対処。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-slack
 tags: [slack, setup, runbook, secrets, doctor]
-generated: { by: claude-code/opus-5.5, at: 2026-10-03T12:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-03T18:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -253,7 +253,7 @@ Gateway 方式では `gcloud auth application-default login` が済んでいる�
 | リアクションを付けてもタスク化されない | ①`[[workflows]]` に `trigger = { reaction = "…" }` を持つ workflow があるか（**定義順は関係ない** — #554 以降はメンションとリアクションが別のイベント経路なので、catch-all より後ろに書いても隠れない）②絵文字名が一致しているか（👀 は `eyes`、👁 は `eye`。カスタム絵文字の alias は「実際に押された名前」で届くので alias を使うなら両方列挙）③**付けたのが自分か**（他人のリアクションでは起動しない。緩和する設定は無い — [ADR-0025](/decisions/adr-0025-reaction-task-trigger.md)）④`reactions:read` を含む manifest で再インストール済みか（スコープが無いとイベント自体が届かず、**エラーにもならない**）⑤同じメッセージを既に mention 経由で処理していないか（dedup は共有） |
 | リアクションを付け直しても再実行されない | 意図した挙動。dedup キーが `{channel}:{メッセージの ts}` なので、**成功したものは付け直しても再実行しない**（誤って外して付け直しただけで二重にエージェントが走る方が事故が大きい）。ただし**取得に失敗した場合は付け直しで再試行できる**（失敗時はキーを消費しない）。強制的に再実行するならプロセス再起動で LRU が消える |
 | 返信案は届くがボタンが失効 | TTL 24h 超過、または FIFO 追い出し（上限 1024 件）。`bot_token` を設定していれば通知 DM に返信案の本文が残っているので、そこから手動返信するか、再メンションで再実行（#122 以降、下書きは `~/.local/state/totsuka/plugins/{source_name}/drafts.json` に永続化されるため再起動ではボタンは失効しない） |
-| グループメンション（`@team-name`）がタスクにならない | `usergroups:read` を含む manifest で再インストール済みか（#658）。**このスコープが無いと、起動時の `usergroups.list` が失敗して所属グループが空になり、グループ宛のメンションは 1 件もタスクにならない** —— 個人宛メンションは影響を受けないので、「一部だけ動かない」形で気づきにくい。totsuka は起動時に WARN を 1 回出すので、そこを見る。所属は**起動時に 1 回だけ**解決するので、グループに追加された直後は再起動が要る。`@here` / `@channel` / `@everyone` は**仕様として対象外**（名指しではないため、[ADR-0072](/decisions/adr-0072-slack-event-gateway.md) 決定 8） |
+| グループメンション（`@team-name`）がタスクにならない | `usergroups:read` を含む manifest で再インストール済みか（#658）。**このスコープが無いと、起動時の `usergroups.list` が失敗して所属グループが空になり、グループ宛のメンションは 1 件もタスクにならない** —— 個人宛メンションは影響を受けないので、「一部だけ動かない」形で気づきにくい。totsuka は起動時に WARN を 1 回出すので、そこを見る。所属は**起動時に 1 回だけ**解決するので、グループに追加された直後は再起動が要る。`@here` / `@channel` / `@everyone` は**仕様として対象外**（名指しではないため、[ADR-0072](/decisions/adr-0072-slack-event-gateway.md) 決定 8）。`[slack] mention_groups` を書いている場合は、**そのグループがリストに入っているか**も確認する（入っていないグループ宛は意図どおり無視される、[ADR-0110](/decisions/adr-0110-slack-mention-groups.md)） |
 | **Gateway** メンションが 1 件も来ない | ①`gcloud auth application-default login` が済んでいるか（`doctor` の起動時プローブが落ちていないか）②Slack 側の Request URL が保存できているか（保存時に URL 検証が走るので、ゲートウェイが動いていないと保存自体が失敗する）③`[slack.gateway]` の `project` / `subscription` が `tofu output totsuka_config` と一致しているか |
 | **Gateway** メンションは動くのに承認ボタンだけ届かない | **Interactivity & Shortcuts の Request URL** が未設定。Event Subscriptions とは別の設定項目で、Socket Mode ではどちらも同じ WebSocket で届いていたので見落としやすい |
 | **Gateway** 復帰してもメンションが起票されない | `drain_max_age_hours`（既定 24）の窓の外。Pub/Sub 側は 7 日保持しているので設定を上げれば拾えるが、**上げるのは復帰後の最初の起動より前**でなければならない —— 窓の外と判定したレコードはその場で ack して捨てるので、**一度起動した後に上げても、捨てたぶんは戻らない**。長期不在から戻る前に上げておくこと |

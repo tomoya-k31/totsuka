@@ -313,6 +313,23 @@ trigger = { assignee = "@none", filter = { and = [
 
 **`to_group` はメンションの宛先による振り分け**（[ADR-0081](/decisions/adr-0081-slack-group-mention-routing.md)）で、`mention = true` と併記したときだけ意味を持つ。書いたユーザーグループ宛のメンションがこの workflow へ行き、**`to_group` を持つ workflow は素の `mention = true`（catch-all）より常に優先する —— `[[workflows]]` の並び順は影響しない**。定義順が効くのは、別々のグループを名指した 1 メッセージが 2 つの workflow に一致したとき（`@oncall @design` のような場合）の tie-break だけで、そこは先に書いた方が勝つ。名指しされていない所属グループ宛は catch-all に落ちるので、`to_group` を 1 つ足しても他のグループのメンションは今までどおり来る。**書けるのは自分が所属しているグループだけ**で、所属外は `initialize` で拒否される（自分が関与していない会話がエージェントを走らせる経路を作らないため）。`repo` を併記するとリポジトリを固定し、`task/lookup` も LLM 分類も飛ばして即起票する（会話が既に決めたリポジトリより優先する）。**`repo` は `to_group` を伴わなくても書ける** —— `trigger = { mention = true, repo = "web-app" }` は「どのメンションもこのリポジトリ」になり、分類 LLM を一切呼ばない（候補が 1 つの構成向け）。`to_group` を書いた時点で `usergroups:read` スコープが必須になり、無ければ `CONFIG_INVALID`。**所属の照合は `totsuka config validate` では行えない** —— `usergroups.list` を引く必要があり、そちらは意図的にオフラインだからで、失効トークンを検出できないのと同じ区分である。
 
+**反応するグループそのものを絞るのは `to_group` ではなく `[slack] mention_groups`**（[ADR-0110](/decisions/adr-0110-slack-mention-groups.md)）。`to_group` は「どの workflow に渡すか」を決めるだけで、名指ししなかった所属グループ宛は catch-all に落ちてタスクになる。全体連絡用のグループなど、そもそも反応したくないグループがあるなら `mention_groups` に反応したいグループだけを書く。リストに無いグループ宛はどの workflow にも渡らず、個人メンションは影響を受けない。`to_group` に書けるのは `mention_groups` に含まれるグループだけで、外れていると `initialize` が `CONFIG_INVALID` を返す（その workflow は決して動かないため）。
+
+```toml
+[slack]
+mention_groups = ["S0ONCALL", "S0TEAM"]   # この 2 つ以外の所属グループ宛は無視する
+
+[[workflows]]
+name = "slack-oncall"
+projects = ["slack"]
+trigger = { mention = true, to_group = ["S0ONCALL"] }   # mention_groups の中から選ぶ
+
+[[workflows]]
+name = "slack-reply"
+projects = ["slack"]
+trigger = { mention = true }   # 個人メンションと S0TEAM 宛
+```
+
 **`from_bot` はリアクショントリガの許可リスト**（[ADR-0079](/decisions/adr-0079-reaction-on-bot-posts.md)）で、`reaction` と併記したときだけ意味を持つ（bot 投稿にもその絵文字を効かせる）。`reaction` 抜き・`channel` との併記・空配列はいずれも `CONFIG_INVALID` で弾かれる。
 
 **`channel` はチャンネル監視トリガ**（#617、[ADR-0068](/decisions/adr-0068-channel-watch-trigger.md)）で、`channel_name`（照合用・必須）/ `repo`（固定するリポジトリ・必須）/ `from`（起動を許す投稿者の追加、既定は操作者本人のみ）を伴う。`reaction` との併記は拒否され、`channel` 抜きで他の 3 つだけ書くのも拒否される（これらは有効キーなので未知キー検査では捕まらない）。監視ワークフローはそれ自体が 1 つの種別なので、`mention = true` を書く必要は無い（書くと併記として拒否される）
