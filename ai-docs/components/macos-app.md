@@ -4,7 +4,7 @@ title: Totsuka.app（macOS メニューバーアプリ）
 description: "apps/macos/ の SwiftUI メニューバーアプリ（ADR-0113）。totsuka run --watch --events-jsonl（config に secret: があれば --secrets-stdin 付き）を子プロセスとして監督し（終了コードで再起動を判断）、通知をアプリ名義で出す。設定画面は持たず、config.toml を $TERMINAL の $EDITOR で開き、run の stderr を $TERMINAL で tail -F する。機密は Start 時に Keychain に無い secret:<名前> を尋ねる（[github].token の secret は、選べば Start のたびに gh auth token から取る。ADR-0114）。ロジックは SwiftPM の TotsukaKit（swift test）、出荷する .app は XcodeGen の project.yml から CI がビルドする。"
 resource: https://github.com/tomoya-k31/totsuka/tree/main/apps/macos
 tags: [macos, swift, swiftui, menubar, app, notifier, config]
-generated: { by: claude-code/opus-5.5, at: 2026-10-04T12:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-04T04:50:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -37,7 +37,7 @@ owner: tomoya-k31
 - **エージェント IDE の稼働表示**: 10 秒ごとに `config get` を読み直し、`[plugins]` で有効な herdr / orca だけを調べて Running の横に ✓ / ✗ で出す（`enabledAgentIDEs`）。herdr はプラグインと同じ解決順のソケット（`herdrSocketPath`）に接続できるか、orca は `orca status --json` の `result.runtime.reachable`（CLI はアプリが落ちていても答える。10 秒で打ち切り、止まった呼び出しが以後の検査を塞がないようにする）。`run` の状態とは独立に、止まっている間も出す
 - **設定**: 設定画面は無い（ADR-0113 §5）。Settings… は `config get` が返す config.toml を `$TERMINAL -e $EDITOR <path>` で開く（どちらもログインシェルの環境の値をシェル断片として使う。どちらかが無ければ `open -t`）。ファイルがまだ無ければ `totsuka init` を案内する。`$TERMINAL` が見つからない（シェルが 126 / 127 で終わる）ときはメニューに出す。`$EDITOR` の失敗はシェルがターミナルに置き換わった後なので、ターミナルの中に出る。変更は次の起動から効く
 - **ログ**: `run` の stderr を `$XDG_STATE_HOME/totsuka/app-run.log` に書き（起動ごとに見出し行、5 MB を超えたら次の起動で書き直す）、Logs は `$TERMINAL -e tail -n 200 -F` で開く（`$TERMINAL` が無ければ Console）
-- **その他のメニュー**: ログイン項目のオン・オフと、Keychain のマップを空にする「Forget saved secrets…」（`githubTokenFromGh` の印も消し、次の起動でまた尋ねる）。`totsuka` の場所と `PATH` は `defaults write <bundle ID> totsukaPath` / `pathOverride` で上書きできる
+- **パネル下段**: 左下にアプリの版（`CFBundleShortVersionString`。無ければ出さない）、右に `⋯` メニューと Quit。`⋯` には Settings… と Logs、区切りの下にログイン項目のオン・オフと、Keychain のマップを空にする「Forget saved secrets…」（`githubTokenFromGh` の印も消し、次の起動でまた尋ねる）。`totsuka` の場所と `PATH` は `defaults write <bundle ID> totsukaPath` / `pathOverride` で上書きできる
 - **更新**: 自分のバンドルが消えたら（`brew upgrade` と cleanup）メニューに「更新済み・再起動」を出し、CLI の隣の `Totsuka.app` を開いて自分は終わる。起動時に、ログイン項目が有効なら登録し直して新しい場所へ移す
 
 # テスト

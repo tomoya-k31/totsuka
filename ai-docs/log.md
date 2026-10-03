@@ -8,6 +8,7 @@
 * **Update**: [ADR-0053](/decisions/adr-0053-homebrew-tap-distribution.md) — `brew trust` の対話プロンプトが出ないことを 2026-08-31 に実測済みと追記。`verified` を付けない理由は未導入の Mac での実測だけになった
 * **Update**: [リリース Runbook](/operations/release-runbook.md) — `HOMEBREW_TAP_TOKEN` の失効日 2026-09-30 が実際と合わない（その後も bump が成功している）ので「未確認」とし、確かめ直す手順を書いた
 * **Update**: [Totsuka.app](/components/macos-app.md) — 有効な herdr / orca の稼働（herdr はソケット接続、orca は `orca status --json`）を Running の横に表示。タスク行の領域クリックで focus し、その際 IDE のアプリ（orca は Orca、herdr は `[macos].activate_bundle_id`）を前面に出すようにした。通知クリックも同じ
+* **Update**: [Totsuka.app](/components/macos-app.md) — パネル下段の Settings… / Logs を `⋯` メニューへ移し、メニューの全項目にアイコンを付け（`.labelStyle(.titleAndIcon)` が無いと macOS のメニューはアイコンを落とす）、空いた左下にアプリの版を出した。
 
 ## 2026-10-03
 
