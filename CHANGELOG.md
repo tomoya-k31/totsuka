@@ -11,6 +11,19 @@ Note: the plugin protocol is versioned independently of the application (see
 `crates/plugin-protocol`); a totsuka release does not imply a protocol-version
 change.
 
+## [0.10.5](https://github.com/tomoya-k31/totsuka/compare/v0.10.4...v0.10.5) (2026-10-03)
+
+
+### Features
+
+* **macos:** secret 入力で gh auth token を選べるようにし、起動のたびに gh からトークンを取る ([#859](https://github.com/tomoya-k31/totsuka/issues/859)) ([86871fd](https://github.com/tomoya-k31/totsuka/commit/86871fdd21f76ef3b14ccf230e8c0a0a6728bf6d))
+* **macos:** メニューバーのアイコンで作業中と要対応を動きで示す ([#862](https://github.com/tomoya-k31/totsuka/issues/862)) ([d6e8eb7](https://github.com/tomoya-k31/totsuka/commit/d6e8eb79fcadbd6b4640027ff5bedd43e438f628))
+
+
+### Documentation
+
+* **ai-docs:** ADR-0114 に実機検収の結果と verified を記録する ([#861](https://github.com/tomoya-k31/totsuka/issues/861)) ([360746c](https://github.com/tomoya-k31/totsuka/commit/360746c81fd1992cfe2501d593460b94dd64e80a))
+
 ## [0.10.4](https://github.com/tomoya-k31/totsuka/compare/v0.10.3...v0.10.4) (2026-10-03)
 
 
