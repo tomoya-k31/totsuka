@@ -11,6 +11,20 @@ Note: the plugin protocol is versioned independently of the application (see
 `crates/plugin-protocol`); a totsuka release does not imply a protocol-version
 change.
 
+## [0.10.6](https://github.com/tomoya-k31/totsuka/compare/v0.10.5...v0.10.6) (2026-10-03)
+
+
+### Features
+
+* **macos:** エージェント IDE の稼働表示と、タスク行クリックでの focus ([#867](https://github.com/tomoya-k31/totsuka/issues/867)) ([70bbf3e](https://github.com/tomoya-k31/totsuka/commit/70bbf3ed1f83ca8830e4b6903ff83d0cbf0355ae))
+
+
+### Documentation
+
+* **ai-docs:** Homebrew tap の formula が Totsuka.app を入れるようになったことを反映する ([#863](https://github.com/tomoya-k31/totsuka/issues/863)) ([e285b1d](https://github.com/tomoya-k31/totsuka/commit/e285b1d9c22c2b737a8814bbb8cdf1523d26398b))
+* **ai-docs:** Homebrew tap の「まだ済んでいないこと」を現状に合わせる ([#865](https://github.com/tomoya-k31/totsuka/issues/865)) ([0560fc6](https://github.com/tomoya-k31/totsuka/commit/0560fc66717161f1c24c01f138e05243858f78f1))
+* README の冒頭に Mac アプリのアイコンを表示する ([#866](https://github.com/tomoya-k31/totsuka/issues/866)) ([787a10c](https://github.com/tomoya-k31/totsuka/commit/787a10c8d89ddc8133d7dd53db2c33d1f7a6d7ae))
+
 ## [0.10.5](https://github.com/tomoya-k31/totsuka/compare/v0.10.4...v0.10.5) (2026-10-03)
 
 
