@@ -185,6 +185,7 @@ pub async fn publish_draft<T: SlackTransport>(
         created_at: std::time::SystemTime::now(),
         // Filled in below, once the nudge that announces this draft exists.
         nudge_ts: None,
+        sender_id: Some(pending.sender_id.clone()),
         alt_reply: None,
         alt_reply_sent: false,
     };
@@ -425,9 +426,7 @@ pub async fn handle_view_submission<T: SlackTransport>(
         .is_some_and(|options| options.iter().any(|o| o["value"] == "send"));
     let mut sent = false;
     if let (true, Some(alt)) = (wants_send, &alt_reply) {
-        // Addressed like an approved reply: the draft opens with the
-        // mechanical asker mention whenever there is someone to address.
-        let text = format!("{}{alt}", leading_mention(&draft.text));
+        let text = alt_reply_text(&draft, alt);
         let posted = api
             .chat_post_message(&PostMessage {
                 channel: &draft.channel,
@@ -530,6 +529,19 @@ fn reject_modal(draft: &Draft, metadata: &str) -> Value {
             }
         ]
     })
+}
+
+/// The alternative reply as posted: addressed like an approved reply, by the
+/// same rule — never by reading a mention back off the draft text, whose head
+/// may be a third party the agent addressed (a bot-raised draft has no
+/// prefix of its own, ADR-0079).
+fn alt_reply_text(draft: &Draft, alt: &str) -> String {
+    let prefix = draft
+        .sender_id
+        .as_deref()
+        .map(asker_prefix)
+        .unwrap_or_default();
+    format!("{prefix}{alt}")
 }
 
 /// The alternative reply as a display block, when there is one.
@@ -825,14 +837,6 @@ fn final_fallback(draft: &Draft) -> &'static str {
         _ if draft.alt_reply_sent => "❌ 返信案を却下し、代わりの返信を送信しました",
         _ => "❌ 返信案を却下しました",
     }
-}
-
-/// The mechanical `<@…> ` an approved reply opens with, taken back off the
-/// draft — `asker_prefix` put it there, so it is either that or nothing.
-fn leading_mention(text: &str) -> &str {
-    text.strip_prefix("<@")
-        .and_then(|rest| rest.find("> "))
-        .map_or("", |end| &text[..end + 4])
 }
 
 /// The Block Kit rendering of a draft: detection header, reply text,
@@ -1152,13 +1156,6 @@ fn starts_with_iso_date(text: &str) -> bool {
 mod tests {
     use super::asker_prefix;
 
-    #[test]
-    fn leading_mention_is_the_asker_prefix_or_nothing() {
-        assert_eq!(leading_mention("<@U_OTHER> 調査しました"), "<@U_OTHER> ");
-        assert_eq!(leading_mention("調査しました <@U_OTHER> "), "");
-        assert_eq!(leading_mention("<@U_OTHER>"), "");
-    }
-
     /// The prefix addresses a human and nobody else. A bot-raised task
     /// (ADR-0079) carries a `B…` sender, and `<@B…>` is not a mention Slack
     /// resolves — it renders as literal characters at the head of the reply.
@@ -1183,9 +1180,24 @@ mod tests {
             status,
             created_at: std::time::SystemTime::now(),
             nudge_ts: None,
+            sender_id: None,
             alt_reply: None,
             alt_reply_sent: false,
         }
+    }
+
+    /// The alternative reply is addressed to the asker and nobody else: a
+    /// bot-raised draft whose text opens with a third party's mention must
+    /// not lend that mention to the alternative reply.
+    #[test]
+    fn the_alternative_reply_is_addressed_to_the_asker_only() {
+        let mut draft = draft_of("<@U_THIRD> さんに聞いてください", DraftStatus::Pending);
+        draft.sender_id = Some("B0BOT".into());
+        assert_eq!(alt_reply_text(&draft, "別案"), "別案");
+        draft.sender_id = Some("U_ASKER".into());
+        assert_eq!(alt_reply_text(&draft, "別案"), "<@U_ASKER> 別案");
+        draft.sender_id = None;
+        assert_eq!(alt_reply_text(&draft, "別案"), "別案");
     }
 
     /// Every block type present in `blocks`, in order.
@@ -1435,6 +1447,7 @@ DEBUG: shutting down
             status: DraftStatus::Pending,
             created_at: std::time::SystemTime::now(),
             nudge_ts: None,
+            sender_id: None,
             alt_reply: None,
             alt_reply_sent: false,
         };
