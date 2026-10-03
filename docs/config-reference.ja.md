@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:87f931dc4e685cd2ea0e10a594f52114063b2f59fc36d0c0d5ca6e4985fa27cf -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:2a7cb751b7c87ee4d08b067f77abde9085aeeb252fb2deaebd03e666146c68c9 -->
 
 # 設定リファレンス
 
@@ -285,6 +285,23 @@ trigger = { assignee = "@none", filter = { and = [
 **`mention` はメンショントリガ**（Slack のみ）で、`mention = true` を書いたワークフローが自分宛メンションの行き先になる。**宛先 ID は持たない** — 誰宛が「自分宛」かは `[slack] target_user_id` と自分が所属するユーザーグループで決まるので、ここに書き写して実態とずれることがない。`reaction` / `channel` との併記は拒否される（起動する種別が 2 つになり、設定からどちらか読めないため）。`mention = false` は真偽値として素直に読むので `reaction` の横に書いてよいが、`mention = false` だけの trigger は起動条件が無いので拒否される。
 
 **`to_group` はメンションの宛先による振り分け**で、`mention = true` と併記したときだけ意味を持つ。書いたユーザーグループ宛のメンションがこの workflow へ行き、**`to_group` を持つ workflow は素の `mention = true`（catch-all）より常に優先する —— `[[workflows]]` の並び順は影響しない**。定義順が効くのは、別々のグループを名指した 1 メッセージが 2 つの workflow に一致したとき（`@oncall @design`）の tie-break だけで、先に書いた方が勝つ。名指しされていない所属グループ宛は catch-all に落ちるので、`to_group` を 1 つ足しても他のグループのメンションは今までどおり来る。**書けるのは自分が所属しているグループだけ**で、所属外は起動時に拒否される（自分が関与していない会話がここでエージェントを走らせる経路を作らないため）。`repo` を併記するとリポジトリを固定し、解決（`task/lookup`・LLM 分類）を丸ごと飛ばす。会話が既に決めたリポジトリより優先する。**`repo` は `to_group` を伴わなくても書ける** —— `trigger = { mention = true, repo = "web-app" }` は「どのメンションもこのリポジトリ」になり、分類 LLM を一切呼ばない（候補が 1 つの構成向け）。`to_group` を書いた時点で `usergroups:read` スコープが必須になる。**所属の照合は `totsuka config validate` では行えない** —— ライブな `usergroups.list` が要り、このコマンドは意図的にオフラインだからで、失効トークンを検出できないのと同じ区分である。
+
+**反応するグループそのものを絞るのは `to_group` ではなく `[slack] mention_groups`** である。`to_group` は「どの workflow に渡すか」を決めるだけで、名指ししなかった所属グループ宛は catch-all に落ちてタスクになる。全体連絡用のグループなど、そもそも反応したくないグループがあるなら `mention_groups` に反応したいグループだけを書く。リストに無いグループ宛はどの workflow にも渡らず、個人メンションは影響を受けない。`to_group` に書けるのは `mention_groups` に含まれるグループだけで、外れていると起動時エラーになる（その workflow は決して動かないため）。
+
+```toml
+[slack]
+mention_groups = ["S0ONCALL", "S0TEAM"]   # この 2 つ以外の所属グループ宛は無視する
+
+[[workflows]]
+name = "slack-oncall"
+projects = ["slack"]
+trigger = { mention = true, to_group = ["S0ONCALL"] }   # mention_groups の中から選ぶ
+
+[[workflows]]
+name = "slack-reply"
+projects = ["slack"]
+trigger = { mention = true }   # 個人メンションと S0TEAM 宛
+```
 
 **`channel` はチャンネル監視トリガ**で、そのチャンネルへのトップレベル投稿がそのままタスクになる。`channel_name`（改名検知のための照合用・必須）/ `repo`（タスクを向けるリポジトリ・必須）/ `from`（起動を許す投稿者を追加する。**既定は自分の投稿だけ**）を伴う。`reaction` との併記は拒否され、`channel` 抜きで残り 3 つだけ書くのも拒否される。監視ワークフローはそれ自体が 1 つの種別なので、`mention = true` を書く必要は無い（書くと併記として拒否される）
 
@@ -1165,6 +1182,7 @@ kind = "task_source"
 | `drain_limit` | int? | 100 | `gateway` 方式で、1 回の取り込みでタスクにする件数の上限。**`0` は拒否される。** `socket` 方式では読まれない |
 | `watch_poll_interval_secs` | int? | 60 | `gateway` 方式でのチャンネル監視のポーリング間隔（秒）。**監視はゲートウェイに載せられない** —— ゲートウェイが転送するのは自分を名指ししたものだけで、監視チャンネルへの普通の投稿は該当しないためである。ゲートウェイに監視チャンネル一覧を持たせると設定が 2 箇所に分かれ、ずれたときの症状が「監視が黙って効かない」になるので、代わりにチャンネル履歴を定期的に読む。**遅くなるのは監視経路だけ**で、メンション・リアクション・承認ボタンはキューから来る。ただしそちらも 1〜2 秒の保証ではない —— キューの読み取りはメッセージを**待つことがある**という規定であって待つ保証は無く、空応答が続けば読み取り側はバックオフする。**`0` は拒否される。** `socket` 方式では読まれない（Slack が push してくる） |
 | `thread_context_limit` | int | 6 | タスク本文に含めるスレッド直近メッセージ数 |
+| `mention_groups` | string[]? | なし | **反応するユーザーグループを workflow と無関係に限定する**。書いたグループ（`S…`）宛のメンションだけがタスクになり、それ以外の所属グループ宛はどの workflow にも渡らない。**省略すると所属する全グループ**、`[]` は**グループメンション無効**（個人メンションのみ）。個人メンション（`<@自分>`）には効かない。`S…` の形をしていない値（ハンドル `@oncall` やユーザー id）、**所属していないグループ**、**ここに無いグループを名指す `to_group`** はいずれも起動時エラーになる（どれも黙って効かない設定になるため）。値を書くときはユーザートークンに `usergroups:read` スコープが要る |
 | `reply_style` | string? | なし | タスク本文へ注入する返信トーンの指示 |
 | `[slack.prompts]` | テーブル | — | このプラグインが送るプロンプト文の上書き |
 | `source_name` | string | `slack` | 各タスクに刻印するソース名 |

@@ -6,6 +6,10 @@
 * **Update**: [task-source-slack](/components/task-source-slack.md) — メンション判定表①を「`bot_message` 以外の subtype」と「自アプリの bot」に絞った
 * **Update**: [ADR-0079](/decisions/adr-0079-reaction-on-bot-posts.md) — 不採用だった「メンション経路を緩める」案が ADR-0109 で覆ったことを注記
 * **Update**: [設定リファレンス](/development/config-reference.md) / [Slack クイックスタート](/operations/slack-quickstart.md) / [Event Gateway セットアップ](/operations/event-gateway-setup.md) / [実機検証](/components/live-e2e.md) — bot 投稿の扱いを更新
+* **Creation**: [ADR-0110 反応するグループメンションを [slack] mention_groups で事前に限定する](/decisions/adr-0110-slack-mention-groups.md) — workflow と無関係にタスク化するユーザーグループを限定する
+* **Update**: [task-source-slack](/components/task-source-slack.md) — 判定表④の所属グループが `mention_groups` との積集合になる
+* **Update**: [設定リファレンス](/development/config-reference.md) — `[slack] mention_groups`
+* **Update**: [Slack クイックスタート](/operations/slack-quickstart.md) — グループメンションが動かないときの確認項目に `mention_groups` を追加
 
 ## 2026-09-30
 

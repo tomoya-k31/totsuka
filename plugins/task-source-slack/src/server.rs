@@ -24,7 +24,7 @@ use serde_json::Value;
 
 use std::sync::Arc;
 
-use crate::config::{LlmConfig, RepoInfo, SlackConfig, static_config_errors};
+use crate::config::{LlmConfig, RepoInfo, SlackConfig, is_group_id, static_config_errors};
 use crate::draft::DraftStore;
 use crate::error::SlackError;
 use crate::gateway;
@@ -374,19 +374,6 @@ fn parse_route_repo(
             Err(())
         }
     }
-}
-
-/// Whether `id` has the shape Slack gives a user group id: `S` and then
-/// alphanumerics.
-///
-/// Checking the shape is what makes the rest of this worth anything, for the
-/// same reason it is on `from_bot`: a handle (`@oncall`) or a `U…` user id is
-/// a perfectly good non-empty string, so it would pass startup and then never
-/// equal any id in a `<!subteam^…>` tag. The membership check in `initialize`
-/// catches those too, but only when the scope is there to ask with.
-fn is_group_id(id: &str) -> bool {
-    let mut chars = id.chars();
-    chars.next() == Some('S') && id.len() > 1 && chars.all(|c| c.is_ascii_alphanumeric())
 }
 
 /// Refuse a trigger that names no kind of trigger, and one that names two.
@@ -796,6 +783,24 @@ where
         let (workflow_options, mut option_errors) =
             crate::workflow_options::WorkflowOptions::resolve(&init.workflows);
         errors.append(&mut option_errors);
+        // A `to_group` outside `[slack] mention_groups` (ADR-0110) is a route
+        // the list has already closed. Offline, so it is reported with the
+        // other config errors before the TokenGuard spends a Slack call.
+        if let Some(allowed) = &config.mention_groups {
+            let closed: Vec<&str> = reaction_triggers
+                .claimed_groups()
+                .filter(|g| !allowed.iter().any(|a| a == g))
+                .collect();
+            if !closed.is_empty() {
+                errors.push(format!(
+                    "`trigger.to_group` names user group(s) {} that `[slack] mention_groups` \
+                     does not list → mentions of them are ignored before any workflow is \
+                     chosen, so the workflow could never run; add them to `mention_groups`, \
+                     or drop them from `to_group`",
+                    closed.join(", ")
+                ));
+            }
+        }
         if !errors.is_empty() {
             return Err(Error::new(error_code::CONFIG_INVALID, errors.join("; ")));
         }
@@ -824,7 +829,14 @@ where
         //
         // Resolved once and handed to the pipeline, which would otherwise ask
         // again for an answer that cannot have changed in between.
-        let claimed: Vec<&str> = reaction_triggers.claimed_groups().collect();
+        //
+        // `[slack] mention_groups` (ADR-0110) joins the same check: a listed
+        // group the operator is not in would answer nothing, just as a
+        // `to_group` would.
+        let claimed: Vec<&str> = reaction_triggers
+            .claimed_groups()
+            .chain(config.mention_groups.iter().flatten().map(String::as_str))
+            .collect();
         let subteams = if claimed.is_empty() {
             None
         } else {
@@ -843,7 +855,7 @@ where
                         return Err(Error::new(
                             error_code::CONFIG_INVALID,
                             format!(
-                                "`trigger.to_group` names user group(s) {} that `{}` does not belong to \
+                                "`trigger.to_group` / `mention_groups` name user group(s) {} that `{}` does not belong to \
                                      → a mention of a group you are not in never reaches \
                                      this plugin, so the workflow could never run. Your \
                                      groups: {}",
@@ -884,8 +896,8 @@ where
                     return Err(Error::new(
                         code,
                         format!(
-                            "a workflow uses `trigger.to_group`, but the operator's user groups \
-                                 could not be resolved ({e}) → `to_group` is checked \
+                            "`trigger.to_group` or `mention_groups` is set, but the operator's user groups \
+                                 could not be resolved ({e}) → those are checked \
                                  against your live membership, and group mentions \
                                  cannot be routed without it. The usual cause is a \
                                  user token without the `usergroups:read` scope: \

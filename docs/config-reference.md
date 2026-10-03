@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:87f931dc4e685cd2ea0e10a594f52114063b2f59fc36d0c0d5ca6e4985fa27cf -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:2a7cb751b7c87ee4d08b067f77abde9085aeeb252fb2deaebd03e666146c68c9 -->
 
 # Configuration reference
 
@@ -284,6 +284,23 @@ With `filter` present, `status` is not sent to Notion; it is only checked agains
 **`mention` is the mention trigger** (Slack only): the workflow that writes `mention = true` is where mentions addressed to you go. It carries no ids — who counts as "you" is `[slack] target_user_id` plus the user groups you belong to, so there is nothing here to drift from them. Writing it beside `reaction` or `channel` is rejected, because two kinds would start it and the config would not say which. `mention = false` reads as the boolean it is and may sit beside a `reaction`, but a trigger holding only `mention = false` names no kind and is rejected.
 
 **`to_group` routes mentions by who they are addressed to**, and only means anything beside `mention = true`. A mention of a user group you list goes to that workflow, and **a workflow with `to_group` always wins over a bare `mention = true` (the catch-all) — the order in `[[workflows]]` does not matter**. Order decides only the tie, when one message names two groups claimed by two workflows (`@oncall @design`): the one written first wins. Mentions of your other groups still fall to the catch-all, so adding one `to_group` does not stop the rest. **You may only list groups you belong to** — anything else is rejected at startup, so a conversation you are not part of cannot start an agent here. Adding `repo` pins the repository and skips resolution entirely (no `task/lookup`, no classifier), overriding whatever the conversation had settled on. **`repo` works without `to_group` too** — `trigger = { mention = true, repo = "web-app" }` sends every mention to that repository and never calls the classifier, which is what a single-repository setup wants. Writing `to_group` makes the `usergroups:read` scope required. **`totsuka config validate` cannot check membership** — that needs a live `usergroups.list`, and the command is deliberately offline, exactly as it cannot check a revoked token.
+
+**To narrow which groups you answer at all, use `[slack] mention_groups`, not `to_group`.** `to_group` only decides which workflow a mention goes to; a mention of any other group you belong to still falls to the catch-all and becomes a task. If there are groups you never want to answer (a company-wide announcement group, say), list only the groups you do want in `mention_groups`. Mentions of unlisted groups reach no workflow, and personal mentions are unaffected. A `to_group` may only name groups in `mention_groups`; naming one outside it fails startup, since that workflow could never run.
+
+```toml
+[slack]
+mention_groups = ["S0ONCALL", "S0TEAM"]   # ignore mentions of every other group you are in
+
+[[workflows]]
+name = "slack-oncall"
+projects = ["slack"]
+trigger = { mention = true, to_group = ["S0ONCALL"] }   # must be one of mention_groups
+
+[[workflows]]
+name = "slack-reply"
+projects = ["slack"]
+trigger = { mention = true }   # personal mentions and S0TEAM
+```
 
 **`channel` is the channel watch trigger**: every top-level post in that channel becomes a task. It takes `channel_name` (required, checked against the live name so a rename is reported), `repo` (required, the repository those tasks go to) and `from` (extra people allowed to trigger it — **by default only your own posts do**). Writing it beside `reaction` is rejected, and so is writing the other three without `channel`. A watch is a trigger kind of its own, so it needs no `mention = true` — writing both is rejected
 
@@ -1166,6 +1183,7 @@ kind = "task_source"
 | `drain_limit` | int? | 100 | Under `gateway`, how many queued events become tasks per drain pass. **`0` is rejected.** Unread under `socket` |
 | `watch_poll_interval_secs` | int? | 60 | Under `gateway`, seconds between polls of watched channels. **Channel watching cannot ride the gateway**: the gateway only forwards things that name you, and an ordinary post in a watched channel does not. Giving the gateway a copy of the watch list would split the setting across two places, and when the two drift the symptom is that watching silently stops working — so totsuka polls the channel history instead. **Only the watch path gets slower**; mentions, reactions and approval buttons still come off the queue. That is not a one-to-two-second guarantee either, though: the queue read is specified as *allowed* to wait for a message, not required to, and the reader backs off when it keeps answering empty. **`0` is rejected.** Unread under `socket`, where Slack pushes these posts |
 | `thread_context_limit` | int | 6 | How many recent thread messages to include in the task body |
+| `mention_groups` | string[]? | none | **Limits which user groups you answer, independent of workflows.** Only mentions of the listed groups (`S…`) become tasks; mentions of your other groups reach no workflow. **Absent means every group you belong to**; `[]` turns **group mentions off** (personal mentions only). Personal mentions (`<@you>`) are unaffected. A value not shaped like a group id (a handle such as `@oncall`, or a user id), **a group you do not belong to**, and **a `to_group` naming a group missing from this list** all fail startup, since each would otherwise silently do nothing. A non-empty list needs the `usergroups:read` scope on the user token |
 | `reply_style` | string? | none | Tone instructions injected into the task body |
 | `[slack.prompts]` | table | — | Overrides for the prompts this plugin sends |
 | `source_name` | string | `slack` | The source name stamped on each task |

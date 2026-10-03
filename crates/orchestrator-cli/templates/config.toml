@@ -368,6 +368,8 @@
 #                                           #   noticeable
 # target_user_id = "U0000000000"            # your Slack user id; mentions of it become tasks
 # thread_context_limit = 6                  # recent thread messages included in the task body
+# mention_groups = ["S0123ABC"]             # only these user groups' mentions become tasks (any workflow).
+#                                           #   Absent = every group you are in; [] = personal mentions only
 # reply_style = "Concise, plain, no honorifics"   # tone instruction injected into the task body
 # event_source = "socket"                   # "socket" (this process holds the WebSocket) / "gateway"
 # drain_max_age_hours = 24                  # gateway: how far back queued events are still filed

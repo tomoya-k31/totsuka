@@ -4,7 +4,7 @@ title: 設定リファレンス（config.toml）
 description: "config.toml の全キー・デフォルト値・意味の一覧。設定ファイルは 1 本で、プラグイン個別設定もトップレベルの [<name>] テーブルに入る。シークレット参照、設定スキーマのバージョニング方針、[[projects]] の domain 宣言とワークフローからの参照、プラグインが定義する追加プロパティ、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-github の [github]、task-source-notion の [notion]、task-source-slack の [slack]、agent-ide-herdr の [herdr] を含む。"
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
 tags: [config, reference, toml, secrets, workflow, worktree, github, notion, slack, hooks, versioning]
-generated: { by: claude-code/opus-5.5, at: 2026-10-03T12:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-03T15:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -312,6 +312,23 @@ trigger = { assignee = "@none", filter = { and = [
 **`mention` はメンショントリガ**（slack のみ、[ADR-0080](/decisions/adr-0080-slack-mention-trigger-marker.md)）で、`mention = true` を書いた workflow が自分宛メンションの行き先になる。**宛先 ID は持たない** —— 誰宛が「自分宛」かは `[slack] target_user_id` と `usergroups.list` が解決した所属ユーザーグループで、trigger に書き写さないので実態とずれない。`reaction` / `channel` との併記は拒否される（起動する種別が 2 つになり、設定からどちらか読めない）。`mention = false` は真偽値として素直に読むので `reaction` の横に書いてよいが、**`mention = false` だけの trigger は起動条件が無い**ので拒否される。
 
 **`to_group` はメンションの宛先による振り分け**（[ADR-0081](/decisions/adr-0081-slack-group-mention-routing.md)）で、`mention = true` と併記したときだけ意味を持つ。書いたユーザーグループ宛のメンションがこの workflow へ行き、**`to_group` を持つ workflow は素の `mention = true`（catch-all）より常に優先する —— `[[workflows]]` の並び順は影響しない**。定義順が効くのは、別々のグループを名指した 1 メッセージが 2 つの workflow に一致したとき（`@oncall @design` のような場合）の tie-break だけで、そこは先に書いた方が勝つ。名指しされていない所属グループ宛は catch-all に落ちるので、`to_group` を 1 つ足しても他のグループのメンションは今までどおり来る。**書けるのは自分が所属しているグループだけ**で、所属外は `initialize` で拒否される（自分が関与していない会話がエージェントを走らせる経路を作らないため）。`repo` を併記するとリポジトリを固定し、`task/lookup` も LLM 分類も飛ばして即起票する（会話が既に決めたリポジトリより優先する）。**`repo` は `to_group` を伴わなくても書ける** —— `trigger = { mention = true, repo = "web-app" }` は「どのメンションもこのリポジトリ」になり、分類 LLM を一切呼ばない（候補が 1 つの構成向け）。`to_group` を書いた時点で `usergroups:read` スコープが必須になり、無ければ `CONFIG_INVALID`。**所属の照合は `totsuka config validate` では行えない** —— `usergroups.list` を引く必要があり、そちらは意図的にオフラインだからで、失効トークンを検出できないのと同じ区分である。
+
+**反応するグループそのものを絞るのは `to_group` ではなく `[slack] mention_groups`**（[ADR-0110](/decisions/adr-0110-slack-mention-groups.md)）。`to_group` は「どの workflow に渡すか」を決めるだけで、名指ししなかった所属グループ宛は catch-all に落ちてタスクになる。全体連絡用のグループなど、そもそも反応したくないグループがあるなら `mention_groups` に反応したいグループだけを書く。リストに無いグループ宛はどの workflow にも渡らず、個人メンションは影響を受けない。`to_group` に書けるのは `mention_groups` に含まれるグループだけで、外れていると `initialize` が `CONFIG_INVALID` を返す（その workflow は決して動かないため）。
+
+```toml
+[slack]
+mention_groups = ["S0ONCALL", "S0TEAM"]   # この 2 つ以外の所属グループ宛は無視する
+
+[[workflows]]
+name = "slack-oncall"
+projects = ["slack"]
+trigger = { mention = true, to_group = ["S0ONCALL"] }   # mention_groups の中から選ぶ
+
+[[workflows]]
+name = "slack-reply"
+projects = ["slack"]
+trigger = { mention = true }   # 個人メンションと S0TEAM 宛
+```
 
 **`from_bot` はリアクショントリガの許可リスト**（[ADR-0079](/decisions/adr-0079-reaction-on-bot-posts.md)）で、`reaction` と併記したときだけ意味を持つ（bot 投稿にもその絵文字を効かせる）。`reaction` 抜き・`channel` との併記・空配列はいずれも `CONFIG_INVALID` で弾かれる。
 
@@ -1248,6 +1265,7 @@ kind = "task_source"
 | `drain_limit` | int? | 100 | 同、1 回の取り込みで起票する件数の上限。**`0` は拒否される**。`socket` 方式では読まれない |
 | `watch_poll_interval_secs` | int? | 60 | `gateway` 方式での[チャンネル監視](/glossary/channel-watch.md)のポーリング間隔（秒）。**監視はゲートウェイに載せられない** —— ADR-0072 決定 4 で publish 対象を「自分に関係しうるもの」に絞ったため、監視チャンネルへの（メンションを含まない）投稿はそもそも流れてこない。ゲートウェイに監視チャンネル一覧を持たせると設定が 2 箇所に分かれ、ずれたときの症状が「監視が黙って効かない」になるので採らなかった。代わりに `conversations.history` を定期ポーリングする（[ADR-0068](/decisions/adr-0068-channel-watch-trigger.md) の起動時バックフィルを周期実行に広げるだけ）。**遅くなるのは監視経路だけ**で、メンション・リアクション・承認ボタンはキューの取り込みのままである。ただし**そちらも「1〜2 秒」の保証ではない** —— REST の `pull` は「メッセージが得られるまで**有界時間だけ待つことがある**」という規定で、待つことは保証されておらず、空応答が続くと取り込み側がバックオフする。**`0` は拒否される**。`socket` 方式では読まれない（Slack が push してくる） |
 | `thread_context_limit` | int | 6 | タスク本文に含めるスレッド直近メッセージ数 |
+| `mention_groups` | string[]? | なし | **反応するユーザーグループを workflow と無関係に限定する**（[ADR-0110](/decisions/adr-0110-slack-mention-groups.md)）。書いたグループ（`S…`）宛のメンションだけがタスクになり、それ以外の所属グループ宛はどの workflow にも渡らず捨てられる。**省略時は所属する全グループ**（従来どおり）、`[]` は**グループメンション無効**（個人メンションのみ）。個人メンション（`<@自分>`）には効かない。`S…` の形をしていない値（ハンドル `@oncall`・`U…`）は `config validate` で拒否、**所属していないグループ**と、**ここに無いグループを名指す `to_group`** は `initialize` で `CONFIG_INVALID`（どちらも黙って効かない設定になるため）。非空のときは所属照合のため `usergroups:read` が必須 |
 | `reply_style` | string? | なし | 返信トーンの指示（タスク本文へ注入、例 `"丁寧語で簡潔に"`） |
 | `[prompts]` | テーブル | — | このプラグインが送るプロンプト文の上書き（下記、#318） |
 | `source_name` | string | `slack` | `Task.source` に刻印するソース名 |

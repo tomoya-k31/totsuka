@@ -221,6 +221,14 @@ impl MentionFilter {
         self.subteams = subteams.into_iter().collect();
     }
 
+    /// Keep only the groups in `allowed` (`[slack] mention_groups`,
+    /// ADR-0110). Called after [`set_subteams`](Self::set_subteams), so a
+    /// group outside the list is simply not the operator's as far as row 4
+    /// is concerned.
+    pub fn restrict_subteams(&mut self, allowed: &[String]) {
+        self.subteams.retain(|g| allowed.contains(g));
+    }
+
     /// The operator's own user id — the identity the reaction trigger
     /// requires the *reacting* user to match (#319).
     pub(crate) fn target_user_id(&self) -> &str {
@@ -722,6 +730,17 @@ mod tests {
         app["bot_id"] = json!("B0APP");
         let mention = filter().assess(&app).expect("an app bot mention");
         assert_eq!(mention.user, "U_BOTUSER");
+    }
+
+    /// ADR-0110: a group outside `mention_groups` is ignored even though the
+    /// operator belongs to it; a listed one still passes.
+    #[test]
+    fn mention_groups_limits_which_groups_are_answered() {
+        let mut f = filter();
+        f.set_subteams(["S0MINE".to_string(), "S0NOISY".to_string()]);
+        f.restrict_subteams(&["S0MINE".to_string()]);
+        assert!(f.assess(&said("<!subteam^S0NOISY> 全体連絡")).is_none());
+        assert!(f.assess(&said("<!subteam^S0MINE> 見てほしい")).is_some());
     }
 
     #[test]

@@ -599,6 +599,12 @@ pub struct SlackConfig {
     /// The operator's own Slack user id (`U…`). Mentions of this user become
     /// tasks, and the TokenGuard refuses a token belonging to anyone else.
     pub target_user_id: String,
+    /// The user groups (`S…`) whose mentions this plugin answers, regardless
+    /// of workflow (ADR-0110). Absent = every group the operator belongs to;
+    /// `[]` = no group mentions at all, personal mentions only. Each listed
+    /// group must be one the operator belongs to (checked at `initialize`).
+    #[serde(default)]
+    pub mention_groups: Option<Vec<String>>,
     /// How many recent thread messages to include as context.
     #[serde(default = "default_thread_context_limit")]
     pub thread_context_limit: u32,
@@ -786,12 +792,36 @@ pub(crate) fn default_confidence_threshold() -> f64 {
     0.6
 }
 
+/// Whether `id` has the shape Slack gives a user group id: `S` and then
+/// alphanumerics.
+///
+/// Checking the shape is what makes the rest of this worth anything, for the
+/// same reason it is on `from_bot`: a handle (`@oncall`) or a `U…` user id is
+/// a perfectly good non-empty string, so it would pass startup and then never
+/// equal any id in a `<!subteam^…>` tag. The membership check in `initialize`
+/// catches those too, but only when the scope is there to ask with.
+pub(crate) fn is_group_id(id: &str) -> bool {
+    let mut chars = id.chars();
+    chars.next() == Some('S') && id.len() > 1 && chars.all(|c| c.is_ascii_alphanumeric())
+}
+
 /// Static (offline) config problems for `config/validate` (F-63), each in the
 /// "cause → next action" form (§7). Live token verification is *not* done
 /// here — that is the TokenGuard's job at `initialize` — so `config validate`
 /// and `doctor` probes stay deterministic and network-free.
 pub fn static_config_errors(config: &SlackConfig) -> Vec<String> {
     let mut errors = Vec::new();
+
+    // A handle or `U…` id is a fine string that never equals a group id, so
+    // it would pass and silently answer no group at all.
+    for id in config.mention_groups.iter().flatten() {
+        if !is_group_id(id) {
+            errors.push(format!(
+                "`mention_groups` has \"{id}\", which is not a user group id → write the id \
+                 in the group's URL, e.g. `mention_groups = [\"S0123ABC\"]` (not its handle)"
+            ));
+        }
+    }
 
     match (config.event_source, config.app_token.as_deref()) {
         // Socket Mode cannot open a connection without it.
@@ -1746,5 +1776,15 @@ mod tests {
             errors.iter().any(|e| e.contains("confidence_threshold")),
             "{errors:?}"
         );
+    }
+
+    /// ADR-0110: a handle or user id in `mention_groups` would answer no group.
+    #[test]
+    fn mention_groups_must_be_group_ids() {
+        let mut value = minimal();
+        value["mention_groups"] = serde_json::json!(["S0ABC", "@oncall"]);
+        let errors = static_config_errors(&parse(value));
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("@oncall"), "{errors:?}");
     }
 }
