@@ -128,4 +128,4 @@ manifest（`plugins/task-source-slack/plugin.toml`）と `initialize` 応答で 
 
 マニフェストで `config_schema = true` を宣言し、`initialize` より前の `config/schema` に `[slack]` のスキーマ（`plugin_sdk::config_schema::of::<SlackConfig>()`）で答える。実装はSDK の `TaskSourceHandler::config_schema`。スキーマは serde が読む `SlackConfig` から schemars で導出するので、受け付けないキーは載らない（`llm` は `RawLlmConfig` の形で載る）。全キー（入れ子を含む）に `x-title` / `x-help` があり、ヘルプに既定値を書いていないことを `config.rs` の `schema_tests` が、`initialize` 前に答えることを適合キットの検査 10 が確かめる。`x-secret` を付けたフィールド: `app_token` / `user_token` / `bot_token` / `llm.api_key`。
 
-答えには `[[workflows]]` のキー（`workflow`: `server::workflow_schema()`。`trigger` の 8 キー —— メンション・リアクション・チャンネル監視のどれに属するかをヘルプに書く —— と、claim する `publish`）と、`[[projects]]` 要素について「読むキーは無い」（`project`: `no_keys()`）も載せる。`TRIGGER_KEYS` とキーが一致することをテストで検査する（ADR-0109 §5）。
+答えには `[[workflows]]` のキー（`workflow`: `server::workflow_schema()`。`trigger` の 8 キー —— メンション・リアクション・チャンネル監視のどれに属するかをヘルプに書く —— と、claim する `publish`）と、`[[projects]]` 要素について「読むキーは無い」（`project`: `no_keys()`）も載せる。`TRIGGER_KEYS` とキーが一致することをテストで検査する（ADR-0113 §5）。

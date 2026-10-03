@@ -30,7 +30,7 @@ use crate::watch::WatchTriggers;
 /// why an unknown one fails startup instead of being ignored.
 const TRIGGER_KEYS: &[&str] = &["channel", "channel_name", "repo", "from"];
 
-/// The `workflow` part of this source's `config/schema` answer (ADR-0109):
+/// The `workflow` part of this source's `config/schema` answer (ADR-0113):
 /// the channel watch [`TRIGGER_KEYS`] names.
 fn workflow_schema() -> serde_json::Value {
     use plugin_sdk::config_schema::{watch_trigger, workflow};
@@ -239,7 +239,7 @@ where
         })
     }
 
-    /// `config/schema` (ADR-0109): this plugin's table as the settings
+    /// `config/schema` (ADR-0113): this plugin's table as the settings
     /// window's schema. Answered before `initialize`; needs no state.
     async fn config_schema(
         &mut self,

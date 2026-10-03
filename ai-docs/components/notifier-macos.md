@@ -65,6 +65,6 @@ Notifier として宣言する機能 capability は無い（`notify` を受け�
 - [フックシグナルフロー](/architecture/hook-signal-flow.md) / [フックのトラブルシューティング](/operations/hook-troubleshooting.md)
 - [ADR-0002 Rust workspace 構成と CI 品質ゲート](/decisions/adr-0002-rust-workspace-ci.md)
 
-# 設定スキーマ（`config/schema`、[ADR-0109](/decisions/adr-0109-native-menubar-app.md)）
+# 設定スキーマ（`config/schema`、[ADR-0113](/decisions/adr-0113-native-menubar-app.md)）
 
 マニフェストで `config_schema = true` を宣言し、`initialize` より前の `config/schema` に `[macos]` のスキーマ（`plugin_sdk::config_schema::of::<NotifierConfig>()`）で答える。実装は手書きの `match` に `config/schema` の腕を足した（SDK の dispatch を使っていないため）。スキーマは serde が読む `NotifierConfig` から schemars で導出するので、受け付けないキーは載らない。全キー（入れ子を含む）に `x-title` / `x-help` があり、ヘルプに既定値を書いていないことを `config.rs` の `schema_tests` が、`initialize` 前に答えることを適合キットの検査 10 が確かめる。`x-secret` を付けたフィールド: なし。

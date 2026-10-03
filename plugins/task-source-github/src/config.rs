@@ -731,7 +731,7 @@ mod schema_tests {
     }
 
     /// Every key of `[github]`, at any depth, carries an `x-title` and `x-help`
-    /// for the settings window, and no help states a default (ADR-0109).
+    /// for the settings window, and no help states a default (ADR-0113).
     #[test]
     fn every_key_has_title_and_help() {
         let schema = plugin_sdk::config_schema::of::<super::GithubConfig>().schema;

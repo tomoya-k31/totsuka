@@ -1,4 +1,4 @@
-//! `config/schema` answers (protocol 0.7.7, ADR-0109): a plugin's config table
+//! `config/schema` answers (protocol 0.7.7, ADR-0113): a plugin's config table
 //! as the JSON Schema the menu bar app's settings window renders.
 //!
 //! Derive `schemars::JsonSchema` on the struct `initialize` deserializes, put

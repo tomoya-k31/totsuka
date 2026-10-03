@@ -101,7 +101,7 @@ impl<F: SenderFactory> Server<F> {
         match method {
             method::INITIALIZE => self.initialize(id, params),
             method::CONFIG_VALIDATE => self.config_validate(id, params).await,
-            // ADR-0109: `[macos]` as the settings window's schema. Needs no
+            // ADR-0113: `[macos]` as the settings window's schema. Needs no
             // state, so it is answered before `initialize` like the above.
             method::CONFIG_SCHEMA => Reply::respond(Response::result(
                 id,

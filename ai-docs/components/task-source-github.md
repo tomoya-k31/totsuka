@@ -190,8 +190,8 @@ present/null を判定しているのはこのためで、`assignees` / `labels`
 - [Spec §4.2 タスクソース / F-02・F-04・F-07・F-08・F-84](/product/orchestrator-spec.ja.md)
 - [ADR-0002 Rust workspace 構成と CI 品質ゲート](/decisions/adr-0002-rust-workspace-ci.md)
 
-# 設定スキーマ（`config/schema`、[ADR-0109](/decisions/adr-0109-native-menubar-app.md)）
+# 設定スキーマ（`config/schema`、[ADR-0113](/decisions/adr-0113-native-menubar-app.md)）
 
 マニフェストで `config_schema = true` を宣言し、`initialize` より前の `config/schema` に `[github]` のスキーマ（`plugin_sdk::config_schema::of::<GithubConfig>()`）で答える。実装はSDK の `TaskSourceHandler::config_schema`。スキーマは serde が読む `GithubConfig` から schemars で導出するので、受け付けないキーは載らない。全キー（入れ子を含む）に `x-title` / `x-help` があり、ヘルプに既定値を書いていないことを `config.rs` の `schema_tests` が、`initialize` 前に答えることを適合キットの検査 10 が確かめる。`x-secret` を付けたフィールド: `token`。
 
-答えには `[[projects]]` 要素のキー（`project`: `ProjectOptions` から導出 —— `owner` / `owner_type` / `project_number` / `triage_status`）と、`[[workflows]]` の `trigger` のキー（`workflow`: `client::workflow_schema()`。`status` / `label` / `assignee` / `exclude`）も載せる。trigger は 1 キーずつ読まれるので手書きで、`TRIGGER_KEYS` / `EXCLUDE_KEYS` とキーが一致することをテストで検査する。設定画面はこれを、source が github の要素にだけ出す（ADR-0109 §5）。
+答えには `[[projects]]` 要素のキー（`project`: `ProjectOptions` から導出 —— `owner` / `owner_type` / `project_number` / `triage_status`）と、`[[workflows]]` の `trigger` のキー（`workflow`: `client::workflow_schema()`。`status` / `label` / `assignee` / `exclude`）も載せる。trigger は 1 キーずつ読まれるので手書きで、`TRIGGER_KEYS` / `EXCLUDE_KEYS` とキーが一致することをテストで検査する。設定画面はこれを、source が github の要素にだけ出す（ADR-0113 §5）。

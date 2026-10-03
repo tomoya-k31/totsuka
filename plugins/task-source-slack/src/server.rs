@@ -66,7 +66,7 @@ const TRIGGER_KEYS: &[&str] = &[
     "from",
 ];
 
-/// The `workflow` part of this source's `config/schema` answer (ADR-0109):
+/// The `workflow` part of this source's `config/schema` answer (ADR-0113):
 /// the trigger keys `TRIGGER_KEYS` names, and the options
 /// [`workflow_options`](crate::workflow_options) claims. A trigger is one of
 /// three kinds — a mention, a reaction, a channel watch — and the help says
@@ -1052,7 +1052,7 @@ where
         Ok(claims)
     }
 
-    /// `config/schema` (ADR-0109): this plugin's table as the settings
+    /// `config/schema` (ADR-0113): this plugin's table as the settings
     /// window's schema. Answered before `initialize`; needs no state.
     async fn config_schema(
         &mut self,

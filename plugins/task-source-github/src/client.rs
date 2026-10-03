@@ -75,7 +75,7 @@ pub const EXCLUDE_KEYS: &[&str] = &["assignee", "label", "status"];
 /// it.
 pub const TRIGGER_KEYS: &[&str] = &["assignee", "exclude", "label", "status"];
 
-/// The `workflow` part of this source's `config/schema` answer (ADR-0109):
+/// The `workflow` part of this source's `config/schema` answer (ADR-0113):
 /// the trigger keys [`TRIGGER_KEYS`] / [`EXCLUDE_KEYS`] name, for the settings
 /// window. A test holds the two lists and this schema to the same keys.
 pub fn workflow_schema() -> Value {

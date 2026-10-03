@@ -23,7 +23,7 @@ protocol_version = ">=0.7.5, <0.8"
 # AssignedEvent order. `label_writeback` (ADR-0108): answers
 # `task/update_labels` on the task's issue / PR.
 [capabilities]
-# ADR-0109: answers `config/schema` before `initialize` (protocol 0.7.7), so
+# ADR-0113: answers `config/schema` before `initialize` (protocol 0.7.7), so
 # the menu bar app's settings window can render this table as a form.
 config_schema = true
 task_claim = true

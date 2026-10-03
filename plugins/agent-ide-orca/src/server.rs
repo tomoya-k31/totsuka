@@ -128,7 +128,7 @@ where
         Ok(capabilities_result())
     }
 
-    /// `config/schema` (ADR-0109): this plugin's table as the settings
+    /// `config/schema` (ADR-0113): this plugin's table as the settings
     /// window's schema. Answered before `initialize`; needs no state.
     async fn config_schema(
         &mut self,

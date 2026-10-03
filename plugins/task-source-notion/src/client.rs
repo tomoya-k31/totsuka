@@ -71,7 +71,7 @@ pub const EXCLUDE_KEYS: &[&str] = &["assignee", "status"];
 /// it.
 pub const TRIGGER_KEYS: &[&str] = &["assignee", "exclude", "filter", "status"];
 
-/// The `workflow` part of this source's `config/schema` answer (ADR-0109):
+/// The `workflow` part of this source's `config/schema` answer (ADR-0113):
 /// the trigger keys [`TRIGGER_KEYS`] / [`EXCLUDE_KEYS`] name. `filter` goes to
 /// Notion verbatim, so it is edited as JSON (`x-raw`).
 pub fn workflow_schema() -> Value {

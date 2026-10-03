@@ -15,6 +15,6 @@ protocol_version = ">=0.7.0, <0.8"
 # itself, so this plugin publishes nothing.
 
 [capabilities]
-# ADR-0109: answers `config/schema` before `initialize` (protocol 0.7.7), so
+# ADR-0113: answers `config/schema` before `initialize` (protocol 0.7.7), so
 # the menu bar app's settings window can render this table as a form.
 config_schema = true
