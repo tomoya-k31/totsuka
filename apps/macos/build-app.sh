@@ -33,7 +33,7 @@ iconset="$(mktemp -d)/AppIcon.iconset"
 mkdir -p "${iconset}"
 cp Resources/Assets.xcassets/AppIcon.appiconset/*.png "${iconset}/"
 iconutil -c icns -o "${app}/Contents/Resources/AppIcon.icns" "${iconset}"
-cp Resources/Assets.xcassets/StatusBarTemplate.imageset/*.png "${app}/Contents/Resources/"
+cp Resources/Assets.xcassets/StatusBar*.imageset/*.png "${app}/Contents/Resources/"
 
 cat > "${app}/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
