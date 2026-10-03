@@ -138,7 +138,7 @@ fn expected_posted_reply() -> String {
 fn canned_bot_ok(shared: &Shared) {
     shared.push_for(
         "auth.test",
-        Canned::Data(json!({ "ok": true, "user_id": "U_BOT" })),
+        Canned::Data(json!({ "ok": true, "user_id": "U_BOT", "bot_id": "B_SELF" })),
     );
     shared.push_for(
         "conversations.open",
@@ -593,7 +593,7 @@ async fn bot_dm_resolution_failure_degrades_to_no_nudge() {
     // skipped for the run — the draft flow itself must be untouched.
     shared.push_for(
         "auth.test",
-        Canned::Data(json!({ "ok": true, "user_id": "U_BOT" })),
+        Canned::Data(json!({ "ok": true, "user_id": "U_BOT", "bot_id": "B_SELF" })),
     );
     shared.push_for("conversations.open", Canned::Network);
     let (_srv, _ws) = publish_draft_flow_with(&shared, &listener, init_params_with_bot()).await;

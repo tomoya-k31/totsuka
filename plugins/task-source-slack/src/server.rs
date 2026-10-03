@@ -1174,7 +1174,7 @@ async fn token_guard<T: SlackTransport>(
     // (visible to `doctor`) instead of silently dropping every nudge (#305).
     // Absent = nudges off by choice; nothing to probe.
     let own_bot_id = if config.bot_token.is_some() {
-        api.auth_test_bot().await?
+        Some(api.auth_test_bot().await?)
     } else {
         None
     };

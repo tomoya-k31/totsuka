@@ -291,7 +291,9 @@ async fn unknown_scopes_add_no_round_trip() {
 async fn initialize_probes_the_bot_token_when_configured() {
     let shared = Shared::default();
     push_guard_ok(&shared);
-    shared.push(Canned::Data(json!({ "ok": true, "user_id": "U_BOT" })));
+    shared.push(Canned::Data(
+        json!({ "ok": true, "user_id": "U_BOT", "bot_id": "B_SELF" }),
+    ));
     let (mut srv, _harness) = server(&shared);
 
     let mut params = init_params();
@@ -304,6 +306,29 @@ async fn initialize_probes_the_bot_token_when_configured() {
     assert_eq!(requests.len(), 3);
     assert_eq!(requests[2].method, "auth.test");
     assert_eq!(requests[2].token, TokenKind::Bot);
+}
+
+/// ADR-0109: the bot probe's `bot_id` is what keeps the plugin's own bot
+/// posts out of the mention path. A response without a usable one would
+/// start with that guard off while bot posting stays on, so it fails startup.
+#[tokio::test]
+async fn initialize_refuses_a_bot_probe_without_a_bot_id() {
+    for reply in [
+        json!({ "ok": true, "user_id": "U_BOT" }),
+        json!({ "ok": true, "user_id": "U_BOT", "bot_id": "" }),
+        json!({ "ok": true, "user_id": "U_BOT", "bot_id": 7 }),
+    ] {
+        let shared = Shared::default();
+        push_guard_ok(&shared);
+        shared.push(Canned::Data(reply.clone()));
+        let (mut srv, _harness) = server(&shared);
+
+        let mut params = init_params();
+        params["config"]["bot_token"] = json!("xoxb-bot-test");
+        let resp = call(&mut srv, 1, "initialize", params).await;
+        let (_, message) = error_of(&resp);
+        assert!(message.contains("bot_id"), "{reply}: {message}");
+    }
 }
 
 #[tokio::test]
@@ -1059,7 +1084,7 @@ async fn a_well_formed_watch_initializes() {
     let shared = Shared::default();
     push_guard_ok(&shared);
     // The bot-token probe the TokenGuard runs when `bot_token` is set.
-    shared.push(Canned::Data(json!({ "ok": true })));
+    shared.push(Canned::Data(json!({ "ok": true, "bot_id": "B_SELF" })));
     let (mut srv, _harness) = server(&shared);
 
     let params = init_params_watching(config_with_bot(), json!({ "from": ["U_MATE"] }));
@@ -1074,7 +1099,7 @@ async fn a_well_formed_watch_initializes() {
 async fn a_watch_coexists_with_the_mention_catch_all() {
     let shared = Shared::default();
     push_guard_ok(&shared);
-    shared.push(Canned::Data(json!({ "ok": true })));
+    shared.push(Canned::Data(json!({ "ok": true, "bot_id": "B_SELF" })));
     let (mut srv, _harness) = server(&shared);
 
     let params = init_params_watching(config_with_bot(), json!({}));

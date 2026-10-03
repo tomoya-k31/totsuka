@@ -32,6 +32,8 @@ ADR-0079 はこれを意図した挙動とし、bot 投稿を拾う手段をリ�
 
 `bot_token` があるときだけ `initialize` が bot トークンで `auth.test` を呼んでいたので、その応答の `bot_id` を `MentionFilter` に渡す。API 呼び出しは増えない。`bot_token` が無ければ bot 名義の投稿自体が無いので、除外も要らない。
 
+**`bot_id` の無い応答は起動失敗にする。** 除外が外れたまま bot 名義の投稿だけが有効になると、引用されたメンションでループするからである（Copilot の指摘で追加）。
+
 ## 3. `user` の無い古典的 bot 投稿は `bot_id` を送信者にする
 
 `subtype: bot_message` の投稿は `user` を持たない。ADR-0079 決定 4 と同じく `bot_id` を `Mention.user` に入れ、表示名は解決しない（pane には `B…` が出る）。アプリ bot の投稿は `user`（bot ユーザー）を持つので、そちらを使う。

@@ -555,7 +555,7 @@ async fn picker_posts_a_bot_nudge_when_configured() {
     // the TokenGuard's bot probe and the startup bot-DM open.
     shared.push_for(
         "auth.test",
-        Canned::Data(json!({ "ok": true, "user_id": "U_BOT" })),
+        Canned::Data(json!({ "ok": true, "user_id": "U_BOT", "bot_id": "B_SELF" })),
     );
     shared.push_for(
         "conversations.open",
@@ -607,7 +607,7 @@ async fn picker_post_failure_submits_hintless_without_a_nudge() {
     shared.push_for("chat.postEphemeral", Canned::Network);
     shared.push_for(
         "auth.test",
-        Canned::Data(json!({ "ok": true, "user_id": "U_BOT" })),
+        Canned::Data(json!({ "ok": true, "user_id": "U_BOT", "bot_id": "B_SELF" })),
     );
     shared.push_for(
         "conversations.open",

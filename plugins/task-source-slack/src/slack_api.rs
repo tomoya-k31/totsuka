@@ -546,8 +546,10 @@ impl<T: SlackTransport> SlackApi<T> {
     ///
     /// Returns the app's own `bot_id` (`B…`), which the mention filter needs
     /// to tell this plugin's bot posts from any other bot's (ADR-0109).
-    /// Optional: a response without it only costs that exclusion.
-    pub async fn auth_test_bot(&self) -> Result<Option<String>, SlackError> {
+    /// **Required**: without it the filter would admit the plugin's own bot
+    /// posts — which quote mentions back — while bot posting stays on, so a
+    /// response lacking it fails startup rather than opening that loop.
+    pub async fn auth_test_bot(&self) -> Result<String, SlackError> {
         let response = self
             .transport
             .call(TokenKind::Bot, "auth.test", None, true)
@@ -560,10 +562,12 @@ impl<T: SlackTransport> SlackApi<T> {
             }
             other => other,
         })?;
-        Ok(response
-            .get("bot_id")
-            .and_then(Value::as_str)
-            .map(str::to_string))
+        match string_field(&response, "auth.test", "bot_id")? {
+            id if id.is_empty() => Err(SlackError::InvalidResponse(
+                "`auth.test` response has an empty `bot_id`".into(),
+            )),
+            id => Ok(id),
+        }
     }
 
     /// `conversations.info` — the channel's name (`#general` without the
