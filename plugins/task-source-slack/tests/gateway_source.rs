@@ -172,6 +172,7 @@ async fn collect(
         GatewayOptions {
             backoff_base: Duration::from_millis(1),
             backoff_max: Duration::from_millis(5),
+            press_empty_max: Duration::from_millis(5),
             warn_after: 100,
         },
     );
@@ -407,6 +408,7 @@ async fn an_always_empty_subscription_does_not_busy_loop() {
         GatewayOptions {
             backoff_base: Duration::from_millis(20),
             backoff_max: Duration::from_millis(40),
+            press_empty_max: Duration::from_millis(40),
             warn_after: 100,
         },
     );
@@ -644,5 +646,49 @@ async fn a_queued_submission_is_rebuilt_into_a_view_submission() {
     assert!(
         shared.requests().is_empty(),
         "nothing is fetched: the record carries everything"
+    );
+}
+
+/// **A press is not left waiting on an idle queue's backoff.** The event
+/// subscription may back off to a long ceiling, but the press subscription
+/// keeps polling at `press_empty_max`, so a press that arrives after a long
+/// quiet spell is still picked up promptly.
+///
+/// Both drain loops pull from the one fake, so the empties ahead of the
+/// press are shared between them. With the long ceiling applied to both, the
+/// 30 empty answers take well over the 2-second budget below; with the short
+/// ceiling on the press loop they are gone in a fraction of a second.
+#[tokio::test]
+async fn a_press_after_a_quiet_spell_is_picked_up_promptly() {
+    let shared = Shared::default();
+    let mut batches: Vec<Vec<PulledMessage>> = vec![Vec::new(); 30];
+    batches.push(vec![PulledMessage {
+        ack_id: "ack-press".into(),
+        data: serde_json::to_string(&press_record(&ts_ago(60))).unwrap(),
+    }]);
+    let pubsub = Arc::new(FakePubSub {
+        batches: Arc::new(Mutex::new(batches)),
+        ..FakePubSub::default()
+    });
+    let config = gateway_config();
+    let api = Arc::new(SlackApi::new(transport(&shared)));
+    let gateway = Arc::new(config.gateway.clone().expect("gateway table"));
+    let (mut events, handle) = spawn(
+        api,
+        Arc::new(config),
+        gateway,
+        pubsub,
+        GatewayOptions {
+            backoff_base: Duration::from_millis(10),
+            backoff_max: Duration::from_secs(60),
+            press_empty_max: Duration::from_millis(10),
+            warn_after: 100,
+        },
+    );
+    let got = tokio::time::timeout(Duration::from_secs(2), events.recv()).await;
+    handle.abort();
+    assert!(
+        matches!(got, Ok(Some(SocketEvent::BlockActions(_)))),
+        "the press should arrive within 2s, got {got:?}"
     );
 }

@@ -368,8 +368,14 @@ fn decode_base64(encoded: &str) -> Result<String, SlackError> {
 pub struct GatewayOptions {
     /// First delay after an empty pull; doubles per consecutive empty answer.
     pub backoff_base: Duration,
-    /// Ceiling for that delay.
+    /// Ceiling for that delay, and for the delay after a failed pull.
     pub backoff_max: Duration,
+    /// Ceiling on the delay after an empty pull **of the press
+    /// subscription**. A press is somebody waiting on a button: at
+    /// `backoff_max` an idle queue is polled every 20 seconds, so a press
+    /// sat unanswered for ~10 seconds on average and up to 20. Failures still
+    /// back off to `backoff_max` — only idle polling is kept short.
+    pub press_empty_max: Duration,
     /// Consecutive failures after which each further one is logged at `warn`
     /// rather than `info` — a persistent outage, not a blip.
     pub warn_after: u32,
@@ -382,6 +388,8 @@ impl Default for GatewayOptions {
             // straight away rather than that nothing is happening.
             backoff_base: Duration::from_millis(500),
             backoff_max: Duration::from_secs(20),
+            // At most one idle pull a second, on one subscription.
+            press_empty_max: Duration::from_secs(1),
             warn_after: 5,
         }
     }
@@ -904,6 +912,7 @@ where
             Arc::clone(&pubsub),
             gateway.events_path(),
             tx.clone(),
+            options.backoff_max,
             options.clone(),
         );
         let presses = drain_forever(
@@ -912,6 +921,7 @@ where
             pubsub,
             gateway.block_actions_path(),
             tx,
+            options.press_empty_max,
             options,
         );
         tokio::join!(events, presses);
@@ -926,6 +936,7 @@ async fn drain_forever<T, P>(
     pubsub: Arc<P>,
     subscription: String,
     tx: mpsc::UnboundedSender<SocketEvent>,
+    empty_max: Duration,
     options: GatewayOptions,
 ) where
     T: SlackTransport,
@@ -974,11 +985,7 @@ async fn drain_forever<T, P>(
         if pulled.is_empty() {
             // `pull` is documented as *may* wait, so an immediate empty answer
             // is legal and a tight loop around it would spin a CPU.
-            let delay = capped_backoff(
-                options.backoff_base,
-                options.backoff_max,
-                empty_polls.min(8),
-            );
+            let delay = capped_backoff(options.backoff_base, empty_max, empty_polls.min(8));
             empty_polls = empty_polls.saturating_add(1);
             tokio::time::sleep(delay).await;
             continue;

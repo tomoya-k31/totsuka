@@ -2,6 +2,8 @@
 
 ## 2026-10-03
 
+* **Update**: [task-source-slack](/components/task-source-slack.md) — Gateway 構成の押下用購読は、空振り後の待ちの上限を 20 秒から 1 秒（`press_empty_max`）に縮め、ボタンの反応の遅れをなくした
+* **Update**: [ADR-0111](/decisions/adr-0111-reject-modal-alt-reply.md) / [ADR-0112](/decisions/adr-0112-gateway-reject-modal.md) — 「押下が届くまで最大 20 秒」の記述を現状に合わせた
 * **Creation**: [ADR-0112 Event Gateway が却下モーダルを開き、その送信を中継する](/decisions/adr-0112-gateway-reject-modal.md) — 任意のボットトークンで views.open、view_submission を新しいレコード種別として中継
 * **Update**: [ADR-0072](/decisions/adr-0072-slack-event-gateway.md) — 決定 1・4 を却下モーダルの経路に限って ADR-0112 が改めたことを Status に追記
 * **Update**: [ADR-0111](/decisions/adr-0111-reject-modal-alt-reply.md) — Gateway 経由の扱いを ADR-0112 へリンク
