@@ -56,7 +56,7 @@ Apple Developer Program には**加入しない**。それでも友人に配り�
 
 ## 3. 状態表示とメニュー
 
-- 状態は `totsuka menu --json`（`MenuModel`）を流用する。SwiftBar 版は残す（CLI だけで使う人の経路）
+- 状態は `totsuka menu --json`（`MenuModel`）を流用する。SwiftBar 版は残す（CLI だけで使う人の経路）。行にリポジトリと経過時間を出すため、`--json` の各行に `repo` と取り込み時刻 `created_at` を足した
 - メニューの操作は focus・cancel（確認付き）・retry。**CLI の `totsuka focus` / `task cancel` / `task retry` を呼ぶ**（当初は UDS へ直接 POST する案だったが、CLI がソケットの場所と hook-token（[ADR-0099](/decisions/adr-0099-generated-hook-token.md)。#785 で機密の参照ではなくなった）をすでに解決するので、同じ処理を Swift に持たない。ADR-0094 のエンドポイントは CLI の向こうで使われる）。**`task verify` は置かない**（取り消せない操作なので ADR-0065 と同じ判断）
 
 ## 4. 通知

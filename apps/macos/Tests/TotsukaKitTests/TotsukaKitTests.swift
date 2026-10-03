@@ -174,3 +174,27 @@ import Testing
         try? FileManager.default.removeItem(at: dir)
     }
 }
+
+@Suite struct MenuRowTests {
+    @Test func detailShowsRepoWorkflowStateAndElapsed() throws {
+        let data = Data(#"""
+        {"availability":"ok","attention_count":0,"attention":[],"degraded":[],
+         "working":[{"task_id":97,"state":"running","workflow":"github-task","title":"t",
+                     "repo":"web","created_at":"2026-10-03T11:48:10.699617Z"},
+                    {"task_id":98,"state":"queued","workflow":"w","title":"t"}]}
+        """#.utf8)
+        let menu = try MenuModel.decode(data)
+        let now = try #require(parseTimestamp("2026-10-03T12:00:40Z"))
+        #expect(menu.working[0].detail(now: now) == "web · github-task · running · 12m")
+        // An older CLI sends neither field: the row still renders.
+        #expect(menu.working[1].detail(now: now) == "w · queued")
+    }
+
+    @Test func elapsedIsShortAndNeverNegative() {
+        let start = Date(timeIntervalSince1970: 0)
+        #expect(elapsedText(from: start, to: start.addingTimeInterval(45)) == "45s")
+        #expect(elapsedText(from: start, to: start.addingTimeInterval(3 * 3600 + 5 * 60)) == "3h 5m")
+        #expect(elapsedText(from: start, to: start.addingTimeInterval(2 * 86400 + 4 * 3600)) == "2d 4h")
+        #expect(elapsedText(from: start, to: start.addingTimeInterval(-5)) == "0s")
+    }
+}

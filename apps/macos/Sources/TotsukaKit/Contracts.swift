@@ -20,8 +20,45 @@ public struct MenuRow: Decodable, Equatable, Hashable, Sendable, Identifiable {
     public let state: String
     public let workflow: String
     public let title: String
+    /// The repository the task resolved to; absent until it has one (and
+    /// from a CLI older than the field).
+    public let repo: String?
+    /// When the task was ingested (RFC 3339), what the row's elapsed time
+    /// counts from. Absent from a CLI older than the field.
+    public let createdAt: String?
 
     public var id: Int64 { taskId }
+
+    /// The row's second line: repository, workflow, state and how long ago
+    /// the task came in, leaving out whatever is not known.
+    public func detail(now: Date = Date()) -> String {
+        var parts = [repo, workflow, state].compactMap { $0 }
+        if let created = createdAt.flatMap(parseTimestamp) {
+            parts.append(elapsedText(from: created, to: now))
+        }
+        return parts.joined(separator: " · ")
+    }
+}
+
+/// An RFC 3339 timestamp as the CLI writes it, with or without fractional
+/// seconds.
+public func parseTimestamp(_ text: String) -> Date? {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    if let date = formatter.date(from: text) { return date }
+    formatter.formatOptions = [.withInternetDateTime]
+    return formatter.date(from: text)
+}
+
+/// A short elapsed time: `45s`, `12m`, `3h 5m`, `2d 4h`.
+public func elapsedText(from start: Date, to now: Date) -> String {
+    let seconds = max(0, Int(now.timeIntervalSince(start)))
+    switch seconds {
+    case ..<60: return "\(seconds)s"
+    case ..<3600: return "\(seconds / 60)m"
+    case ..<86400: return "\(seconds / 3600)h \(seconds % 3600 / 60)m"
+    default: return "\(seconds / 86400)d \(seconds % 86400 / 3600)h"
+    }
 }
 
 /// One `notify` line of `run --events-jsonl` — the fields notifier plugins

@@ -203,7 +203,7 @@ struct TaskMenu: View {
         HStack {
             VStack(alignment: .leading, spacing: 1) {
                 Text("#\(row.taskId) \(row.title)").lineLimit(1)
-                Text("\(row.workflow) · \(row.state)").font(.caption).foregroundStyle(.secondary)
+                Text(row.detail()).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer()
             Menu {

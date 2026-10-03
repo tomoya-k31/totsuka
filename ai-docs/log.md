@@ -14,6 +14,7 @@
 * **Update**: [ADR-0109](/decisions/adr-0109-native-menubar-app.md) / [Totsuka.app](/components/macos-app.md) — 設定画面を外した。Settings… は config.toml を `$TERMINAL -e $EDITOR` で開き、Logs は run の stderr を書いたファイルを `$TERMINAL` で `tail -F` する。機密は Start 時に Keychain に無い `secret:<名前>` を尋ねる。スキーマと config CLI の層は残した。
 * **Update**: [プラグイン開発ガイド](/development/plugin-dev-guide.md) — `config/schema` の説明から「メニューバーアプリの設定画面が尋ねる」前提を外した（設定画面を外したため）。
 * **Update**: [ADR-0109](/decisions/adr-0109-native-menubar-app.md) / [Totsuka.app](/components/macos-app.md) — config に `secret:` が無ければ `run` を `--secrets-stdin` なしで起動し、`op://` / `cmd:` / `bw:` を `run` 自身に解決させる。1Password / Bitwarden をアプリ側で解決する案を採らない理由を記録した。
+* **Update**: [orchestrator-cli](/components/orchestrator-cli.md) / [Totsuka.app](/components/macos-app.md) — `menu --json` の各行に `repo` と `created_at` を足し、アプリの行にリポジトリと経過時間を出した。
 * **Creation**: [ADR-0111 返信案の却下をモーダルで受け、代わりの返信を記録する](/decisions/adr-0111-reject-modal-alt-reply.md) — 却下押下でモーダルを開き、代わりの返信を記録する
 * **Update**: [task-source-slack](/components/task-source-slack.md) — `approval` / `socket_mode` / `draft` に却下モーダルと `alt_reply` を追記
 * **Creation**: [ADR-0109 Slack のメンション経路で bot と人間を区別しない](/decisions/adr-0109-slack-bot-mentions.md) — bot 投稿のメンション（個人・グループ）もタスクにする。自アプリの bot だけは除外
