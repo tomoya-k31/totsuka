@@ -3,6 +3,7 @@
 ## 2026-10-04
 
 * **Update**: [ADR-0114](/decisions/adr-0114-macos-app-gh-token.md) — 実機検収の結果を記録し `verified` を追加（ダイアログ、gh のトークンでの起動とカード移動、gh 失敗時に起動しないこと）
+* **Update**: [Homebrew tap](/infrastructure/homebrew-tap.md) — formula が Totsuka.app を入れるようになった（homebrew-tap PR #3）。「足すもの」の予定表記を、実際の formula・利用者の手順・quarantine が付かない実測に置き換えた
 
 ## 2026-10-03
 
