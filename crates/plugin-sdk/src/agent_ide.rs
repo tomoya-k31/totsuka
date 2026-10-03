@@ -59,7 +59,7 @@ pub trait AgentIdeHandler: Send {
         params: ConfigValidateParams,
     ) -> impl Future<Output = Result<ConfigValidateResult, Error>> + Send;
 
-    /// `config/schema` (0.7.7, ADR-0109) — gated on the `config_schema`
+    /// `config/schema` (0.7.7, ADR-0113) — gated on the `config_schema`
     /// capability; see
     /// [`TaskSourceHandler::config_schema`](crate::TaskSourceHandler::config_schema).
     fn config_schema(

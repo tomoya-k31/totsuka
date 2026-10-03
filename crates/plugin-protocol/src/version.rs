@@ -418,7 +418,7 @@ use semver::{Version, VersionReq};
 /// break for code that builds `Capabilities` with a struct literal and no
 /// `..Default::default()`.
 ///
-/// 0.7.7 (ADR-0109): [`method::CONFIG_SCHEMA`](crate::method::CONFIG_SCHEMA)
+/// 0.7.7 (ADR-0113): [`method::CONFIG_SCHEMA`](crate::method::CONFIG_SCHEMA)
 /// (O→P) with [`ConfigSchemaParams`](crate::methods::ConfigSchemaParams) /
 /// [`ConfigSchemaResult`](crate::methods::ConfigSchemaResult): the plugin
 /// describes its own config table as a JSON Schema, so the menu bar app's

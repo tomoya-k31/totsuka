@@ -40,7 +40,7 @@ task_source のみ:
 
 9. 最初のワークフローの trigger に未知のキーを足した `initialize` は `CONFIG_INVALID` で失敗し、メッセージがそのキー名を含む
 
-マニフェストで `config_schema` を宣言したプラグインのみ（0.7.7、[ADR-0109](/decisions/adr-0109-native-menubar-app.md)）:
+マニフェストで `config_schema` を宣言したプラグインのみ（0.7.7、[ADR-0113](/decisions/adr-0113-native-menubar-app.md)）:
 
 10. initialize 前の `config/schema` に、`schema` が `"type": "object"` の JSON オブジェクトである result で答える
 

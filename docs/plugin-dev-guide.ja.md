@@ -1,7 +1,7 @@
 > 🌐 [English](plugin-dev-guide.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:5a1e23c23448a3308eac31ea9861ba8a6d720cef8cc7725b001c545341d77ef7 -->
+<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:b4e83171e621aa6792c2709b83c4a18280d076647a275447fc84eb0cf096625d -->
 
 # プラグイン開発ガイド
 

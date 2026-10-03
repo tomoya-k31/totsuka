@@ -104,7 +104,7 @@ pub trait TaskSourceHandler: Send {
         params: ConfigValidateParams,
     ) -> impl Future<Output = Result<ConfigValidateResult, Error>> + Send;
 
-    /// `config/schema` (0.7.7, ADR-0109): a JSON Schema of this plugin's own
+    /// `config/schema` (0.7.7, ADR-0113): a JSON Schema of this plugin's own
     /// config table, answered before `initialize`.
     ///
     /// Defaulted to `METHOD_NOT_FOUND`, gated on the `config_schema`

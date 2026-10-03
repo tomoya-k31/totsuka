@@ -28,7 +28,7 @@ pub mod method {
     /// Validate plugin-specific config (O→P, F-59).
     pub const CONFIG_VALIDATE: &str = "config/validate";
     /// Describe the plugin's own config table as a JSON Schema (O→P, 0.7.7,
-    /// ADR-0109). Answered **before** `initialize`, like `config/validate`,
+    /// ADR-0113). Answered **before** `initialize`, like `config/validate`,
     /// and only sent to plugins whose [`Capabilities`] declare
     /// [`config_schema`](crate::Capabilities::config_schema).
     ///
@@ -548,13 +548,13 @@ pub struct ConfigValidateResult {
     pub warnings: Vec<String>,
 }
 
-/// `config/schema` params (O→P, 0.7.7, ADR-0109). Empty: the schema describes
+/// `config/schema` params (O→P, 0.7.7, ADR-0113). Empty: the schema describes
 /// the plugin's config *table*, not any particular value of it, so there is
 /// nothing to send.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConfigSchemaParams {}
 
-/// `config/schema` result (P→O, 0.7.7, ADR-0109).
+/// `config/schema` result (P→O, 0.7.7, ADR-0113).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConfigSchemaResult {
     /// A JSON Schema (draft 2020-12) for the plugin's own `[<name>]` table —
@@ -566,7 +566,7 @@ pub struct ConfigSchemaResult {
     /// that uses `$ref` is shown as raw TOML instead of a form.
     ///
     /// Besides the standard keywords, the settings GUI reads four extension
-    /// keywords on any property (ADR-0109): `x-title`, `x-help` and
+    /// keywords on any property (ADR-0113): `x-title`, `x-help` and
     /// `x-category` (a group label) as English strings, and `x-secret` (`true`
     /// for a value that is a secret reference). Unknown keywords are ignored, so a schema without them is
     /// still valid — the field is shown by its key with no help text.
@@ -591,7 +591,7 @@ pub struct ConfigSchemaResult {
     ///
     /// The settings window shows a workflow's form as the Orchestrator's keys
     /// plus this schema from the source its `projects` resolve to and from its
-    /// `agent`, so a field appears only where it means something (ADR-0109).
+    /// `agent`, so a field appears only where it means something (ADR-0113).
     /// Absent means "not described", as for [`project`](Self::project).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow: Option<serde_json::Value>,

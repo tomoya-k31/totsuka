@@ -73,7 +73,7 @@ pub struct Capabilities {
     /// instead of silently never sending them.
     pub label_writeback: bool,
     /// Answers `config/schema` with a JSON Schema of its own config table,
-    /// before `initialize` (any kind, 0.7.7, ADR-0109).
+    /// before `initialize` (any kind, 0.7.7, ADR-0113).
     ///
     /// Read from the manifest, so the host knows without launching the plugin
     /// whether to ask. Undeclared means the settings GUI shows the plugin's

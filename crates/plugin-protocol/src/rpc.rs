@@ -64,7 +64,7 @@ methods! {
     Initialize = INITIALIZE, InitializeParams => InitializeResult;
     /// `config/validate` (O→P, F-59).
     ConfigValidate = CONFIG_VALIDATE, ConfigValidateParams => ConfigValidateResult;
-    /// `config/schema` (O→P, 0.7.7, ADR-0109).
+    /// `config/schema` (O→P, 0.7.7, ADR-0113).
     ConfigSchema = CONFIG_SCHEMA, ConfigSchemaParams => ConfigSchemaResult;
     /// `task/update_status` (O→P, F-84).
     TaskUpdateStatus = TASK_UPDATE_STATUS, TaskUpdateStatusParams => IgnoredAny;
