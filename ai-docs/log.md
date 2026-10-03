@@ -10,6 +10,8 @@
 * **Update**: [slack-event-gateway](/components/slack-event-gateway.md) — `modal` モジュール、`bot_token`、`view_submission` の射影
 * **Update**: [task-source-slack](/components/task-source-slack.md) — `gateway_contract` / `gateway` が `view_submission` を受ける
 * **Update**: [Event Gateway 構築手順](/operations/event-gateway-setup.md) — 任意の `bot_token` と、それで増える資格情報
+* **Creation**: [ADR-0114](/decisions/adr-0114-macos-app-gh-token.md) — メニューバーアプリが `[github].token` の `secret:` を、入力ダイアログの「Use gh auth token」で選べば Start のたびに `gh auth token --hostname <host> --user <github_login>` から取る（保存しない）。PAT の発行を不要にする（#858）
+* **Update**: [macOS アプリ](/components/macos-app.md) — 起動の流れ、`Launch` / `CLI` の関数、Forget の挙動を追記
 * **Update**: [要対応（Attention）](/glossary/attention.md) / [orchestrator-cli](/components/orchestrator-cli.md) — 許可を求めて止まっている `running` タスクを要対応に入れ、`menu --json` の行に `waiting_for: "approval"` を付ける（SwiftBar では `awaiting_approval` と ⏸）。
 * **Update**: [orchestrator-core](/components/orchestrator-core.md) / [フックのトラブルシューティング](/operations/hook-troubleshooting.md) / [フックのセキュリティ](/security/hook-security.md) — `PostToolUse` フック（`on-post-tool-use.sh`）で許可待ちの印を外し、許可待ちのタスクを `health.json` の `awaiting_approval` に載せる。`on-notification.sh` がプロンプトごとに `prompt_id` を付け、同じセッションの 2 回目以降の許可プロンプトが重複として捨てられていた不具合を直した。
 * **Update**: [ADR-0113](/decisions/adr-0113-native-menubar-app.md) — 許可待ちをメニューの「Needs you」に出す決定と、DB の最後の信号から推す案を採らない理由を記録した。

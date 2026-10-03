@@ -43,6 +43,54 @@ public func usesSuppliedSecrets(_ config: JSONValue) -> Bool {
     }
 }
 
+/// The `secret:<name>` that `[github].token` refers to — the one secret the
+/// app may take from `gh auth token` instead of the Keychain (ADR-0114).
+public func githubTokenSecretName(in config: JSONValue) -> String? {
+    guard let token = config["github"]?["token"]?.string, token.hasPrefix("secret:") else {
+        return nil
+    }
+    let name = String(token.dropFirst("secret:".count))
+    return isSecretName(name) ? name : nil
+}
+
+/// `gh`'s `--hostname` for `[github].api_url`: `api.github.com` is
+/// `github.com`, `api.<sub>.ghe.com` is `<sub>.ghe.com`, and any other host
+/// (GitHub Enterprise Server) is itself. Nil for anything that is not a
+/// plain http(s) URL — a `${ENV}` or secret reference is never guessed at.
+public func ghHostname(apiURL: String) -> String? {
+    guard !apiURL.contains("${"), let url = URLComponents(string: apiURL),
+        let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http",
+        let host = url.host?.lowercased(), !host.isEmpty
+    else { return nil }
+    if host == "api.github.com" { return "github.com" }
+    if host.hasPrefix("api."), host.hasSuffix(".ghe.com"), host.count > "api..ghe.com".count {
+        return String(host.dropFirst(4))
+    }
+    return host
+}
+
+/// The `gh` host and account of the config's `[github]` table, for
+/// `gh auth token --hostname <host> --user <login>` — so a `gh auth switch`
+/// never hands `run` another account's token. Nil when either cannot be told
+/// from the file as written (a reference, an empty login, an `api_url` that
+/// is not a string): then there is nothing safe to ask `gh` for.
+public func ghAccount(in config: JSONValue) -> (host: String, login: String)? {
+    let github = config["github"]
+    let apiURL: String
+    switch github?["api_url"] {
+    case nil: apiURL = "https://api.github.com/graphql"
+    case .string(let s)?: apiURL = s
+    default: return nil
+    }
+    guard let login = github?["github_login"]?.string, !login.isEmpty,
+        login.unicodeScalars.allSatisfy({
+            $0.isASCII && (CharacterSet.alphanumerics.contains($0) || "-_".unicodeScalars.contains($0))
+        }),
+        let host = ghHostname(apiURL: apiURL)
+    else { return nil }
+    return (host, login)
+}
+
 private func isSecretName(_ name: String) -> Bool {
     !name.isEmpty
         && name.unicodeScalars.allSatisfy {
