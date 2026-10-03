@@ -7,12 +7,10 @@ import UserNotifications
 struct TotsukaApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var app: AppModel
-    @StateObject private var settings: SettingsModel
 
     init() {
         let app = AppModel()
         _app = StateObject(wrappedValue: app)
-        _settings = StateObject(wrappedValue: SettingsModel(app: app))
         AppDelegate.model = app
     }
 
@@ -23,12 +21,6 @@ struct TotsukaApp: App {
             MenuLabel(app: app)
         }
         .menuBarExtraStyle(.window)
-        Settings {
-            SettingsView(model: settings, app: app)
-        }
-        Window("Totsuka Logs", id: "logs") {
-            LogsView(app: app)
-        }
     }
 }
 
@@ -86,7 +78,6 @@ struct MenuLabel: View {
 /// width would follow its shortest labels.
 struct MenuContent: View {
     @ObservedObject var app: AppModel
-    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -120,14 +111,22 @@ struct MenuContent: View {
                 Button("Updated — restart") { app.restartIntoUpdate() }
             }
             HStack {
-                SettingsLink { Label("Settings…", systemImage: "gearshape") }
-                Button {
-                    openWindow(id: "logs")
-                    NSApp.activate()
-                } label: {
-                    Label("Logs", systemImage: "doc.text")
-                }
+                // No settings window: config.toml is edited in $EDITOR, and the
+                // log followed in $TERMINAL (ADR-0109 §5).
+                Button { app.openSettings() } label: { Label("Settings…", systemImage: "gearshape") }
+                    .help("Open config.toml in $EDITOR")
+                Button { app.openLogs() } label: { Label("Logs", systemImage: "doc.text") }
+                    .help("Follow totsuka run's output in $TERMINAL")
                 Spacer()
+                Menu {
+                    Toggle("Open at login", isOn: Binding(
+                        get: { app.launchesAtLogin }, set: { app.launchesAtLogin = $0 }))
+                    Button("Forget saved secrets…") { app.forgetSecrets() }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
                 Button { app.quit() } label: { Label("Quit", systemImage: "power") }
             }
             .buttonStyle(.borderless)
@@ -217,27 +216,5 @@ struct TaskMenu: View {
             .menuStyle(.borderlessButton)
             .fixedSize()
         }
-    }
-}
-
-struct LogsView: View {
-    @ObservedObject var app: AppModel
-
-    var body: some View {
-        VStack(alignment: .leading) {
-            ScrollView {
-                Text(app.logLines.joined(separator: "\n"))
-                    .font(.system(.caption, design: .monospaced))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            Button("Open log folder") {
-                let dir = stateDirectory(environment: app.cli?.environment ?? [:])
-                    .appendingPathComponent("logs")
-                NSWorkspace.shared.open(dir)
-            }
-        }
-        .padding()
-        .frame(minWidth: 600, minHeight: 360)
     }
 }

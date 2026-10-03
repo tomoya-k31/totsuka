@@ -99,60 +99,7 @@ import Testing
     }
 }
 
-@Suite struct SchemaTests {
-    @Test func classifiesFields() throws {
-        let schema = try #require(
-            JSONValue.parse(
-                #"""
-                {"type":"object","required":["name"],"properties":{
-                  "name":{"type":"string","x-title":"Name"},
-                  "level":{"type":["string","null"]},
-                  "mode":{"anyOf":[{"oneOf":[{"const":"plan"},{"const":"implement"}]},{"type":"null"}],
-                          "x-title":"Mode"},
-                  "token":{"type":"string","x-secret":true},
-                  "tags":{"type":"array","items":{"type":"string"}},
-                  "repos":{"type":"array","items":{"type":"object","properties":{"a":{"type":"string"}}}},
-                  "tools":{"type":"object","additionalProperties":{"type":"object","properties":{"k":{"type":"string"}}}},
-                  "trigger":{"type":"object"}
-                }}
-                """#))
-        guard case .object(let props) = fieldKind(schema) else {
-            Issue.record("not an object")
-            return
-        }
-        #expect(props.first?.key == "name", "required keys come first")
-        let kinds = Dictionary(uniqueKeysWithValues: props.map { ($0.key, fieldKind($0.schema)) })
-        #expect(kinds["level"] == .string)
-        #expect(kinds["mode"] == .choice(["plan", "implement"]))
-        #expect(kinds["token"] == .secret)
-        #expect(kinds["tags"] == .stringList)
-        #expect(kinds["trigger"] == .raw(reason: nil))
-        if case .list = kinds["repos"] {} else { Issue.record("repos is not a list") }
-        if case .map = kinds["tools"] {} else { Issue.record("tools is not a map") }
-        let mode = props.first { $0.key == "mode" }!.schema
-        #expect(annotation(nonNull(mode), "x-title") == "Mode")
-    }
-
-    @Test func newValuesFillOnlyRequiredKeys() throws {
-        let schema = try #require(
-            JSONValue.parse(
-                #"{"type":"object","required":["name","projects"],"properties":{"name":{"type":"string"},"projects":{"type":"array","items":{"type":"string"}},"tool":{"type":"string"}}}"#
-            ))
-        #expect(newValue(for: schema) == .object(["name": .string(""), "projects": .array([])]))
-    }
-
-    @Test func secretNamesAndPointers() {
-        #expect(secretName(for: ["github", "token"]) == "github.token")
-        #expect(secretName(for: ["slack", "bot_token"]) == "slack.bot_5Ftoken")
-        // One-to-one (Copilot on #849): neither `/` vs `_` nor a dot inside a
-        // segment vs a segment boundary may collide.
-        #expect(secretName(for: ["t", "a/b"]) != secretName(for: ["t", "a_b"]))
-        #expect(secretName(for: ["a.b"]) != secretName(for: ["a", "b"]))
-        let allowed = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-")
-        #expect(secretName(for: ["tools", "日本 語/x"]).allSatisfy { allowed.contains($0) })
-        #expect(JSONPointer.join(["tools", "my.tool", "a/b"]) == "/tools/my.tool/a~1b")
-    }
-
+@Suite struct CLITests {
     @Test func integersSurviveARoundTrip() throws {
         let value = try #require(JSONValue.parse(#"{"n":4,"r":0.8}"#))
         #expect(value.jsonText == #"{"n":4,"r":0.8}"#)
@@ -177,165 +124,42 @@ import Testing
     }
 }
 
-@Suite struct SettingsLayoutTests {
-    @Test func pagesHaveAFixedOrderAndPluginsAreGrouped() throws {
-        let keys = ["version", "max_concurrency", "worktree", "repositories", "projects", "workflows",
-                    "default_tool", "tools", "llm", "log", "hooks", "plugins",
-                    "orca", "slack", "macos", "github", "herdr", "notion", "discord", "zeta"]
-        var props: [String: JSONValue] = [:]
-        for key in keys { props[key] = .object([:]) }
-        let layout = SettingsLayout(schema: .object(["properties": .object(props)]))
-        #expect(layout.general.keys == ["version", "max_concurrency", "worktree"])
-        #expect(layout.settings.map(\.id) == ["repositories", "projects", "workflows", "tools", "llm", "log", "hooks"])
-        #expect(layout.settings.first { $0.id == "tools" }?.keys == ["default_tool", "tools"])
-        #expect(layout.plugins.map(\.id)
-            == ["github", "notion", "slack", "discord", "herdr", "orca", "macos", "zeta"])
-    }
-
-    @Test func referencesOfferWhatIsConfigured() throws {
+@Suite struct LaunchTests {
+    @Test func findsEverySecretReferenceOnce() throws {
         let config = try #require(JSONValue.parse(#"""
-            {"tools":{"claude-fast":{"kind":"claude"},"codex":{"kind":"codex"}},
-             "plugins":{"herdr":{"kind":"agent_ide"},"github":{"kind":"task_source"},"orca":{"kind":"agent_ide"}},
-             "projects":[{"name":"board"}],"repositories":[{"name":"web"},{"name":"cli"}]}
-            """#))
-        #expect(reference(for: ["workflows", "0", "tool"])?.0 == .tool)
-        #expect(reference(for: ["workflows", "2", "projects"])?.multiple == true)
-        #expect(reference(for: ["workflows", "0", "name"]) == nil)
-        #expect(referenceOptions(.tool, config: config) == ["claude", "codex", "opencode", "claude-fast"])
-        #expect(referenceOptions(.agent, config: config) == ["herdr", "orca"])
-        #expect(referenceOptions(.source, config: config) == ["github"])
-        #expect(referenceOptions(.project, config: config) == ["board"])
-        #expect(referenceOptions(.repository, config: config) == ["web", "cli"])
-    }
-}
-
-@Suite struct PlaceholderAndCleanupTests {
-    @Test func placeholdersComeFromXPlaceholderOrDefault() throws {
-        let explicit = try #require(JSONValue.parse(#"{"type":["integer","null"],"default":null,"x-placeholder":"4"}"#))
-        #expect(placeholder(explicit) == "4")
-        let derived = try #require(JSONValue.parse(#"{"type":"integer","default":30}"#))
-        #expect(placeholder(derived) == "30")
-        let none = try #require(JSONValue.parse(#"{"type":"string"}"#))
-        #expect(placeholder(none) == nil)
+        {"github":{"token":"secret:github.token"},
+         "llm":{"api_key_ref":"op://v/i/f"},
+         "slack":{"app_token":"secret:slack.app","bot_token":"secret:github.token"},
+         "x":["secret:", "secret:in.list"]}
+        """#))
+        #expect(secretNames(in: config) == ["github.token", "slack.app", "in.list"])
     }
 
-    @Test func cleanupIsAChoiceOrDays() throws {
-        let cleanup = try #require(JSONValue.parse(#"""
-            {"anyOf":[{"anyOf":[{"oneOf":[{"const":"immediate"},{"const":"manual"}]},
-              {"type":"object","required":["retention_days"],"properties":{"retention_days":{"type":"integer"}}}]},
-              {"type":"null"}],"x-title":"Cleanup"}
-            """#))
-        guard case .choiceOrObject(let choices, let object) = fieldKind(cleanup) else {
-            Issue.record("not a choice-or-object: \(fieldKind(cleanup))")
-            return
-        }
-        #expect(choices == ["immediate", "manual"])
-        #expect(object["properties"]?["retention_days"] != nil)
+    @Test func buildsTerminalCommandsFromTheEnvironment() {
+        let env = ["TERMINAL": "alacritty", "EDITOR": "nvim -p"]
+        #expect(
+            editorCommand(environment: env, path: "/a b/it's.toml")
+                == #"exec alacritty -e nvim -p '/a b/it'\''s.toml'"#)
+        #expect(
+            tailCommand(environment: env, path: "/s/app-run.log")
+                == "exec alacritty -e tail -n 200 -F '/s/app-run.log'")
+        #expect(editorCommand(environment: ["TERMINAL": "alacritty"], path: "/c") == nil)
+        #expect(editorCommand(environment: ["EDITOR": "vim", "TERMINAL": " "], path: "/c") == nil)
+        #expect(tailCommand(environment: [:], path: "/c") == nil)
     }
 
-    @Test func decodesThePluginList() throws {
-        let json = #"[{"name":"github","installed":true,"enabled":true,"kind":"task_source","version":"0.3.0"}]"#
-        let list = try PluginInfo.decodeList(Data(json.utf8))
-        #expect(list == [PluginInfo(name: "github", kind: "task_source", enabled: true)])
-    }
-}
-
-@Suite struct FormHintsTests {
-    @Test func longTextsAreMultiline() {
-        #expect(isMultiline(["github", "prompts", "triage_instructions"], value: nil))
-        #expect(isMultiline(["workflows", "0", "rubric"], value: nil))
-        #expect(isMultiline(["x"], value: .string("a\nb")))
-        #expect(!isMultiline(["log", "level"], value: .string("info")))
-    }
-
-    @Test func optionalFieldsWithADefaultAreAdvanced() throws {
-        let withDefault = Property(key: "t", schema: .object(["default": .int(30)]), required: false)
-        let bool = Property(key: "b", schema: .object(["type": .string("boolean"), "default": .bool(true)]), required: false)
-        let required = Property(key: "r", schema: .object(["default": .int(1)]), required: true)
-        let bare = Property(key: "s", schema: .object(["type": .string("string")]), required: false)
-        #expect(isAdvanced(withDefault))
-        #expect(isAdvanced(bool))
-        #expect(!isAdvanced(required))
-        #expect(!isAdvanced(bare))
-    }
-}
-
-@Suite struct EntryFormTests {
-    private func json(_ text: String) -> JSONValue { JSONValue.parse(text)! }
-
-    /// A projects item schema as `config schema` sends it, with github's and
-    /// slack's project keys attached.
-    private var projectItem: JSONValue {
-        json(#"""
-        {"type":"object","required":["name","source"],
-         "properties":{"name":{"type":"string"},"source":{"type":"string"}},
-         "x-by-source":{
-           "github":{"type":"object","required":["owner"],
-                     "properties":{"owner":{"type":"string"},"project_number":{"type":"integer"}}},
-           "slack":{"type":"object","properties":{}}}}
-        """#)
-    }
-
-    @Test func aProjectShowsItsSourcesKeysOnly() {
-        let form = entryForm(
-            collection: "projects", item: projectItem,
-            element: json(#"{"name":"b","source":"github","owner":"me"}"#), config: .object([:]))
-        let keys = Set(form.schema["properties"]?.object?.keys.map { $0 } ?? [])
-        #expect(keys == ["name", "source", "owner", "project_number"])
-        #expect(form.schema["required"] == json(#"["name","owner","source"]"#))
-        #expect(form.schema["x-by-source"] == nil)
-        #expect(form.unused.isEmpty)
-    }
-
-    /// Switching the source leaves the old source's keys behind; they are
-    /// listed, not hidden.
-    @Test func keysFromAnotherSourceAreUnused() {
-        let form = entryForm(
-            collection: "projects", item: projectItem,
-            element: json(#"{"name":"b","source":"slack","owner":"me","project_number":7}"#),
-            config: .object([:]))
-        #expect(form.unused == ["owner", "project_number"])
-    }
-
-    /// A source that did not describe its keys might read any of them, so
-    /// nothing is called unused.
-    @Test func anUndescribedSourceFlagsNothing() {
-        for source in ["notion", ""] {
-            let form = entryForm(
-                collection: "projects", item: projectItem,
-                element: json(#"{"name":"b","source":"\#(source)","owner":"me"}"#),
-                config: .object([:]))
-            #expect(form.unused.isEmpty, "\(source)")
-        }
-    }
-
-    @Test func aWorkflowUsesTheSourceOfItsProjectsAndItsAgent() {
-        let item = json(#"""
-        {"type":"object",
-         "properties":{"name":{"type":"string"},"projects":{"type":"array"},"agent":{"type":"string"},
-                       "trigger":{"type":"object","additionalProperties":true}},
-         "x-by-source":{"github":{"type":"object","properties":{
-             "trigger":{"type":"object","properties":{"status":{"type":"string"}}}}}},
-         "x-by-agent":{"herdr":{"type":"object","properties":{}}}}
-        """#)
-        let config = json(#"{"projects":[{"name":"board","source":"github"}]}"#)
-        let form = entryForm(
-            collection: "workflows", item: item,
-            element: json(#"""
-            {"name":"w","projects":["board"],"agent":"herdr","publish":"direct",
-             "trigger":{"status":"Todo","reaction":"eyes"}}
-            """#),
-            config: config)
-        #expect(form.schema["properties"]?["trigger"]?["properties"]?["status"] != nil)
-        #expect(form.unused == ["publish"])
-        #expect(form.unusedTrigger == ["reaction"])
-        #expect(workflowSource(json(#"{"projects":["nope","board"]}"#), config: config) == "github")
-    }
-
-    @Test func oneOrManyIsAList() {
-        let schema = json(#"{"anyOf":[{"type":"string"},{"type":"array","items":{"type":"string"}}]}"#)
-        #expect(acceptsOneOrMany(schema))
-        #expect(fieldKind(schema) == .stringList)
-        #expect(!acceptsOneOrMany(json(#"{"type":"array","items":{"type":"string"}}"#)))
+    @Test func runLogStartsOverWhenTooLarge() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        let log = RunLogFile(stateDirectory: dir)
+        log.begin()
+        log.append("one")
+        var text = try String(contentsOf: log.url, encoding: .utf8)
+        #expect(text.hasPrefix("--- run started "))
+        #expect(text.hasSuffix("one\n"))
+        log.begin(limit: 1)
+        text = try String(contentsOf: log.url, encoding: .utf8)
+        #expect(!text.contains("one"))
+        try? FileManager.default.removeItem(at: dir)
     }
 }

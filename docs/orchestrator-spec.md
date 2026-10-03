@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](orchestrator-spec.ja.md)
 
-<!-- generated-from: ai-docs/product/orchestrator-spec.md sha256:bed60b1bc25a4ab1e8f674ad94b1475e178bf1cb033d1c1f9c8165294f82df75 -->
+<!-- generated-from: ai-docs/product/orchestrator-spec.md sha256:88d42e89f46063cfec87939bc5f6d416f5d0b3eaae3a21b04e71c52853877808 -->
 
 # What totsuka is
 
@@ -98,7 +98,7 @@ A single binary, run in the foreground.
 | `task export` | Stream the audit log to stdout as NDJSON |
 | `plugin list / install / uninstall / enable / disable` | Plugin management |
 | `config validate / show [--redacted]` | Validate or print configuration, with secrets masked |
-| `config schema / get / set <path> <json> / unset <path>` | The configuration as JSON, for the menu bar app's settings window: the schema of every key, the file's contents, and one-key edits that keep your comments |
+| `config schema / get / set <path> <json> / unset <path>` | The configuration as JSON: the schema of every key, the file's contents, and one-key edits that keep your comments |
 | `doctor` | Diagnose the environment |
 | `logs [-f] [--task <id>]` | Read or follow logs |
 | `completion <shell>` | Shell completions |

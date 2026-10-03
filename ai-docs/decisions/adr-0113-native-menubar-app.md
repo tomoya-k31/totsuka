@@ -1,7 +1,7 @@
 ---
 type: Decision
-title: ADR-0113 ネイティブ macOS メニューバーアプリが run を子プロセスとして監督し、通知と設定 GUI を持つ
-description: "SwiftBar 向けの `totsuka menu` だけでは届かない 2 つの要件（アプリ名義のネイティブ通知と、config.toml の GUI 編集）のため、SwiftUI のメニューバーアプリ（apps/macos/）を足す決定。run は `--secrets-stdin` 付きの子プロセスとして起動し終了コードで再起動を判断、通知は `run --events-jsonl` の stdout、設定画面は JSON Schema（core は schemars、プラグインは新メソッド config/schema）から生成し読み書きは CLI 経由。Developer Program に加入しないため ad-hoc 署名の .app を release tarball に同梱して formula で配る。ADR-0065 の「Swift アプリ」却下を部分的に覆す。"
+title: ADR-0113 ネイティブ macOS メニューバーアプリが run を子プロセスとして監督し、通知を出す
+description: "SwiftBar 向けの `totsuka menu` では届かないアプリ名義のネイティブ通知のため、SwiftUI のメニューバーアプリ（apps/macos/）を足す決定。run は `--secrets-stdin` 付きの子プロセスとして起動し終了コードで再起動を判断、通知は `run --events-jsonl` の stdout。設定は GUI を作らず config.toml を `$TERMINAL` の `$EDITOR` で開き、機密は Start 時に Keychain に無い `secret:<名前>` を尋ねる（スキーマから組み立てる設定画面は実装後に外し、その下の config/schema と config CLI は残した）。Developer Program に加入しないため ad-hoc 署名の .app を release tarball に同梱して formula で配る。ADR-0065 の「Swift アプリ」却下を部分的に覆す。"
 resource: https://github.com/tomoya-k31/totsuka/tree/main/apps/macos
 tags: [decision, macos, menubar, notifier, config, protocol, distribution, adr]
 generated: { by: claude-code/opus-5.5, at: 2026-10-03T02:38:00+09:00 }
@@ -19,6 +19,8 @@ stable。gh stack の 5 層で入れる。本 ADR は 1 層目（プロトコル
 4. 同梱 7 プラグイン: `config/schema` に答える
 5. `apps/macos/`（SwiftUI アプリ）、CI のビルドジョブ、release tarball への同梱と formula
 
+**設定 GUI は実装して実機で見た後に外した**（2026-10-03、利用者の判断）。メニューバーだけを残し、設定は config.toml を `$EDITOR` で直接編集する（§5）。1〜4 層（スキーマと config CLI）は消さずに残しており、今のアプリが使うのは `config get` と `config validate` だけである。
+
 [ADR-0065](/decisions/adr-0065-menubar-status.md) の「却下した案」のうち **独立した Swift/AppKit `.app`** の行を覆す。SwiftBar 向けの `totsuka menu` はそのまま残し、アプリも状態の取得にその `--json` を使う。
 
 # Context
@@ -26,7 +28,7 @@ stable。gh stack の 5 層で入れる。本 ADR は 1 層目（プロトコル
 ADR-0065 は「要件が UI の自由度を必要としない」ことを理由に Swift アプリを却下し、SwiftBar のプラグイン書式を吐く `totsuka menu` を選んだ。その後、次の 2 つが要件になった:
 
 - **通知をアプリ名義で出し、クリックを受ける。** 今の通知は notifier-macos プラグインの osascript（クリック不可）か terminal-notifier（別アプリの名義）で、どちらも totsuka の通知として許可・管理できない
-- **`config.toml` を GUI で設定する。** カテゴリごとに 1 項目ずつ手入力し、項目ごとにヘルプを出す。設定が通るまで `run` を起動させない
+- **`config.toml` を GUI で設定する。** カテゴリごとに 1 項目ずつ手入力し、項目ごとにヘルプを出す。設定が通るまで `run` を起動させない（GUI は後に外した。設定が通るまで起動させない点は残る、§5）
 
 どちらも SwiftBar の上では作れない。一方で、アプリが `run` を監督する前提の下準備は #753〜#756 で済んでいる: SIGTERM / SIGHUP での graceful 停止（#753）、親プロセスから stdin で機密を受け取る `--secrets-stdin` と `secret:<name>`（[ADR-0100](/decisions/adr-0100-secrets-stdin.md)）、起動時エラーの終了コード（[ADR-0095](/decisions/adr-0095-run-startup-exit-codes.md)）、タスク操作のエンドポイント（[ADR-0094](/decisions/adr-0094-task-control-endpoints.md)）。GitHub トークンは無期限トークンで運用する（#756 の選択肢 a）。
 
@@ -36,7 +38,7 @@ Apple Developer Program には**加入しない**。それでも友人に配り�
 
 ## 1. 技術と配置
 
-- **Swift + SwiftUI**（`MenuBarExtra`、`Settings` シーン、`UserNotifications`）、**macOS 15 以上**。CLI 本体の前提（macOS 14 以上、仕様 §3.3）は変えない
+- **Swift + SwiftUI**（`MenuBarExtra`、`UserNotifications`）、**macOS 15 以上**。CLI 本体の前提（macOS 14 以上、仕様 §3.3）は変えない
 - ソースは同じリポジトリの **`apps/macos/`**。CLI のフラグ・JSON の形・config スキーマと同じ PR で追従できるようにするため
 - プロジェクトは **XcodeGen（`project.yml`）**。`.xcodeproj` は生成物としてコミットしない（pbxproj の衝突を避ける）
 - ロジックは SwiftPM のパッケージ（`apps/macos/Package.swift` の `TotsukaKit`）に置き、`swift test` で試す。Command Line Tools だけの環境でもテストとアプリ本体のビルドが通る（アセットカタログだけは Xcode の `actool` が要るので、出荷する `.app` は CI の `xcodebuild` がビルドする）
@@ -48,9 +50,9 @@ Apple Developer Program には**加入しない**。それでも友人に配り�
 - `totsuka run --watch --secrets-stdin --events-jsonl` を**子プロセス**として起動し、stdin の 1 行目に機密のマップを書いて開けたままにする（ADR-0100）
 - 終了コードで分ける: **1** は指数バックオフで再起動、**4**（設定・機密）と **2**（使い方）は止めてエラーを表示、**5**（lock 競合）は「外部の run が稼働中」として監視だけする
 - アプリ起動時は前回の状態（動いていたか）を復元する。停止は SIGTERM で、最大 300 秒（[ADR-0092](/decisions/adr-0092-git-timeout.md) の git 待ち）「停止中…」を出す。強制終了は別メニュー
-- 子プロセスの `PATH` は起動時に `$SHELL -lic env` から取り、設定で上書きできる（ADR-0100 の申し送り）
-- stderr は直近 N 行をメモリに持ってログウィンドウに出し、JSONL のログフォルダを開ける
-- **起動できる条件は `config validate --secrets-stdin` が exit 0 で終わること**。失敗した項目は設定画面に出す
+- 子プロセスの `PATH` は起動時に `$SHELL -lic env` から取り、`defaults` の `pathOverride` で上書きできる（ADR-0100 の申し送り）。`totsuka` の場所も `totsukaPath` で指せる
+- stderr は `$XDG_STATE_HOME/totsuka/app-run.log` に書き（起動ごとに見出し行、5 MB を超えたら次の起動で書き直す）、メニューの Logs で **`$TERMINAL -e tail -F`** する（`$TERMINAL` が無ければ Console で開く）。直近の数行は終了時のエラー表示に使う
+- **起動できる条件は `config validate --secrets-stdin` が exit 0 で終わること**。失敗の出力はメニューに出す
 
 ## 3. 状態表示とメニュー
 
@@ -65,7 +67,13 @@ Apple Developer Program には**加入しない**。それでも友人に配り�
 - 絞り込み（workflow × イベント種別、F-92）は **`[macos]` の設定をアプリが読んで適用する**。core が `[macos]` を読むのはプラグインの所有物に触ることになる（[ADR-0058](/decisions/adr-0058-config-ownership-boundary.md)）
 - クリックは `task_id` を `userInfo` で受けて `totsuka focus <task_id>` を呼ぶ
 
-## 5. 設定 GUI
+## 5. 設定
+
+- **設定画面は持たない。** メニューの Settings… は config.toml（`config get` が返すパス）を **`$TERMINAL -e $EDITOR <path>`** で開く。どちらもログインシェルの環境から取り、ユーザーのシェル断片として引数ごと使う（`nvim -p`、`alacritty --class x`）。どちらかが無ければ既定のテキストエディタ（`open -t`）で開く。変更は次の起動から効く
+- **機密は config.toml に `secret:<名前>` と手で書く**（ADR-0100）。Start のとき、config にある `secret:` の名前のうち Keychain の 1 項目（JSON マップ）に無いものを、パスワード欄のダイアログで 1 つずつ尋ねて保存してから起動する。取り消すと起動しない。メニューの「Forget saved secrets…」でマップを空にすると、次の起動でまた尋ねる。`op://` などの参照は `--secrets-stdin` の下では拒否されるので、アプリで動かす config には書けない
+- ログイン項目のオン・オフはメニューから切り替える
+
+以下は、外した設定画面のために入れ、**消さずに残した**下の層の決定である。今のアプリはこれを使わない。
 
 - **全項目を JSON Schema から生成する。** core は自分の部分を **schemars** で書き出し、各プラグインは新メソッド **`config/schema`** で自分のテーブルのスキーマを返す
 - `config/schema` は **`initialize` より前に答える**（`config/validate` と同じ）。`initialize` は機密を解決し、ポーリングや接続確認を始めるので、まだ機密が無い設定画面からは呼べない
@@ -76,7 +84,7 @@ Apple Developer Program には**加入しない**。それでも友人に配り�
   - `config schema` — core とプラグインのスキーマを 1 つのルートスキーマにまとめて返す
   - `config get` — 実際に読むファイル（`--config` / `hosts/<host>.toml` / `config.toml`、[ADR-0106](/decisions/adr-0106-per-host-config-file.md)）のパスと中身を JSON で返す
   - `config set <path> <json>` / `config unset <path>` — キーパスは JSON Pointer（ツール名・プラグイン名に `.` を含められるため。数字は既存の配列でだけ添字、`-` は追加）。`toml_edit` でコメントを保ったまま 1 キーずつ書き換える。**読めていたファイルを読めなくする書き込みは拒否する**が、1 キーずつなので途中の状態が `config validate` を通るとは限らない（起動の条件は別に `config validate` で見る）。シンボリックリンクは辿った先に書く（dotfiles の Stow を壊さない）
-- `x-secret` のフィールドは、保存すると config に **`secret:<キーパスから作った名前>`** が自動で書かれ（セグメントを `.` でつなぎ、`[A-Za-z0-9-]` 以外のバイトは `_` と 16 進 2 桁にする。`_` と `.` も逃がすので、別のキーが同じ名前になることはない）、値は Keychain の 1 項目（JSON マップ）に入る。既存の `op://` などの参照は `--secrets-stdin` の下では拒否されるので、設定画面で「要入力」として出し、入力されたら `secret:` に置き換える
+- （外した設定画面での扱い）`x-secret` のフィールドは、保存すると config に **`secret:<キーパスから作った名前>`** が自動で書かれ（セグメントを `.` でつなぎ、`[A-Za-z0-9-]` 以外のバイトは `_` と 16 進 2 桁にする。`_` と `.` も逃がすので、別のキーが同じ名前になることはない）、値は Keychain の 1 項目（JSON マップ）に入る。既存の `op://` などの参照は `--secrets-stdin` の下では拒否されるので、設定画面で「要入力」として出し、入力されたら `secret:` に置き換える
 
 ## 6. 配布
 
@@ -106,6 +114,7 @@ Apple Developer Program には**加入しない**。それでも友人に配り�
 | 通知を `menu --json` の差分から作る | ポーリングの間の遷移と完了イベントを取りこぼす |
 | 新しい notifier プラグインからアプリの UDS へ送る | アプリ側に受信サーバーと認証が要る。親子関係のパイプで足りる |
 | core が `[macos]` を読んで絞ってから stdout へ出す | プラグインの所有物を core が読むことになる（ADR-0058） |
+| 設定 GUI（スキーマから組み立てるフォーム） | 実装して実機で見た後、利用者の判断で外した（2026-10-03）。config.toml を `$EDITOR` で直接編集する形を選んだ。スキーマと config CLI は残してある |
 | 設定 GUI を主要項目の手書きフォームに絞る | スキーマが変わるたびに Swift 側を追従させる必要があり、プラグインのキーに届かない |
 | Swift 側で TOML をパース・書き出し | TOML の実装が 2 つになり、コメントの保持が怪しい |
 | プラグインのスキーマを `--print-schema` フラグで取る | プロトコルの外に 2 つ目の規約ができる |
@@ -120,6 +129,7 @@ Apple Developer Program には**加入しない**。それでも友人に配り�
 
 - 仕様 §3.2 の「常駐デーモン / サーバ運用」の行を改訂した。常駐するのはメニューバーアプリで、`run` はその子プロセスとしてローカルに起動されるライフサイクルのままである
 - プロトコルは 0.7.7 になる（加算的・patch。`Capabilities` を構造体リテラルで組むコードには source break）
+- `config/schema`・`config schema` / `set` / `unset`・プラグインのスキーマ（`x-by-source` / `x-by-agent` を含む）は、設定画面を外した今は**同梱のどこからも使われない**。プラグインがキーを増やしたときにスキーマの追従を求めるテスト（`missing_help` や `TRIGGER_KEYS` との一致）は残るので、保守の手間は続く。使い道が無いまま残るなら、消すかどうかを改めて決める
 - リポジトリに Swift と XcodeGen が入り、CI に macOS ランナーのジョブが増える（`apps/macos/` を触った PR だけでビルドする）
 - 機密を `--secrets-stdin` で渡す構成では、ターミナルから単独で `doctor` などを叩くと `secret:` を解決できない（ADR-0100 の帰結のまま）
 - `[[projects]]` / `[[workflows]]` に書くプラグイン所有のキー（`owner`・`project_number`・`trigger` の中身など）は、プラグインが `config/schema` の `project` / `workflow` で申告し、`config schema` がそれを要素のスキーマに `x-by-source` / `x-by-agent` として添える。申告しないプラグインの要素では core のキーしかフォームにならない。`on_*` は core のテーブルなので core のスキーマが `status` / `labels` を持つ

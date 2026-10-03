@@ -55,16 +55,6 @@ public enum RunEvent: Equatable, Sendable {
     }
 }
 
-/// `totsuka config schema`.
-public struct SchemaDocument: Sendable {
-    public let schema: JSONValue
-
-    public static func decode(_ data: Data) throws -> SchemaDocument {
-        let value = try JSONDecoder().decode(JSONValue.self, from: data)
-        return SchemaDocument(schema: value["schema"] ?? .object([:]))
-    }
-}
-
 /// `totsuka config get`.
 public struct ConfigDocument: Sendable {
     public let configPath: String
@@ -77,18 +67,6 @@ public struct ConfigDocument: Sendable {
             configPath: value["config_path"]?.string ?? "",
             exists: value["exists"]?.bool ?? false,
             config: value["config"] ?? .object([:]))
-    }
-}
-
-/// JSON Pointer (RFC 6901) — the key path `config set` / `unset` take.
-public enum JSONPointer {
-    public static func escape(_ segment: String) -> String {
-        segment.replacingOccurrences(of: "~", with: "~0")
-            .replacingOccurrences(of: "/", with: "~1")
-    }
-
-    public static func join(_ segments: [String]) -> String {
-        segments.map { "/" + escape($0) }.joined()
     }
 }
 

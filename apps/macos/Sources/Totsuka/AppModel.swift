@@ -25,7 +25,10 @@ final class AppModel: ObservableObject {
     /// The bundle this process was started from is gone (`brew upgrade` +
     /// cleanup): offer a restart into the new one.
     @Published private(set) var needsRestart = false
-    @Published private(set) var logLines: [String] = []
+    /// The last lines of `run`'s stderr, for the failure message. The full
+    /// stream goes to `runLog`, which Logs follows in `$TERMINAL`.
+    private var logLines: [String] = []
+    private var runLog: RunLogFile?
 
     private(set) var cli: TotsukaCLI?
     private var process: RunProcess?
@@ -66,10 +69,11 @@ final class AppModel: ObservableObject {
         var env = runEnvironment(login: login, own: ProcessInfo.processInfo.environment)
         if !pathOverride.isEmpty { env["PATH"] = pathOverride }
         guard let binary = locateTotsuka(override: binaryOverride, environment: env) else {
-            notice = "totsuka was not found → install it with Homebrew, or set its path in Settings"
+            notice = "totsuka was not found → install it with Homebrew, or `defaults write \(Bundle.main.bundleIdentifier ?? "") totsukaPath /path/to/totsuka`"
             return
         }
         cli = TotsukaCLI(binary: binary, environment: env)
+        runLog = RunLogFile(stateDirectory: stateDirectory(environment: env))
         await checkVersion()
         _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [
             .alert, .sound,
@@ -104,7 +108,17 @@ final class AppModel: ObservableObject {
         guard let cli, process == nil, !versionBlocked else { return }
         restartTimer?.invalidate()
         runState = .starting
-        guard let secretMap = loadSecrets() else { return }
+        guard let stored = loadSecrets() else { return }
+        let config = (try? await cli.run(["config", "get"])).flatMap {
+            try? ConfigDocument.decode($0.stdout)
+        }
+        // A `secret:<name>` with no value yet is asked for here — there is no
+        // settings window to enter it in (ADR-0109 §5).
+        let wanted = secretNames(in: config?.config ?? .object([:]))
+        guard let secretMap = askForMissingSecrets(wanted, in: stored) else {
+            runState = .stopped
+            return
+        }
         // The start gate (ADR-0109 §2): nothing runs until the config passes.
         let check = try? await cli.run(
             ["config", "validate", "--secrets-stdin"], stdin: secretsLine(secretMap))
@@ -112,16 +126,11 @@ final class AppModel: ObservableObject {
         guard runState == .starting else { return }
         guard let check, check.status == 0 else {
             let output = [check?.stdoutText, check?.stderrText].compactMap { $0 }.joined()
-            fail("The configuration does not pass → open Settings"
+            fail("The configuration does not pass → fix config.toml (Settings… opens it)"
                 + "\n" + output.trimmingCharacters(in: .whitespacesAndNewlines))
             return
         }
-        if let config = try? await cli.run(["config", "get"]),
-            let doc = try? ConfigDocument.decode(config.stdout)
-        {
-            macosConfig = doc.config["macos"]
-        }
-        guard runState == .starting else { return }
+        macosConfig = config?.config["macos"]
         let child = RunProcess(
             cli: cli,
             onEvent: { [weak self] event in Task { @MainActor in self?.handle(event) } },
@@ -134,6 +143,7 @@ final class AppModel: ObservableObject {
             return
         }
         process = child
+        runLog?.begin()
         requestedStop = false
         startedAt = Date()
         runState = .running
@@ -190,7 +200,7 @@ final class AppModel: ObservableObject {
                 [weak self] _ in Task { @MainActor in await self?.start() }
             }
         case .fail(.configuration):
-            fail("Configuration or secrets were refused (exit 4) → open Settings"
+            fail("Configuration or secrets were refused (exit 4) → fix config.toml (Settings… opens it)"
                 + "\n" + recentLog())
         case .fail(.usage):
             fail("totsuka refused the app's arguments (exit 2) → update both"
@@ -210,6 +220,7 @@ final class AppModel: ObservableObject {
     }
 
     private func appendLog(_ line: String) {
+        runLog?.append(line)
         logLines.append(line)
         if logLines.count > Self.logLimit { logLines.removeFirst(logLines.count - Self.logLimit) }
     }
@@ -238,10 +249,120 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Ask for each name the map lacks, save the map, and return it — or nil
+    /// when the person cancels (or the Keychain refuses), and nothing starts.
+    private func askForMissingSecrets(
+        _ names: [String], in stored: [String: String]
+    ) -> [String: String]? {
+        var map = stored
+        let missing = names.filter { map[$0] == nil }
+        guard !missing.isEmpty else { return map }
+        for name in missing {
+            let alert = NSAlert()
+            alert.messageText = "Secret “\(name)”"
+            alert.informativeText = "config.toml refers to secret:\(name). Its value is kept in the Keychain and handed to totsuka run on start."
+            let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
+            alert.accessoryView = field
+            alert.addButton(withTitle: "Save")
+            alert.addButton(withTitle: "Cancel")
+            alert.window.initialFirstResponder = field
+            NSApp.activate()
+            guard alert.runModal() == .alertFirstButtonReturn, !field.stringValue.isEmpty else {
+                notice = "Not started: secret:\(name) has no value"
+                return nil
+            }
+            map[name] = field.stringValue
+        }
+        do {
+            try secrets.save(map)
+        } catch {
+            fail("Keychain: " + String(describing: error))
+            return nil
+        }
+        return map
+    }
+
+    /// Drop every saved secret; the next start asks for them again.
+    func forgetSecrets() {
+        let alert = NSAlert()
+        alert.messageText = "Forget all saved secrets?"
+        alert.informativeText = "They are asked for again at the next start."
+        alert.addButton(withTitle: "Forget")
+        alert.addButton(withTitle: "Keep")
+        NSApp.activate()
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        do {
+            try secrets.save([:])
+            notice = nil
+        } catch {
+            notice = "Keychain: " + String(describing: error)
+        }
+    }
+
     func secretsLine(_ map: [String: String]) -> Data {
         var data = (try? JSONEncoder().encode(map)) ?? Data("{}".utf8)
         data.append(UInt8(ascii: "\n"))
         return data
+    }
+
+    // MARK: - config file and logs
+
+    /// Settings…: config.toml in `$EDITOR` inside `$TERMINAL`, else in the
+    /// default text editor. Changes take effect at the next start.
+    func openSettings() {
+        Task {
+            guard let cli, let result = try? await cli.run(["config", "get"]),
+                let doc = try? ConfigDocument.decode(result.stdout)
+            else {
+                notice = "Could not find config.toml (totsuka config get failed)"
+                return
+            }
+            guard doc.exists else {
+                notice = "There is no config.toml yet at \(doc.configPath) → run `totsuka init`"
+                return
+            }
+            if let line = editorCommand(environment: cli.environment, path: doc.configPath) {
+                launch(line, what: "$TERMINAL -e $EDITOR")
+            } else {
+                launch("exec open -t \(shellQuote(doc.configPath))", what: "open -t")
+            }
+        }
+    }
+
+    /// Logs: `run`'s stderr followed with `tail -F` in `$TERMINAL`, else in
+    /// Console.
+    func openLogs() {
+        guard let cli, let runLog else { return }
+        let path = runLog.url.path
+        if let line = tailCommand(environment: cli.environment, path: path) {
+            launch(line, what: "$TERMINAL")
+        } else {
+            if !FileManager.default.fileExists(atPath: path) { runLog.append("") }
+            launch("exec open -a Console \(shellQuote(path))", what: "open -a Console")
+        }
+    }
+
+    /// Run a `/bin/sh -c` line with the login shell's environment, without
+    /// waiting; a command that could not be found is reported in the menu.
+    private func launch(_ line: String, what: String) {
+        guard let cli else { return }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", line]
+        process.environment = cli.environment
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        process.terminationHandler = { [weak self] p in
+            // 126 / 127: the shell could not run or find the command.
+            guard p.terminationStatus == 126 || p.terminationStatus == 127 else { return }
+            Task { @MainActor in self?.notice = "Could not run \(what) → check it in your login shell" }
+        }
+        do {
+            try process.run()
+        } catch {
+            notice = "Could not run \(what): \(error.localizedDescription)"
+        }
     }
 
     // MARK: - notifications
