@@ -1,5 +1,9 @@
 # Bundle Update Log
 
+## 2026-10-04
+
+* **Update**: [ADR-0114](/decisions/adr-0114-macos-app-gh-token.md) — 実機検収の結果を記録し `verified` を追加（ダイアログ、gh のトークンでの起動とカード移動、gh 失敗時に起動しないこと）
+
 ## 2026-10-03
 
 * **Update**: [task-source-slack](/components/task-source-slack.md) — Gateway 構成の押下用購読は、空振り後の待ちの上限を 20 秒から 1 秒（`press_empty_max`）に縮め、ボタンの反応の遅れをなくした
