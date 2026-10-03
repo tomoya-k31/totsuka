@@ -434,7 +434,8 @@ impl DrainWindow {
 /// |---|---|
 /// | `message` | `ts` — Slack's, and the post *is* the event |
 /// | `block_actions` | `action_ts` — Slack's, stamped at the press |
-/// | `reaction` / `view_submission` | `received_at` — the **gateway's** |
+/// | `reaction` | `received_at` — the **gateway's** |
+/// | `view_submission` | none — a decision is not dropped on age |
 ///
 /// The reaction row is the compromise: Slack's `reaction_added` carries an
 /// `event_ts`, but the frozen record does not (ADR-0072 decision 7 closes the
@@ -451,9 +452,11 @@ fn event_time(record: &GatewayRecord) -> Option<SystemTime> {
             .action_ts
             .as_deref()
             .and_then(slack_ts_to_system_time),
-        RecordKind::Reaction | RecordKind::ViewSubmission => {
-            rfc3339_to_system_time(&record.received_at)
-        }
+        RecordKind::Reaction => rfc3339_to_system_time(&record.received_at),
+        // An operator's decision is never judged by age: `None` is "no
+        // evidence of age", which the window admits. A submission whose draft
+        // has expired is answered with the expiry notice downstream instead.
+        RecordKind::ViewSubmission => None,
     }
 }
 

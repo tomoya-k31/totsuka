@@ -239,7 +239,10 @@ impl GatewayRecord {
             ("alt_text", self.alt_text.is_some()),
             ("send_alt", self.send_alt.is_some()),
         ];
+        // `value` is the modal metadata: without the draft id in it the
+        // decision cannot be applied, only acked away.
         let submission_required = ["view_id"];
+        let submission_needs_value = self.value.is_none();
         let refuse = |problem: String| {
             Err(ContractError::KindMismatch {
                 kind: self.kind,
@@ -319,7 +322,10 @@ impl GatewayRecord {
                 }
             }
             RecordKind::ViewSubmission => {
-                let absent = missing(&submission_fields, &submission_required);
+                let mut absent = missing(&submission_fields, &submission_required);
+                if submission_needs_value {
+                    absent.push("value".into());
+                }
                 if !absent.is_empty() {
                     return refuse(format!("is missing {}", absent.join(", ")));
                 }
@@ -1112,12 +1118,17 @@ mod tests {
         let parsed = GatewayRecord::from_value(&submission()).unwrap();
         assert_eq!(parsed.delivery_id(), "view_submission:V0REJECT01");
 
-        let mut no_id = submission();
-        no_id.as_object_mut().unwrap().remove("view_id");
-        assert!(matches!(
-            GatewayRecord::from_value(&no_id),
-            Err(ContractError::KindMismatch { .. })
-        ));
+        for required in ["view_id", "value"] {
+            let mut without = submission();
+            without.as_object_mut().unwrap().remove(required);
+            assert!(
+                matches!(
+                    GatewayRecord::from_value(&without),
+                    Err(ContractError::KindMismatch { .. })
+                ),
+                "{required} is required"
+            );
+        }
         let mut with_press = submission();
         with_press["action_id"] = json!("reject_reply");
         assert!(matches!(

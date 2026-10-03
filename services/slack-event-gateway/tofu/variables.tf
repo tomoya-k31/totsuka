@@ -189,6 +189,13 @@ variable "operators" {
     condition     = alltrue([for o in var.operators : length(o.path_token) >= 32])
     error_message = "A path_token must be at least 32 characters. It is the routing credential on an endpoint with no IAM in front of it; generate one with `openssl rand -hex 24`."
   }
+
+  validation {
+    # Same rule as `Registry::validate`: caught here, a blank token fails the
+    # plan instead of deploying a revision that refuses to start.
+    condition     = alltrue([for o in var.operators : o.bot_token == null ? true : trimspace(o.bot_token) != ""])
+    error_message = "A bot_token, when given, must not be blank — omit the field instead."
+  }
 }
 
 variable "enable_apis" {

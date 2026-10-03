@@ -175,14 +175,20 @@ where
     // and is then not published: the decision now waits for the submission
     // (ADR-0112). Anything short of an opened modal publishes the press as
     // before, and totsuka rejects on the spot.
+    // What is left of the acknowledgement window for the publish, once a
+    // modal attempt has spent some of it.
+    let mut publish_budget = PUBLISH_BUDGET;
     if endpoint == Endpoint::Interactivity
         && let Some(token) = registration.bot_token.as_deref()
         && let Some((trigger_id, metadata)) = reject_press(&payload)
     {
         let view = reject_modal(&metadata);
-        match tokio::time::timeout(MODAL_BUDGET, gateway.modals.open(token, &trigger_id, &view))
-            .await
-        {
+        let started = std::time::Instant::now();
+        let opened =
+            tokio::time::timeout(MODAL_BUDGET, gateway.modals.open(token, &trigger_id, &view))
+                .await;
+        publish_budget = PUBLISH_BUDGET.saturating_sub(started.elapsed());
+        match opened {
             Ok(Ok(())) => {
                 tracing::info!(user = %registration.slack_user_id, "opened the reject modal");
                 return text(StatusCode::OK, "");
@@ -219,7 +225,7 @@ where
                     Topic::BlockActions => &registration.block_actions_topic,
                 };
                 let result = tokio::time::timeout(
-                    PUBLISH_BUDGET,
+                    publish_budget,
                     gateway.publisher.publish(topic, &encode(&item.record)),
                 )
                 .await;

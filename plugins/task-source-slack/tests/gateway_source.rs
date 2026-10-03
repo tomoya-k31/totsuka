@@ -622,12 +622,10 @@ async fn a_queued_submission_is_rebuilt_into_a_view_submission() {
         ..message_record("100.0", false, &[])
     };
     let pubsub = Arc::new(FakePubSub::with_records(&[record]));
-    // The record's `received_at` is a fixed past date; a submission is judged
-    // by it, so widen the window instead of faking the clock.
-    let mut config = gateway_config();
-    config.drain_max_age_hours = Some(24 * 365 * 10);
 
-    let events = collect(&shared, config, Arc::clone(&pubsub), 1).await;
+    // `received_at` is weeks old, far past the default 24-hour window: a
+    // decision is not dropped on age.
+    let events = collect(&shared, gateway_config(), Arc::clone(&pubsub), 1).await;
     assert_eq!(events.len(), 1, "expected one rebuilt event");
     let SocketEvent::ViewSubmission(payload) = &events[0] else {
         panic!("expected a view submission, got {:?}", events[0]);

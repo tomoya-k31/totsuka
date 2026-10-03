@@ -243,6 +243,25 @@ mod tests {
         format!("{seed}{}", "0".repeat(pad))
     }
 
+    /// `bot_token` is optional, but a blank one is refused: it would fail
+    /// every reject modal and fall back with only a log line to show for it.
+    #[test]
+    fn a_blank_bot_token_is_refused_and_an_omitted_one_is_fine() {
+        let a = tok("tok-a");
+        assert!(Registry::parse(&table(&row(&a, "U_A"))).is_ok(), "omitted");
+        let with_token = |token: &str| {
+            row(&a, "U_A").replace(
+                r#""signing_secret":"s","#,
+                &format!(r#""signing_secret":"s","bot_token":"{token}","#),
+            )
+        };
+        assert!(Registry::parse(&table(&with_token("xoxb-1"))).is_ok());
+        for blank in ["", "  "] {
+            let err = Registry::parse(&table(&with_token(blank))).unwrap_err();
+            assert!(err.to_string().contains("empty `bot_token`"), "{err}");
+        }
+    }
+
     #[test]
     fn a_registered_path_resolves_to_its_row() {
         let (a, b) = (tok("tok-a"), tok("tok-b"));

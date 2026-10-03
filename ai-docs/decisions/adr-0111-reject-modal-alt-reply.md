@@ -4,7 +4,7 @@ title: ADR-0111 返信案の却下をモーダルで受け、代わりの返信�
 description: 承認フローの「却下」押下で views.open のモーダルを開き、送信（view_submission）で却下を確定して、運用者が書いた「代わりの返信」を下書き・ナッジ DM の判定記録・ログに残し、チェックしたときだけ本人名義でスレッドにも投稿する決定。モーダルが開けない押下（trigger_id が無い Gateway 経由・期限切れ）は従来どおりその場で却下にし、却下そのものは失わない。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/plugins/task-source-slack/src/approval.rs
 tags: [decision, slack, approval, modal, adr]
-generated: { by: claude-code/opus-5.5, at: 2026-10-03T18:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-03T22:00:00+09:00 }
 verified: { by: human:tomoya-k31, at: 2026-10-03T10:34:54Z }
 status: stable
 owner: tomoya-k31

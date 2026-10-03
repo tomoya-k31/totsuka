@@ -105,7 +105,11 @@ pub fn reject_press(payload: &Value) -> Option<(String, String)> {
     let trigger_id = payload.get("trigger_id").and_then(Value::as_str)?;
     let mut metadata: Value =
         serde_json::from_str(action.get("value").and_then(Value::as_str)?).ok()?;
-    metadata.get("d")?;
+    // All three, as strings: the submission is routed by `c` / `ts`, and a
+    // modal whose submission cannot be routed would swallow the rejection.
+    for key in ["d", "c", "ts"] {
+        metadata.get(key)?.as_str()?;
+    }
     metadata["r"] = payload.get("response_url").cloned().unwrap_or(Value::Null);
     Some((trigger_id.to_string(), metadata.to_string()))
 }
@@ -188,6 +192,10 @@ mod tests {
         assert!(
             reject_press(&press("reject_reply", "draft-1")).is_none(),
             "an old button"
+        );
+        assert!(
+            reject_press(&press("reject_reply", r#"{"d":"draft-1"}"#)).is_none(),
+            "no thread to route the submission to"
         );
         let mut no_trigger = press("reject_reply", value);
         no_trigger.as_object_mut().unwrap().remove("trigger_id");
