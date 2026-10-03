@@ -1,0 +1,1 @@
+* **Update**: [Totsuka.app](/components/macos-app.md) — 有効な herdr / orca の稼働（herdr はソケット接続、orca は `orca status --json`）を Running の横に表示。タスク行の領域クリックで focus し、その際 IDE のアプリ（orca は Orca、herdr は `[macos].activate_bundle_id`）を前面に出すようにした。通知クリックも同じ

@@ -40,8 +40,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         _ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
-        if let id = response.notification.request.content.userInfo["task_id"] as? String {
-            Task { @MainActor in Self.model?.focus(id) }
+        let info = response.notification.request.content.userInfo
+        if let id = info["task_id"] as? String {
+            let workflow = (info["workflow"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            Task { @MainActor in Self.model?.focus(id, workflow: workflow) }
         }
         completionHandler()
     }
@@ -117,6 +119,16 @@ struct MenuContent: View {
                 Text(status.text)
                     .font(.headline)
                     .lineLimit(3)
+                ForEach(app.agentIDEs, id: \.name) { ide in
+                    HStack(spacing: 2) {
+                        Image(systemName: ide.up ? "checkmark.circle.fill" : "xmark.circle.fill")
+                            .foregroundStyle(ide.up ? .green : .red)
+                        Text(ide.name)
+                    }
+                    .font(.caption)
+                    .fixedSize()
+                    .help(ide.up ? "\(ide.name) is running" : "\(ide.name) is not running → start it")
+                }
                 Spacer()
                 toggle
             }
@@ -222,21 +234,28 @@ struct TaskSection: View {
     }
 }
 
-/// A task row: focus, retry, cancel (no `verify` — it cannot be undone, as in
-/// ADR-0065).
+/// A task row: a click focuses it; retry and cancel in its menu (no `verify`
+/// — it cannot be undone, as in ADR-0065).
 struct TaskMenu: View {
     @ObservedObject var app: AppModel
     let row: MenuRow
+    @State private var hovering = false
 
     var body: some View {
         HStack {
-            VStack(alignment: .leading, spacing: 1) {
-                Text("#\(row.taskId) \(row.title)").lineLimit(1)
-                Text(row.detail()).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            Button { app.focus(String(row.taskId), workflow: row.workflow) } label: {
+                HStack {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("#\(row.taskId) \(row.title)").lineLimit(1)
+                        Text(row.detail()).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    Spacer()
+                }
+                .contentShape(Rectangle())
             }
-            Spacer()
+            .buttonStyle(.plain)
+            .help("Focus")
             Menu {
-                Button("Focus") { app.focus(String(row.taskId)) }
                 Button("Retry") { app.retry(row.taskId) }
                 Button("Cancel…") { app.cancel(row) }
             } label: {
@@ -245,5 +264,8 @@ struct TaskMenu: View {
             .menuStyle(.borderlessButton)
             .fixedSize()
         }
+        .padding(.horizontal, 4)
+        .background(RoundedRectangle(cornerRadius: 4).fill(hovering ? Color.primary.opacity(0.08) : .clear))
+        .onHover { hovering = $0 }
     }
 }

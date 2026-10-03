@@ -30,6 +30,12 @@ final class AppModel: ObservableObject {
     /// `TimelineView` in the label: there, `MenuBarExtra` redrew the button
     /// without pause (100% CPU, memory growing past 2 GB).
     @Published private(set) var iconTick = 0
+    /// Whether each enabled agent IDE (herdr / orca) is up, beside the run
+    /// state; empty until the first check.
+    @Published private(set) var agentIDEs: [(name: String, up: Bool)] = []
+    /// The last `config get`, re-read with every IDE check.
+    private var config: JSONValue?
+    private var checkingIDEs = false
     private var iconTimer: Timer?
     private var refreshing = false
     /// The last lines of `run`'s stderr, for the failure message. The full
@@ -449,7 +455,9 @@ final class AppModel: ObservableObject {
         content.title = notify.title
         content.body = notify.body ?? eventLabel(notify.event)
         content.sound = .default
-        if let id = notify.taskId { content.userInfo = ["task_id": id] }
+        if let id = notify.taskId {
+            content.userInfo = ["task_id": id, "workflow": notify.workflow ?? ""]
+        }
         UNUserNotificationCenter.current().add(
             UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
     }
@@ -476,6 +484,44 @@ final class AppModel: ObservableObject {
                 self?.checkBundle()
             }
         }
+        Task { await checkAgentIDEs() }
+        // Less often than the menu: an orca check runs the orca CLI.
+        Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
+            Task { @MainActor in await self?.checkAgentIDEs() }
+        }
+    }
+
+    /// herdr: its socket accepts a connection. orca: `orca status --json`
+    /// says its runtime is reachable.
+    private func checkAgentIDEs() async {
+        // One at a time, as `refreshMenu`: the CLI calls have no timeout.
+        guard !checkingIDEs, let cli else { return }
+        checkingIDEs = true
+        defer { checkingIDEs = false }
+        guard let result = try? await cli.run(["config", "get"]),
+            let config = (try? ConfigDocument.decode(result.stdout))?.config
+        else { return }
+        self.config = config
+        var checked: [(name: String, up: Bool)] = []
+        for name in enabledAgentIDEs(in: config) {
+            switch name {
+            case "herdr":
+                let path = herdrSocketPath(config: config, environment: cli.environment)
+                checked.append((name, await Task.detached { unixSocketAccepts(path) }.value))
+            default:
+                let bin = config["orca"]?["orca_bin"]?.string ?? "orca"
+                let orca = locateExecutable(
+                    named: bin, override: bin.contains("/") ? bin : nil, environment: cli.environment)
+                var up = false
+                if let orca, let status = try? await TotsukaCLI(binary: orca, environment: cli.environment)
+                    .run(["status", "--json"])
+                {
+                    up = orcaRuntimeReachable(status.stdout)
+                }
+                checked.append((name, up))
+            }
+        }
+        agentIDEs = checked
     }
 
     func refreshMenu() async {
@@ -510,8 +556,30 @@ final class AppModel: ObservableObject {
 
     /// The task actions go through the CLI, which already knows the socket and
     /// its token (ADR-0094 / ADR-0099).
-    func focus(_ id: String) {
+    /// Bring the IDE's window forward, then its pane. `workflow` picks the
+    /// IDE; nil looks the task up in the menu.
+    func focus(_ id: String, workflow: String? = nil) {
+        let row = ((menu?.attention ?? []) + (menu?.working ?? [])).first { String($0.taskId) == id }
+        if let config, let app = focusApp(workflow: workflow ?? row?.workflow, config: config) {
+            activate(app)
+        }
         Task { await act(["focus", id]) }
+    }
+
+    private func activate(_ app: FocusApp) {
+        let url: URL?
+        switch app {
+        case .bundleID(let id):
+            url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id)
+        case .named(let name):
+            url = NSWorkspace.shared.runningApplications.first { $0.localizedName == name }?.bundleURL
+        }
+        guard let url else {
+            notice = "Could not find the app to bring forward → check [macos].activate_bundle_id"
+            return
+        }
+        // Opening a running app activates it.
+        NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
     }
 
     func retry(_ id: Int64) {
