@@ -5,6 +5,7 @@ description: "メニューバーアプリ（ADR-0113）が --secrets-stdin で r
 resource: https://github.com/tomoya-k31/totsuka/issues/858
 tags: [decision, macos, menubar, secrets, github, adr]
 generated: { by: claude-code/opus-5.5, at: 2026-10-03T12:00:00+09:00 }
+verified: { by: claude-code/opus-5.5, at: 2026-10-04T00:20:00+09:00 }
 status: stable
 owner: tomoya-k31
 sources:
@@ -15,7 +16,7 @@ sources:
 
 # Status
 
-stable。#858 で実装した。
+stable。#858 で実装した。2026-10-04 に実機（隔離 e2e 環境の dev アプリ、Project #7）で検収した: ダイアログの表示、gh から取ったトークンでの起動とカード移動（Todo → In Progress）、gh が失敗したときに起動しないこと。失敗経路は `gh auth logout` ではなく、gh に無い `github_login` で通した（結果は #858 のコメント）
 
 # Context
 
