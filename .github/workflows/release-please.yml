@@ -301,7 +301,7 @@ jobs:
           cp README.md LICENSE "${root}/"
           find "${root}" -type f | sort
 
-      # The menu bar app (ADR-0109), ad-hoc signed like the binaries above and
+      # The menu bar app (ADR-0113), ad-hoc signed like the binaries above and
       # built for both architectures. It sits at the top of the tree so the
       # Homebrew formula can install it next to the CLI: files a formula
       # installs carry no quarantine attribute, which is what lets an

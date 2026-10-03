@@ -4,7 +4,7 @@ import TotsukaKit
 import UserNotifications
 
 /// Everything the menu shows and does: the supervised `run`, its
-/// notifications, the polled `menu --json` (ADR-0109 §2–§4).
+/// notifications, the polled `menu --json` (ADR-0113 §2–§4).
 @MainActor
 final class AppModel: ObservableObject {
     enum RunState: Equatable {
@@ -85,7 +85,7 @@ final class AppModel: ObservableObject {
         if defaults.bool(forKey: "wasRunning") { await start() }
     }
 
-    /// ADR-0109 §6: major mismatch blocks, minor/patch mismatch warns. A
+    /// ADR-0113 §6: major mismatch blocks, minor/patch mismatch warns. A
     /// development build has no version and is not checked.
     private func checkVersion() async {
         guard let cli, let app = parseVersion(appVersion),
@@ -117,7 +117,7 @@ final class AppModel: ObservableObject {
         // `secret:` values come from the Keychain map (asked for here when
         // missing — there is no settings window to enter them in). A config
         // without any is left to `run` to resolve, `op://` and `cmd:`
-        // included (ADR-0109 §5).
+        // included (ADR-0113 §5).
         var secretMap: [String: String]?
         if usesSuppliedSecrets(document) {
             guard let stored = loadSecrets() else { return }
@@ -127,7 +127,7 @@ final class AppModel: ObservableObject {
             }
             secretMap = asked
         }
-        // The start gate (ADR-0109 §2): nothing runs until the config passes.
+        // The start gate (ADR-0113 §2): nothing runs until the config passes.
         let check = try? await cli.run(
             ["config", "validate"] + (secretMap == nil ? [] : ["--secrets-stdin"]),
             stdin: secretMap.map(secretsLine))
@@ -238,7 +238,7 @@ final class AppModel: ObservableObject {
 
     /// The Keychain map. Before the first read by a new version, say that macOS
     /// is about to ask — an ad-hoc-signed update is a new app to the Keychain,
-    /// so it asks once per update (measured, ADR-0109).
+    /// so it asks once per update (measured, ADR-0113).
     func loadSecrets() -> [String: String]? {
         let seen = defaults.string(forKey: "keychainVersion")
         if let seen, seen != appVersion {

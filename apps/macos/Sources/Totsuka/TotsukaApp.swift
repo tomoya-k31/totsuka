@@ -112,7 +112,7 @@ struct MenuContent: View {
             }
             HStack {
                 // No settings window: config.toml is edited in $EDITOR, and the
-                // log followed in $TERMINAL (ADR-0109 §5).
+                // log followed in $TERMINAL (ADR-0113 §5).
                 Button { app.openSettings() } label: { Label("Settings…", systemImage: "gearshape") }
                     .help("Open config.toml in $EDITOR")
                 Button { app.openLogs() } label: { Label("Logs", systemImage: "doc.text") }

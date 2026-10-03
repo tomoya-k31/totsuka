@@ -162,7 +162,7 @@ Homebrew の formula は `url` を**素の `curl`（GitHub 認証なし）**で�
   sudo rm -rf /usr/local/lib/totsuka
   ```
 
-# メニューバーアプリ（ADR-0109）
+# メニューバーアプリ（ADR-0113）
 
 tarball の最上位に `Totsuka.app` が入る（[release runbook](/operations/release-runbook.md)）。formula がこれを `prefix` に置くと、**formula の入れたファイルには quarantine が付かない**ので、公証していない ad-hoc 署名のアプリでも Gatekeeper に止められずに開く（cask は 2026-09-01 以降この経路を持たない）。
 

@@ -1,6 +1,6 @@
 import Foundation
 
-/// One supervised `totsuka run --watch --events-jsonl` (ADR-0109 §2), with
+/// One supervised `totsuka run --watch --events-jsonl` (ADR-0113 §2), with
 /// `--secrets-stdin` when the config names `secret:` values. Owns the child,
 /// feeds it the secret map on stdin and keeps stdin open, and turns its stdout into [`RunEvent`]s and its stderr into
 /// log lines. Restart decisions are the caller's ([`exitDecision`]).

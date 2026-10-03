@@ -1,6 +1,6 @@
 name: macos-app
 
-# The menu bar app (apps/macos/, ADR-0109): `swift test` and the `.app` build,
+# The menu bar app (apps/macos/, ADR-0113): `swift test` and the `.app` build,
 # only when the app changed. A workflow of its own rather than jobs in ci.yml
 # because `on: paths` filters a whole workflow, not a job — the reason
 # warm-cache.yml is separate too — and a macOS minute is billed at ten Linux

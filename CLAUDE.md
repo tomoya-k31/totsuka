@@ -27,7 +27,7 @@ If rust-analyzer becomes slow or unstable on this workspace (large monorepo), it
 
 ## Code Intelligence (Swift / sourcekit-lsp)
 
-For the menu bar app under `apps/macos/` (ADR-0109), prefer LSP over Grep/Read
+For the menu bar app under `apps/macos/` (ADR-0113), prefer LSP over Grep/Read
 for navigation, the same way as rust-analyzer above (`goToDefinition`,
 `findReferences`, `hover`, `documentSymbol`, …), and check LSP diagnostics
 after editing Swift files.

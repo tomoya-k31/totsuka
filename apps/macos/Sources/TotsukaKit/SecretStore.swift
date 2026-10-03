@@ -2,13 +2,13 @@ import Foundation
 import Security
 
 /// The app's secrets: one Keychain item holding a JSON map
-/// `{"<secret name>": "<value>"}` (ADR-0109 §5). `run` receives the whole map
+/// `{"<secret name>": "<value>"}` (ADR-0113 §5). `run` receives the whole map
 /// on stdin and resolves `secret:<name>` from it, so config.toml only ever
 /// holds names.
 ///
 /// One item rather than one per secret: with an ad-hoc-signed app every build
 /// is a new identity to the Keychain, and each item asks again — one item
-/// means one prompt per update (measured, ADR-0109).
+/// means one prompt per update (measured, ADR-0113).
 public struct SecretStore: Sendable {
     public let service: String
     public let account: String

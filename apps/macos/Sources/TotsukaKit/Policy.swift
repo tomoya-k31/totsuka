@@ -1,6 +1,6 @@
 import Foundation
 
-/// What to do when the supervised `run` exits (ADR-0109 §2; exit codes from
+/// What to do when the supervised `run` exits (ADR-0113 §2; exit codes from
 /// ADR-0095).
 public enum ExitDecision: Equatable, Sendable {
     /// Stopped because it was asked to: stay stopped.
@@ -58,7 +58,7 @@ public enum VersionVerdict: Equatable, Sendable {
     case block
 }
 
-/// ADR-0109 §6: major mismatch blocks, minor/patch mismatch warns.
+/// ADR-0113 §6: major mismatch blocks, minor/patch mismatch warns.
 public func compareVersions(app: (Int, Int, Int), cli: (Int, Int, Int)) -> VersionVerdict {
     if app.0 != cli.0 { return .block }
     if app.1 != cli.1 || app.2 != cli.2 { return .warn }

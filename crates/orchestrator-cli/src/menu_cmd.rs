@@ -448,7 +448,7 @@ mod tests {
     use super::*;
 
     /// The app reads the repository and the ingest time off each row to show
-    /// where the task runs and how long ago it came in (ADR-0109 §3); a task
+    /// where the task runs and how long ago it came in (ADR-0113 §3); a task
     /// with no repository yet omits the key rather than sending `null`.
     #[test]
     fn rows_carry_repo_and_ingest_time() {

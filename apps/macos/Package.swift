@@ -1,5 +1,5 @@
 // swift-tools-version: 6.0
-// The menu bar app (ADR-0109). `TotsukaKit` holds everything testable without
+// The menu bar app (ADR-0113). `TotsukaKit` holds everything testable without
 // a window — process supervision, the CLI contract, the notification filter,
 // the Keychain map — and `swift test` runs on Command Line Tools alone. The
 // `Totsuka` executable is the SwiftUI app; CI builds the shipped `.app` from

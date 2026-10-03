@@ -1,4 +1,4 @@
-# XcodeGen spec for the shipped Totsuka.app (ADR-0109). The `.xcodeproj` is
+# XcodeGen spec for the shipped Totsuka.app (ADR-0113). The `.xcodeproj` is
 # generated (`xcodegen generate`) and not committed. CI builds it ad-hoc
 # signed; the release job puts the result into the universal tarball, and the
 # Homebrew formula installs it next to the CLI.
@@ -38,7 +38,7 @@ targets:
         CURRENT_PROJECT_VERSION: "1"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         SWIFT_VERSION: "5.0"
-        # Ad-hoc: no Developer Program (ADR-0109 §6). A Developer ID would not
+        # Ad-hoc: no Developer Program (ADR-0113 §6). A Developer ID would not
         # remove the Gatekeeper question here anyway — Homebrew formulae are
         # not quarantined — and a self-signed certificate does not keep the
         # Keychain from asking after an update (measured).

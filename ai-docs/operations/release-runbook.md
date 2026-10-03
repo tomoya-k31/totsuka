@@ -146,7 +146,7 @@ Packages → slack-event-gateway → Package settings → Change visibility → 
   totsuka-vX.Y.Z-macos-universal/
   ├── totsuka
   ├── plugins/<name>/{<name>, plugin.toml}
-  ├── Totsuka.app        # メニューバーアプリ（ADR-0109）
+  ├── Totsuka.app        # メニューバーアプリ（ADR-0113）
   ├── README.md
   └── LICENSE
   ```
