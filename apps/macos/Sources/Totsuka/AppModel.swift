@@ -112,6 +112,8 @@ final class AppModel: ObservableObject {
         let config = (try? await cli.run(["config", "get"])).flatMap {
             try? ConfigDocument.decode($0.stdout)
         }
+        // A stop pressed while the file was read: ask for nothing.
+        guard runState == .starting else { return }
         // A `secret:<name>` with no value yet is asked for here — there is no
         // settings window to enter it in (ADR-0109 §5).
         let wanted = secretNames(in: config?.config ?? .object([:]))

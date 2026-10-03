@@ -11,7 +11,7 @@ owner: tomoya-k31
 
 # 責務
 
-[ADR-0109](/decisions/adr-0109-native-menubar-app.md) のメニューバーアプリ。CLI の上に立つ薄い GUI で、TOML も機密の参照も自分では解釈しない —— 読むのは `totsuka` の CLI 契約（`config get`・`config validate`、[run --events-jsonl](/apis/run-events-jsonl.md)、`menu --json`）だけで、config.toml の編集は `$EDITOR` に任せる。
+[ADR-0109](/decisions/adr-0109-native-menubar-app.md) のメニューバーアプリ。CLI の上に立つ薄い GUI で、TOML は自分では解釈しない。機密の参照は `secret:<名前>` の名前を集める（`secretNames`。CLI と同じ `[A-Za-z0-9_.-]` に合わない名前は尋ねない）ところまでで、解決は `run` に任せる —— 読むのは `totsuka` の CLI 契約（`config get`・`config validate`、[run --events-jsonl](/apis/run-events-jsonl.md)、`menu --json`）だけで、config.toml の編集は `$EDITOR` に任せる。
 
 # 構成
 
@@ -32,7 +32,7 @@ owner: tomoya-k31
 - **外部の run**: exit 5 の後は `menu --json` がロックの解放（`down`）を見たところで引き継ぐ
 - **通知**: `run` の stdout の `notify` 行を、`config get` で読んだ `[macos]` のフィルタ（ワークフロー別 → 全体 → 既定オン）に通してから `UserNotifications` で出す。クリックは `totsuka focus <task_id>`
 - **メニュー**: 10 秒ごとと通知のたびに `menu --json`。要対応・作業中の各行に focus / retry / cancel（確認付き）。verify は置かない
-- **設定**: 設定画面は無い（ADR-0109 §5）。Settings… は `config get` が返す config.toml を `$TERMINAL -e $EDITOR <path>` で開く（どちらもログインシェルの環境の値をシェル断片として使う。どちらかが無ければ `open -t`）。ファイルがまだ無ければ `totsuka init` を案内する。`$TERMINAL` や `$EDITOR` が見つからない（シェルが 126 / 127 で終わる）ときはメニューに出す。変更は次の起動から効く
+- **設定**: 設定画面は無い（ADR-0109 §5）。Settings… は `config get` が返す config.toml を `$TERMINAL -e $EDITOR <path>` で開く（どちらもログインシェルの環境の値をシェル断片として使う。どちらかが無ければ `open -t`）。ファイルがまだ無ければ `totsuka init` を案内する。`$TERMINAL` が見つからない（シェルが 126 / 127 で終わる）ときはメニューに出す。`$EDITOR` の失敗はシェルがターミナルに置き換わった後なので、ターミナルの中に出る。変更は次の起動から効く
 - **ログ**: `run` の stderr を `$XDG_STATE_HOME/totsuka/app-run.log` に書き（起動ごとに見出し行、5 MB を超えたら次の起動で書き直す）、Logs は `$TERMINAL -e tail -n 200 -F` で開く（`$TERMINAL` が無ければ Console）
 - **その他のメニュー**: ログイン項目のオン・オフと、Keychain のマップを空にする「Forget saved secrets…」（次の起動でまた尋ねる）。`totsuka` の場所と `PATH` は `defaults write <bundle ID> totsukaPath` / `pathOverride` で上書きできる
 - **更新**: 自分のバンドルが消えたら（`brew upgrade` と cleanup）メニューに「更新済み・再起動」を出し、CLI の隣の `Totsuka.app` を開いて自分は終わる。起動時に、ログイン項目が有効なら登録し直して新しい場所へ移す

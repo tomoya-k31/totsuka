@@ -130,7 +130,7 @@ import Testing
         {"github":{"token":"secret:github.token"},
          "llm":{"api_key_ref":"op://v/i/f"},
          "slack":{"app_token":"secret:slack.app","bot_token":"secret:github.token"},
-         "x":["secret:", "secret:in.list"]}
+         "x":["secret:", "secret:in.list", "secret:bad name", "secret:日本"]}
         """#))
         #expect(secretNames(in: config) == ["github.token", "slack.app", "in.list"])
     }

@@ -4,7 +4,9 @@ import Foundation
 /// without repeats, in the order a walk with sorted keys meets them (a JSON
 /// object keeps no order, so this is what makes the questions' order stable)
 /// — what the app asks for before `run` starts when the Keychain map lacks
-/// one.
+/// one. A name outside the CLI's alphabet (`[A-Za-z0-9_.-]`, ADR-0100) is
+/// skipped: `config validate` refuses it anyway, and asking for it would only
+/// store a value nothing can ever read.
 public func secretNames(in config: JSONValue) -> [String] {
     var names: [String] = []
     func walk(_ value: JSONValue) {
@@ -12,7 +14,7 @@ public func secretNames(in config: JSONValue) -> [String] {
         case .string(let s):
             if s.hasPrefix("secret:") {
                 let name = String(s.dropFirst("secret:".count))
-                if !name.isEmpty, !names.contains(name) { names.append(name) }
+                if isSecretName(name), !names.contains(name) { names.append(name) }
             }
         case .array(let items):
             items.forEach(walk)
@@ -24,6 +26,13 @@ public func secretNames(in config: JSONValue) -> [String] {
     }
     walk(config)
     return names
+}
+
+private func isSecretName(_ name: String) -> Bool {
+    !name.isEmpty
+        && name.unicodeScalars.allSatisfy {
+            $0.isASCII && (CharacterSet.alphanumerics.contains($0) || "_.-".unicodeScalars.contains($0))
+        }
 }
 
 /// `s` as one `/bin/sh` word.
@@ -85,6 +94,8 @@ public struct RunLogFile: Sendable {
             _ = try? handle.seekToEnd()
             try? handle.write(contentsOf: data)
         } else {
+            try? FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             try? data.write(to: url)
         }
     }
