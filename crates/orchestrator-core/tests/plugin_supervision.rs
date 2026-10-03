@@ -603,12 +603,12 @@ async fn a_parked_task_does_not_starve_a_healthy_agent() {
         &mut plugins,
         "task_source",
         "src_down",
-        // Both sources are held back so the tasks arrive **after** the agent's
-        // crash has been observed, as in
-        // `a_task_queued_during_a_crash_window_is_not_failed`. Submitting
-        // immediately races the detection: a dispatch to the not-yet-noticed
-        // dead agent fails the task instead of parking it, which frees the
-        // slot and lets the probe below stop without ever testing the gate.
+        // Held back so the task arrives **after** the agent's crash has been
+        // observed, as in `a_task_queued_during_a_crash_window_is_not_failed`.
+        // Submitting immediately races the detection: a dispatch to the
+        // not-yet-noticed dead agent fails the task instead of parking it,
+        // which frees the slot and lets the probe below stop without ever
+        // testing the gate.
         json!({ "submit_delay_ms": 800, "submit_workflow": "wf-down", "submit_tasks": [{ "id": "for-the-dead-agent", "source": "src_down", "title": "a" }] }),
     )
     .await;
@@ -616,7 +616,10 @@ async fn a_parked_task_does_not_starve_a_healthy_agent() {
         &mut plugins,
         "task_source",
         "src_up",
-        json!({ "submit_delay_ms": 800, "submit_workflow": "wf-up", "submit_tasks": [{ "id": "for-the-live-agent", "source": "src_up", "title": "b" }] }),
+        // Later still, so the parked task is already holding its place in the
+        // queue when this one competes for the slot. Arriving first, it would
+        // simply take the free slot and prove nothing (checked below).
+        json!({ "submit_delay_ms": 1600, "submit_workflow": "wf-up", "submit_tasks": [{ "id": "for-the-live-agent", "source": "src_up", "title": "b" }] }),
     )
     .await;
     // Down for the whole run.
@@ -703,11 +706,18 @@ output = "none"
         summary.stats.dispatched >= 1,
         "a task for a healthy agent must dispatch while another is parked: {summary:?}"
     );
-    // Parked, not failed: a failure frees the slot by itself, and the
-    // assertion above would then pass without the gate being exercised.
+    // Parked, not failed, and already there when the healthy task won the
+    // slot: a failure frees the slot by itself, and a dead task that had not
+    // arrived yet never competed for it — either way the assertion above would
+    // pass without the gate being exercised.
     assert_eq!(
         summary.stats.failed, 0,
         "the dead agent's task must be parked, not failed: {summary:?}"
+    );
+    assert_eq!(
+        (summary.stats.submitted, summary.queued.len()),
+        (2, 1),
+        "the dead agent's task must have been queued alongside: {summary:?}"
     );
     engine.shutdown(Duration::from_secs(2)).await;
 }
