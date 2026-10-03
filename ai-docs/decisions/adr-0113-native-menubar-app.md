@@ -1,7 +1,7 @@
 ---
 type: Decision
 title: ADR-0113 ネイティブ macOS メニューバーアプリが run を子プロセスとして監督し、通知を出す
-description: "SwiftBar 向けの `totsuka menu` では届かないアプリ名義のネイティブ通知のため、SwiftUI のメニューバーアプリ（apps/macos/）を足す決定。run は `--secrets-stdin` 付きの子プロセスとして起動し終了コードで再起動を判断、通知は `run --events-jsonl` の stdout。設定は GUI を作らず config.toml を `$TERMINAL` の `$EDITOR` で開き、機密は Start 時に Keychain に無い `secret:<名前>` を尋ねる（スキーマから組み立てる設定画面は実装後に外し、その下の config/schema と config CLI は残した）。Developer Program に加入しないため ad-hoc 署名の .app を release tarball に同梱して formula で配る。ADR-0065 の「Swift アプリ」却下を部分的に覆す。"
+description: "SwiftBar 向けの `totsuka menu` では届かないアプリ名義のネイティブ通知のため、SwiftUI のメニューバーアプリ（apps/macos/）を足す決定。run は子プロセスとして起動し終了コードで再起動を判断（config に `secret:` があれば `--secrets-stdin` で Keychain の値を渡し、無ければ `op://` / `cmd:` などを run 自身に解決させる）、通知は `run --events-jsonl` の stdout。設定は GUI を作らず config.toml を `$TERMINAL` の `$EDITOR` で開き、機密は Start 時に Keychain に無い `secret:<名前>` を尋ねる（スキーマから組み立てる設定画面は実装後に外し、その下の config/schema と config CLI は残した）。Developer Program に加入しないため ad-hoc 署名の .app を release tarball に同梱して formula で配る。ADR-0065 の「Swift アプリ」却下を部分的に覆す。"
 resource: https://github.com/tomoya-k31/totsuka/tree/main/apps/macos
 tags: [decision, macos, menubar, notifier, config, protocol, distribution, adr]
 generated: { by: claude-code/opus-5.5, at: 2026-10-03T02:38:00+09:00 }
@@ -47,12 +47,12 @@ Apple Developer Program には**加入しない**。それでも友人に配り�
 
 ## 2. run の監督
 
-- `totsuka run --watch --secrets-stdin --events-jsonl` を**子プロセス**として起動し、stdin の 1 行目に機密のマップを書いて開けたままにする（ADR-0100）
+- `totsuka run --watch --events-jsonl` を**子プロセス**として起動する。config に `secret:` の参照があるときは `--secrets-stdin` を付け、stdin の 1 行目に機密のマップを書いて開けたままにする（ADR-0100）。無いときは付けず、`op://` / `cmd:` / `bw:` / `keychain:` を `run` 自身がターミナルから起動したときと同じに解決する（§5）
 - 終了コードで分ける: **1** は指数バックオフで再起動、**4**（設定・機密）と **2**（使い方）は止めてエラーを表示、**5**（lock 競合）は「外部の run が稼働中」として監視だけする
 - アプリ起動時は前回の状態（動いていたか）を復元する。停止は SIGTERM で、最大 300 秒（[ADR-0092](/decisions/adr-0092-git-timeout.md) の git 待ち）「停止中…」を出す。強制終了は別メニュー
 - 子プロセスの `PATH` は起動時に `$SHELL -lic env` から取り、`defaults` の `pathOverride` で上書きできる（ADR-0100 の申し送り）。`totsuka` の場所も `totsukaPath` で指せる
 - stderr は `$XDG_STATE_HOME/totsuka/app-run.log` に書き（起動ごとに見出し行、5 MB を超えたら次の起動で書き直す）、メニューの Logs で **`$TERMINAL -e tail -F`** する（`$TERMINAL` が無ければ Console で開く）。直近の数行は終了時のエラー表示に使う
-- **起動できる条件は `config validate --secrets-stdin` が exit 0 で終わること**。失敗の出力はメニューに出す
+- **起動できる条件は `config validate`（`run` と同じく、`secret:` があるときだけ `--secrets-stdin` 付き）が exit 0 で終わること**。失敗の出力はメニューに出す
 
 ## 3. 状態表示とメニュー
 
@@ -70,7 +70,8 @@ Apple Developer Program には**加入しない**。それでも友人に配り�
 ## 5. 設定
 
 - **設定画面は持たない。** メニューの Settings… は config.toml（`config get` が返すパス）を **`$TERMINAL -e $EDITOR <path>`** で開く。どちらもログインシェルの環境から取り、ユーザーのシェル断片として引数ごと使う（`nvim -p`、`alacritty --class x`）。どちらかが無ければ既定のテキストエディタ（`open -t`）で開く。変更は次の起動から効く
-- **機密は config.toml に `secret:<名前>` と手で書く**（ADR-0100）。Start のとき、config にある `secret:` の名前のうち Keychain の 1 項目（JSON マップ）に無いものを、パスワード欄のダイアログで 1 つずつ尋ねて保存してから起動する。取り消すと起動しない。メニューの「Forget saved secrets…」でマップを空にすると、次の起動でまた尋ねる。`op://` などの参照は `--secrets-stdin` の下では拒否されるので、アプリで動かす config には書けない
+- **機密は config.toml に `secret:<名前>` と手で書く**（ADR-0100）。Start のとき、config にある `secret:` の名前のうち Keychain の 1 項目（JSON マップ）に無いものを、パスワード欄のダイアログで 1 つずつ尋ねて保存してから起動する。取り消すと起動しない。メニューの「Forget saved secrets…」でマップを空にすると、次の起動でまた尋ねる
+- **`secret:` が 1 つも無い config は `--secrets-stdin` を付けずに起動する。** `op://` / `cmd:` / `bw:` / `keychain:` は `run` が自分で解決する（`op` はデスクトップアプリの承認を、`bw` は `BW_SESSION` を求める。どちらもターミナルから起動したときと同じ）。1Password と Bitwarden をアプリ側で解決する案は採らない —— 1Password の公式 SDK は Go / JavaScript / Python だけで Swift には無く、ヘルパーを同梱しても `run` がすでに持つ `op` の解決を作り直すだけになる。Bitwarden の保管庫を読む SDK（`sdk-internal`）は外部での利用をサポートしないと明言されている。`secret:` と他の参照を 1 つの config に混ぜることはできない（`--secrets-stdin` の下では他のストアは拒否される、ADR-0100）
 - ログイン項目のオン・オフはメニューから切り替える
 
 以下は、外した設定画面のために入れ、**消さずに残した**下の層の決定である。今のアプリはこれを使わない。

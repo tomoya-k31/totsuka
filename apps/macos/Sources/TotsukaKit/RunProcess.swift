@@ -1,8 +1,8 @@
 import Foundation
 
-/// One supervised `totsuka run --watch --secrets-stdin --events-jsonl`
-/// (ADR-0109 §2). Owns the child, feeds it the secret map on stdin and keeps
-/// stdin open, and turns its stdout into [`RunEvent`]s and its stderr into
+/// One supervised `totsuka run --watch --events-jsonl` (ADR-0109 §2), with
+/// `--secrets-stdin` when the config names `secret:` values. Owns the child,
+/// feeds it the secret map on stdin and keeps stdin open, and turns its stdout into [`RunEvent`]s and its stderr into
 /// log lines. Restart decisions are the caller's ([`exitDecision`]).
 public final class RunProcess {
     public struct Termination: Sendable {
@@ -26,7 +26,7 @@ public final class RunProcess {
         onExit: @escaping (Termination) -> Void
     ) {
         process.executableURL = cli.binary
-        process.arguments = ["run", "--watch", "--secrets-stdin", "--events-jsonl"]
+        process.arguments = ["run", "--watch", "--events-jsonl"]
         process.environment = cli.environment
         process.standardInput = stdin
         process.standardOutput = stdout
@@ -48,10 +48,18 @@ public final class RunProcess {
         }
     }
 
-    /// Start the child and hand it the secrets: one JSON object on one line.
-    /// stdin stays open afterwards — `run` reads the first line only, and
-    /// lines after it are reserved (ADR-0100).
-    public func start(secrets: [String: String]) throws {
+    /// Start the child. With `secrets`, it gets `--secrets-stdin` and the map
+    /// as one JSON object on one line; stdin stays open afterwards — `run`
+    /// reads the first line only, and lines after it are reserved (ADR-0100).
+    /// Without, `run` resolves the config's references itself, as from a
+    /// terminal.
+    public func start(secrets: [String: String]?) throws {
+        guard let secrets else {
+            process.standardInput = FileHandle.nullDevice
+            try process.run()
+            return
+        }
+        process.arguments?.append("--secrets-stdin")
         try process.run()
         var line = (try? JSONEncoder().encode(secrets)) ?? Data("{}".utf8)
         line.append(UInt8(ascii: "\n"))

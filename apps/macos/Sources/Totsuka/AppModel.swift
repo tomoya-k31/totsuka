@@ -108,22 +108,29 @@ final class AppModel: ObservableObject {
         guard let cli, process == nil, !versionBlocked else { return }
         restartTimer?.invalidate()
         runState = .starting
-        guard let stored = loadSecrets() else { return }
         let config = (try? await cli.run(["config", "get"])).flatMap {
             try? ConfigDocument.decode($0.stdout)
         }
         // A stop pressed while the file was read: ask for nothing.
         guard runState == .starting else { return }
-        // A `secret:<name>` with no value yet is asked for here — there is no
-        // settings window to enter it in (ADR-0109 §5).
-        let wanted = secretNames(in: config?.config ?? .object([:]))
-        guard let secretMap = askForMissingSecrets(wanted, in: stored) else {
-            runState = .stopped
-            return
+        let document = config?.config ?? .object([:])
+        // `secret:` values come from the Keychain map (asked for here when
+        // missing — there is no settings window to enter them in). A config
+        // without any is left to `run` to resolve, `op://` and `cmd:`
+        // included (ADR-0109 §5).
+        var secretMap: [String: String]?
+        if usesSuppliedSecrets(document) {
+            guard let stored = loadSecrets() else { return }
+            guard let asked = askForMissingSecrets(secretNames(in: document), in: stored) else {
+                runState = .stopped
+                return
+            }
+            secretMap = asked
         }
         // The start gate (ADR-0109 §2): nothing runs until the config passes.
         let check = try? await cli.run(
-            ["config", "validate", "--secrets-stdin"], stdin: secretsLine(secretMap))
+            ["config", "validate"] + (secretMap == nil ? [] : ["--secrets-stdin"]),
+            stdin: secretMap.map(secretsLine))
         // A stop pressed while the check ran wins (`stop` left `.starting`).
         guard runState == .starting else { return }
         guard let check, check.status == 0 else {

@@ -28,6 +28,21 @@ public func secretNames(in config: JSONValue) -> [String] {
     return names
 }
 
+/// Whether config.toml names any `secret:` value — then `run` is given the
+/// Keychain map with `--secrets-stdin`; otherwise it is started without, and
+/// resolves `op://`, `cmd:`, `bw:`, `keychain:` itself, as from a terminal.
+/// (The two cannot be mixed: under `--secrets-stdin` every other store is
+/// refused, ADR-0100.) Any `secret:` string counts, valid name or not, so a
+/// misspelt one still fails `config validate` instead of being skipped.
+public func usesSuppliedSecrets(_ config: JSONValue) -> Bool {
+    switch config {
+    case .string(let s): return s.hasPrefix("secret:")
+    case .array(let items): return items.contains(where: usesSuppliedSecrets)
+    case .object(let map): return map.values.contains(where: usesSuppliedSecrets)
+    default: return false
+    }
+}
+
 private func isSecretName(_ name: String) -> Bool {
     !name.isEmpty
         && name.unicodeScalars.allSatisfy {

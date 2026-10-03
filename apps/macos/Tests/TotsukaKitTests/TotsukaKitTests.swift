@@ -135,6 +135,17 @@ import Testing
         #expect(secretNames(in: config) == ["github.token", "slack.app", "in.list"])
     }
 
+    /// Only a config that names a `secret:` value is run with
+    /// `--secrets-stdin`; `op://` / `cmd:` alone are left to `run`.
+    @Test func suppliedSecretsOnlyWhenTheConfigNamesOne() throws {
+        let plain = try #require(JSONValue.parse(#"""
+        {"github":{"token":"cmd:gh auth token"},"llm":{"api_key_ref":"op://v/i/f"},"n":4}
+        """#))
+        #expect(!usesSuppliedSecrets(plain))
+        let nested = try #require(JSONValue.parse(#"{"tools":{"x":{"env":["secret:bad name"]}}}"#))
+        #expect(usesSuppliedSecrets(nested), "a misspelt name still counts")
+    }
+
     @Test func buildsTerminalCommandsFromTheEnvironment() {
         let env = ["TERMINAL": "alacritty", "EDITOR": "nvim -p"]
         #expect(
