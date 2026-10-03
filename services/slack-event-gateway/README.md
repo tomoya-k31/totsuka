@@ -18,8 +18,10 @@ The design is recorded in `ai-docs/decisions/adr-0072-slack-event-gateway.md`.
 
 **It does not store, forward, or log the message body.** The only thing it does
 with the text is compare it against constant strings. It calls no external API
-to interpret a message — no LLM, nothing. The one outbound call is the Pub/Sub
-publish, which is the point of the process.
+to interpret a message — no LLM, nothing. The outbound calls are the Pub/Sub
+publish, which is the point of the process, and — only for an operator whose
+row has a `bot_token` — `views.open` for the reject modal, which sends Slack a
+modal built from the press's own coordinates and nothing of any message.
 
 The record schema has no field that could carry a body, but *that is not the
 guarantee*: a process can keep a string in memory, print it, or post it
@@ -66,6 +68,7 @@ not worth guessing at.
 | `REGISTRATIONS` | The table inline. Simpler, but it puts every operator's signing secret in the revision's configuration |
 | `PORT` | Listen port. Cloud Run sets this; defaults to 8080 |
 | `PUBSUB_URL` | Pub/Sub base URL. For tests |
+| `SLACK_API_URL` | Slack Web API base URL, used for `views.open`. For tests |
 
 The registration table, one row per operator:
 

@@ -1,6 +1,6 @@
 {
   "name": "view-submission-other-modal",
-  "why": "却下モーダル以外の送信は捨てる。このシステムが開くモーダルはそれだけで、知らないモーダルの入力欄を publish すると、運用者の書いた文面が用途もなくトピックに 7 日間残る。",
+  "why": "却下モーダル以外の送信は捨てる。このシステムが開くモーダルはそれだけで、知らないモーダルの入力欄を publish すると、運用者の書いた文面が用途もなく押下用トピックに残る。",
   "delivery": {
     "endpoint": "interactivity",
     "content_type": "application/x-www-form-urlencoded",

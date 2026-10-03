@@ -92,7 +92,7 @@ gcloud org-policies describe \
 
 # 運用上の注意
 
-- **`terraform.tfvars` と state ファイルの両方に全利用者の signing secret が入り、このモジュールに逃げ道は無い**（登録表を変数から組み立てることが「1 人足して apply」を成立させている当のものだから）。OpenTofu は state を暗号化しないので、デプロイ担当だけが読めるバケットに置き、**そのバケットへのアクセス = 全利用者の Slack アプリへのアクセス**とみなす。`.gitignore` は `terraform.tfvars` という名前ではなく `*.tfvars` を弾く ——`prod.auto.tfvars` のような名前はごく普通で、守りたいのは名前ではなく中身である
+- **`terraform.tfvars` と state ファイルの両方に全利用者の signing secret が入り、このモジュールに逃げ道は無い**。`bot_token`（任意、[ADR-0112](/decisions/adr-0112-gateway-reject-modal.md)）を書いた利用者の分は**ボットトークン（`xoxb-`）も入る** —— ボット名義の操作しかできないが、そのバケットに置く資格情報が 1 種類増える。本人名義で投稿できるユーザートークンは入らない（登録表を変数から組み立てることが「1 人足して apply」を成立させている当のものだから）。OpenTofu は state を暗号化しないので、デプロイ担当だけが読めるバケットに置き、**そのバケットへのアクセス = 全利用者の Slack アプリへのアクセス**とみなす。`.gitignore` は `terraform.tfvars` という名前ではなく `*.tfvars` を弾く ——`prod.auto.tfvars` のような名前はごく普通で、守りたいのは名前ではなく中身である
 - **`.terraform.lock.hcl` は commit する。** 秘密は入らず、プロバイダの版とハッシュだけである。`Cargo.lock` を commit しているのと同じ理由で、手元の `tofu init` が CI の検証したものと同じ版を引くようにする（`versions.tf` の制約も `~> 6.0` で上限を切ってある）
 - リソースは**位置ではなく `key`** で識別しているので、利用者を 1 人足しても既存の
   リソースは作り直されない
