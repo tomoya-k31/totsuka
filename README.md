@@ -1,5 +1,11 @@
 > 🌐 **English** · [日本語](README.ja.md)
 
+<!-- rumdl-disable MD033 -->
+<p align="center">
+  <img src="apps/macos/Resources/Assets.xcassets/AppIcon.appiconset/icon_256x256.png" alt="totsuka app icon" width="128" height="128">
+</p>
+<!-- rumdl-enable MD033 -->
+
 # totsuka
 
 **AI-driven dev-flow automation.** totsuka detects task instructions from your
