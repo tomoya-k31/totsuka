@@ -1,6 +1,12 @@
 > 🌐 [English](README.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
+<!-- rumdl-disable MD033 -->
+<p align="center">
+  <img src="apps/macos/Resources/Assets.xcassets/AppIcon.appiconset/icon_256x256.png" alt="totsuka アプリのアイコン" width="128" height="128">
+</p>
+<!-- rumdl-enable MD033 -->
+
 # totsuka
 
 **AI 駆動の開発フロー自動化ツール。** totsuka はタスクソース（GitHub Issues、
