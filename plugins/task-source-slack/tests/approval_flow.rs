@@ -1415,3 +1415,293 @@ async fn empty_publish_fails_without_consuming_the_pending_entry() {
     .await;
     assert_eq!(requests_for(&shared, "chat.postEphemeral").len(), 1);
 }
+
+// ---------------------------------------------------------------------------
+// The reject modal (ADR-0111)
+// ---------------------------------------------------------------------------
+
+/// A reject press carrying a `trigger_id`, the shape Socket Mode delivers.
+fn reject_press_with_trigger(envelope_id: &str, draft_id: &str) -> Value {
+    let mut envelope = block_actions_envelope(envelope_id, "reject_reply", draft_id, "C1");
+    envelope["payload"]["trigger_id"] = json!("T.trigger");
+    envelope
+}
+
+/// The reject modal's submission, echoing the `private_metadata` it was
+/// opened with.
+fn reject_submission(envelope_id: &str, metadata: &str, alt_text: Option<&str>) -> Value {
+    json!({
+        "type": "interactive",
+        "envelope_id": envelope_id,
+        "payload": {
+            "type": "view_submission",
+            "view": {
+                "callback_id": "reject_reply_modal",
+                "private_metadata": metadata,
+                "state": { "values": {
+                    "alt_reply": { "alt_text": {
+                        "type": "plain_text_input", "value": alt_text
+                    } },
+                    "send_alt": { "send": {
+                        "type": "checkboxes", "selected_options": []
+                    } }
+                } }
+            }
+        }
+    })
+}
+
+/// Press reject, wait for the modal, and return the opened view.
+async fn open_reject_modal(
+    shared: &Shared,
+    ws: &mut tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
+    draft_id: &str,
+) -> Value {
+    send_and_await_ack(ws, reject_press_with_trigger("e2", draft_id)).await;
+    wait_until("the reject modal", || {
+        !requests_for(shared, "views.open").is_empty()
+    })
+    .await;
+    requests_for(shared, "views.open")[0].body.clone().unwrap()
+}
+
+/// **A press with a trigger opens the modal and decides nothing**; the
+/// submission rejects and keeps the alternative reply on the repainted
+/// surface.
+#[tokio::test]
+async fn reject_opens_a_modal_and_the_submission_keeps_the_alternative_reply() {
+    let (listener, url) = ws_listener().await;
+    let shared = Shared::default();
+    canned_web_api(&shared, &url);
+    shared.push_for("views.open", Canned::Data(json!({ "ok": true })));
+    let (_srv, mut ws) = publish_draft_flow(&shared, &listener).await;
+    let (draft_id, ..) = draft_buttons(&shared);
+
+    let body = open_reject_modal(&shared, &mut ws, &draft_id).await;
+    assert_eq!(body["trigger_id"], "T.trigger");
+    let view = &body["view"];
+    assert_eq!(view["callback_id"], "reject_reply_modal");
+    let metadata = view["private_metadata"].as_str().unwrap().to_string();
+    let parsed: Value = serde_json::from_str(&metadata).unwrap();
+    // The press's `response_url` rides along: the submission has none.
+    assert_eq!(parsed["r"], "https://hooks.slack.test/r/1");
+    assert_eq!(
+        view["blocks"][1]["text"]["text"],
+        expected_posted_reply(),
+        "the modal shows what is being rejected: {view}"
+    );
+
+    send_and_await_ack(
+        &mut ws,
+        reject_submission("e3", &metadata, Some("  今日中に一次版を出します  ")),
+    )
+    .await;
+    wait_until("the final view rewrite", || {
+        !shared.posted_urls().is_empty()
+    })
+    .await;
+
+    let posted = shared.posted_urls();
+    assert_eq!(
+        posted.len(),
+        1,
+        "the press itself finalized nothing: {posted:?}"
+    );
+    assert_eq!(posted[0].body["replace_original"], true);
+    let blocks = posted[0].body["blocks"].to_string();
+    assert!(blocks.contains("却下済み"), "{blocks}");
+    assert!(
+        blocks.contains("*代わりの返信*\\n今日中に一次版を出します"),
+        "trimmed and kept: {blocks}"
+    );
+    assert!(requests_for(&shared, "chat.postMessage").is_empty());
+}
+
+/// With a nudge, the alternative reply goes on the decision record — the
+/// surface that outlives the ephemeral, which is the point of collecting it.
+#[tokio::test]
+async fn the_alternative_reply_is_recorded_on_the_nudge() {
+    let (listener, url) = ws_listener().await;
+    let shared = Shared::default();
+    canned_web_api(&shared, &url);
+    canned_bot_ok(&shared);
+    shared.push_for(
+        "chat.postMessage",
+        Canned::Data(json!({ "ok": true, "ts": "888.8" })),
+    );
+    shared.push_for("views.open", Canned::Data(json!({ "ok": true })));
+    let (_srv, mut ws) = publish_draft_flow_with(&shared, &listener, init_params_with_bot()).await;
+    let (draft_id, ..) = draft_buttons(&shared);
+
+    let body = open_reject_modal(&shared, &mut ws, &draft_id).await;
+    let metadata = body["view"]["private_metadata"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    send_and_await_ack(&mut ws, reject_submission("e3", &metadata, Some("別案"))).await;
+    wait_until("the ephemeral delete", || !shared.posted_urls().is_empty()).await;
+
+    let updates = requests_for(&shared, "chat.update");
+    let record = updates[0].body.as_ref().unwrap();
+    assert!(
+        record["text"].as_str().unwrap().contains("却下"),
+        "{record}"
+    );
+    assert_eq!(
+        record["blocks"].as_array().unwrap().last().unwrap()["text"]["text"],
+        "*代わりの返信*\n別案"
+    );
+    assert_eq!(
+        shared.posted_urls()[0].body,
+        json!({ "delete_original": true })
+    );
+}
+
+/// An empty field is a rejection with nothing to add, not an empty record.
+#[tokio::test]
+async fn an_empty_alternative_reply_rejects_without_one() {
+    let (listener, url) = ws_listener().await;
+    let shared = Shared::default();
+    canned_web_api(&shared, &url);
+    shared.push_for("views.open", Canned::Data(json!({ "ok": true })));
+    let (_srv, mut ws) = publish_draft_flow(&shared, &listener).await;
+    let (draft_id, ..) = draft_buttons(&shared);
+
+    let body = open_reject_modal(&shared, &mut ws, &draft_id).await;
+    let metadata = body["view"]["private_metadata"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    send_and_await_ack(&mut ws, reject_submission("e3", &metadata, None)).await;
+    wait_until("the final view rewrite", || {
+        !shared.posted_urls().is_empty()
+    })
+    .await;
+
+    let blocks = shared.posted_urls()[0].body["blocks"].to_string();
+    assert!(blocks.contains("却下済み"), "{blocks}");
+    assert!(!blocks.contains("代わりの返信"), "{blocks}");
+}
+
+/// **A modal that cannot open must not swallow the rejection.** An expired
+/// trigger is the likely cause, and the press still means "reject".
+#[tokio::test]
+async fn a_modal_that_cannot_open_rejects_on_the_spot() {
+    let (listener, url) = ws_listener().await;
+    let shared = Shared::default();
+    canned_web_api(&shared, &url);
+    shared.push_for(
+        "views.open",
+        Canned::Data(json!({ "ok": false, "error": "expired_trigger_id" })),
+    );
+    let (_srv, mut ws) = publish_draft_flow(&shared, &listener).await;
+    let (draft_id, ..) = draft_buttons(&shared);
+
+    send_and_await_ack(&mut ws, reject_press_with_trigger("e2", &draft_id)).await;
+    wait_until("the final view rewrite", || {
+        !shared.posted_urls().is_empty()
+    })
+    .await;
+
+    let posted = shared.posted_urls();
+    assert_eq!(posted[0].body["replace_original"], true);
+    assert!(
+        posted[0].body["blocks"].to_string().contains("却下済み"),
+        "{:?}",
+        posted[0].body
+    );
+}
+
+/// The same submission with the send box ticked.
+fn reject_and_send_submission(envelope_id: &str, metadata: &str, alt_text: &str) -> Value {
+    let mut envelope = reject_submission(envelope_id, metadata, Some(alt_text));
+    envelope["payload"]["view"]["state"]["values"]["send_alt"]["send"]["selected_options"] =
+        json!([{ "value": "send" }]);
+    envelope
+}
+
+/// **Ticking the box also posts the alternative reply**, addressed like an
+/// approved one — and the record says it went out.
+#[tokio::test]
+async fn a_ticked_send_box_posts_the_alternative_reply_to_the_thread() {
+    let (listener, url) = ws_listener().await;
+    let shared = Shared::default();
+    canned_web_api(&shared, &url);
+    canned_bot_ok(&shared);
+    // In order: the nudge (bot), then the alternative reply (operator).
+    shared.push_for(
+        "chat.postMessage",
+        Canned::Data(json!({ "ok": true, "ts": "888.8" })),
+    );
+    shared.push_for(
+        "chat.postMessage",
+        Canned::Data(json!({ "ok": true, "ts": "777.7" })),
+    );
+    shared.push_for("views.open", Canned::Data(json!({ "ok": true })));
+    let (_srv, mut ws) = publish_draft_flow_with(&shared, &listener, init_params_with_bot()).await;
+    let (draft_id, ..) = draft_buttons(&shared);
+
+    let body = open_reject_modal(&shared, &mut ws, &draft_id).await;
+    let metadata = body["view"]["private_metadata"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    send_and_await_ack(&mut ws, reject_and_send_submission("e3", &metadata, "別案")).await;
+    wait_until("the ephemeral delete", || !shared.posted_urls().is_empty()).await;
+
+    let posts = requests_for(&shared, "chat.postMessage");
+    assert_eq!(posts.len(), 2, "the nudge, then the alternative reply");
+    assert_eq!(
+        posts[1].token,
+        task_source_slack::transport::TokenKind::User
+    );
+    let reply = posts[1].body.as_ref().unwrap();
+    assert_eq!(reply["text"], "<@U_OTHER> 別案");
+    assert_eq!(reply["thread_ts"], "100.0");
+    let record = requests_for(&shared, "chat.update")[0]
+        .body
+        .clone()
+        .unwrap();
+    assert!(
+        record["text"]
+            .as_str()
+            .unwrap()
+            .contains("代わりの返信を送信しました"),
+        "{record}"
+    );
+}
+
+/// A failed post keeps the rejection and its record, and says so.
+#[tokio::test]
+async fn a_failed_alternative_post_still_rejects_and_says_so() {
+    let (listener, url) = ws_listener().await;
+    let shared = Shared::default();
+    canned_web_api(&shared, &url);
+    shared.push_for("chat.postMessage", Canned::Network);
+    shared.push_for("views.open", Canned::Data(json!({ "ok": true })));
+    let (_srv, mut ws) = publish_draft_flow(&shared, &listener).await;
+    let (draft_id, ..) = draft_buttons(&shared);
+
+    let body = open_reject_modal(&shared, &mut ws, &draft_id).await;
+    let metadata = body["view"]["private_metadata"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    send_and_await_ack(&mut ws, reject_and_send_submission("e3", &metadata, "別案")).await;
+    wait_until("the notice and the repaint", || {
+        shared.posted_urls().len() >= 2
+    })
+    .await;
+
+    let posted = shared.posted_urls();
+    assert!(
+        posted[0].body["text"]
+            .as_str()
+            .unwrap()
+            .contains("送信に失敗しました"),
+        "{posted:?}"
+    );
+    let blocks = posted[1].body["blocks"].to_string();
+    assert!(blocks.contains("返信は送信されていません"), "{blocks}");
+    assert!(blocks.contains("別案"), "{blocks}");
+}

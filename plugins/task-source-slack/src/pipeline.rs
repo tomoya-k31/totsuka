@@ -231,6 +231,14 @@ impl SharedState {
         self.drafts.lock().unwrap().set_status(draft_id, status);
     }
 
+    /// Reject a draft, keeping the alternative reply typed into the modal.
+    pub fn reject_draft(&self, draft_id: &str, alt_reply: Option<String>, sent: bool) {
+        self.drafts
+            .lock()
+            .unwrap()
+            .reject(draft_id, alt_reply, sent);
+    }
+
     /// Remember which bot-DM nudge announced `draft_id`, so a decision can be
     /// recorded there before the ephemeral is deleted (ADR-0074 amendment 7).
     pub fn set_draft_nudge_ts(&self, draft_id: &str, nudge_ts: String) {
@@ -720,6 +728,15 @@ where
                         &awaiting,
                         &payload,
                         &orchestrator.submit,
+                    )
+                    .await;
+                }
+                SocketEvent::ViewSubmission(payload) => {
+                    crate::approval::handle_view_submission(
+                        api.as_ref(),
+                        &state,
+                        &config,
+                        &payload,
                     )
                     .await;
                 }

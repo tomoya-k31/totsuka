@@ -79,6 +79,21 @@ pub struct Draft {
     /// its nudge, if any, is no longer addressable.
     #[serde(default)]
     pub nudge_ts: Option<String>,
+    /// Slack id of whoever raised the task — what an alternative reply is
+    /// addressed to, the same way the draft itself was (`asker_prefix`).
+    /// `None` on a draft persisted before the field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sender_id: Option<String>,
+    /// What the operator would have sent instead, typed into the reject
+    /// modal — the record a rejection is kept for, so the reply that should
+    /// have been written can be looked up later. `None` for an approval, a
+    /// rejection with the field left empty, or one decided without a modal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alt_reply: Option<String>,
+    /// The alternative reply was also posted to the thread, because the
+    /// operator ticked the modal's send box.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub alt_reply_sent: bool,
 }
 
 /// The on-disk shape of the store: schema version, the id counter, and the
@@ -223,6 +238,16 @@ impl DraftStore {
         }
     }
 
+    /// Reject `draft_id`, keeping the operator's alternative reply with it.
+    pub fn reject(&mut self, draft_id: &str, alt_reply: Option<String>, sent: bool) {
+        if let Some(draft) = self.entries.get_mut(draft_id) {
+            draft.status = DraftStatus::Rejected;
+            draft.alt_reply = alt_reply;
+            draft.alt_reply_sent = sent;
+            self.save();
+        }
+    }
+
     /// Record the `ts` of the nudge DM that announced `draft_id`. Written
     /// after the insert because the nudge names the draft, so the draft has
     /// to exist first.
@@ -308,6 +333,9 @@ mod tests {
             status: DraftStatus::Pending,
             created_at,
             nudge_ts: None,
+            sender_id: None,
+            alt_reply: None,
+            alt_reply_sent: false,
         }
     }
 
@@ -389,6 +417,39 @@ mod tests {
         assert_eq!(restored.status, DraftStatus::Sent);
         assert_eq!(reloaded.get(&b).unwrap().status, DraftStatus::Pending);
         assert_eq!(reloaded.order.len(), 2);
+    }
+
+    /// A rejection's record — the alternative reply, whether it was sent,
+    /// and who it was addressed to — survives a restart (ADR-0111), and a
+    /// draft written before those fields existed still loads.
+    #[test]
+    fn a_rejection_record_round_trips_and_old_drafts_still_load() {
+        let path = scratch_path("reject-record");
+        let mut store = DraftStore::load(path.clone());
+        let mut with_sender = draft(SystemTime::now());
+        with_sender.sender_id = Some("U_ASKER".into());
+        let id = store.insert(with_sender);
+        store.reject(&id, Some("別案".into()), true);
+
+        let reloaded = DraftStore::load(path.clone());
+        let restored = reloaded.get(&id).expect("the draft survives the reload");
+        assert_eq!(restored.status, DraftStatus::Rejected);
+        assert_eq!(restored.alt_reply.as_deref(), Some("別案"));
+        assert!(restored.alt_reply_sent);
+        assert_eq!(restored.sender_id.as_deref(), Some("U_ASKER"));
+
+        // The pre-ADR-0111 shape: none of the three fields on disk.
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let mut on_disk: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        for field in ["alt_reply", "alt_reply_sent", "sender_id"] {
+            on_disk["drafts"][0].as_object_mut().unwrap().remove(field);
+        }
+        std::fs::write(&path, on_disk.to_string()).unwrap();
+        let old = DraftStore::load(path);
+        let old = old.get(&id).expect("an old-shape draft still loads");
+        assert_eq!(old.alt_reply, None);
+        assert!(!old.alt_reply_sent);
+        assert_eq!(old.sender_id, None);
     }
 
     #[test]
