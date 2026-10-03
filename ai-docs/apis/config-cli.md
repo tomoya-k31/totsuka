@@ -1,7 +1,7 @@
 ---
 type: API Endpoint
-title: totsuka config schema / get / set / unset（設定画面向けの CLI 契約）
-description: メニューバーアプリの設定画面が config.toml を読み書きするための CLI 契約（ADR-0113）。schema は core（schemars）と各プラグイン（config/schema）のスキーマを 1 つのルートスキーマにまとめ、get はファイルの中身を JSON で返し、set / unset は JSON Pointer のキーパスで 1 キーずつコメントを保ったまま書き換える。読めていたファイルを読めなくする書き込みは拒否し、シンボリックリンクは辿って書く。
+title: totsuka config schema / get / set / unset（設定を JSON で扱う CLI 契約）
+description: config.toml を JSON で読み書きする CLI 契約（ADR-0113）。メニューバーアプリの設定画面のために作り、設定画面を外した今もアプリは get（パスと中身）を使う。schema は core（schemars）と各プラグイン（config/schema）のスキーマを 1 つのルートスキーマにまとめ、get はファイルの中身を JSON で返し、set / unset は JSON Pointer のキーパスで 1 キーずつコメントを保ったまま書き換える。読めていたファイルを読めなくする書き込みは拒否し、シンボリックリンクは辿って書く。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-cli/src/config_cmd.rs
 tags: [api, cli, config, json-schema, menubar, macos]
 generated: { by: claude-code/opus-5.5, at: 2026-10-01T22:56:00+09:00 }

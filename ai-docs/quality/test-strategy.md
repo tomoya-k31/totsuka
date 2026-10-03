@@ -4,7 +4,7 @@ title: テスト戦略（自動結合テスト / E2E / モックプラグイン�
 description: totsuka のテスト層（ユニット・実プロセス結合・バイナリE2E）とモックプラグインによるシナリオ注入、フレーク対策、CI 品質ゲートの定義。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates
 tags: [testing, e2e, integration, mock, ci, quality, slack]
-generated: { by: claude-code/opus-5.5, at: 2026-09-26T19:30:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-01T23:32:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -79,7 +79,7 @@ owner: tomoya-k31
 
 チェック内容は #45 のまま、実行タイミングはコスト最適化のため [ADR-0007](/decisions/adr-0007-ci-cost-optimization.md) で再設計し、実行時間そのものは [ADR-0018](/decisions/adr-0018-ci-test-time.md) で削減した。
 
-- **毎 PR**（`ci.yml`）: `clippy / rustfmt`（rustfmt・arch-lint・`cargo-machete` をステップとして含む 1 ジョブ。7 秒の machete を独立ジョブにすると切り上げ課金 1 分が固定費になるため #281 で吸収した）と `test`（全層）、`msrv`（`rust-version` の toolchain で workspace とゲートウェイを `cargo check` する。[ADR-0087](/decisions/adr-0087-msrv-gate.md)）、`gateway (slack-event-gateway)`（workspace 外のゲートウェイの fmt・clippy・test。イメージのビルドと `tofu validate` はゲートウェイを触った PR だけ）。`okf-lint.yml`（`lint` ジョブ、唯一の必須チェック）は全 PR で OKF lint を実行する。
+- **毎 PR**（`ci.yml`）: `clippy / rustfmt`（rustfmt・arch-lint・`cargo-machete` をステップとして含む 1 ジョブ。7 秒の machete を独立ジョブにすると切り上げ課金 1 分が固定費になるため #281 で吸収した）と `test`（全層）、`msrv`（`rust-version` の toolchain で workspace とゲートウェイを `cargo check` する。[ADR-0087](/decisions/adr-0087-msrv-gate.md)）、`gateway (slack-event-gateway)`（workspace 外のゲートウェイの fmt・clippy・test。イメージのビルドと `tofu validate` はゲートウェイを触った PR だけ）。`okf-lint.yml`（`lint` ジョブ、唯一の必須チェック）は全 PR で OKF lint を実行する。`macos-app.yml`（`macos app` ジョブ）は `apps/macos/**` を触った PR だけで走り、`swift test` と `.app` のビルドを行う（パスで絞ったワークフローなので、触らない PR にはチェック自体が出ない。手動実行でも `.app` を artifact に残せる、[macOS アプリ](/components/macos-app.md)）。
 - **週次 cron**（`cache-cleanup.yml`）: クローズ済み PR の Actions キャッシュを回収する。PR ごとに約 350 MB を PR スコープで作り捨てるため放置すると 10 GB 上限に張り付き、main のベースラインまで退避されてビルドが温まらなくなる。
 - **main への push**（`ci.yml`）: `coverage (llvm-cov)` のみ。計装ビルドで全テストスイートを実行するため、マージごとのテスト検証を兼ねる（カバレッジはアーティファクト化のみ、閾値ゲートなし）。
 - **日次 cron + 依存ファイル変更 PR**（`audit.yml`）: `cargo-audit` / `cargo-deny`。

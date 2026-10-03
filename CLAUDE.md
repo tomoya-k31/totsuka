@@ -25,6 +25,27 @@ After writing or editing code, check LSP diagnostics before moving on. Fix type 
 
 If rust-analyzer becomes slow or unstable on this workspace (large monorepo), it's fine to disable it temporarily with `/plugin disable rust-analyzer-lsp@claude-plugins-official` and fall back to Grep.
 
+## Code Intelligence (Swift / sourcekit-lsp)
+
+For the menu bar app under `apps/macos/` (ADR-0113), prefer LSP over Grep/Read
+for navigation, the same way as rust-analyzer above (`goToDefinition`,
+`findReferences`, `hover`, `documentSymbol`, …), and check LSP diagnostics
+after editing Swift files.
+
+- `apps/macos/Package.swift` is a SwiftPM package (`TotsukaKit` + the
+  `TotsukaApp` executable built from `Sources/Totsuka`), which sourcekit-lsp
+  indexes directly — run `swift build` there
+  once so cross-file results resolve.
+- The shipped `.app` is built from `apps/macos/project.yml` (XcodeGen; the
+  `.xcodeproj` is generated and not committed). sourcekit-lsp does not read
+  that project without a build server (e.g. `xcode-build-server`), so use the
+  package, not the generated project, for navigation.
+- On a machine with Command Line Tools only, run the tests with
+  `apps/macos/test.sh` (plain `swift test` cannot find swift-testing there).
+  `apps/macos/build-app.sh` assembles a `.app` without Xcode for trying it;
+  the shipped one needs Xcode's `actool` for its asset catalog, so CI's
+  `macos-app.yml` (`xcodebuild`) is the gate for the app build itself.
+
 ## Documentation (`ai-docs/` = OKF Knowledge Bundle)
 
 All knowledge about this repository lives in `ai-docs/`, an [OKF v0.2](https://raw.githubusercontent.com/GoogleCloudPlatform/knowledge-catalog/refs/heads/main/okf/SPEC.md)-compliant Knowledge Bundle.

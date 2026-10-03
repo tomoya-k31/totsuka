@@ -167,6 +167,13 @@ pub struct MenuRow {
     pub state: String,
     /// Matched workflow name.
     pub workflow: String,
+    /// The repository the task resolved to (`[[repositories]].name`), absent
+    /// while it has none yet.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+    /// When the task was ingested (RFC 3339) — what an elapsed time counts
+    /// from.
+    pub created_at: String,
     /// Task title, **verbatim** (`--json` stays byte-exact, #280).
     pub title: String,
 }
@@ -270,6 +277,8 @@ fn build(cx: &Cx) -> Result<MenuModel, CliError> {
             task_id: task.id,
             state: task.state.to_string(),
             workflow: task.workflow,
+            repo: task.repo,
+            created_at: orchestrator_core::ports::clock::format_rfc3339(task.created_at),
             title: task.title,
         });
     }
@@ -438,11 +447,27 @@ fn render_swiftbar(model: &MenuModel, binary: &str) -> String {
 mod tests {
     use super::*;
 
+    /// The app reads the repository and the ingest time off each row to show
+    /// where the task runs and how long ago it came in (ADR-0113 §3); a task
+    /// with no repository yet omits the key rather than sending `null`.
+    #[test]
+    fn rows_carry_repo_and_ingest_time() {
+        let mut with_repo = row(1, "running", "t");
+        with_repo.repo = Some("web".to_string());
+        let json = serde_json::to_value(&with_repo).unwrap();
+        assert_eq!(json["repo"], "web");
+        assert_eq!(json["created_at"], "2026-10-03T00:00:00Z");
+        let json = serde_json::to_value(row(2, "queued", "t")).unwrap();
+        assert!(json.get("repo").is_none(), "{json}");
+    }
+
     fn row(task_id: i64, state: &str, title: &str) -> MenuRow {
         MenuRow {
             task_id: TaskId(task_id),
             state: state.to_string(),
             workflow: "implement".to_string(),
+            repo: None,
+            created_at: "2026-10-03T00:00:00Z".to_string(),
             title: title.to_string(),
         }
     }

@@ -15,6 +15,7 @@
   "enabledPlugins": {
     "rust-analyzer-lsp@claude-plugins-official": true,
     "code-review@claude-plugins-official": true,
-    "context7@claude-plugins-official": true
+    "context7@claude-plugins-official": true,
+    "swift-lsp@claude-plugins-official": true
   }
 }

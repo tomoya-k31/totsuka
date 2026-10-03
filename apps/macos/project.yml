@@ -1,0 +1,48 @@
+# XcodeGen spec for the shipped Totsuka.app (ADR-0113). The `.xcodeproj` is
+# generated (`xcodegen generate`) and not committed. CI builds it ad-hoc
+# signed; the release job puts the result into the universal tarball, and the
+# Homebrew formula installs it next to the CLI.
+name: Totsuka
+options:
+  bundleIdPrefix: io.github.tomoya-k31
+  deploymentTarget:
+    macOS: "15.0"
+packages:
+  TotsukaKit:
+    path: .
+targets:
+  Totsuka:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/Totsuka
+      - path: Resources
+    dependencies:
+      - package: TotsukaKit
+        product: TotsukaKit
+    info:
+      path: Generated/Info.plist
+      properties:
+        CFBundleDisplayName: Totsuka
+        # Without these XcodeGen writes "1.0", which the CLI version check
+        # cannot parse and which never changes across updates.
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSUIElement: true
+        LSMinimumSystemVersion: "15.0"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.tomoya-k31.totsuka
+        PRODUCT_NAME: Totsuka
+        MARKETING_VERSION: 0.10.3 # x-release-please-version
+        CURRENT_PROJECT_VERSION: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        SWIFT_VERSION: "5.0"
+        # Ad-hoc: no Developer Program (ADR-0113 §6). A Developer ID would not
+        # remove the Gatekeeper question here anyway — Homebrew formulae are
+        # not quarantined — and a self-signed certificate does not keep the
+        # Keychain from asking after an update (measured).
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGN_STYLE: Manual
+        DEVELOPMENT_TEAM: ""
+        ENABLE_HARDENED_RUNTIME: false
