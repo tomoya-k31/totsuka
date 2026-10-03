@@ -4,7 +4,7 @@ title: Homebrew tap（tomoya-k31/homebrew-tap）
 description: "totsuka を brew install で配れるようにするための tap リポジトリ。formula のインストールレイアウトがなぜ bundled plugins の探索順と一致するのか、メニューバーアプリ（Totsuka.app）を formula で入れる理由と入れ方、リリースジョブが何を書き換えるのか、HOMEBREW_TAP_TOKEN のスコープ、bump が失敗したときの復旧、そして public 化までステップを止めている可視性ゲート。"
 resource: https://github.com/tomoya-k31/homebrew-tap
 tags: [infrastructure, homebrew, distribution, release, token]
-generated: { by: claude-code/opus-5.5, at: 2026-10-04T01:19:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-04T01:25:00+09:00 }
 status: stable
 owner: tomoya-k31
 sources:
@@ -101,7 +101,7 @@ bin.install "totsuka"
 | Repository access | **`homebrew-tap` のみ** |
 | Permissions | **Contents: Read and write** だけ |
 | 置き場所 | `tomoya-k31/totsuka` の Actions secret `HOMEBREW_TAP_TOKEN` |
-| 失効日 | **未発行**（下の「まだ済んでいないこと」） |
+| 失効日 | 2026-08-31 発行。失効日は [リリース Runbook](/operations/release-runbook.md) のトークン表で管理する |
 
 `RELEASE_PLEASE_TOKEN` を流用しない。あれは totsuka リポジトリのみにスコープされていて tap へ push できず、広げるとリリーストークンの爆発半径とローテーション周期が tap に結合する。
 
@@ -128,24 +128,23 @@ Homebrew の formula は `url` を**素の `curl`（GitHub 認証なし）**で�
 
 下段が問題である。それは `grep -q` の assert を置いて赤に変換しようとしている失敗そのもので、ガードがそれを再導入してしまう。
 
-## まだ済んでいないこと（tap を本番にするまでの手順）
+## tap を本番にするまでの手順（2026-08-31 にほぼ完了）
 
-1. **totsuka リポジトリを public にする。** これが済むまで残りは意味を持たない。bump ステップはこの時点で自動的に有効になる
-2. `Formula/totsuka.rb` の `version` / `sha256` が最新リリースを指しているか確認する（公開までに何度かリリースが出ていれば古い）。sha256 はアセットとして公開されている:
+public 化の前に「まだ済んでいないこと」として並べていた 5 項目の、今の状態:
 
-   ```sh
-   gh release view --json tagName -q .tagName -R tomoya-k31/totsuka
-   gh release download <TAG> -R tomoya-k31/totsuka \
-     -p 'totsuka-*-macos-universal.tar.gz.sha256' -O -
-   ```
+| 項目 | 状態 |
+|---|---|
+| totsuka リポジトリを public にする | 済み（2026-08-31）。bump ステップはこの時点で自分で有効になった |
+| formula の `version` / `sha256` を最新リリースに合わせる | 済み。public 化直後の 0.6.1（2026-08-31）から 0.10.5 までの 29 リリースすべてで、bump ジョブが書き換えた（tap の `github-actions[bot]` のコミットが 29 本） |
+| `HOMEBREW_TAP_TOKEN` を発行して Actions secret に登録する | 済み（2026-08-31） |
+| クリーンな Mac で実測する | **一部のみ**。開発機で `brew install` → `brew test` → 一時 XDG の `doctor` を通した（[ADR-0053](/decisions/adr-0053-homebrew-tap-distribution.md) の「検証」節）。`brew test` は `test do` が XDG を張り替えるので隔離されているが、「totsuka を一度も入れたことのない Mac」での実測はまだ無い |
+| README / setup playbook を brew 主導へ書き換える | 済み |
 
-3. `HOMEBREW_TAP_TOKEN` を上の表のスコープで発行し、Actions secret に登録する。**public 化の後は、これが無いとリリースが赤くなる**（そうなるように設計してある）
-4. **クリーンな Mac で実測する**（[ADR-0053](/decisions/adr-0053-homebrew-tap-distribution.md) の「検証」節のコマンド）。特に `totsuka doctor` — quarantine されたプラグインはメインのバイナリが動いたまま黙って落ちるので、`--version` が通ることは何の証拠にもならない
-5. 実測が通ったら README / setup playbook を brew 主導へ書き換える
+残っているのは、一度も入れたことのない Mac での実測だけである。そのとき特に見るのは `totsuka doctor` — quarantine されたプラグインはメインのバイナリが動いたまま黙って落ちるので、`--version` が通ることは何の証拠にもならない。
 
 # 知っておくとよいこと
 
-- **Homebrew 6.0 は third-party tap に `brew trust` を要求する**（`https://docs.brew.sh/Tap-Trust`）。未 trust の tap は「無視されている」と表示される。`brew install tomoya-k31/tap/totsuka` を**非対話で**実行したときは formula が `trust.json` に自動追加された。**対話実行時に確認プロンプトが出るかは未確認**なので、README にはまだ書いていない
+- **Homebrew 6.0 は third-party tap に `brew trust` を要求する**（`https://docs.brew.sh/Tap-Trust`）。未 trust の tap は「無視されている」と表示される。**formula を名指しすれば同じコマンドの中で trust が付与され**、`==> Trusted formula tomoya-k31/tap/totsuka` の 1 行が出て進むだけで、答えるべきプロンプトは無い（2026-08-31、`trust.json` の該当エントリを退避して対話・非対話の両方で実測。[setup playbook](/operations/setup-playbook.md) にも書いてある）。`brew info` では発火せず、formula を load する `install` / `reinstall` で発火する
 - **`brew install` は formula の `test do` を走らせない。** レイアウトが壊れても、誰かの `setup` がプラグインを見つけられなくなるまで誰も気づけない。手で回すなら:
 
   ```sh
