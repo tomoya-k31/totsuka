@@ -69,7 +69,7 @@ public func envFilePaths(in config: JSONValue, environment: [String: String]) ->
 public func envFileValues(_ text: String) -> JSONValue {
     var values: [JSONValue] = []
     for line in text.split(whereSeparator: \.isNewline) {
-        let trimmed = line.drop(while: { $0 == " " || $0 == "\t" })
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
         guard !trimmed.hasPrefix("#"), let eq = trimmed.firstIndex(of: "=") else { continue }
         var value = trimmed[trimmed.index(after: eq)...]
         if value.count >= 2, let q = value.first, q == "\"" || q == "'", value.last == q {

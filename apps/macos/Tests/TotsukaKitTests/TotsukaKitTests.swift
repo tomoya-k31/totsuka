@@ -161,6 +161,8 @@ import Testing
         #expect(secretNames(in: scanned) == ["brave", "exa"])
         #expect(usesSuppliedSecrets(scanned))
         #expect(!usesSuppliedSecrets(.array([config, envFileValues("D=plain\n")])))
+        // `run` trims both ends of a line, so a trailing space must not hide the quotes.
+        #expect(secretNames(in: envFileValues("  A=\"secret:pad\"  \t\n")) == ["pad"])
     }
 
     /// ADR-0114: only `[github].token`'s own `secret:` can come from `gh`.
