@@ -26,7 +26,7 @@
 # only a label) so Renovate can see which version this is and bump both
 # together (#728 / ADR-0088). It cannot move `alpine3.24` to the next Alpine
 # release on its own — that suffix is a different tag line, bumped by hand.
-FROM rust:1.98-alpine3.24@sha256:1716b3aa042d735f4566d14dc54e8037de9d69556e2d5dd58131d93a613d173d AS build
+FROM rust:1.98-alpine3.24@sha256:7cc1c22d77d9432f7fe012a70e6d3e555af54c2a6832700ed7d553f1769ae89f AS build
 
 RUN apk add --no-cache musl-dev
 
