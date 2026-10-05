@@ -52,7 +52,7 @@ clap_complete = "4"
 dialoguer = { version = "0.12", default-features = false }
 thiserror = "2"
 libc = "0.2"
-keyring = { version = "3", features = ["apple-native"] }
+keyring = { version = "4", features = ["apple-native"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # JSON Schema of the config for the menu bar app's settings window (ADR-0113).
