@@ -11,6 +11,24 @@ Note: the plugin protocol is versioned independently of the application (see
 `crates/plugin-protocol`); a totsuka release does not imply a protocol-version
 change.
 
+## [0.10.8](https://github.com/tomoya-k31/totsuka/compare/v0.10.7...v0.10.8) (2026-10-05)
+
+
+### Features
+
+* **macos:** 起動失敗のメッセージを全文表示し、起動中をスピナーにする ([#877](https://github.com/tomoya-k31/totsuka/issues/877)) ([752c0a5](https://github.com/tomoya-k31/totsuka/commit/752c0a5df8843d1c4f81c3c8657423f09baaeea5))
+
+
+### Bug Fixes
+
+* **core:** Stop の直後に plugin が死んでも crash 扱いにしない ([#874](https://github.com/tomoya-k31/totsuka/issues/874)) ([5a89377](https://github.com/tomoya-k31/totsuka/commit/5a8937796e515a3ac235510f1baa4ad8072d7e5e))
+* **core:** 前提不足は FAILED ではなく NEEDS_INPUT で止まるよう完了マーカーの説明を直す ([#876](https://github.com/tomoya-k31/totsuka/issues/876)) ([865a7b1](https://github.com/tomoya-k31/totsuka/commit/865a7b1a12d96d98c34ae22e41cbf69da4c945eb))
+
+
+### Documentation
+
+* **adr:** ADR-0072 に実機検収の verified を追記 ([#878](https://github.com/tomoya-k31/totsuka/issues/878)) ([aec9dea](https://github.com/tomoya-k31/totsuka/commit/aec9dead9f96fc9e893379f1bc50869888ca12b2))
+
 ## [0.10.7](https://github.com/tomoya-k31/totsuka/compare/v0.10.6...v0.10.7) (2026-10-05)
 
 
