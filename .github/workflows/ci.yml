@@ -42,9 +42,9 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
         with:
           toolchain: stable
           components: clippy,rustfmt
@@ -76,7 +76,7 @@ jobs:
       # rust-cache v2.9.1 の src/config.ts:74-88 は shared-key と key を排他に
       # 扱っており、shared-key があると key は読まれずに黙って捨てられる。
       - name: Cache cargo build
-        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: clippy-${{ hashFiles('Cargo.toml') }}
       - name: Check formatting
@@ -106,7 +106,7 @@ jobs:
       # 誤検知はクレートごとに `[package.metadata.cargo-machete] ignored = [...]`
       # で理由コメント付きに抑止する。
       - name: Install cargo-machete
-        uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2.83.2
+        uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
         with:
           tool: cargo-machete
       - name: Run cargo-machete
@@ -119,14 +119,14 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
         with:
           toolchain: stable
       # shared-key にハッシュを畳み込む理由は clippy ジョブのコメントを参照 (#341)。
       - name: Cache cargo build
-        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: test-${{ hashFiles('Cargo.toml') }}
       # --all-targets はこのワークスペースでは --lib --bins --tests と等価。
@@ -161,7 +161,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # 版は root Cargo.toml の `rust-version` が唯一の情報源。ここに版を書くと
       # MSRV を上げるときに宣言と CI がずれる。RUSTUP_TOOLCHAIN は
       # rust-toolchain.toml (channel = "stable") より優先されるので、以降の
@@ -175,7 +175,7 @@ jobs:
       # 専用の鍵空間: 古い rustc の成果物は stable のキャッシュと共有できない。
       # warm-cache には足さないので、PR ごとの初回 run は cold (ADR-0087)。
       - name: Cache cargo build
-        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: |
             .
@@ -212,7 +212,7 @@ jobs:
         working-directory: services/slack-event-gateway
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The OpenTofu `image` default is bumped by release-please, via the
       # annotation on the `default` line and the `extra-files` entry in
       # `release-please-config.json`. What this guards is a **hand edit that
@@ -251,7 +251,7 @@ jobs:
           fi
           echo "image default: ${tag} (workspace ${version})"
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
         with:
           toolchain: stable
           components: clippy,rustfmt
@@ -261,7 +261,7 @@ jobs:
       # Its own key space: this crate shares no dependency graph with the
       # workspace, so mixing them would only evict entries both sides want.
       - name: Cache cargo build
-        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: services/slack-event-gateway
           shared-key: gateway-${{ hashFiles('services/slack-event-gateway/Cargo.toml') }}
@@ -346,20 +346,20 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
         with:
           toolchain: stable
           components: llvm-tools-preview
       # shared-key にハッシュを畳み込む理由は clippy ジョブのコメントを参照 (#341)。
       # 計装済み成果物は通常ビルドと混ぜられないので、鍵は独立のままにする。
       - name: Cache cargo build
-        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: coverage-${{ hashFiles('Cargo.toml') }}
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2.83.2
+        uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
         with:
           tool: cargo-llvm-cov
       # Coverage is measured and reported only; no threshold gate (per #45).
