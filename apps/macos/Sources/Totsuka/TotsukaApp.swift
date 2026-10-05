@@ -115,7 +115,7 @@ struct MenuContent: View {
             HStack(spacing: 8) {
                 if app.runState == .starting || app.runState == .stopping {
                     // A spinner rather than a still symbol: it says "in progress".
-                    ProgressView().controlSize(.small)
+                    ProgressView().controlSize(.small).frame(width: 20, height: 20)
                 } else {
                     Image(systemName: status.symbol)
                         .foregroundStyle(status.color)
@@ -233,7 +233,7 @@ struct MenuContent: View {
             return ("arrow.clockwise.circle", .orange,
                     "Restarting at " + at.formatted(date: .omitted, time: .standard))
         case .failed:
-            return ("exclamationmark.triangle.fill", .red, "Failed to start")
+            return ("exclamationmark.triangle.fill", .red, "Failed")
         case .external:
             return ("circle.fill", .blue, "Running outside the app")
         }
@@ -242,8 +242,10 @@ struct MenuContent: View {
 
 /// A failed start's message in full: wrapped, scrollable past 180 pt, and
 /// selectable so it can be copied (the header used to cut it at three lines).
+/// The box is as tall as the text, so a one-line error leaves no blank space.
 struct FailureBox: View {
     let message: String
+    @State private var textHeight: CGFloat = 0
 
     var body: some View {
         ScrollView {
@@ -252,8 +254,9 @@ struct FailureBox: View {
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(8)
+                .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { textHeight = $0 }
         }
-        .frame(maxHeight: 180)
+        .frame(height: textHeight > 0 ? min(textHeight, 180) : nil)
         .background(Color.red.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
     }
 }
