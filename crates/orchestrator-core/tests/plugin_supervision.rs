@@ -207,6 +207,39 @@ fn launches(counter: &Path) -> u64 {
         .unwrap_or(0)
 }
 
+/// Stop condition for the restart tests: the relaunch has been **installed**
+/// by the engine, not merely started (#892). Needs a run publishing health.
+///
+/// The counter alone is not enough. The mock bumps it right after answering
+/// `initialize`, while the engine learns of the new instance only when the
+/// off-loop launch reports back as `Restarted` — the handler that swaps the
+/// instance in and counts the restart. Stopping in between returns a summary
+/// with `restarts: 0`.
+///
+/// A launch count of 2 means the first process is dead, and a dead instance
+/// is published as `plugin_down` until `Restarted` replaces it. So once the
+/// count is reached, remove the health file — anything published afterwards
+/// describes a cycle that ended after this point — and wait for a document
+/// without `plugin_down`.
+fn relaunch_installed(counter: PathBuf, health: PathBuf) -> impl Fn() -> bool {
+    let armed = std::cell::Cell::new(false);
+    move || {
+        if !armed.get() {
+            if launches(&counter) < 2 {
+                return false;
+            }
+            let _ = std::fs::remove_file(&health);
+            armed.set(true);
+            return false;
+        }
+        orchestrator_core::adapters::run_health::read(&health).is_some_and(|h| {
+            !h.degraded
+                .iter()
+                .any(|d| matches!(d, Degradation::PluginDown { .. }))
+        })
+    }
+}
+
 fn notifications(log: &Path) -> Vec<serde_json::Value> {
     test_support::read_ndjson_log(log)
 }
@@ -330,7 +363,7 @@ async fn a_dead_task_source_is_noticed_and_comes_back() {
 
     let mut engine = Engine::new(
         db,
-        settings(5),
+        settings_publishing_health(5, &dir),
         plugins,
         SystemGitRunner::default(),
         None::<GatewayClassifier>,
@@ -338,9 +371,13 @@ async fn a_dead_task_source_is_noticed_and_comes_back() {
     .await;
 
     // Launch 1 dies right after `initialize`; launch 2 is the relaunch and
-    // survives, so a stable count of 2 means the cycle completed.
-    let probe = counter.clone();
-    let summary = run_until(&mut engine, move || launches(&probe) >= 2).await;
+    // survives. Stop once the engine has installed it, not when it merely
+    // started (#892).
+    let probe = relaunch_installed(
+        counter.clone(),
+        orchestrator_core::adapters::run_health::path_in(&dir),
+    );
+    let summary = run_until(&mut engine, probe).await;
 
     assert_eq!(
         launches(&counter),
@@ -385,14 +422,17 @@ async fn a_dead_notifier_is_noticed_and_comes_back() {
 
     let mut engine = Engine::new(
         db,
-        settings(5),
+        settings_publishing_health(5, &dir),
         plugins,
         SystemGitRunner::default(),
         None::<GatewayClassifier>,
     )
     .await;
-    let probe = counter.clone();
-    let summary = run_until(&mut engine, move || launches(&probe) >= 2).await;
+    let probe = relaunch_installed(
+        counter.clone(),
+        orchestrator_core::adapters::run_health::path_in(&dir),
+    );
+    let summary = run_until(&mut engine, probe).await;
 
     assert_eq!(launches(&counter), 2);
     assert_eq!(summary.stats.plugin_restarts, 1);
@@ -918,14 +958,17 @@ async fn a_restart_does_not_reset_the_accounting() {
 
     let mut engine = Engine::new(
         db,
-        settings(5),
+        settings_publishing_health(5, &dir),
         plugins,
         SystemGitRunner::default(),
         None::<GatewayClassifier>,
     )
     .await;
-    let probe = counter.clone();
-    let summary = run_until(&mut engine, move || launches(&probe) >= 2).await;
+    let probe = relaunch_installed(
+        counter.clone(),
+        orchestrator_core::adapters::run_health::path_in(&dir),
+    );
+    let summary = run_until(&mut engine, probe).await;
 
     let report = summary.plugins.get("mock_src").expect("plugin in summary");
     let init = report.methods.get("initialize").expect("initialize");
