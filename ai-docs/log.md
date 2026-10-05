@@ -1,5 +1,9 @@
 # Bundle Update Log
 
+## 2026-10-05
+
+* **Update**: [Totsuka.app](/components/macos-app.md) / [ADR-0100](/decisions/adr-0100-secrets-stdin.md) — メニューバーアプリが `[tools.*].env_file` のファイルの中の `secret:<名前>` も集めて Keychain に尋ねるようにした。これまでは config 本文しか走査せず、`env_file` に書いた `secret:` が `secret not found` で起動できなかった。
+
 ## 2026-10-04
 
 * **Update**: [ADR-0114](/decisions/adr-0114-macos-app-gh-token.md) — 実機検収の結果を記録し `verified` を追加（ダイアログ、gh のトークンでの起動とカード移動、gh 失敗時に起動しないこと）

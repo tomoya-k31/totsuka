@@ -43,6 +43,43 @@ public func usesSuppliedSecrets(_ config: JSONValue) -> Bool {
     }
 }
 
+/// The files `[tools.*].env_file` names, with `${VAR}` and a leading `~`
+/// expanded as `run` does (ADR-0090). One that does not expand to an absolute
+/// path is skipped: `run` refuses it with its own message.
+public func envFilePaths(in config: JSONValue, environment: [String: String]) -> [String] {
+    guard case .object(let tools)? = config["tools"] else { return [] }
+    var paths: [String] = []
+    for key in tools.keys.sorted() {
+        guard var path = tools[key]?["env_file"]?.string else { continue }
+        path = expandEnv(path, environment)
+        if path.hasPrefix("~/"), let home = environment["HOME"] {
+            path = home + path.dropFirst()
+        }
+        if path.hasPrefix("/") { paths.append(path) }
+    }
+    return paths
+}
+
+/// The values of an `env_file` (`KEY=value` lines; `#` comment and blank
+/// lines skipped; one pair of surrounding quotes removed), as a JSON array —
+/// so the scan for `secret:` that covers config.toml covers these too. `run`
+/// resolves a `secret:` here from the same map, but only the app can ask for
+/// it, so the app has to find it (ADR-0100 §7). Format errors are `run`'s to
+/// report.
+public func envFileValues(_ text: String) -> JSONValue {
+    var values: [JSONValue] = []
+    for line in text.split(whereSeparator: \.isNewline) {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.hasPrefix("#"), let eq = trimmed.firstIndex(of: "=") else { continue }
+        var value = trimmed[trimmed.index(after: eq)...]
+        if value.count >= 2, let q = value.first, q == "\"" || q == "'", value.last == q {
+            value = value.dropFirst().dropLast()
+        }
+        values.append(.string(String(value)))
+    }
+    return .array(values)
+}
+
 /// The `secret:<name>` that `[github].token` refers to — the one secret the
 /// app may take from `gh auth token` instead of the Keychain (ADR-0114).
 public func githubTokenSecretName(in config: JSONValue) -> String? {

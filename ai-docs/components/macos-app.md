@@ -4,14 +4,14 @@ title: Totsuka.app（macOS メニューバーアプリ）
 description: "apps/macos/ の SwiftUI メニューバーアプリ（ADR-0113）。totsuka run --watch --events-jsonl（config に secret: があれば --secrets-stdin 付き）を子プロセスとして監督し（終了コードで再起動を判断）、通知をアプリ名義で出す。設定画面は持たず、config.toml を $TERMINAL の $EDITOR で開き、run の stderr を $TERMINAL で tail -F する。機密は Start 時に Keychain に無い secret:<名前> を尋ねる（[github].token の secret は、選べば Start のたびに gh auth token から取る。ADR-0114）。ロジックは SwiftPM の TotsukaKit（swift test）、出荷する .app は XcodeGen の project.yml から CI がビルドする。"
 resource: https://github.com/tomoya-k31/totsuka/tree/main/apps/macos
 tags: [macos, swift, swiftui, menubar, app, notifier, config]
-generated: { by: claude-code/opus-5.5, at: 2026-10-04T04:50:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-05T19:40:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
 
 # 責務
 
-[ADR-0113](/decisions/adr-0113-native-menubar-app.md) のメニューバーアプリ。CLI の上に立つ薄い GUI で、TOML は自分では解釈しない。機密の参照は `secret:<名前>` の名前を集める（`secretNames`。CLI と同じ `[A-Za-z0-9_.-]` に合わない名前は尋ねない）ところまでで、解決は `run` に任せる —— 読むのは `totsuka` の CLI 契約（`config get`・`config validate`、[run --events-jsonl](/apis/run-events-jsonl.md)、`menu --json`）だけで、config.toml の編集は `$EDITOR` に任せる。
+[ADR-0113](/decisions/adr-0113-native-menubar-app.md) のメニューバーアプリ。CLI の上に立つ薄い GUI で、TOML は自分では解釈しない。機密の参照は `secret:<名前>` の名前を集める（`secretNames`。config 本文に加えて `[tools.*].env_file` が指すファイルの値も走査する（`envFilePaths` / `envFileValues`）。CLI と同じ `[A-Za-z0-9_.-]` に合わない名前は尋ねない）ところまでで、解決は `run` に任せる —— 読むのは `totsuka` の CLI 契約（`config get`・`config validate`、[run --events-jsonl](/apis/run-events-jsonl.md)、`menu --json`）だけで、config.toml の編集は `$EDITOR` に任せる。
 
 # 構成
 
@@ -27,7 +27,7 @@ owner: tomoya-k31
 
 # 振る舞い
 
-- **起動**: `config get` で読んだ config に `secret:` の参照があれば（`usesSuppliedSecrets`）、Keychain のマップを読み（新しい版での初回は「次の確認で『常に許可』を」と先に言う）、マップに無い名前をパスワード欄のダイアログで尋ねて保存し（取り消すと起動しない）、`[github].token` の secret のダイアログには「Use gh auth token」も出し（選ぶと UserDefaults の `githubTokenFromGh` に印を置くだけで、以後は尋ねない）、印があれば `gh auth token --hostname <api_url のホスト> --user <github_login>` の結果をマップに入れ（保存しない。失敗したら起動しない。[ADR-0114](/decisions/adr-0114-macos-app-gh-token.md)）、`config validate --secrets-stdin` が通ったら `run --secrets-stdin` を子プロセスとして起動し、stdin の 1 行目にマップを書いて開けたままにする。`secret:` が無ければ Keychain には触れず、`--secrets-stdin` なしで検証・起動して、`op://` / `cmd:` / `bw:` / `keychain:` を `run` 自身に解決させる。終了コードは `exitDecision`: 0 は停止、1 とシグナルは 2 秒から倍々で最大 5 分のバックオフ再起動（1 分以上健全に動いたら数え直す）、2 と 4 は止めて表示、5 は外部の `run` として監視だけ
+- **起動**: `config get` で読んだ config、または `[tools.*].env_file` のファイルに `secret:` の参照があれば（`usesSuppliedSecrets`。`env_file` 内の `secret:` を `run` は同じマップから解決するが、尋ねられるのはアプリだけ。読めないファイルは `run` に任せる）、Keychain のマップを読み（新しい版での初回は「次の確認で『常に許可』を」と先に言う）、マップに無い名前をパスワード欄のダイアログで尋ねて保存し（取り消すと起動しない）、`[github].token` の secret のダイアログには「Use gh auth token」も出し（選ぶと UserDefaults の `githubTokenFromGh` に印を置くだけで、以後は尋ねない）、印があれば `gh auth token --hostname <api_url のホスト> --user <github_login>` の結果をマップに入れ（保存しない。失敗したら起動しない。[ADR-0114](/decisions/adr-0114-macos-app-gh-token.md)）、`config validate --secrets-stdin` が通ったら `run --secrets-stdin` を子プロセスとして起動し、stdin の 1 行目にマップを書いて開けたままにする。`secret:` が無ければ Keychain には触れず、`--secrets-stdin` なしで検証・起動して、`op://` / `cmd:` / `bw:` / `keychain:` を `run` 自身に解決させる。終了コードは `exitDecision`: 0 は停止、1 とシグナルは 2 秒から倍々で最大 5 分のバックオフ再起動（1 分以上健全に動いたら数え直す）、2 と 4 は止めて表示、5 は外部の `run` として監視だけ
 - **アプリの終了**: Quit に限らず、ログアウトや外からの quit でも `applicationWillTerminate` で `run` に SIGTERM を送る（`run` は自分で正常に止まる。送らないと監督されない `run` が残り、次の起動がロック競合（exit 5）になる）
 - **停止**: SIGTERM、300 秒待っても終わらなければ SIGKILL（メニューの「すぐに停止」でも）。起動中（設定の検証を待っている間）やバックオフ待ちの停止も効く。終了の通知は stdout / stderr の両方が EOF になってから出すので、exit 4 の理由の行が先に届く
 - **外部の run**: exit 5 の後は `menu --json` がロックの解放（`down`）を見たところで引き継ぐ
@@ -42,7 +42,7 @@ owner: tomoya-k31
 
 # テスト
 
-- `apps/macos/test.sh`（`TotsukaKit` の swift-testing。終了コードの方針、版の比較、イベントの解釈、通知フィルタ、`secret:` の名前の収集、`gh auth token` の引数（ホストの変換と、決められない値の除外）、`$TERMINAL` / `$EDITOR` のシェル行と引用、ログファイルの書き直し、ログインシェルの環境、整数の往復、エージェント IDE の抽出・herdr ソケットの解決順・orca の稼働判定・focus 先アプリ）
+- `apps/macos/test.sh`（`TotsukaKit` の swift-testing。終了コードの方針、版の比較、イベントの解釈、通知フィルタ、`secret:` の名前の収集（`env_file` の中も）、`gh auth token` の引数（ホストの変換と、決められない値の除外）、`$TERMINAL` / `$EDITOR` のシェル行と引用、ログファイルの書き直し、ログインシェルの環境、整数の往復、エージェント IDE の抽出・herdr ソケットの解決順・orca の稼働判定・focus 先アプリ）
 - CI の `macos-app.yml`（`apps/macos/**` を触った PR と手動実行だけ。`on: paths` はワークフロー単位でしか効かないので `ci.yml` とは分けた）: `swift test` と、XcodeGen + `xcodebuild` での `.app` のビルド。ビルドした `.app` は `ditto` で zip にして artifact `Totsuka.app`（7 日）に残す —— 実機で試すにはこれを `~/Applications` に展開する（`/tmp` に置くと通知が許可されない）
 - UI と、実機の Keychain・通知・ログイン項目の挙動はテストが無い。ADR-0113 の「実測」がプロトタイプでの確認の記録
 

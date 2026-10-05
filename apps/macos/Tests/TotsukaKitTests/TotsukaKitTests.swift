@@ -146,6 +146,25 @@ import Testing
         #expect(usesSuppliedSecrets(nested), "a misspelt name still counts")
     }
 
+    /// ADR-0100 §7: a `secret:` in an `[tools.*].env_file` is resolved by
+    /// `run` from the same map, so the app must find and ask for it.
+    @Test func secretsInAnEnvFileAreFoundToo() throws {
+        let config = try #require(JSONValue.parse(#"""
+        {"tools":{"a":{"env_file":"~/x.env"},"b":{"env_file":"${D}/x.env"},
+                  "c":{"env_file":"rel.env"},"d":{"command":"y"}}}
+        """#))
+        let paths = envFilePaths(in: config, environment: ["HOME": "/h", "D": "/d"])
+        #expect(paths == ["/h/x.env", "/d/x.env"], "relative and env_file-less tools are skipped")
+
+        let text = "# c\n\nA=secret:brave\nB=\"secret:exa\"\nC='secret:brave'\nD=plain\nE=op://v/i/f\n"
+        let scanned = JSONValue.array([config, envFileValues(text)])
+        #expect(secretNames(in: scanned) == ["brave", "exa"])
+        #expect(usesSuppliedSecrets(scanned))
+        #expect(!usesSuppliedSecrets(.array([config, envFileValues("D=plain\n")])))
+        // `run` trims both ends of a line, so a trailing space must not hide the quotes.
+        #expect(secretNames(in: envFileValues("  A=\"secret:pad\"  \t\n")) == ["pad"])
+    }
+
     /// ADR-0114: only `[github].token`'s own `secret:` can come from `gh`.
     @Test func theGithubTokenSecretIsTheOneGithubTokenNames() throws {
         let config = try #require(JSONValue.parse(#"""

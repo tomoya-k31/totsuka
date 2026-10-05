@@ -131,14 +131,21 @@ final class AppModel: ObservableObject {
         // missing — there is no settings window to enter them in). A config
         // without any is left to `run` to resolve, `op://` and `cmd:`
         // included (ADR-0113 §5).
+        // The `[tools.*].env_file` files are part of the config: `run`
+        // resolves a `secret:` in one from the same map (ADR-0100 §7), so
+        // their values are scanned too. An unreadable file is `run`'s to report.
+        let envFiles = envFilePaths(in: document, environment: cli.environment).compactMap {
+            (try? String(contentsOfFile: $0, encoding: .utf8)).map(envFileValues)
+        }
+        let scanned = JSONValue.array([document] + envFiles)
         var secretMap: [String: String]?
-        if usesSuppliedSecrets(document) {
+        if usesSuppliedSecrets(scanned) {
             guard let stored = loadSecrets() else { return }
             let account = ghAccount(in: document)
             let githubSecret = githubTokenSecretName(in: document)
             guard
                 let asked = askForMissingSecrets(
-                    secretNames(in: document), in: stored,
+                    secretNames(in: scanned), in: stored,
                     github: githubSecret, gh: account)
             else {
                 runState = .stopped
@@ -303,7 +310,7 @@ final class AppModel: ObservableObject {
         for name in missing {
             let alert = NSAlert()
             alert.messageText = "Secret “\(name)”"
-            alert.informativeText = "config.toml refers to secret:\(name). Its value is kept in the Keychain and handed to totsuka run on start."
+            alert.informativeText = "config.toml (or an env_file it names) refers to secret:\(name). Its value is kept in the Keychain and handed to totsuka run on start."
             let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
             alert.accessoryView = field
             alert.addButton(withTitle: "Save")
