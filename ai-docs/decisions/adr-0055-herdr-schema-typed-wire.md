@@ -3,7 +3,7 @@ type: Decision
 title: ADR-0055 herdr Socket API を下限版の schema から生成した型で受け、互換を CI で機械検査する
 description: "herdr のレスポンスを serde 型で受け、互換を CI の schema 差分で機械検査する決定。型は下限版（0.7.5）のスライス済み schema から 1 組だけ生成し、版ごとの分岐は作らない。protocol 整数は互換の信号として使わず version の semver 判定へ置き換える。実行時は寛容（追加を無視）・CI は厳格（削除と required 追加で落とす）。最新版から生成する案・未知メソッドを試す案・実行時に schema を読む案は却下。"
 tags: [decision, herdr, socket-api, schema, codegen, compatibility, ci, adr]
-generated: { by: claude-code/opus-5, at: 2026-09-18T11:20:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-06T02:00:00+09:00 }
 verified:
   - { by: claude-code/opus-5, at: 2026-08-23T00:00:00Z }
   - { by: process:herdr-schema-check, at: 2026-09-18T11:20:00+09:00 }
@@ -69,6 +69,7 @@ Socket API の版ではない。7 版を実測すると、**両方向に外れ�
 | 0.8.0 → 0.8.2 | 19 → 20 | メソッド +1（`pane.input.set`）のみ |
 | 0.8.2 → 0.9.0 | 20 → **22** | メソッドの増減 0。任意プロパティの追加のみ（`workspace.close` の params が `WorkspaceTarget` → `WorkspaceCloseParams` に差し替わり `close_group` が増えた・`workspace.create` に `source_workspace_id`・`ping` の capabilities に 3 つ） |
 | 0.9.0 → 0.9.1 | 22 → **22** | **変化 0**。スライスは `sliced_from` のメタを除いてバイト単位で同一 |
+| 0.9.1 → 0.9.3 | 22 → **22** | メソッドの増減 0。任意プロパティの追加のみ（`completion_seq`・`restore_error`・`ssh_agent_registration` の 3 つ）。0.9.2 は取り込んでいない |
 
 - **上がっても壊れていない**: 17 → 19 → 20 → 22 の 3 回の bump で、22 メソッドの request
   形状の変更 0 件・result 型の削除 0 件・`required` の追加 0 件。protocol が 2 つ
