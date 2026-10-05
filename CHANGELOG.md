@@ -11,6 +11,18 @@ Note: the plugin protocol is versioned independently of the application (see
 `crates/plugin-protocol`); a totsuka release does not imply a protocol-version
 change.
 
+## [0.10.7](https://github.com/tomoya-k31/totsuka/compare/v0.10.6...v0.10.7) (2026-10-05)
+
+
+### Features
+
+* **macos:** Settings / Logs を ⋯ メニューへ移し、パネル左下に版を出す ([#869](https://github.com/tomoya-k31/totsuka/issues/869)) ([5b6a5b9](https://github.com/tomoya-k31/totsuka/commit/5b6a5b97483b227e8967a5cd4da68a6c7442107b))
+
+
+### Bug Fixes
+
+* **macos:** env_file 内の secret: も Keychain に尋ねる ([#873](https://github.com/tomoya-k31/totsuka/issues/873)) ([26704a2](https://github.com/tomoya-k31/totsuka/commit/26704a2ce6ac97c857647c366f7ade71afbaa873))
+
 ## [0.10.6](https://github.com/tomoya-k31/totsuka/compare/v0.10.5...v0.10.6) (2026-10-03)
 
 

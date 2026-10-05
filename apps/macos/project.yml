@@ -34,7 +34,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.github.tomoya-k31.totsuka
         PRODUCT_NAME: Totsuka
-        MARKETING_VERSION: 0.10.6 # x-release-please-version
+        MARKETING_VERSION: 0.10.7 # x-release-please-version
         CURRENT_PROJECT_VERSION: "1"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         SWIFT_VERSION: "5.0"
