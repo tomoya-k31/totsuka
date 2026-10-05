@@ -78,7 +78,7 @@ test-support = { path = "crates/test-support" }
 task-source-github = { path = "plugins/task-source-github" }
 task-source-slack = { path = "plugins/task-source-slack" }
 sha2 = "0.11"
-toml_edit = "0.22"
+toml_edit = "0.25"
 reqwest = { version = "0.12", default-features = false, features = ["json", "default-tls"] }
 # TLS matches reqwest's `default-tls` (native-tls) so both HTTP and WebSocket
 # go through the platform TLS stack.
