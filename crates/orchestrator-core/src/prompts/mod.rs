@@ -629,8 +629,10 @@ mod tests {
              automatically before the result is delivered, so include it even when \
              instructed to output nothing but the answer body: \
              {MARKER_COMPLETED} (done) / \
-             {MARKER_NEEDS_INPUT} (human input required) / \
-             {MARKER_FAILED} (cannot proceed). \
+             {MARKER_NEEDS_INPUT} (human input required, or a blocker the human can fix so \
+             you can continue — e.g. a missing tool, MCP server, credential or permission) / \
+             {MARKER_FAILED} (cannot proceed even with human help — the task itself is \
+             impossible or invalid). \
              Delivery contract: ONLY the message carrying the marker is delivered to \
              the requester — earlier messages in this session are NEVER delivered. The \
              marker-bearing message must therefore contain the complete, \

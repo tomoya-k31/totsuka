@@ -1,5 +1,9 @@
 # Bundle Update Log
 
+## 2026-10-06
+
+* **Update**: [orchestrator-core](/components/orchestrator-core.md) / [ADR-0023](/decisions/adr-0023-configurable-prompt-surface.md) — 組み込みの完了マーカー説明（`marker_self_report` / `_confirm` / `_confirm_question`）で、`NEEDS_INPUT` を「人が直せば続行できる前提不足（ツール・MCP・認証・権限の欠如）」にも使うと明記し、`FAILED` は「人が手を貸しても進めない（タスク自体が不可能・不正）」に限った。これまで `FAILED` は `cannot proceed` の一語で、前提の MCP が無いだけのレビューが終端の `failed` になり、直しても再開できなかった。
+
 ## 2026-10-05
 
 * **Update**: [Totsuka.app](/components/macos-app.md) / [ADR-0100](/decisions/adr-0100-secrets-stdin.md) — メニューバーアプリが `[tools.*].env_file` のファイルの中の `secret:<名前>` も集めて Keychain に尋ねるようにした。これまでは config 本文しか走査せず、`env_file` に書いた `secret:` が `secret not found` で起動できなかった。
