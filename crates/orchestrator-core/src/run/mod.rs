@@ -711,6 +711,18 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                 }
                 event = self.events.recv() => {
                     if let Some(event) = event {
+                        // The group signal reaches the plugins a moment before
+                        // our own handler wakes, so `biased` above cannot win
+                        // that race: wait one tick for the stop before
+                        // treating a death as a crash (it failed waiting
+                        // tasks with "agent plugin crashed" on every Stop).
+                        if let PluginEvent::Closed(plugin) = &event
+                            && tokio::time::timeout(SETTLE_TICK, &mut shutdown).await.is_ok()
+                        {
+                            self.count_plugin_crash(plugin);
+                            interrupted = true;
+                            break;
+                        }
                         last_activity = tokio::time::Instant::now();
                         self.on_event(event).await?;
                         self.dispatch_ready().await?;
@@ -1735,6 +1747,26 @@ mod tests {
             .get("mock_agent")
             .expect("the plugin must appear in the per-plugin report");
         assert_eq!(report.crashes, 1, "{report:?}");
+    }
+
+    /// A stop whose signal lands just after the plugins died with it (a group
+    /// SIGTERM) is a stop, not a crash: the loop must end `interrupted`, with
+    /// the death counted once, instead of running the crash teardown.
+    #[tokio::test]
+    async fn a_death_just_before_the_stop_is_not_handled_as_a_crash() {
+        let mut engine = test_engine(Duration::from_secs(3600)).await;
+        engine
+            .events_tx
+            .send(PluginEvent::Closed("mock_agent".to_string()))
+            .expect("the receiver is alive");
+
+        let summary = engine
+            .run(true, tokio::time::sleep(Duration::from_millis(50)))
+            .await
+            .expect("run loop error");
+
+        assert!(summary.interrupted, "{summary:?}");
+        assert_eq!(summary.stats.plugin_crashes, 1, "{summary:?}");
     }
 
     /// #409/#410: a read-only profile that ended up on a branch is failed
