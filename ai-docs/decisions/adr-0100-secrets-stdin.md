@@ -4,7 +4,7 @@ title: ADR-0100 run が親プロセスから解決済みの機密情報を stdin
 description: "メニューバーアプリが run を子プロセスとして起動する構成のため、secret:<name> スキームと run --secrets-stdin を足した決定。値は stdin の 1 行目の JSON で受け取り、EOF は待たない。フラグを付けたプロセスは Keychain・op・bw・cmd: を backend を呼ばずに拒否する（プロセス全体で 1 か所の関門）。取得元はアプリが持ち、config には名前だけを書く。env・[secrets] テーブル・アプリへの問い合わせ窓口は却下した。"
 resource: https://github.com/tomoya-k31/totsuka/issues/754
 tags: [decision, config, secrets, macos, menubar, adr]
-generated: { by: claude-code/opus-5, at: 2026-09-26T13:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-05T19:40:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -42,6 +42,7 @@ stable（#754）。層 1 で `secret:` と `run --secrets-stdin`、層 2 で `do
    - ADR-0065 は「`doctor` を定期実行すると `op://` を解決してしまう」ことを理由にポーリングを却下したが、フラグを付けた `doctor` はストアに触れないので、その理由は当てはまらない
 6. **取得元はアプリが持つ。** config には `secret:<name>` だけを書き、どの値をどこから取るかはアプリの設定と保管庫の話にする。既存の `op://` / `keychain:` / `cmd:` / `bw:` / `${ENV}` はターミナルから単独で使う人のために全部残す
 7. **`[tools.X].env_file` は変えない。** 値に `secret:<name>` を書けば共通の解決器で解決される
+   - 解決するのは `run` だが、値を尋ねて Keychain に入れるのはアプリなので、アプリは config 本文に加えて `[tools.*].env_file` のファイルも走査して名前を集める（実機で、アプリが `env_file` 内の `secret:` を尋ねず `secret not found` で起動できなかった）。この走査は `config.toml` に `secret:` が無く `env_file` にだけある場合の `--secrets-stdin` の有無も決める
 8. プロトコルは変えない。プラグインは解決済みの値を受け取り、それがどこから来たかは知らない（F-65）
 
 # 代替案と不採用理由

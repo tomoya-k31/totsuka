@@ -1,0 +1,1 @@
+* **Update**: [Totsuka.app](/components/macos-app.md) / [ADR-0100](/decisions/adr-0100-secrets-stdin.md) — メニューバーアプリが `[tools.*].env_file` のファイルの中の `secret:<名前>` も集めて Keychain に尋ねるようにした。これまでは config 本文しか走査せず、`env_file` に書いた `secret:` が `secret not found` で起動できなかった。
