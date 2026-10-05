@@ -629,8 +629,10 @@ mod tests {
              automatically before the result is delivered, so include it even when \
              instructed to output nothing but the answer body: \
              {MARKER_COMPLETED} (done) / \
-             {MARKER_NEEDS_INPUT} (human input required) / \
-             {MARKER_FAILED} (cannot proceed). \
+             {MARKER_NEEDS_INPUT} (human input required, or a blocker the human can fix so \
+             you can continue — e.g. a missing tool, MCP server, credential or permission) / \
+             {MARKER_FAILED} (cannot proceed even with human help — the task itself is \
+             impossible or invalid). \
              Delivery contract: ONLY the message carrying the marker is delivered to \
              the requester — earlier messages in this session are NEVER delivered. The \
              marker-bearing message must therefore contain the complete, \
@@ -1026,6 +1028,36 @@ agent = "herdr"
                 Prompts::resolve_for(&c.workflows[0]).marker_self_report(),
                 Prompts::builtin().marker_self_report(),
                 "{profile} keeps the plain self-report"
+            );
+        }
+    }
+
+    /// A missing tool / MCP server / credential is something the human can fix,
+    /// so it must park as NEEDS_INPUT; FAILED is the terminal state and cannot
+    /// be resumed. All three built-in templates carry that boundary
+    /// independently, so each is checked on its own.
+    #[test]
+    fn every_builtin_marker_template_separates_fixable_blockers_from_failure() {
+        let design = profile_cfg("design", "");
+        let confirm = Prompts::resolve_for(&design.workflows[0]);
+        let templates = [
+            ("plain", Prompts::builtin().marker_self_report().to_string()),
+            ("confirm", confirm.marker_self_report().to_string()),
+            (
+                "question",
+                confirm
+                    .marker_self_report_for_question_tool("AskUserQuestion")
+                    .expect("design resolves the question variant"),
+            ),
+        ];
+        for (name, text) in templates {
+            assert!(
+                text.contains("a blocker the human can fix so you can continue"),
+                "{name} must send a fixable blocker to NEEDS_INPUT: {text}"
+            );
+            assert!(
+                text.contains("cannot proceed even with human help"),
+                "{name} must reserve FAILED for what a human cannot fix: {text}"
             );
         }
     }

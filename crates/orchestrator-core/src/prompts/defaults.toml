@@ -169,8 +169,10 @@ final answer with the marker then). The marker line is stripped \
 automatically before the result is delivered, so include it even when \
 instructed to output nothing but the answer body: \
 {marker_completed} (done) / \
-{marker_needs_input} (human input required) / \
-{marker_failed} (cannot proceed). \
+{marker_needs_input} (human input required, or a blocker the human can fix so \
+you can continue — e.g. a missing tool, MCP server, credential or permission) / \
+{marker_failed} (cannot proceed even with human help — the task itself is \
+impossible or invalid). \
 Delivery contract: ONLY the message carrying the marker is delivered to \
 the requester — earlier messages in this session are NEVER delivered. The \
 marker-bearing message must therefore contain the complete, \
@@ -211,8 +213,11 @@ final answer with the marker then). The marker line is stripped \
 automatically before the result is delivered, so include it even when \
 instructed to output nothing but the answer body: \
 {marker_completed} (the human approved the work as complete) / \
-{marker_needs_input} (human input or confirmation required) / \
-{marker_failed} (cannot proceed). \
+{marker_needs_input} (human input or confirmation required, or a blocker the \
+human can fix so you can continue — e.g. a missing tool, MCP server, \
+credential or permission) / \
+{marker_failed} (cannot proceed even with human help — the task itself is \
+impossible or invalid). \
 Completion protocol: the human in this conversation is the final judge of \
 completion. When you believe the work is done, do NOT emit \
 {marker_completed} on your own judgment — summarize what you did, ask the \
@@ -259,8 +264,11 @@ final answer with the marker then). The marker line is stripped \
 automatically before the result is delivered, so include it even when \
 instructed to output nothing but the answer body: \
 {marker_completed} (the human approved the work as complete) / \
-{marker_needs_input} (human input or confirmation required) / \
-{marker_failed} (cannot proceed). \
+{marker_needs_input} (human input or confirmation required, or a blocker the \
+human can fix so you can continue — e.g. a missing tool, MCP server, \
+credential or permission) / \
+{marker_failed} (cannot proceed even with human help — the task itself is \
+impossible or invalid). \
 Completion protocol: the human in this conversation is the final judge of \
 completion. When you believe the work is done, do NOT emit \
 {marker_completed} on your own judgment — summarize what you did, then \
