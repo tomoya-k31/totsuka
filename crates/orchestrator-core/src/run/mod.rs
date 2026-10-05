@@ -1767,6 +1767,13 @@ mod tests {
 
         assert!(summary.interrupted, "{summary:?}");
         assert_eq!(summary.stats.plugin_crashes, 1, "{summary:?}");
+        // The crash teardown ends in `schedule_restart`, which with no launch
+        // spec (this engine has none) abandons the plugin. That is the one
+        // effect of the old path that survives the later stop.
+        assert!(
+            !engine.supervision.is_abandoned("mock_agent"),
+            "the death was handled as a crash"
+        );
     }
 
     /// #409/#410: a read-only profile that ended up on a branch is failed
