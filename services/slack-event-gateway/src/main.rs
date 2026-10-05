@@ -43,8 +43,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "loaded the registration table"
     );
 
+    // Roots compiled in, never read from the image (see Cargo.toml).
+    let roots = webpki_root_certs::TLS_SERVER_ROOT_CERTS
+        .iter()
+        .map(|der| reqwest::Certificate::from_der(der))
+        .collect::<Result<Vec<_>, _>>()?;
     let client = reqwest::Client::builder()
         .timeout(publish::PUBLISH_BUDGET)
+        .tls_certs_only(roots)
         .build()?;
     let slack_api_url =
         std::env::var("SLACK_API_URL").unwrap_or_else(|_| DEFAULT_SLACK_API_URL.to_string());

@@ -45,7 +45,13 @@ subtle = "2"
 # error rather than at build time. Compiling the roots in removes that coupling
 # entirely; the cost is that updating them is a dependency bump, which is
 # exactly how the rest of this lockfile is maintained anyway.
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots"] }
+#
+# reqwest 0.13 dropped `rustls-tls-webpki-roots`: its `rustls` feature verifies
+# through the platform verifier, i.e. the filesystem. `main.rs` hands the
+# `webpki-root-certs` bundle to `tls_certs_only`, which turns the platform
+# roots off and verifies against exactly these.
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+webpki-root-certs = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt"] }
 percent-encoding = "2"
