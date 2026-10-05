@@ -59,7 +59,7 @@ serde_json = "1"
 # Derived from the same structs serde reads, so the schema cannot drift from
 # what the loader accepts.
 schemars = "1"
-toml = "0.9"
+toml = "1.0"
 rusqlite = { version = "0.40", features = ["bundled"] }
 time = { version = "0.3", features = ["formatting", "parsing"] }
 tracing = "0.1"
