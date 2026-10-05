@@ -3,6 +3,7 @@
 ## 2026-10-06
 
 * **Update**: [ADR-0072](/decisions/adr-0072-slack-event-gateway.md) — 実機検収が済んだ事実として `verified`（`human:tomoya-k31`）を追記した。#652 の完了条件の最後の項目。
+* **Update**: Event Gateway の OpenTofu モジュールの `hashicorp/google` provider を `~> 6.0` から `~> 8.0`（8.5.0）へ上げた（Renovate #889）。v7・v8 の破壊的変更のうち、このスタックが使うリソースに関係するのは 2 つで、どちらも影響しない。`google_project_service` の `disable_on_destroy` の既定値の撤去（v7）は、もともと明示的に指定している。`google_secret_manager_secret_version` の `secret_data_wo_version` の型変更（v8）は、`secret_data` しか使っていないので関係しない。`tofu validate` は v8.5.0 で通った。[モジュールのドキュメント](/infrastructure/slack-event-gateway-tofu.md) に残っていた上限の記述（`~> 6.0`）も合わせて直した。
 * **Update**: herdr **0.9.3** の schema スライスを取り込み、`wire::NEWEST_CHECKED` を 0.9.1 → 0.9.3 に上げた（#843）。[ADR-0055](/decisions/adr-0055-herdr-schema-typed-wire.md) の protocol 実測表に 0.9.1 → 0.9.3 の行を足した — protocol は 22 のまま据え置きで、切り出した 22 メソッドに増えたのは任意プロパティ 3 つ（`completion_seq`・`restore_error`・`ssh_agent_registration`）だけ。request 形状・`required` の変更は 0 件。`herdr-schema-check.sh` は 0 error（下限 0.7.5 / 上位 5 版 / 22 メソッド）。
 * **Update**: [orchestrator-core](/components/orchestrator-core.md) / [ADR-0023](/decisions/adr-0023-configurable-prompt-surface.md) — 組み込みの完了マーカー説明（`marker_self_report` / `_confirm` / `_confirm_question`）で、`NEEDS_INPUT` を「人が直せば続行できる前提不足（ツール・MCP・認証・権限の欠如）」にも使うと明記し、`FAILED` は「人が手を貸しても進めない（タスク自体が不可能・不正）」に限った。これまで `FAILED` は `cannot proceed` の一語で、前提の MCP が無いだけのレビューが終端の `failed` になり、直しても再開できなかった。
 

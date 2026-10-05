@@ -13,7 +13,7 @@ terraform {
     # that is someone else's `tofu plan`.
     google = {
       source  = "hashicorp/google"
-      version = "~> 6.0"
+      version = "~> 8.0"
     }
   }
 }
