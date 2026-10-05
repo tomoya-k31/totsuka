@@ -113,9 +113,14 @@ struct MenuContent: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
-                Image(systemName: status.symbol)
-                    .foregroundStyle(status.color)
-                    .font(.title3)
+                if app.runState == .starting || app.runState == .stopping {
+                    // A spinner rather than a still symbol: it says "in progress".
+                    ProgressView().controlSize(.small)
+                } else {
+                    Image(systemName: status.symbol)
+                        .foregroundStyle(status.color)
+                        .font(.title3)
+                }
                 Text(status.text)
                     .font(.headline)
                     .lineLimit(3)
@@ -132,8 +137,12 @@ struct MenuContent: View {
                 Spacer()
                 toggle
             }
+            if case .failed(let message) = app.runState {
+                FailureBox(message: message)
+            }
             if let notice = app.notice {
                 Label(notice, systemImage: "info.circle").font(.callout)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             if let error = app.menu?.error, app.runState == .running {
                 Label(error, systemImage: "exclamationmark.circle").font(.callout)
@@ -223,11 +232,29 @@ struct MenuContent: View {
         case .restarting(let at):
             return ("arrow.clockwise.circle", .orange,
                     "Restarting at " + at.formatted(date: .omitted, time: .standard))
-        case .failed(let message):
-            return ("exclamationmark.triangle.fill", .red, message)
+        case .failed:
+            return ("exclamationmark.triangle.fill", .red, "Failed to start")
         case .external:
             return ("circle.fill", .blue, "Running outside the app")
         }
+    }
+}
+
+/// A failed start's message in full: wrapped, scrollable past 180 pt, and
+/// selectable so it can be copied (the header used to cut it at three lines).
+struct FailureBox: View {
+    let message: String
+
+    var body: some View {
+        ScrollView {
+            Text(message)
+                .font(.system(.caption, design: .monospaced))
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(8)
+        }
+        .frame(maxHeight: 180)
+        .background(Color.red.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
     }
 }
 
