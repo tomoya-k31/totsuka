@@ -4,7 +4,7 @@ title: task-source-slack プラグイン
 description: 自分宛の Slack メンションをタスク化し本人名義で代理返信する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。設定スキーマ・TokenGuard（auth.test + apps.connections.open + 任意の bot probe）・Web API / Socket Mode クライアント・メンション検知と Task 正規化・プラグイン内 3 段階リポジトリ解決・下書き提示・承認フロー・bot ナッジ DM 通知（#305）・チャンネル監視トリガと起動時バックフィル（#617）に加え、Event Gateway の契約モジュールと Pub/Sub 取り込み（#656・#657）・manifest 雛形 2 種（Socket Mode / Request URL）・CLI レベル E2E・運用ドキュメントまで完備。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-slack
 tags: [rust, crate, plugin, task-source, slack, socket-mode, token-guard, conversation-identity, conversation-continuity]
-generated: { by: claude-code/opus-5.5, at: 2026-10-03T23:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-06T14:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -113,7 +113,7 @@ manifest（`plugins/task-source-slack/plugin.toml`）と `initialize` 応答で 
 
 # 依存
 
-- `plugin-protocol`（プラグイン境界）、`reqwest`（Web API）、`tokio-tungstenite` + `futures-util`（Socket Mode WebSocket。TLS は reqwest の `default-tls` に合わせ native-tls）、`tokio`、`serde` / `serde_json` / `semver` / `thiserror` / `tracing`。
+- `plugin-protocol`（プラグイン境界）、`reqwest`（Web API）、`tokio-tungstenite` + `futures-util`（Socket Mode WebSocket。TLS は reqwest の `native-tls` に合わせる。reqwest 0.13 から `default-tls` は rustls を指すので、明示的に `native-tls` を選んでいる）、`tokio`、`serde` / `serde_json` / `semver` / `thiserror` / `tracing`。
 
 # 関連
 
