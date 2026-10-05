@@ -1,9 +1,11 @@
 //! macOS Keychain-backed [`SecretStore`] (F-62, §5.6).
 //!
-//! Reads generic-password items from the login Keychain via the `keyring`
-//! crate (`apple-native` backend). Only the Orchestrator holds this access;
-//! resolved values are passed to plugins so plugins never touch the Keychain
-//! (F-65).
+//! Reads generic-password items from the login Keychain via the keyring
+//! ecosystem's Keychain store (`apple-native-keyring-store`). Only the
+//! Orchestrator holds this access; resolved values are passed to plugins so
+//! plugins never touch the Keychain (F-65).
+
+use apple_native_keyring_store::keychain::{Cred, MacKeychainDomain};
 
 use crate::ports::{SecretError, SecretRef, SecretStore, SecretString};
 
@@ -18,11 +20,12 @@ impl SecretStore for KeychainSecretStore {
             // reaching here is a wiring bug, not a user error.
             return Err(SecretError::InvalidReference(reference.to_string()));
         };
-        let entry = keyring::Entry::new(service, account)
+        // `User` is the login keychain, the domain keyring 3 read from.
+        let entry = Cred::build(MacKeychainDomain::User, service, account)
             .map_err(|e| SecretError::Backend(e.to_string()))?;
         match entry.get_password() {
             Ok(value) => Ok(SecretString::new(value)),
-            Err(keyring::Error::NoEntry) => Err(SecretError::NotFound {
+            Err(keyring_core::Error::NoEntry) => Err(SecretError::NotFound {
                 reference: reference.to_string(),
             }),
             Err(e) => Err(SecretError::Backend(e.to_string())),
