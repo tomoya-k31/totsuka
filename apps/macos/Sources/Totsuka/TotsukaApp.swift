@@ -115,27 +115,35 @@ struct MenuContent: View {
             HStack(spacing: 8) {
                 if app.runState == .starting || app.runState == .stopping {
                     // A spinner rather than a still symbol: it says "in progress".
-                    ProgressView().controlSize(.small).frame(width: 20, height: 20)
+                    ProgressView().controlSize(.small).frame(width: 16, height: 16)
                 } else {
                     Image(systemName: status.symbol)
                         .foregroundStyle(status.color)
-                        .font(.title3)
+                        .font(.headline)
                 }
                 Text(status.text)
                     .font(.headline)
                     .lineLimit(3)
+                    // Wrap rather than truncate: the panel sizes to one line otherwise.
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer()
                 ForEach(app.agentIDEs, id: \.name) { ide in
                     HStack(spacing: 2) {
                         Image(systemName: ide.up ? "checkmark.circle.fill" : "xmark.circle.fill")
                             .foregroundStyle(ide.up ? .green : .red)
                         Text(ide.name)
                     }
-                    .font(.caption)
+                    // Same size as the status beside it; the weight tells them apart.
+                    .font(.body)
                     .fixedSize()
                     .help(ide.up ? "\(ide.name) is running" : "\(ide.name) is not running → start it")
                 }
-                Spacer()
                 toggle
+            }
+            if app.runState == .stopped {
+                Text("Start to pick up tasks and hand them to your agents.")
+                    .font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             if case .failed(let message) = app.runState {
                 FailureBox(message: message)
@@ -146,9 +154,11 @@ struct MenuContent: View {
             }
             if let error = app.menu?.error, app.runState == .running {
                 Label(error, systemImage: "exclamationmark.circle").font(.callout)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             ForEach(app.menu?.degraded ?? [], id: \.self) {
                 Label($0, systemImage: "exclamationmark.triangle").font(.callout)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             if let rows = app.menu?.attention, !rows.isEmpty {
                 TaskSection(app: app, title: "Needs you", rows: rows)
@@ -192,7 +202,7 @@ struct MenuContent: View {
             .buttonStyle(.borderless)
         }
         .padding(14)
-        .frame(width: 320)
+        .frame(width: 400)
     }
 
     /// One button for starting and stopping (and stopping now, once a stop is
@@ -203,7 +213,7 @@ struct MenuContent: View {
             Button { Task { await app.start() } } label: {
                 Label("Start", systemImage: "play.fill")
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.bordered)
         case .running, .starting, .restarting:
             Button { app.stop() } label: { Label("Stop", systemImage: "stop.fill") }
                 .buttonStyle(.bordered)
@@ -225,7 +235,7 @@ struct MenuContent: View {
             return ("arrow.triangle.2.circlepath", .orange, "Starting…")
         case .running:
             return app.menu?.availability == "degraded"
-                ? ("exclamationmark.circle.fill", .yellow, "Running (degraded)")
+                ? ("exclamationmark.circle.fill", .yellow, "Degraded")
                 : ("circle.fill", .green, "Running")
         case .stopping:
             return ("arrow.triangle.2.circlepath", .orange, "Stopping…")
