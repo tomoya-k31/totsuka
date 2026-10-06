@@ -11,6 +11,13 @@ Note: the plugin protocol is versioned independently of the application (see
 `crates/plugin-protocol`); a totsuka release does not imply a protocol-version
 change.
 
+## [0.10.9](https://github.com/tomoya-k31/totsuka/compare/v0.10.8...v0.10.9) (2026-10-06)
+
+
+### Bug Fixes
+
+* **macos:** メニューバーのパネルでメッセージが見切れないようにし、見た目を整える ([#894](https://github.com/tomoya-k31/totsuka/issues/894)) ([1dbb90c](https://github.com/tomoya-k31/totsuka/commit/1dbb90c6ff7ece86b959e885cfa54a20316e4437))
+
 ## [0.10.8](https://github.com/tomoya-k31/totsuka/compare/v0.10.7...v0.10.8) (2026-10-05)
 
 
