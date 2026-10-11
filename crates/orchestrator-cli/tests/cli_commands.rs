@@ -777,6 +777,49 @@ fn task_show_json_and_retry_cancel_rules() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// `task retry --repo` (#896): only a configured repository is accepted, and
+/// the re-queued task points at it.
+#[test]
+fn task_retry_repo_moves_the_task_to_a_configured_repository() {
+    let base = scratch("retry-repo");
+    let (_, failed_id, _) = seed_db(&base);
+    seed_empty_config(
+        &base,
+        &format!(
+            "[[repositories]]\nname = \"web\"\npath = \"{0}\"\n\n\
+             [[repositories]]\nname = \"api\"\npath = \"{0}\"\n",
+            base.display()
+        ),
+    );
+    let id = failed_id.to_string();
+
+    let out = run(&base, &["task", "retry", &id, "--repo", "nope"]);
+    assert!(!out.status.success());
+    let err = stderr(&out);
+    assert!(err.contains("`web`, `api`"), "names the choices: {err}");
+
+    let out = run(&base, &["task", "retry", &id, "--repo", "api"]);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(
+        stdout(&out).contains("in repository `api`"),
+        "{}",
+        stdout(&out)
+    );
+    let listed: serde_json::Value =
+        serde_json::from_str(&stdout(&run(&base, &["task", "list", "--json"]))).unwrap();
+    let task = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["id"] == failed_id)
+        .unwrap();
+    assert_eq!(
+        (&task["state"], &task["repo"]),
+        (&"queued".into(), &"api".into())
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 #[test]
 fn missing_config_and_db_errors_have_cause_and_action() {
     let base = scratch("errors");

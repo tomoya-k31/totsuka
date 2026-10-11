@@ -1,5 +1,9 @@
 # Bundle Update Log
 
+## 2026-10-11
+
+* **Decision**: `totsuka task retry <ID> --repo <name>` を足した（#896、[ADR-0115](/decisions/adr-0115-task-retry-repo.md)）。リポジトリ選択を誤ったタスクを、指定した `[[repositories]]` で再キューする。旧 worktree は cleanup と同じガードで消し（汚れていれば拒否）、ブランチ・base commit・tool session id を忘れ、移動を `EventDetail::Moved` として監査ログに残す。dispatch はそれを読み戻して旧 pane へ再接続せずに閉じる。`--repo` なしの `retry` は変えていない。[orchestrator-cli](/components/orchestrator-cli.md)・[orchestrator-core](/components/orchestrator-core.md)・[state.db](/data/state-db.md) を更新した。
+
 ## 2026-10-06
 
 * **Update**: [ADR-0072](/decisions/adr-0072-slack-event-gateway.md) — 実機検収が済んだ事実として `verified`（`human:tomoya-k31`）を追記した。#652 の完了条件の最後の項目。

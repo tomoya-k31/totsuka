@@ -437,6 +437,36 @@ impl StateDb {
         }
         Ok(streak)
     }
+
+    /// Whether `task retry --repo` moved task `id` since it was last
+    /// dispatched (#896): an [`EventDetail::Moved`] row newer than its latest
+    /// `dispatched` row. The same backwards walk as
+    /// [`auto_retry_streak`](Self::auto_retry_streak), and for the same reason
+    /// the `detail` is read as an `EventDetail` in Rust rather than searched
+    /// in SQL. A plain retry after a move that never reached dispatch keeps
+    /// the move: the old repository's pane is still the recorded one.
+    pub fn moved_since_dispatch(&self, id: TaskId) -> Result<bool, StateError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT to_state, detail FROM events WHERE task_id = ?1 ORDER BY id DESC")?;
+        let rows = stmt.query_map(params![id], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
+        })?;
+        for row in rows {
+            let (to_state, detail) = row?;
+            if to_state == TaskState::Dispatched.as_str() {
+                break;
+            }
+            let moved = detail
+                .as_deref()
+                .and_then(|d| serde_json::from_str::<EventDetail>(d).ok())
+                .is_some_and(|d| matches!(d, EventDetail::Moved { .. }));
+            if moved {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
 }
 
 #[cfg(test)]

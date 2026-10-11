@@ -757,9 +757,10 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         let latest = self.db.latest_session(record.id)?;
         let resume_session_id = resume_session_id(&tool_profile.capabilities(), latest.as_ref());
         let pending = self.db.pending_task_messages(record.id)?;
+        let moved = self.db.moved_since_dispatch(record.id)?;
 
         if let Some((plugin, session_id)) =
-            reusable_session(&record, latest.as_ref(), &pending, &agent_name)
+            reusable_session(&record, latest.as_ref(), &pending, &agent_name, moved)
             && let Some(state) = self.try_reattach(&plugin, &session_id).await
         {
             self.db.apply_event(
@@ -1540,11 +1541,16 @@ fn resume_session_id(
 /// swallowed: no dispatch, nothing marked processed, and the agent never told.
 /// Before #242 a follow-up was a different row with no worktree of its own,
 /// which is why this never bit. And only on the workflow's own agent plugin.
+///
+/// And never right after `task retry --repo` (`moved`, #896): the recorded
+/// pane sits in the old repository's worktree, holding its conversation. It
+/// is closed and the task dispatched afresh instead.
 fn reusable_session(
     record: &domain::Task,
     latest: Option<&crate::adapters::SessionRecord>,
     pending: &[TaskMessage],
     agent_name: &str,
+    moved: bool,
 ) -> Option<(String, String)> {
     if !pending.is_empty() {
         return None;
@@ -1552,7 +1558,7 @@ fn reusable_session(
     match recovery::retry_plan(record, latest) {
         RetryPlan::ReuseSession {
             plugin, session_id, ..
-        } if plugin == agent_name => Some((plugin, session_id)),
+        } if plugin == agent_name && !moved => Some((plugin, session_id)),
         _ => None,
     }
 }
@@ -2203,18 +2209,29 @@ mod tests {
         r.worktree_path = Some("/tmp/wt".to_string());
         let latest = session("herdr", None);
         assert_eq!(
-            reusable_session(&r, Some(&latest), &[], "herdr"),
+            reusable_session(&r, Some(&latest), &[], "herdr", false),
             Some(("herdr".to_string(), "s-1".to_string()))
         );
         assert_eq!(
-            reusable_session(&r, Some(&latest), &[message("more")], "herdr"),
+            reusable_session(&r, Some(&latest), &[message("more")], "herdr", false),
             None,
             "a follow-up message must be dispatched, not swallowed (#242)"
         );
-        assert_eq!(reusable_session(&r, Some(&latest), &[], "orca"), None);
-        assert_eq!(reusable_session(&r, None, &[], "herdr"), None);
+        assert_eq!(
+            reusable_session(&r, Some(&latest), &[], "herdr", true),
+            None,
+            "the old repository's pane is not handed back after a move (#896)"
+        );
+        assert_eq!(
+            reusable_session(&r, Some(&latest), &[], "orca", false),
+            None
+        );
+        assert_eq!(reusable_session(&r, None, &[], "herdr", false), None);
         r.worktree_path = None;
-        assert_eq!(reusable_session(&r, Some(&latest), &[], "herdr"), None);
+        assert_eq!(
+            reusable_session(&r, Some(&latest), &[], "herdr", false),
+            None
+        );
     }
 
     #[test]

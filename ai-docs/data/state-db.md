@@ -4,7 +4,7 @@ title: 状態DB（SQLite state.db）スキーマ
 description: タスク実行状態を永続化する SQLite DB（$XDG_STATE_HOME/totsuka/state.db）の tasks/sessions/events/hook_events/task_messages/schema_migrations スキーマと設計判断。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/orchestrator-core/src/adapters/state_db
 tags: [sqlite, state, schema, statemachine, hooks]
-generated: { by: claude-code/opus-5.5, at: 2026-09-27T02:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-11T12:00:00+09:00 }
 verified:
   - { by: claude-code/opus-5, at: 2026-08-19T02:36:00Z }
 status: stable
@@ -202,7 +202,7 @@ Claude Code フック（Stop / Notification / SessionStart / SessionEnd / heartb
 
 **遷移行の `detail` は型 `domain::EventDetail` でしか書けない（#766）。** `apply_event` / `retry_task` / `append_task_message_reopening` / `append_task_message_handing_off` は `Option<EventDetail>` を、`task_control::cancel` / `retry` は（detail を必ず記録するので）`EventDetail` を受け、取り込み時の `ingested` / `submitted` も同じ型から作る。列に入るのは `EventDetail::to_json` の出力で、`serde_json::Value` を経由するのでキーはソート済みになる — #766 以前の `json!` の書き手が保存したのと同じバイト列で、形ごとのゴールデンテストがそれを固定している。kind とフィールドの対応は `EventDetail` の定義が唯一の一覧。ノート行（下記）は別の語彙で、`note_task` が `serde_json::Value` のまま受ける。
 
-**`detail` を読み戻して制御に使うのは 2 箇所で、どちらも `EventDetail` へ deserialize して判定する。** `auto_retry_streak`（再試行予算、下記）と、再起動後に成果物を回収する `run::finalize` の `persisted_artifact`（`publish_artifact` を持つ `agent_state`（`BeginPublish`）・`hook_complete`・`self_report` のうち最新のもの。`null` の行は飛ばして古い行を見る）。未知の kind は `EventDetail::Unknown`、どの形にも合わない行は deserialize 失敗になり、どちらも「該当しない」として扱う — 別バージョンが書いた監査行で engine を止めないため。
+**`detail` を読み戻して制御に使うのは 3 箇所で、どれも `EventDetail` へ deserialize して判定する。** `auto_retry_streak`（再試行予算、下記）、`moved_since_dispatch`（#896、[ADR-0115](/decisions/adr-0115-task-retry-repo.md)。最新の `dispatched` 行より新しい `moved` 行があれば、dispatch は旧 pane へ再接続しない。`retry_task_in_repo` が再キュー・`repo` の書き換え・`branch` / `base_commit` / 全セッションの `tool_session_id` の NULL 化と一緒に 1 トランザクションで書く。`worktree_path` は旧 pane の identity guard に使うため残す）、そして再起動後に成果物を回収する `run::finalize` の `persisted_artifact`（`publish_artifact` を持つ `agent_state`（`BeginPublish`）・`hook_complete`・`self_report` のうち最新のもの。`null` の行は飛ばして古い行を見る）。未知の kind は `EventDetail::Unknown`、どの形にも合わない行は deserialize 失敗になり、どちらも「該当しない」として扱う — 別バージョンが書いた監査行で engine を止めないため。
 
 ### ノート行（#407、[ADR-0037](/decisions/adr-0037-task-notes-in-the-event-log.md)）
 

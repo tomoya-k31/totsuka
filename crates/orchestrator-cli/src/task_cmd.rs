@@ -6,15 +6,19 @@
 //! session is reconciled by the next `totsuka run` (recovery/retry reuse,
 //! F-44).
 
+use std::collections::HashMap;
 use std::io::Write;
 
 use clap::Subcommand;
+use orchestrator_core::adapters::git::SystemGitRunner;
 use orchestrator_core::adapters::state_db::{EventExportFilter, StateError};
+use orchestrator_core::config;
 use orchestrator_core::domain::TaskId;
 use orchestrator_core::domain::event_detail::{Cli, EventDetail};
 use orchestrator_core::domain::state::{TaskEvent, TaskState};
 use orchestrator_core::ports::clock::format_rfc3339;
 use orchestrator_core::task_control;
+use orchestrator_core::worktree::WorktreeManager;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -47,6 +51,11 @@ pub enum TaskCommand {
     Retry {
         /// Task id.
         id: i64,
+        /// Re-run it in this `[[repositories]]` entry instead (#896). Its
+        /// worktree in the old repository is removed first — refused if it
+        /// has uncommitted changes — and the agent starts a new conversation.
+        #[arg(long, value_name = "NAME")]
+        repo: Option<String>,
     },
     /// Stream the audit log as NDJSON — one JSON event per line, oldest first
     /// (#463).
@@ -169,7 +178,7 @@ pub fn run(cx: &Cx, command: TaskCommand) -> Result<(), CliError> {
         TaskCommand::List { json } => list(cx, json.json),
         TaskCommand::Show { id, json } => show(cx, TaskId(id), json.json),
         TaskCommand::Cancel { id } => cancel(cx, TaskId(id)),
-        TaskCommand::Retry { id } => retry(cx, TaskId(id)),
+        TaskCommand::Retry { id, repo } => retry(cx, TaskId(id), repo.as_deref()),
         TaskCommand::Export {
             since,
             task,
@@ -476,15 +485,42 @@ fn cancel(cx: &Cx, id: TaskId) -> Result<(), CliError> {
     Ok(())
 }
 
-fn retry(cx: &Cx, id: TaskId) -> Result<(), CliError> {
+fn retry(cx: &Cx, id: TaskId, repo: Option<&str>) -> Result<(), CliError> {
     let db = cx.open_state_db()?;
-    let outcome = task_control::retry(
-        &db,
-        id,
-        EventDetail::Cli(Cli::Plain {
-            command: "task retry".to_string(),
-        }),
-    )?;
+    // Naming the task's own repository is a plain retry.
+    let prior_repo = db.get_task(id)?.and_then(|t| t.repo);
+    let moved_to = repo.filter(|r| prior_repo.as_deref() != Some(*r));
+    let outcome = match moved_to {
+        None => task_control::retry(
+            &db,
+            id,
+            EventDetail::Cli(Cli::Plain {
+                command: "task retry".to_string(),
+            }),
+        )?,
+        Some(repo) => {
+            let env: HashMap<String, String> = std::env::vars().collect();
+            let env_fn = |k: &str| env.get(k).cloned();
+            let repos = cx
+                .load_config(&env)?
+                .repositories
+                .into_iter()
+                .map(|r| {
+                    let path = config::expand_path(&r.path.to_string_lossy(), &env_fn)
+                        .map_err(|e| format!("[[repositories]] `{}`.path: {e}", r.name))?;
+                    Ok((r.name, path))
+                })
+                .collect::<Result<Vec<_>, CliError>>()?;
+            task_control::retry_in_repo(
+                &db,
+                id,
+                &format!("task retry --repo {repo}"),
+                repo,
+                &repos,
+                &WorktreeManager::new(SystemGitRunner::default()),
+            )?
+        }
+    };
     if !outcome.ok {
         return Err(outcome.reason.unwrap_or_default().into());
     }
@@ -497,9 +533,14 @@ fn retry(cx: &Cx, id: TaskId) -> Result<(), CliError> {
              the claim: it runs here only if they have since released the task"
         );
     }
-    println!(
-        "task {id} re-queued → `totsuka run` dispatches it (reusing its worktree/session when possible)"
-    );
+    match moved_to {
+        None => println!(
+            "task {id} re-queued → `totsuka run` dispatches it (reusing its worktree/session when possible)"
+        ),
+        Some(repo) => println!(
+            "task {id} re-queued in repository `{repo}` → `totsuka run` dispatches it in a new worktree and conversation"
+        ),
+    }
     let requeued = outcome.requeued.unwrap_or(0);
     if requeued > 0 {
         println!("  {requeued} message(s) from the last dispatch will be sent again");

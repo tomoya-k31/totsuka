@@ -1,4 +1,4 @@
-use rusqlite::{Row, params};
+use rusqlite::{OptionalExtension, Row, params};
 use time::OffsetDateTime;
 
 use crate::domain::EventDetail;
@@ -399,8 +399,55 @@ impl StateDb {
         task: TaskRef,
         detail: Option<EventDetail>,
     ) -> Result<(TaskState, TaskRef, usize), StateError> {
-        let now = self.clock.now_rfc3339();
         let detail = detail.as_ref().map(EventDetail::to_json).transpose()?;
+        self.retry_task_tx(task, detail, None)
+    }
+
+    /// [`retry_task`](Self::retry_task), moving the task to repository `repo`
+    /// in the same transaction (#896). `command` is what the operator ran;
+    /// the event is recorded as [`EventDetail::Moved`], which dispatch reads
+    /// back to close the old repository's pane instead of re-attaching it
+    /// ([`moved_since_dispatch`](Self::moved_since_dispatch)).
+    ///
+    /// Everything else the next dispatch would carry over from the old
+    /// repository is forgotten with it: the branch and its base commit (they
+    /// name commits of the old repository), and every session's tool session
+    /// id, so the dispatch starts a new conversation instead of resuming one
+    /// held in the old repository's context. `worktree_path` is kept on
+    /// purpose: the dispatcher releases the previous pane with it as the
+    /// identity guard, and a path that is no longer on disk is re-created —
+    /// in the new repository, since that is where the row now points.
+    pub fn retry_task_in_repo(
+        &self,
+        task: TaskRef,
+        command: &str,
+        repo: &str,
+    ) -> Result<(TaskState, TaskRef, usize), StateError> {
+        let from_repo: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT repo FROM tasks WHERE id = ?1",
+                params![task.id],
+                |r| r.get(0),
+            )
+            .optional()?
+            .ok_or(StateError::NotFound(task.id))?;
+        let detail = EventDetail::Moved {
+            command: command.to_string(),
+            from_repo,
+            to_repo: repo.to_string(),
+        }
+        .to_json()?;
+        self.retry_task_tx(task, Some(detail), Some(repo))
+    }
+
+    fn retry_task_tx(
+        &self,
+        task: TaskRef,
+        detail: Option<String>,
+        repo: Option<&str>,
+    ) -> Result<(TaskState, TaskRef, usize), StateError> {
+        let now = self.clock.now_rfc3339();
         let tx = self.write_transaction()?;
         let id = task.id;
         let (to, version) = apply_event_tx(
@@ -421,6 +468,16 @@ impl StateDb {
         } else {
             unprocess_last_batch_tx(&tx, id)?
         };
+        if let Some(repo) = repo {
+            tx.execute(
+                "UPDATE tasks SET repo = ?1, branch = NULL, base_commit = NULL WHERE id = ?2",
+                params![repo, id],
+            )?;
+            tx.execute(
+                "UPDATE sessions SET tool_session_id = NULL WHERE task_id = ?1",
+                params![id],
+            )?;
+        }
         tx.commit()?;
         Ok((to, TaskRef { id, version }, requeued))
     }
@@ -661,6 +718,48 @@ mod tests {
         let err = db.retry_task(stale, None).unwrap_err();
         assert!(matches!(err, StateError::Conflict(_)), "{err:?}");
         assert_eq!(db.get_task(id).unwrap().unwrap().state, TaskState::Queued);
+    }
+
+    /// #896: nothing of the old repository reaches the next dispatch — not
+    /// its branch, not its base commit, not a conversation to resume — but
+    /// the worktree path stays as the pane release's identity guard.
+    #[test]
+    fn retry_in_another_repo_forgets_what_belonged_to_the_old_one() {
+        let db = StateDb::open_in_memory().unwrap();
+        let id = db.upsert_task(&sample_task()).unwrap();
+        db.set_repo(id, "api").unwrap();
+        db.set_worktree(id, "/wt/api-42", Some("fix-42"), "abc123")
+            .unwrap();
+        let row = db.record_session(id, "herdr", "pane-1").unwrap();
+        db.set_tool_session_id(row, "conv-1").unwrap();
+        db.apply_event(db.task_ref(id).unwrap(), TaskEvent::Cancel, None)
+            .unwrap();
+
+        assert!(!db.moved_since_dispatch(id).unwrap());
+        let (state, _, _) = db
+            .retry_task_in_repo(db.task_ref(id).unwrap(), "task retry --repo web", "web")
+            .unwrap();
+        assert!(db.moved_since_dispatch(id).unwrap());
+
+        assert_eq!(state, TaskState::Queued);
+        let task = db.get_task(id).unwrap().unwrap();
+        assert_eq!(task.repo.as_deref(), Some("web"));
+        assert_eq!(task.branch, None);
+        assert_eq!(task.base_commit, None);
+        assert_eq!(task.worktree_path.as_deref(), Some("/wt/api-42"));
+        let session = db.latest_session(id).unwrap().unwrap();
+        assert_eq!(session.session_id, "pane-1");
+        assert_eq!(session.tool_session_id, None);
+        let moved = db.list_events(id).unwrap().pop().unwrap().detail.unwrap();
+        assert_eq!(moved["from_repo"], "api");
+
+        // A note does not hide the move; the next dispatch ends it.
+        db.note_task(id, &serde_json::json!({ NOTE_KEY: "blocked" }))
+            .unwrap();
+        assert!(db.moved_since_dispatch(id).unwrap());
+        db.apply_event(db.task_ref(id).unwrap(), TaskEvent::Dispatch, None)
+            .unwrap();
+        assert!(!db.moved_since_dispatch(id).unwrap());
     }
 
     #[test]
