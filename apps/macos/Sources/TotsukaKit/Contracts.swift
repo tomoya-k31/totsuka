@@ -6,6 +6,9 @@ public struct MenuModel: Decodable, Equatable, Sendable {
     public let attentionCount: Int
     public let attention: [MenuRow]
     public let working: [MenuRow]
+    /// Failed / cancelled / skipped in the last day — where Retry is offered
+    /// (#896). Absent from a CLI older than the field.
+    public let recent: [MenuRow]?
     public let degraded: [String]
     public let error: String?
 
@@ -31,6 +34,9 @@ public struct MenuRow: Decodable, Equatable, Hashable, Sendable, Identifiable {
     public let waitingFor: String?
 
     public var id: Int64 { taskId }
+
+    /// Whether `task retry` accepts the row's state.
+    public var retryable: Bool { ["failed", "cancelled", "skipped"].contains(state) }
 
     /// The row's second line: state, how long ago the task came in,
     /// repository and workflow — most telling first, since a narrow panel
@@ -114,3 +120,9 @@ let snakeCaseDecoder: JSONDecoder = {
     decoder.keyDecodingStrategy = .convertFromSnakeCase
     return decoder
 }()
+
+/// Where `task retry --repo` can move `row`: the configured
+/// `[[repositories]]` other than the one it is in (#896).
+public func retryRepos(for row: MenuRow, config: JSONValue) -> [String] {
+    (config["repositories"]?.array ?? []).compactMap { $0["name"]?.string }.filter { $0 != row.repo }
+}

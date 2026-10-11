@@ -595,8 +595,13 @@ final class AppModel: ObservableObject {
         NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
     }
 
-    func retry(_ id: Int64) {
-        Task { await act(["task", "retry", String(id)]) }
+    /// `repo` re-runs it in another `[[repositories]]` entry (#896).
+    func retry(_ id: Int64, repo: String? = nil) {
+        Task { await act(["task", "retry", String(id)] + (repo.map { ["--repo", $0] } ?? [])) }
+    }
+
+    func retryRepos(_ row: MenuRow) -> [String] {
+        config.map { TotsukaKit.retryRepos(for: row, config: $0) } ?? []
     }
 
     /// Run a task action and show its error, if any, above the menu.

@@ -1,7 +1,7 @@
 > 🌐 [English](operations-guide.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/operations-guide.md sha256:49247c8cb0f86fda0d53c3ee328d4619311dc8bbf889571664a300e62d39af1b -->
+<!-- generated-from: ai-docs/operations/operations-guide.md sha256:d15a842a5080d650ecc9352307502d31491dedf5deb90495d1801ba248350542 -->
 
 # 運用ガイド
 
@@ -197,7 +197,7 @@ Host *
 
 数に入るのは `pending` / `waiting_input` / `verifying` / `escalated` / 理由が記録された `queued` の 5 状態。**終わったタスクは決して数えない** —— データベースに残り続けるので、数えると数字が増える一方で 0 に戻らなくなる。失敗の確認は `totsuka status` で行う。
 
-ドロップダウンは「Needs you」と「Working」の 2 節。タスク行をクリックすると `totsuka focus <id>` が走り、その pane が前面に来る。**状態を変えるボタンは無い** —— 検収を通すとプルリクエストの作成や本人名義の返信まで走って取り消せないので、うっかり押せる場所には置かない。
+ドロップダウンは「Needs you」「Working」と、「Recent」（過去 24 時間に `failed` / `cancelled` / `skipped` で終わったタスクを新しい順に最大 5 件。バッジには数えない）の 3 節。タスク行をクリックすると `totsuka focus <id>` が走り、その pane が前面に来る。**状態を変えるボタンは無い** —— 検収を通すとプルリクエストの作成や本人名義の返信まで走って取り消せないので、うっかり押せる場所には置かない。
 
 ### 導入
 

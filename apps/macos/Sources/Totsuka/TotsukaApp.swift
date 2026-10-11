@@ -166,6 +166,9 @@ struct MenuContent: View {
             if let rows = app.menu?.working, !rows.isEmpty {
                 TaskSection(app: app, title: "Working", rows: rows)
             }
+            if let rows = app.menu?.recent, !rows.isEmpty {
+                TaskSection(app: app, title: "Recent", rows: rows)
+            }
             Divider()
             if app.needsRestart {
                 Button("Updated — restart") { app.restartIntoUpdate() }
@@ -284,8 +287,9 @@ struct TaskSection: View {
     }
 }
 
-/// A task row: a click focuses it; retry and cancel in its menu (no `verify`
-/// — it cannot be undone, as in ADR-0065).
+/// A task row: a click focuses it; its menu has cancel for a live task and
+/// retry — here or in another repository (#896) — for one that ended (no
+/// `verify` — it cannot be undone, as in ADR-0065).
 struct TaskMenu: View {
     @ObservedObject var app: AppModel
     let row: MenuRow
@@ -306,8 +310,19 @@ struct TaskMenu: View {
             .buttonStyle(.plain)
             .help("Focus")
             Menu {
-                Button("Retry") { app.retry(row.taskId) }
-                Button("Cancel…") { app.cancel(row) }
+                if row.retryable {
+                    Button("Retry") { app.retry(row.taskId) }
+                    let repos = app.retryRepos(row)
+                    if !repos.isEmpty {
+                        Menu("Retry in") {
+                            ForEach(repos, id: \.self) { repo in
+                                Button(repo) { app.retry(row.taskId, repo: repo) }
+                            }
+                        }
+                    }
+                } else {
+                    Button("Cancel…") { app.cancel(row) }
+                }
             } label: {
                 Image(systemName: "ellipsis.circle")
             }

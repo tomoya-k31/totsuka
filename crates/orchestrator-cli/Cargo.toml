@@ -25,13 +25,14 @@ plugin-protocol.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true
+# The menu's Recent window (#896); the staleness tests (F-110) stamp health
+# documents with it too.
+time = { workspace = true }
 tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
 test-support = { workspace = true }
-# Stamping a health document at a chosen age, for the staleness tests (F-110).
-time = { workspace = true }
 # `setup::plugin_config` writes each plugin's own config file; the test that
 # matters asserts the plugin's real deserializer accepts what it wrote, not
 # merely that it is TOML. Dev-only — the CLI never links a plugin at run time.

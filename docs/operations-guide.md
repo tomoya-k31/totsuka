@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](operations-guide.ja.md)
 
-<!-- generated-from: ai-docs/operations/operations-guide.md sha256:49247c8cb0f86fda0d53c3ee328d4619311dc8bbf889571664a300e62d39af1b -->
+<!-- generated-from: ai-docs/operations/operations-guide.md sha256:d15a842a5080d650ecc9352307502d31491dedf5deb90495d1801ba248350542 -->
 
 # Operations guide
 
@@ -196,7 +196,7 @@ Two channels, read independently.
 
 The number counts five states — `pending`, `waiting_input`, `verifying`, `escalated`, and `queued` with a recorded reason. **Finished tasks are never counted**: they stay in the database forever, so counting them would make the number climb and never come back to zero. Use `totsuka status` to review failures.
 
-The dropdown has two sections, "Needs you" and "Working". Clicking a task row runs `totsuka focus <id>` and brings its pane to the front. **There are no buttons that change a task's state** — approving a task publishes a pull request or posts a reply under your name, which cannot be undone, so it is not something a stray click should do.
+The dropdown has three sections: "Needs you", "Working", and "Recent" — up to five tasks that ended `failed`, `cancelled` or `skipped` in the last 24 hours, newest first, not counted in the badge. Clicking a task row runs `totsuka focus <id>` and brings its pane to the front. **There are no buttons that change a task's state** — approving a task publishes a pull request or posts a reply under your name, which cannot be undone, so it is not something a stray click should do.
 
 ### Setting it up
 
