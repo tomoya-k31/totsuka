@@ -4,7 +4,7 @@ title: Totsuka.app（macOS メニューバーアプリ）
 description: "apps/macos/ の SwiftUI メニューバーアプリ（ADR-0113）。totsuka run --watch --events-jsonl（config に secret: があれば --secrets-stdin 付き）を子プロセスとして監督し（終了コードで再起動を判断）、通知をアプリ名義で出す。設定画面は持たず、config.toml を $TERMINAL の $EDITOR で開き、run の stderr を $TERMINAL で tail -F する。機密は Start 時に Keychain に無い secret:<名前> を尋ねる（[github].token の secret は、選べば Start のたびに gh auth token から取る。ADR-0114）。ロジックは SwiftPM の TotsukaKit（swift test）、出荷する .app は XcodeGen の project.yml から CI がビルドする。"
 resource: https://github.com/tomoya-k31/totsuka/tree/main/apps/macos
 tags: [macos, swift, swiftui, menubar, app, notifier, config]
-generated: { by: claude-code/opus-5.5, at: 2026-10-07T12:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-11T12:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -32,7 +32,7 @@ owner: tomoya-k31
 - **停止**: SIGTERM、300 秒待っても終わらなければ SIGKILL（メニューの「すぐに停止」でも）。起動中（設定の検証を待っている間）やバックオフ待ちの停止も効く。終了の通知は stdout / stderr の両方が EOF になってから出すので、exit 4 の理由の行が先に届く
 - **外部の run**: exit 5 の後は `menu --json` がロックの解放（`down`）を見たところで引き継ぐ
 - **通知**: `run` の stdout の `notify` 行を、`config get` で読んだ `[macos]` のフィルタ（ワークフロー別 → 全体 → 既定オン）に通してから `UserNotifications` で出す。クリックはタスク行のクリックと同じ focus（下記）
-- **メニュー**: 2 秒ごと（1 回 10ms 未満）と通知のたびに `menu --json`。要対応・作業中の各行は 1 行目が `#<ID> <タイトル>`、2 行目が状態 · 取り込みからの経過時間 · リポジトリ · workflow（`MenuRow.detail`。パネルの幅で末尾が切れるので、重要なものから並べる。古い CLI で `repo` / `created_at` が無ければ省く）。行の領域のクリックが focus、右端のメニューに retry / cancel（確認付き）。verify は置かない
+- **メニュー**: 2 秒ごと（1 回 10ms 未満）と通知のたびに `menu --json`。要対応・作業中の各行は 1 行目が `#<ID> <タイトル>`、2 行目が状態 · 取り込みからの経過時間 · リポジトリ · workflow（`MenuRow.detail`。パネルの幅で末尾が切れるので、重要なものから並べる。古い CLI で `repo` / `created_at` が無ければ省く）。行の領域のクリックが focus、右端のメニューは、まだ動いている行なら cancel（確認付き）、Recent 節（`menu --json` の `recent`、#896）の行なら retry と「Retry in」（`config get` の `[[repositories]]` からそのタスクのリポジトリを除いたサブメニューで、`task retry <id> --repo <name>` を実行する。[ADR-0115](/decisions/adr-0115-task-retry-repo.md)）。verify は置かない
 - **focus**: タスクの workflow の `agent` が orca なら起動中の「Orca」アプリを、それ以外（herdr）なら `[macos].activate_bundle_id` のアプリ（herdr を動かしているターミナル。通知の click-to-focus と同じキー）を `NSWorkspace.openApplication` で前面に出してから `totsuka focus <task_id>` を呼ぶ（`focusApp`）。Orca のバンドル ID は未実測なのでアプリ名で探す
 - **エージェント IDE の稼働表示**: 10 秒ごとに `config get` を読み直し、`[plugins]` で有効な herdr / orca だけを調べて、見出しの行の右側（Start / Stop の左）に ✓ / ✗ で出す（`enabledAgentIDEs`）。herdr はプラグインと同じ解決順のソケット（`herdrSocketPath`）に接続できるか、orca は `orca status --json` の `result.runtime.reachable`（CLI はアプリが落ちていても答える。10 秒で打ち切り、止まった呼び出しが以後の検査を塞がないようにする）。`run` の状態とは独立に、止まっている間も出す
 - **設定**: 設定画面は無い（ADR-0113 §5）。Settings… は `config get` が返す config.toml を `$TERMINAL -e $EDITOR <path>` で開く（どちらもログインシェルの環境の値をシェル断片として使う。どちらかが無ければ `open -t`）。ファイルがまだ無ければ `totsuka init` を案内する。`$TERMINAL` が見つからない（シェルが 126 / 127 で終わる）ときはメニューに出す。`$EDITOR` の失敗はシェルがターミナルに置き換わった後なので、ターミナルの中に出る。変更は次の起動から効く

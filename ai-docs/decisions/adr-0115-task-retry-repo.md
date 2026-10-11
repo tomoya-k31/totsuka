@@ -15,7 +15,7 @@ sources:
 
 # Status
 
-stable（[#896](https://github.com/tomoya-k31/totsuka/issues/896)）。CLI の `--repo` が先で、メニューバーアプリの「Retry in…」はその上に載せる（後続 PR）。
+stable（[#896](https://github.com/tomoya-k31/totsuka/issues/896)）。CLI の `--repo` が先で、メニューバーアプリの「Retry in」はその上に載せる（stacked PR の 2 層目。下の「メニュー」）。
 
 # Context
 
@@ -40,6 +40,13 @@ stable（[#896](https://github.com/tomoya-k31/totsuka/issues/896)）。CLI の `
 4. **旧リポジトリのものを忘れる。** 再キューと同じトランザクションで `repo` を書き換え、`branch` と `base_commit` を NULL にし、そのタスクの全セッションの `tool_session_id` を NULL にする（旧リポジトリの文脈の会話を resume しない）。**`worktree_path` は残す** — 次の dispatch が旧 pane を identity guard つきで閉じるのに使い、ディスクに無いパスは新しいリポジトリで作り直される
 5. **移動は `EventDetail::Moved { command, from_repo, to_repo }` として記録する。** 監査ログにどこから移ったかが残る。dispatch はこれを読み戻し（`StateDb::moved_since_dispatch` — 最新の `dispatched` 遷移より新しい `moved` 行があるか）、そのあいだは旧 pane へ再接続せず、閉じて新規に dispatch する。読み戻しは `auto_retry_streak` と同じく Rust で `EventDetail` に deserialize して判定し、SQL の JSON 検索は使わない
 6. **`--repo` なしの `retry` は変えない。** 再接続の抑止は `moved` のときだけ効く
+
+# メニュー（2 層目）
+
+メニュー（`totsuka menu` と macOS アプリ）は終端状態のタスクを一切出していなかった（[ADR-0065](/decisions/adr-0065-menubar-status.md) §2）。そのため既存の「Retry」は、`retry` が受け付けない状態の行にしか出ず、押すと必ず拒否されていた。
+
+7. **`MenuModel` に `recent` を足す。** 過去 24 時間に `failed` / `cancelled` / `skipped` で終わったタスクを新しい順に最大 5 件。**バッジには数えない** — ADR-0065 §2 が退けたのは「直近 N 時間だけ数える」ことで、数えずに見せる別の節はその欠陥（見ていないのに数が消える）を持たない。`done` は `retry` で再実行するものではないので入れない
+8. **アプリのタスク行のメニューは状態で出し分ける。** Recent の行には「Retry」と「Retry in」（設定の `[[repositories]]` のうち、そのタスクのリポジトリ以外を並べたサブメニュー。一覧は既に読んでいる `config get` の結果から取る）、まだ動いている行には「Cancel…」だけ。SwiftBar の出力にも「Recent」節を足す（行のクリックは他の節と同じ focus）
 
 # Alternatives
 

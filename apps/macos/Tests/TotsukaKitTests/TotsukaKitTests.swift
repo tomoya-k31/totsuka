@@ -84,6 +84,21 @@ import Testing
         #expect(menu.attentionCount == 1)
     }
 
+    /// Retry is offered for the states `task retry` accepts, in every other
+    /// configured repository (#896).
+    @Test func offersRetryInTheOtherRepositories() throws {
+        let json = #"""
+            {"availability":"ok","attention_count":0,"attention":[],"working":[],
+             "recent":[{"task_id":4,"state":"cancelled","workflow":"w","title":"T","repo":"web"}],
+             "degraded":[],"error":null}
+            """#
+        let row = try #require(try MenuModel.decode(Data(json.utf8)).recent?.first)
+        #expect(row.retryable)
+        let config = try #require(
+            JSONValue.parse(#"{"repositories":[{"name":"web"},{"name":"api"},{"name":"docs"}]}"#))
+        #expect(retryRepos(for: row, config: config) == ["api", "docs"])
+    }
+
     /// The workflow's toggle wins over the global one; unmentioned is on.
     @Test func appliesTheMacosFilter() throws {
         let macos = try #require(

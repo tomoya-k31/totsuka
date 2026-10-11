@@ -4,7 +4,7 @@ title: 運用ガイド（doctor / worktree 掃除 / FAQ）
 description: totsuka 日常運用の手引き。doctor の読み方、ランタイム health（縮退）の読み方と doctor との守備範囲の違い、worktree 掃除ポリシーと孤児掃除、run 停止・回復と SSH keepalive の推奨設定、メニューバー表示（SwiftBar）の導入と読み方、よくある問題の切り分け。
 resource: https://github.com/tomoya-k31/totsuka
 tags: [operations, doctor, health, worktree, menu, swiftbar, faq, troubleshooting]
-generated: { by: claude-code/opus-5, at: 2026-09-26T12:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-11T12:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -219,7 +219,7 @@ Host *
 
 数に入るのは `pending` / `waiting_input` / `verifying` / `escalated` / `queued`+`wait_reason` の 5 状態だけで、**終端状態（`done` / `failed` / `cancelled` / `skipped`）は数えない**。数えると `totsuka status` の表と同じく単調に増え続け、0 に戻らなくなるため。失敗の確認は `totsuka status` の担当。
 
-ドロップダウンは「Needs you」（要対応）と「Working」（`dispatched` / `running` / `publishing`）の 2 節。タスク行をクリックすると `totsuka focus <id>` が走り、その pane が前面に来る。**状態を変えるボタンは無い** — 検収（`task verify --pass`）は押した瞬間に PR 作成や本人名義返信まで走って取り消せないので、メニューには置いていない。
+ドロップダウンは「Needs you」（要対応）と「Working」（`dispatched` / `running` / `publishing`）、それに「Recent」（過去 24 時間に `failed` / `cancelled` / `skipped` で終わったタスクを新しい順に最大 5 件。バッジには数えない）の 3 節。タスク行をクリックすると `totsuka focus <id>` が走り、その pane が前面に来る。**状態を変えるボタンは無い** — 検収（`task verify --pass`）は押した瞬間に PR 作成や本人名義返信まで走って取り消せないので、メニューには置いていない。
 
 ## 導入
 

@@ -73,6 +73,12 @@ use serde::Serialize;
 
 use crate::common::{CliError, Cx, live_health, lock_status, safe, stale_health_message};
 
+/// How long a failed / cancelled / skipped task stays in the Recent section.
+const RECENT_WINDOW: time::Duration = time::Duration::hours(24);
+
+/// At most this many Recent rows, newest first.
+const RECENT_LIMIT: usize = 5;
+
 /// How many characters of a task title reach the menu before it is elided.
 const TITLE_BUDGET: usize = 60;
 
@@ -183,6 +189,9 @@ pub struct MenuRow {
     /// `"approval"` for a `running` task stopped at a permission prompt.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub waiting_for: Option<&'static str>,
+    /// Orders the Recent section; not part of the document.
+    #[serde(skip)]
+    pub finished_at: Option<time::OffsetDateTime>,
 }
 
 /// The whole menu, independent of how it is rendered.
@@ -197,6 +206,11 @@ pub struct MenuModel {
     pub attention: Vec<MenuRow>,
     /// Tasks an agent is working on.
     pub working: Vec<MenuRow>,
+    /// Tasks that ended in a state `task retry` accepts within the last
+    /// [`RECENT_WINDOW`], newest first, at most [`RECENT_LIMIT`] (#896) —
+    /// where a retry, or one in another repository, is offered. Not counted
+    /// in the badge: nothing about them is stuck.
+    pub recent: Vec<MenuRow>,
     /// What the live `run` cannot currently do (F-110), already worded for a
     /// human. Empty when it is healthy — or when nothing is running, in which
     /// case the glyph is `✕` and a stale document would only mislead.
@@ -218,6 +232,7 @@ impl MenuModel {
             attention_count: 0,
             attention: Vec::new(),
             working: Vec::new(),
+            recent: Vec::new(),
             degraded: Vec::new(),
             error: Some(error),
         }
@@ -281,12 +296,15 @@ fn build(cx: &Cx) -> Result<MenuModel, CliError> {
 
     let mut attention = Vec::new();
     let mut working = Vec::new();
+    let mut recent = Vec::new();
+    let now = time::OffsetDateTime::now_utc();
     for task in db.list_tasks()? {
         let approval = task.state == TaskState::Running && awaiting.contains(&task.id.0);
         let section = classify(task.state, notes.contains_key(&task.id), approval);
         let target = match section {
             Section::Attention => &mut attention,
             Section::Working => &mut working,
+            Section::Hidden if is_recent(task.state, task.finished_at, now) => &mut recent,
             Section::Hidden => continue,
         };
         target.push(MenuRow {
@@ -297,8 +315,11 @@ fn build(cx: &Cx) -> Result<MenuModel, CliError> {
             created_at: orchestrator_core::ports::clock::format_rfc3339(task.created_at),
             title: task.title,
             waiting_for: approval.then_some("approval"),
+            finished_at: task.finished_at,
         });
     }
+    recent.sort_by_key(|row| std::cmp::Reverse(row.finished_at));
+    recent.truncate(RECENT_LIMIT);
 
     Ok(MenuModel {
         availability: match (lock.running, degraded.is_empty()) {
@@ -309,9 +330,24 @@ fn build(cx: &Cx) -> Result<MenuModel, CliError> {
         attention_count: attention.len(),
         attention,
         working,
+        recent,
         degraded,
         error: None,
     })
+}
+
+/// Whether a hidden task belongs in the Recent section: it ended in a state
+/// `task retry` accepts (`done` is continued by a message, not retried), less
+/// than [`RECENT_WINDOW`] ago.
+fn is_recent(
+    state: TaskState,
+    finished_at: Option<time::OffsetDateTime>,
+    now: time::OffsetDateTime,
+) -> bool {
+    matches!(
+        state,
+        TaskState::Failed | TaskState::Cancelled | TaskState::Skipped
+    ) && finished_at.is_some_and(|at| now - at < RECENT_WINDOW)
 }
 
 /// Absolute path of the running binary, for the `bash=` parameters.
@@ -390,6 +426,8 @@ fn row_glyph(state: &str) -> &'static str {
         "escalated" => "🚨",
         "pending" => "◇",
         "queued" => "⛔",
+        "failed" => "✗",
+        "cancelled" | "skipped" => "⊘",
         _ => "▶",
     }
 }
@@ -439,17 +477,16 @@ fn render_swiftbar(model: &MenuModel, binary: &str) -> String {
         out.push_str(&format!("• {} | {RENDER_AS_TEXT}\n", menu_text(reason)));
     }
 
-    if !model.attention.is_empty() {
-        out.push_str("---\n");
-        out.push_str("Needs you\n");
-        for row in &model.attention {
-            out.push_str(&render_row(row, binary));
+    for (title, rows) in [
+        ("Needs you", &model.attention),
+        ("Working", &model.working),
+        ("Recent", &model.recent),
+    ] {
+        if rows.is_empty() {
+            continue;
         }
-    }
-    if !model.working.is_empty() {
-        out.push_str("---\n");
-        out.push_str("Working\n");
-        for row in &model.working {
+        out.push_str(&format!("---\n{title}\n"));
+        for row in rows {
             out.push_str(&render_row(row, binary));
         }
     }
@@ -492,6 +529,7 @@ mod tests {
             created_at: "2026-10-03T00:00:00Z".to_string(),
             title: title.to_string(),
             waiting_for: None,
+            finished_at: None,
         }
     }
 
@@ -501,6 +539,7 @@ mod tests {
             attention_count: attention.len(),
             attention,
             working,
+            recent: Vec::new(),
             degraded: Vec::new(),
             error: None,
         }
@@ -512,6 +551,7 @@ mod tests {
             attention_count: 0,
             attention: Vec::new(),
             working: Vec::new(),
+            recent: Vec::new(),
             degraded: reasons.into_iter().map(str::to_string).collect(),
             error: None,
         }
@@ -591,6 +631,24 @@ mod tests {
                 "{state} with note"
             );
         }
+    }
+
+    /// Recent is the retryable endings of the last day, never `done` and
+    /// never anything older (#896).
+    #[test]
+    fn recent_is_a_retryable_ending_within_the_window() {
+        let now = time::OffsetDateTime::now_utc();
+        let hour_ago = Some(now - time::Duration::hours(1));
+        for state in [TaskState::Failed, TaskState::Cancelled, TaskState::Skipped] {
+            assert!(is_recent(state, hour_ago, now), "{state}");
+            assert!(
+                !is_recent(state, Some(now - RECENT_WINDOW), now),
+                "{state} at the edge"
+            );
+            assert!(!is_recent(state, None, now), "{state} with no end time");
+        }
+        assert!(!is_recent(TaskState::Done, hour_ago, now));
+        assert!(!is_recent(TaskState::Running, hour_ago, now));
     }
 
     /// The SwiftBar row of a task at a permission prompt says so, rather
@@ -698,6 +756,7 @@ mod tests {
             attention_count: 1,
             attention: vec![row(1, "verifying", "a :mushroom: title")],
             working: vec![row(2, "running", "another :sun.max: title")],
+            recent: vec![row(3, "failed", "a third :fire: title")],
             degraded: vec!["plugin `:sparkles:` is down".to_string()],
             error: None,
         };
