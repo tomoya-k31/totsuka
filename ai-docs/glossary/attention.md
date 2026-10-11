@@ -3,7 +3,7 @@ type: Term
 title: 要対応（Attention）
 description: 人間が動かさない限り永久に進まない非終端タスクの集合。pending / waiting_input / verifying / escalated / queued+wait_reason の 5 状態と、許可を求めて止まっている running からなり、メニューバーのバッジ（F-109）が数える対象。終端状態を含めないのは、含めると数字が単調増加して 0 に戻らなくなるため。
 tags: [glossary, attention, menu, status, task-state]
-generated: { by: claude-code/opus-5, at: 2026-09-23T12:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-11T12:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -25,7 +25,7 @@ owner: tomoya-k31
 
 # 何が入らないか
 
-**終端状態（`done` / `failed` / `cancelled` / `skipped`）は含めない。** これは重要度の判断ではなく、数え方の帰結である —— `StateDb::list_tasks` は絞り込みも上限も無く過去の全タスクを返すので、終端を数えるとバッジの数字が**単調増加して二度と 0 に戻らない**。「押せば減る」性質を失った数字は読まれなくなる。失敗の確認は `totsuka status` と通知（F-90）の担当。
+**終端状態（`done` / `failed` / `cancelled` / `skipped`）は含めない。** これは重要度の判断ではなく、数え方の帰結である —— `StateDb::list_tasks` は絞り込みも上限も無く過去の全タスクを返すので、終端を数えるとバッジの数字が**単調増加して二度と 0 に戻らない**。「押せば減る」性質を失った数字は読まれなくなる。失敗の確認は `totsuka status` と通知（F-90）、それにメニューの「Recent」節（過去 24 時間の `failed` / `cancelled` / `skipped`、数えずに見せるだけ）の担当。
 
 `dispatched` / `running` / `publishing` も入らない（許可待ちの `running` を除く）。エージェントが進めており、人間に打つ手が無い。メニューのドロップダウンでは「稼働中」の別節に出るが、バッジの数字には入らない。
 

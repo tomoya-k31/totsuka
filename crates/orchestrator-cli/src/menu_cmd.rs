@@ -135,7 +135,8 @@ enum Section {
     Attention,
     /// An agent is working on it; nothing for a human to do.
     Working,
-    /// Not shown at all.
+    /// Not in either section — though a recently ended, retryable one still
+    /// reaches the Recent list (`is_recent`), which is never counted.
     Hidden,
 }
 
