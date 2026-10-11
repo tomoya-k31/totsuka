@@ -52,5 +52,6 @@ stable（[#896](https://github.com/tomoya-k31/totsuka/issues/896)）。CLI の `
 # Consequences
 
 - 旧 pane は、次の dispatch まで旧 worktree のディレクトリ（消えている）に残る。cancel の後に retry するまでは今までも pane が残っていたので、新しい状態ではない
+- 旧 worktree の削除は、再キューのトランザクションより先に行う（未コミット変更での拒否を、何も書き換えないうちに返すため）。その間に同じタスクが別の書き手に動かされると（新しいメッセージでの reopen など）、再キューは競合で拒否されるが、worktree はもう消えている。消すのは cleanup と同じガードを通ったもの（汚れておらず、detached HEAD に未 push コミットも無い）だけで、ディスクに無い worktree は次の dispatch が記録済みのブランチから作り直すので、作業は失われない
 - 人間の `task retry --repo` も `queued` への遷移なので、`auto_retry_streak` の予算をリセットする（通常の `retry` と同じ）
 - メニューバーアプリは `task retry <ID> --repo <name>` をそのまま呼べる
