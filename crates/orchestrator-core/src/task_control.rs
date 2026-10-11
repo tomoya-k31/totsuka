@@ -7,11 +7,14 @@
 //! state machine itself stays in [`transition`](crate::domain::state::transition);
 //! this only decides which event to ask for and phrases the refusals.
 
+use std::path::{Path, PathBuf};
+
 use crate::adapters::state_db::{StateDb, StateError};
-use crate::domain::EventDetail;
-use crate::domain::TaskId;
 use crate::domain::state::{TaskEvent, TaskState};
+use crate::domain::{EventDetail, Task, TaskId};
+use crate::ports::git::GitRunner;
 use crate::ports::signal_ingress::TaskControlOutcome;
+use crate::worktree::{CleanupOutcome, WorktreeManager};
 
 /// Cancel task `id`. `detail` is the audit detail recorded with the event.
 ///
@@ -55,37 +58,135 @@ pub fn retry(
     id: TaskId,
     detail: EventDetail,
 ) -> Result<TaskControlOutcome, StateError> {
-    let Some(task) = db.get_task(id)? else {
-        return Ok(TaskControlOutcome::refused(not_found(id)));
+    match retryable(db, id)? {
+        // `retry_task`, not `apply_event(Retry)`: requeueing the task without
+        // the messages its failed run was given would dispatch an empty
+        // prompt (#242).
+        Ok(task) => settle(&task, db.retry_task(task.task_ref(), Some(detail))),
+        Err(refused) => Ok(refused),
+    }
+}
+
+/// Retry task `id` in repository `repo` instead of the one it was given
+/// (#896) — for a task whose repository was chosen wrong, which a plain retry
+/// would only re-run in the same wrong place.
+///
+/// `command` is what the operator ran, recorded on the
+/// [`Moved`](EventDetail::Moved) event. `repos` is the configured
+/// `[[repositories]]` as `(name, path)`. The old
+/// worktree is removed first, under the same guards as cleanup (uncommitted
+/// changes, unpushed commits on a detached HEAD): a refusal leaves the task
+/// as it was. Its pane is left to the next dispatch, which closes a previous
+/// dispatch's pane before opening one (#481). The caller sends a retry that
+/// names the task's own repository to [`retry`] instead.
+pub fn retry_in_repo<G: GitRunner>(
+    db: &StateDb,
+    id: TaskId,
+    command: &str,
+    repo: &str,
+    repos: &[(String, PathBuf)],
+    worktrees: &WorktreeManager<G>,
+) -> Result<TaskControlOutcome, StateError> {
+    let task = match retryable(db, id)? {
+        Ok(task) => task,
+        Err(refused) => return Ok(refused),
     };
-    if !matches!(
+    if !repos.iter().any(|(name, _)| name == repo) {
+        let known: Vec<_> = repos.iter().map(|(name, _)| format!("`{name}`")).collect();
+        return Ok(TaskControlOutcome::refused(format!(
+            "repository `{repo}` is not in [[repositories]] → choose one of: {}",
+            known.join(", ")
+        )));
+    }
+    if let Err(reason) = vacate_worktree(&task, repos, worktrees) {
+        return Ok(TaskControlOutcome::refused(reason));
+    }
+    settle(&task, db.retry_task_in_repo(task.task_ref(), command, repo))
+}
+
+/// The task, if it is in a state `retry` accepts; the refusal otherwise.
+fn retryable(db: &StateDb, id: TaskId) -> Result<Result<Task, TaskControlOutcome>, StateError> {
+    let Some(task) = db.get_task(id)? else {
+        return Ok(Err(TaskControlOutcome::refused(not_found(id))));
+    };
+    if matches!(
         task.state,
         TaskState::Failed | TaskState::Cancelled | TaskState::Skipped
     ) {
-        let action = if task.state == TaskState::Done {
-            // Since #242 `done` means "no unprocessed messages", not "closed
-            // forever": a new message reopens the conversation. Re-running the
-            // same instructions is a different thing, and not what anyone
-            // asking about a finished task wants.
-            "it finished; send another message in the conversation (the reply in its thread/issue) to continue it — a re-run of the same instructions is not what `retry` is for"
-        } else {
-            "only failed/cancelled/skipped tasks can be retried; `totsuka task cancel` it first if you want a re-run"
-        };
-        return Ok(TaskControlOutcome::refused(format!(
-            "task {id} is {} → {action}",
-            task.state
-        )));
+        return Ok(Ok(task));
     }
-    // `retry_task`, not `apply_event(Retry)`: requeueing the task without the
-    // messages its failed run was given would dispatch an empty prompt (#242).
-    let (to, requeued) = match db.retry_task(task.task_ref(), Some(detail)) {
+    let action = if task.state == TaskState::Done {
+        // Since #242 `done` means "no unprocessed messages", not "closed
+        // forever": a new message reopens the conversation. Re-running the
+        // same instructions is a different thing, and not what anyone
+        // asking about a finished task wants.
+        "it finished; send another message in the conversation (the reply in its thread/issue) to continue it — a re-run of the same instructions is not what `retry` is for"
+    } else {
+        "only failed/cancelled/skipped tasks can be retried; `totsuka task cancel` it first if you want a re-run"
+    };
+    Ok(Err(TaskControlOutcome::refused(format!(
+        "task {id} is {} → {action}",
+        task.state
+    ))))
+}
+
+/// The outcome of a requeue of `task` that `applied` reports.
+fn settle(
+    task: &Task,
+    applied: Result<(TaskState, crate::adapters::state_db::TaskRef, usize), StateError>,
+) -> Result<TaskControlOutcome, StateError> {
+    let (to, requeued) = match applied {
         Ok((to, _, requeued)) => (to, requeued),
         Err(e @ (StateError::Conflict(_) | StateError::Transition(_))) => {
-            return Ok(lost_race(id, &e));
+            return Ok(lost_race(task.id, &e));
         }
         Err(e) => return Err(e),
     };
     Ok(TaskControlOutcome::applied(task.state, to, Some(requeued)))
+}
+
+/// Remove the task's worktree from its old repository, if it is still on
+/// disk. `Err` is the refusal to give, with the way to do it by hand.
+fn vacate_worktree<G: GitRunner>(
+    task: &Task,
+    repos: &[(String, PathBuf)],
+    worktrees: &WorktreeManager<G>,
+) -> Result<(), String> {
+    let Some(path) = task
+        .worktree_path
+        .as_deref()
+        .map(Path::new)
+        .filter(|p| p.exists())
+    else {
+        return Ok(());
+    };
+    let shown = path.display();
+    let old_repo = task
+        .repo
+        .as_deref()
+        .and_then(|old| repos.iter().find(|(name, _)| name == old));
+    let Some((_, repo_path)) = old_repo else {
+        return Err(format!(
+            "the old worktree {shown} belongs to a repository that is not in [[repositories]] \
+             → remove it with `git worktree remove {shown}` and retry"
+        ));
+    };
+    match worktrees.remove(
+        repo_path,
+        path,
+        task.branch.as_deref(),
+        task.base_commit.as_deref(),
+    ) {
+        Ok(CleanupOutcome::Removed | CleanupOutcome::Gone) => Ok(()),
+        Ok(CleanupOutcome::DirtySkipped | CleanupOutcome::Retained) => Err(format!(
+            "the old worktree {shown} has uncommitted changes or unpushed commits → save what \
+             you need, remove it with `git worktree remove --force {shown}`, and retry"
+        )),
+        Err(e) => Err(format!(
+            "could not remove the old worktree {shown}: {e} → remove it with \
+             `git worktree remove {shown}` and retry"
+        )),
+    }
 }
 
 /// The state moved between the check above and the write — another writer
@@ -150,6 +251,148 @@ mod tests {
             retried,
             TaskControlOutcome::applied(TaskState::Cancelled, TaskState::Queued, Some(0))
         );
+    }
+
+    /// A git that answers `status --porcelain` with `status` and everything
+    /// else with success, recording what it was asked.
+    struct FakeGit {
+        status: &'static str,
+        calls: std::cell::RefCell<Vec<String>>,
+    }
+
+    impl GitRunner for &FakeGit {
+        fn run(&self, _cwd: &Path, args: &[&str]) -> std::io::Result<crate::ports::git::GitOutput> {
+            self.calls.borrow_mut().push(args.join(" "));
+            let stdout = if args[0] == "status" { self.status } else { "" };
+            Ok(crate::ports::git::GitOutput {
+                status: Some(0),
+                stdout: stdout.to_string(),
+                stderr: String::new(),
+            })
+        }
+    }
+
+    /// A cancelled task in repository `web` with a worktree on disk.
+    fn cancelled_with_worktree(name: &str) -> (StateDb, TaskId, PathBuf) {
+        let (db, id) = db_with_task();
+        let id = TaskId(id);
+        let wt = std::env::temp_dir().join(format!("totsuka-{}-{name}", std::process::id()));
+        std::fs::create_dir_all(&wt).unwrap();
+        db.set_worktree(id, &wt.display().to_string(), None, "abc")
+            .unwrap();
+        cancel(&db, id, control()).unwrap();
+        (db, id, wt)
+    }
+
+    fn repos() -> Vec<(String, PathBuf)> {
+        vec![
+            ("web".to_string(), PathBuf::from("/repos/web")),
+            ("api".to_string(), PathBuf::from("/repos/api")),
+        ]
+    }
+
+    #[test]
+    fn retry_in_repo_removes_the_old_worktree_and_moves_the_task() {
+        let (db, id, wt) = cancelled_with_worktree("rehome_moves");
+        let git = FakeGit {
+            status: "",
+            calls: Default::default(),
+        };
+        let outcome = retry_in_repo(
+            &db,
+            id,
+            "test --repo",
+            "api",
+            &repos(),
+            &WorktreeManager::new(&git),
+        )
+        .unwrap();
+        assert!(outcome.ok, "{outcome:?}");
+        assert!(
+            git.calls
+                .borrow()
+                .iter()
+                .any(|c| c.starts_with("worktree remove"))
+        );
+        let task = db.get_task(id).unwrap().unwrap();
+        assert_eq!(
+            (task.state, task.repo.as_deref()),
+            (TaskState::Queued, Some("api"))
+        );
+        std::fs::remove_dir_all(wt).unwrap();
+    }
+
+    #[test]
+    fn retry_in_repo_refuses_without_touching_anything() {
+        let (db, id, wt) = cancelled_with_worktree("rehome_refuses");
+        let unchanged = |db: &StateDb| {
+            let task = db.get_task(id).unwrap().unwrap();
+            assert_eq!(
+                (task.state, task.repo.as_deref()),
+                (TaskState::Cancelled, Some("web"))
+            );
+        };
+
+        let clean = FakeGit {
+            status: "",
+            calls: Default::default(),
+        };
+        let unknown = retry_in_repo(
+            &db,
+            id,
+            "test --repo",
+            "nope",
+            &repos(),
+            &WorktreeManager::new(&clean),
+        )
+        .unwrap();
+        assert!(unknown.reason.unwrap().contains("`web`, `api`"));
+        assert!(clean.calls.borrow().is_empty());
+        unchanged(&db);
+
+        let dirty = FakeGit {
+            status: " M src/lib.rs",
+            calls: Default::default(),
+        };
+        let kept = retry_in_repo(
+            &db,
+            id,
+            "test --repo",
+            "api",
+            &repos(),
+            &WorktreeManager::new(&dirty),
+        )
+        .unwrap();
+        assert!(kept.reason.unwrap().contains("uncommitted changes"));
+        assert!(
+            !dirty
+                .calls
+                .borrow()
+                .iter()
+                .any(|c| c.starts_with("worktree remove"))
+        );
+        unchanged(&db);
+        std::fs::remove_dir_all(wt).unwrap();
+    }
+
+    #[test]
+    fn retry_in_repo_refuses_a_task_that_is_not_retryable_before_any_git() {
+        let (db, id) = db_with_task();
+        let git = FakeGit {
+            status: "",
+            calls: Default::default(),
+        };
+        let refused = retry_in_repo(
+            &db,
+            TaskId(id),
+            "test --repo",
+            "api",
+            &repos(),
+            &WorktreeManager::new(&git),
+        )
+        .unwrap();
+        assert!(refused.reason.unwrap().contains("cancel` it first"));
+        assert!(git.calls.borrow().is_empty());
     }
 
     #[test]

@@ -65,6 +65,20 @@ pub enum EventDetail {
         /// The command, as the operator would have typed it.
         command: String,
     },
+    /// `task retry --repo` re-queued the task in another repository (#896).
+    ///
+    /// Read back by dispatch: until the task is dispatched again, the pane
+    /// its last session recorded belongs to the old repository and is closed
+    /// rather than re-attached.
+    Moved {
+        /// The command, as the operator would have typed it.
+        command: String,
+        /// The repository it left, if it had one.
+        #[serde(deserialize_with = "Option::deserialize")]
+        from_repo: Option<String>,
+        /// The repository it moved to.
+        to_repo: String,
+    },
     /// Repository selection could not settle on one repository.
     RepoSelect {
         /// Why.
@@ -296,6 +310,7 @@ impl EventDetail {
             Self::Submitted => "submitted",
             Self::Cli(_) => "cli",
             Self::Control { .. } => "control",
+            Self::Moved { .. } => "moved",
             Self::RepoSelect { .. } => "repo_select",
             Self::Dispatch(_) => "dispatch",
             Self::AutoRetry { .. } => "auto_retry",
@@ -352,6 +367,14 @@ mod tests {
                     command: s("task cancel"),
                 },
                 r#"{"command":"task cancel","kind":"control"}"#,
+            ),
+            (
+                EventDetail::Moved {
+                    command: s("task retry --repo api"),
+                    from_repo: Some(s("web")),
+                    to_repo: s("api"),
+                },
+                r#"{"command":"task retry --repo api","from_repo":"web","kind":"moved","to_repo":"api"}"#,
             ),
             (
                 EventDetail::RepoSelect {
