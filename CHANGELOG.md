@@ -11,6 +11,14 @@ Note: the plugin protocol is versioned independently of the application (see
 `crates/plugin-protocol`); a totsuka release does not imply a protocol-version
 change.
 
+## [0.10.10](https://github.com/tomoya-k31/totsuka/compare/v0.10.9...v0.10.10) (2026-10-11)
+
+
+### Features
+
+* **cli:** task retry に --repo を足し、リポジトリを指定してやり直せるようにする ([#897](https://github.com/tomoya-k31/totsuka/issues/897)) ([61df644](https://github.com/tomoya-k31/totsuka/commit/61df6442bc769c04b89fe3e0e8a1004f23318356))
+* **macos:** メニューに Recent 節を足し、終わったタスクを別のリポジトリでやり直せるようにする ([#898](https://github.com/tomoya-k31/totsuka/issues/898)) ([368cb0d](https://github.com/tomoya-k31/totsuka/commit/368cb0d171fe02f68d2f9617990a6df685952e4a))
+
 ## [0.10.9](https://github.com/tomoya-k31/totsuka/compare/v0.10.8...v0.10.9) (2026-10-06)
 
 
