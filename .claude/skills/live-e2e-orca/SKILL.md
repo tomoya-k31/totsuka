@@ -1,6 +1,8 @@
 ---
 name: live-e2e-orca
-description: totsuka を実機（実 Slack / 実 GitHub / 実 orca + 実 Claude Code）で通しで動かし、結果を検証する手順（orca 版）。トリガー: 「orca で実機検証」「orca で e2e を回して」「orca で動かして」、および agent-ide-orca に手を入れた PR の検証、orca の版を上げたとき。CI は fake orca CLI までしか検証しないので、orca プラグインの実接続に関わる変更を出したら必ずこのスキルで確かめること。GitHub / Slack の駆動と $E2E_HOME は live-e2e-herdr と共用する。
+description: "totsuka を実機（実 Slack / 実 GitHub / 実 orca + 実 Claude Code）で通しで動かし、結果を検証する手順（orca 版）。トリガー: 「orca で実機検証」「orca で e2e を回して」「orca で動かして」、および agent-ide-orca に手を入れた PR の検証、orca の版を上げたとき。CI は fake orca CLI までしか検証しないので、orca プラグインの実接続に関わる変更を出したら必ずこのスキルで確かめること。GitHub / Slack の駆動と $E2E_HOME は live-e2e-herdr と共用する。"
+metadata:
+  internal: true
 ---
 
 # 実機 E2E 検証（orca 版）

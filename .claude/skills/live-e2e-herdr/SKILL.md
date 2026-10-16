@@ -1,6 +1,8 @@
 ---
 name: live-e2e-herdr
-description: totsuka を実機（実 Slack / 実 GitHub / 実 herdr + 実 Claude Code）で通しで動かし、結果を検証する手順（herdr 版）。トリガー: 「実機で試したい」「実機検証」「e2e を回して」「本物の Slack で確認」「herdr で動かして」「リリース前チェック」、および herdr / Slack / GitHub 連携に手を入れた PR の検証。CI は mock プラグインまでしか検証しないので、agent_ide・task_source の実接続に関わる変更を出したら必ずこのスキルで確かめること。実機で初めて出る不具合はここでしか捕まらない。エージェントが orca の場合は live-e2e-orca を使う（GitHub / Slack の駆動スクリプトはこのスキルのものを共用する）。
+description: "totsuka を実機（実 Slack / 実 GitHub / 実 herdr + 実 Claude Code）で通しで動かし、結果を検証する手順（herdr 版）。トリガー: 「実機で試したい」「実機検証」「e2e を回して」「本物の Slack で確認」「herdr で動かして」「リリース前チェック」、および herdr / Slack / GitHub 連携に手を入れた PR の検証。CI は mock プラグインまでしか検証しないので、agent_ide・task_source の実接続に関わる変更を出したら必ずこのスキルで確かめること。実機で初めて出る不具合はここでしか捕まらない。エージェントが orca の場合は live-e2e-orca を使う（GitHub / Slack の駆動スクリプトはこのスキルのものを共用する）。"
+metadata:
+  internal: true
 ---
 
 # 実機 E2E 検証（herdr 版）

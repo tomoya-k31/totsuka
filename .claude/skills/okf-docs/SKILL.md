@@ -1,6 +1,8 @@
 ---
 name: okf-docs
-description: ai-docs/ 配下（OKF Knowledge Bundle）へのドキュメント作成・更新を行うときに必ず使う。トリガー: ADR作成、設計判断の記録、コンポーネント/API/スキーマ/インフラの追加・変更、Playbook作成、リリースノート、用語追加、「ドキュメントを書いて」「ADRにして」「docsを更新」等の依頼。コード変更のPRでドキュメント更新が必要かの判断にも使う。
+description: "ai-docs/ 配下（OKF Knowledge Bundle）へのドキュメント作成・更新を行うときに必ず使う。トリガー: ADR作成、設計判断の記録、コンポーネント/API/スキーマ/インフラの追加・変更、Playbook作成、リリースノート、用語追加、「ドキュメントを書いて」「ADRにして」「docsを更新」等の依頼。コード変更のPRでドキュメント更新が必要かの判断にも使う。"
+metadata:
+  internal: true
 ---
 
 # OKF Docs Skill

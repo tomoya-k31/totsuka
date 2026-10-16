@@ -1,6 +1,8 @@
 ---
 name: human-docs
-description: 人間向け docs/ を ai-docs/ の対応ソースから生成・更新するときに使う。トリガー: ai-docs/development/config-reference.md・plugin-dev-guide.md、ai-docs/operations/setup-playbook.md・operations-guide.md・slack-quickstart.md・discord-quickstart.md・event-gateway-setup.md・click-to-focus-setup.md、ai-docs/product/orchestrator-spec(.ja).md のいずれかを編集したとき（この 9 本は docs/ の生成元なので、触ったら必ず生成物も更新する）。docs/ 配下の生成ページを直すとき、生成ページを増減するとき、「鮮度検査が落ちた」「generated-from が stale」「宣言した生成物が無い」等の依頼にも使う。手書きの docs/index.md・index.ja.md だけは生成対象外で、このスキルの手順は適用しない。
+description: "人間向け docs/ を ai-docs/ の対応ソースから生成・更新するときに使う。トリガー: ai-docs/development/config-reference.md・plugin-dev-guide.md、ai-docs/operations/setup-playbook.md・operations-guide.md・slack-quickstart.md・discord-quickstart.md・event-gateway-setup.md・click-to-focus-setup.md、ai-docs/product/orchestrator-spec(.ja).md のいずれかを編集したとき（この 9 本は docs/ の生成元なので、触ったら必ず生成物も更新する）。docs/ 配下の生成ページを直すとき、生成ページを増減するとき、「鮮度検査が落ちた」「generated-from が stale」「宣言した生成物が無い」等の依頼にも使う。手書きの docs/index.md・index.ja.md だけは生成対象外で、このスキルの手順は適用しない。"
+metadata:
+  internal: true
 allowed-tools: Read, Write, Edit, Bash, Grep
 ---
 
