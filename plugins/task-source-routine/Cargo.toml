@@ -1,0 +1,40 @@
+[package]
+name = "task-source-routine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "totsuka task_source plugin that runs per-host routines on a cron schedule (stdio JSON-RPC server)."
+# Internal binary crate — depends on plugin-protocol by path, so it must be
+# non-publishable for cargo-deny to permit the path dependency.
+publish = false
+
+[lints]
+workspace = true
+
+# The bin name must equal `plugin.toml`'s `name` — see the note in
+# plugins/task-source-github/Cargo.toml. Enforced by `scripts/arch-lint.sh`.
+[[bin]]
+name = "routine"
+path = "src/main.rs"
+
+[dependencies]
+plugin-protocol.workspace = true
+plugin-sdk.workspace = true
+routine-schedule.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
+semver = { workspace = true, features = ["serde"] }
+# `local-offset` reads the machine's time zone once, before any thread exists
+# (ADR-0097); cron fields are local wall-clock time.
+time = { workspace = true, features = ["local-offset"] }
+# `io-std` (stdin/stdout) is on top of the workspace tokio feature set.
+tokio = { workspace = true, features = ["io-std"] }
+tracing.workspace = true
+
+[dev-dependencies]
+plugin-conformance.workspace = true
+test-support.workspace = true
+time = { workspace = true, features = ["macros"] }

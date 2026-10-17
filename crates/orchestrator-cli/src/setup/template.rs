@@ -219,7 +219,7 @@ mod tests {
         assert_eq!(
             names,
             vec![
-                "github", "notion", "slack", "discord", "herdr", "orca", "macos"
+                "github", "notion", "slack", "discord", "routine", "herdr", "orca", "macos"
             ]
         );
     }
@@ -233,7 +233,9 @@ mod tests {
         let rendered = render(&selected(&["github"]), SecretBackend::OnePassword);
         assert!(rendered.contains("[plugins.github]"), "{rendered}");
         assert!(rendered.contains("[github]"), "{rendered}");
-        for absent in ["notion", "slack", "discord", "herdr", "orca", "macos"] {
+        for absent in [
+            "notion", "slack", "discord", "routine", "herdr", "orca", "macos",
+        ] {
             // Header lines only: the recipe section names plugins in prose
             // ("Needs: [plugins.slack], …"), and that is documentation, not a
             // roster entry.

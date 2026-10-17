@@ -1,6 +1,6 @@
 ---
 name: totsuka-config
-description: "Build or edit a totsuka config.toml with the user, one confirmed step at a time. Use when someone sets up totsuka for the first time, adds a task source (GitHub Projects, Notion, Slack, Discord), a project, a repository or a workflow to an existing totsuka config, changes a workflow's trigger or profile, or moves secrets to secret: references for the menu bar app."
+description: "Build or edit a totsuka config.toml with the user, one confirmed step at a time. Use when someone sets up totsuka for the first time, adds a task source (GitHub Projects, Notion, Slack, Discord, scheduled routines), a project, a repository or a workflow to an existing totsuka config, changes a workflow's trigger or profile, or moves secrets to secret: references for the menu bar app."
 ---
 
 # totsuka config
@@ -57,9 +57,9 @@ Only when the request names none of these, summarise what the file has (plugins,
 ## 3. New config
 
 1. `totsuka config set /version 1` (this creates the file).
-2. Ask which task sources the user wants (github, notion, slack, discord; one or more) and which agent IDE (herdr or orca). Install each with `totsuka plugin install --bundled <name> --yes`, then register it: `set /plugins/<name> '{"kind":"task_source","enabled":true}'` (`"agent_ide"` for herdr / orca). Done when `totsuka plugin list` shows each one installed.
+2. Ask which task sources the user wants (github, notion, slack, discord, routine for scheduled prompts; one or more) and which agent IDE (herdr or orca). Install each with `totsuka plugin install --bundled <name> --yes`, then register it: `set /plugins/<name> '{"kind":"task_source","enabled":true}'` (`"agent_ide"` for herdr / orca). Done when `totsuka plugin list` shows each one installed.
 3. The agent IDE's own table needs no keys; add one only if the user asks (layout and so on, from the schema). Remind them that herdr 0.7.5+ or the Orca app must be running when totsuka starts.
-4. For each task source in turn, follow its file: [github.md](references/github.md), [notion.md](references/notion.md), [slack.md](references/slack.md) or [discord.md](references/discord.md). Each runs the human prerequisites, then `[<source>]`, `[[projects]]`, the repositories, and the workflows, with `validate --offline` after each. For the workflows, also read [workflows.md](references/workflows.md).
+4. For each task source in turn, follow its file: [github.md](references/github.md), [notion.md](references/notion.md), [slack.md](references/slack.md), [discord.md](references/discord.md) or [routine.md](references/routine.md). Each runs the human prerequisites, then `[<source>]`, `[[projects]]`, the repositories, and the workflows, with `validate --offline` after each. For the workflows, also read [workflows.md](references/workflows.md).
 5. With Slack and two or more repositories, an LLM picks the repository for each message, so add `[llm]` (see slack.md).
 6. Only if the user wants an AI tool other than Claude: `[tools.<name>]` and `default_tool` from the schema.
 7. Finish with **6. Hand-off**.

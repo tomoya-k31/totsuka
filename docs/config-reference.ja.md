@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:7e4d65fb5b8560294ac99cac9697271e81d5386c87687dd43ab8f618c0ec2213 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:61867ea679caa9aa4d67929c2f44655473d1e49b784ce64baac3ab268c877357 -->
 
 # 設定リファレンス
 
@@ -223,6 +223,7 @@ GitHub / Notion のトリガーは次の規則で読む（Slack / Discord は起
 | notion | `status`（文字列）/ `assignee` / `filter` / `exclude` | `status`（配列可）/ `assignee`。**`filter` は書けない**（下記） |
 | slack | `mention` / `to_group` / `reaction` / `from_bot` / `channel` / `channel_name` / `repo` / `from` | なし |
 | discord | `channel` / `channel_name` / `repo` / `from` | なし |
+| routine | なし（`trigger = {}`。何を走らせるかは各 routine のファイルが持つ） | なし |
 
 #### `status`
 
@@ -1243,6 +1244,53 @@ operator_user_id = "111111111111111111"    # 必須。自分の Discord ユー�
 | `watch_backfill_max_age_hours` | int? | 24 | 起動時に遡る時間の上限。`0` は拒否 |
 
 トリガは `trigger = { channel = "…", channel_name = "…", repo = "…" }`（+ 任意の `from`）です。**このソースにはトリガがこれしかない**ので、監視するワークフローが 1 本も無い設定は起動時にエラーになります。
+
+## `[routine]`
+
+routine（定期実行）は**ファイル**で定義し、`config.toml` には置きません。routine 1 つが 1 ファイル `<config dir>/routines/<host>/<name>.md` です。`<host>` は `hosts/<host>.toml` と同じ名前、`<config dir>` は `--config` を渡したときはその親、それ以外は `$XDG_CONFIG_HOME/totsuka` です。自分の host のディレクトリが無いマシンでは何も走りません。
+
+```markdown
+---
+repo: my-repo              # 必須。[[repositories]] の name と完全一致
+schedule: "0 9 * * 1-5"    # 必須。cron 5 フィールド（分 時 日 月 曜日）、ローカル時刻
+workflow: routine          # このソースを使う workflow が 1 つなら省略可
+catchup_window: 6h         # 省略時は [routine].catchup_window
+enabled: false             # 省略時 true。false はスケジュールだけを止める（手動実行は可）
+---
+依存関係の更新を確認して、必要なら PR を出してください。
+```
+
+- frontmatter は YAML ではなく平らな `key: value` 行です。値は `"…"` / `'…'` で囲んでよく、空白の後の `#` はコメントです。**未知のキー・同じキーの重複・必須キーの欠落・空の本文は、その routine のエラー**になります（ログに 1 回出し、他の routine は動き続けます）
+- `schedule` の各フィールドは `*`・数値・`a-b`・`*/n`・`a-b/n`・それらのカンマ区切りです。曜日は `0`–`7`（0 と 7 が日曜）。日と曜日の両方を制限すると、**どちらかに合う日**に走ります（`*` で始まるフィールドは制限に数えないので、`0 9 */2 * 1` は「奇数日かつ月曜」です）。`MON` などの名前と `@daily` は使えません
+- ディレクトリは 30 秒ごとに読み直すので、編集は再起動なしで効きます。時差は起動時に 1 回だけ取るので、**夏時間の切り替えは次の起動から反映されます**
+- **PC のスリープ・停止中や `run` の停止中に逃した実行は、`catchup_window` 以内の直近 1 回にまとめて**、戻ったときに 1 回だけ走ります。それより古い回は捨てます。`0` は「時刻どおりのときだけ」です。**ファイルを書いた時刻（分に切り捨て）より前の回は取り戻しません** —— 作ったばかり・`enabled` に戻したばかり・編集したばかりの routine が、直前に過ぎた回をすぐ走らせることはありません
+- **前回の実行が終わっていなければ（入力待ちも含む）その回は飛ばします**（キューに積みません）。手動実行（`totsuka routine run <name>`）も同じ理由で断られます。手動実行は定期の回を消費しません
+
+`[routine]` の全キー（未知のキーはエラー）:
+
+| キー | 型 | 既定 | 意味 |
+|---|---|---|---|
+| `catchup_window` | string | `24h` | 逃した実行を取り戻す範囲。`0` / `90m` / `24h` / `7d` の形。routine 自身の `catchup_window` が勝つ |
+| `source_name` | string | `routine` | このソースの名前（タスクの `source` に入る） |
+
+routine の workflow は `source = "routine"` の `[[projects]]` を指します。**このソースは何も書き戻さない**ので `output = "none"` にします。無人で走るため **`profile = "unattended"`** を使ってください。`design` / `implement` は完了時に pane 上であなたの承認を待ち、`answer` / `triage` は既定の出力が `source` なので弾かれ、profile を書かないと許可の設定が入らず Claude が許可プロンプトで止まりえます:
+
+```toml
+[plugins.routine]
+enabled = true
+kind = "task_source"
+
+[[projects]]
+name = "routines"
+source = "routine"
+
+[[workflows]]
+name = "routine"
+projects = ["routines"]
+trigger = {}               # キーは読まない。書くと起動時にエラー
+agent = "herdr"
+profile = "unattended"     # implement・出力 none・許可プロンプトなし・完了承認なし
+```
 
 ## `[herdr]`
 

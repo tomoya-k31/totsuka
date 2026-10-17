@@ -68,7 +68,7 @@ for why. CI's own flags stay exactly as they are:
   (→ [config-template](../../ai-docs/development/config-template.md)).
   **It fires on a config struct you did not think of as "the template's
   business"** — PR #736 added two keys to a *plugin's* config and CI failed on
-  the `orchestrator-cli` template, because the template carries all 7 plugins'
+  the `orchestrator-cli` template, because the template carries all 8 plugins'
   keys too. Cheap (0.7s, POSIX awk/grep, no build), so run it whenever an
   input of its own changed: **`crates/orchestrator-core/src/config/schema.rs`**
   (not named `config.rs`, and holds the majority of the keys), any

@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:7e4d65fb5b8560294ac99cac9697271e81d5386c87687dd43ab8f618c0ec2213 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:61867ea679caa9aa4d67929c2f44655473d1e49b784ce64baac3ab268c877357 -->
 
 # Configuration reference
 
@@ -222,6 +222,7 @@ GitHub and Notion triggers follow these rules (Slack and Discord pick a *kind* o
 | notion | `status` (string) / `assignee` / `filter` / `exclude` | `status` (takes a list) / `assignee`. **Not `filter`** (below) |
 | slack | `mention` / `to_group` / `reaction` / `from_bot` / `channel` / `channel_name` / `repo` / `from` | none |
 | discord | `channel` / `channel_name` / `repo` / `from` | none |
+| routine | none (`trigger = {}`; each routine's file says what runs) | none |
 
 #### `status`
 
@@ -1244,6 +1245,53 @@ Every `[discord]` key (unknown keys are an error; setup steps are in [Discord se
 | `watch_backfill_max_age_hours` | int? | 24 | How far back that re-read reaches. `0` is rejected |
 
 The trigger is `trigger = { channel = "…", channel_name = "…", repo = "…" }` (plus an optional `from`). **This source has no other kind of trigger**, so a configuration where no workflow watches a channel fails at startup.
+
+## `[routine]`
+
+Routines (scheduled runs) are defined in **files**, not in `config.toml`: one routine is one file, `<config dir>/routines/<host>/<name>.md`. `<host>` is the same name as in `hosts/<host>.toml`, and `<config dir>` is the parent of `--config` if you passed one, otherwise `$XDG_CONFIG_HOME/totsuka`. On a machine without its own host directory, nothing runs.
+
+```markdown
+---
+repo: my-repo              # required: exactly a [[repositories]] name
+schedule: "0 9 * * 1-5"    # required: five-field cron (minute hour day month weekday), local time
+workflow: routine          # optional when only one workflow uses this source
+catchup_window: 6h         # optional: defaults to [routine].catchup_window
+enabled: false             # optional, default true: false stops the schedule (manual runs still work)
+---
+Check the dependencies for updates and open a PR if any are needed.
+```
+
+- The frontmatter is flat `key: value` lines, not YAML. Values may be wrapped in `"…"` or `'…'`, and a `#` after a space starts a comment. **An unknown key, a repeated key, a missing required key, or an empty body is an error for that routine** (logged once; the other routines keep running)
+- Each `schedule` field is `*`, a number, `a-b`, `*/n`, `a-b/n`, or a comma list of those. Weekday is `0`–`7` (both 0 and 7 are Sunday). When both day fields are restricted, a day matching **either** runs (a field starting with `*` does not count as restricted, so `0 9 */2 * 1` means odd days that are Mondays). Names such as `MON` and `@daily` are not accepted
+- The directory is re-read every 30 seconds, so edits take effect without a restart. The time-zone offset is read once at startup, so **a daylight-saving change takes effect at the next start**
+- **Runs missed while the machine slept or was off, or while `run` was stopped, collapse into the latest one within `catchup_window`**, which runs once when things come back. Older ones are dropped. `0` means "only on time". **A run from before the file was last written (to the minute) is not made up**, so a routine you just created, re-enabled or edited does not immediately run the time that just passed
+- **If the previous run has not finished (waiting for input counts), that run is skipped**, not queued. A manual run (`totsuka routine run <name>`) is refused the same way. A manual run does not use up a scheduled one
+
+Every `[routine]` key (unknown keys are an error):
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `catchup_window` | string | `24h` | How far back a missed run is made up. `0` / `90m` / `24h` / `7d`. A routine's own `catchup_window` wins |
+| `source_name` | string | `routine` | This source's name (it appears as the task's `source`) |
+
+A routine's workflow draws from a `[[projects]]` entry with `source = "routine"`. **This source posts nothing back**, so use `output = "none"`. Routines run unattended, so use **`profile = "unattended"`**. `design` and `implement` wait for your approval in the pane when done, `answer` / `triage` default to `source` output, which is rejected, and without a profile no permission settings are applied, so Claude can stop at a permission prompt:
+
+```toml
+[plugins.routine]
+enabled = true
+kind = "task_source"
+
+[[projects]]
+name = "routines"
+source = "routine"
+
+[[workflows]]
+name = "routine"
+projects = ["routines"]
+trigger = {}               # no keys are read; writing one fails at startup
+agent = "herdr"
+profile = "unattended"     # implement, output none, no permission prompts, no approval
+```
 
 ## `[herdr]`
 
