@@ -2,6 +2,7 @@
 
 ## 2026-10-18
 
+* **Update**: [Totsuka.app](/components/macos-app.md) — `⋯` に「Routines」のサブメニュー。`routine list --json` を 10 秒ごとに読み、選んだ routine のファイルを Settings… と同じ方法で開く（新規作成はしない。routine が無ければ出さない）
 * **Update**: [orchestrator-cli](/components/orchestrator-cli.md) — `totsuka routine list [--json]`（routine-schedule でファイルを読み、次回・前回・走れない理由を出す）と `totsuka routine run <name>`（`POST /routine/run`、断られたら非ゼロ終了）
 * **Update**: [運用ガイド](/operations/operations-guide.md) — doctor の `routines` チェックと routine コマンド
 * **Update**: [routine-schedule](/components/routine-schedule.md) — `Schedule::next_after`（一覧の次回）

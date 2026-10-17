@@ -84,6 +84,20 @@ import Testing
         #expect(menu.attentionCount == 1)
     }
 
+    /// The routines submenu (#918) keeps each routine's name, in the CLI's
+    /// order, and the file it opens; the rest of `routine list --json` is
+    /// ignored.
+    @Test func decodesTheRoutineList() throws {
+        let json = #"""
+            {"dir":"/Users/me/.config/totsuka/routines/mbp",
+             "routines":[{"name":"bad","enabled":true,"problem":"repo `x` is not a [[repositories]] name"},
+                         {"name":"deps","enabled":true,"schedule":"0 9 * * 1-5","next":"2026-10-20 09:00"}]}
+            """#
+        let list = try RoutineList.decode(Data(json.utf8))
+        #expect(list.routines.map(\.name) == ["bad", "deps"])
+        #expect(list.path(of: "deps") == "/Users/me/.config/totsuka/routines/mbp/deps.md")
+    }
+
     /// Retry is offered for the states `task retry` accepts, in every other
     /// configured repository (#896).
     @Test func offersRetryInTheOtherRepositories() throws {
