@@ -4,6 +4,7 @@
 
 * **Creation**: [ADR-0116](/decisions/adr-0116-totsuka-config-skill.md) を書いた（#903）。config.toml を 1 段ずつ確認しながら組み立てるエージェントスキル `skills/totsuka-config/` を同梱し、`npx skills add tomoya-k31/totsuka --skill totsuka-config` で配る。スキルは config の知識を持たず `config schema` / `set` / `validate` に聞き、秘密は `secret:` に統一し、最終確認はメニューバーアプリの Start に引き渡す。
 * **Update**: [config CLI](/apis/config-cli.md) にスキルを 2 つ目の利用者として書き、[ADR-0113](/decisions/adr-0113-native-menubar-app.md) の「使い道が無いなら消すかを改めて決める」に ADR-0116 で残すと決めたことを追記した。[セットアップ Playbook](/operations/setup-playbook.md) にスキルで config を書かせる道を足した。
+* **Update**: [Discord セットアップ Quickstart](/operations/discord-quickstart.md) の `[plugins.discord]` の例を直した（#904）。未知のキー `command` を含み `kind` を欠いていたため、そのまま写すと config の読み込みで失敗していた（隔離環境で確認）。`kind = "task_source"` にした。
 
 ## 2026-10-11
 
