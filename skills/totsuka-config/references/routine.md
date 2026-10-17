@@ -42,3 +42,5 @@ Questions: what should run, in which repository (`repo` must be exactly a `[[rep
 - The frontmatter is `key: value` lines, not YAML. An unknown key, a repeated key, a missing `repo` / `schedule`, or an empty body makes the routine fail (logged once; the others keep running).
 - No `MON` / `JAN` names, no `@daily`.
 - If a run is still going at the next time, that time is skipped.
+
+After writing a file, run `totsuka routine list`: it reads the files the way the plugin does and shows each routine's next run, or why it cannot run (a `!` line). To try one right away while totsuka is running: `totsuka routine run <name>`.
