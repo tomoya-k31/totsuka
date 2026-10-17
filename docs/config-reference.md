@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:7478871bba1c0c497be4837d27ad7c5cd98e1b358428e34413408cfcefd8886b -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:61867ea679caa9aa4d67929c2f44655473d1e49b784ce64baac3ab268c877357 -->
 
 # Configuration reference
 
@@ -1262,7 +1262,7 @@ Check the dependencies for updates and open a PR if any are needed.
 ```
 
 - The frontmatter is flat `key: value` lines, not YAML. Values may be wrapped in `"…"` or `'…'`, and a `#` after a space starts a comment. **An unknown key, a repeated key, a missing required key, or an empty body is an error for that routine** (logged once; the other routines keep running)
-- Each `schedule` field is `*`, a number, `a-b`, `*/n`, `a-b/n`, or a comma list of those. Weekday is `0`–`7` (both 0 and 7 are Sunday). When both day fields are restricted, a day matching **either** runs. Names such as `MON` and `@daily` are not accepted
+- Each `schedule` field is `*`, a number, `a-b`, `*/n`, `a-b/n`, or a comma list of those. Weekday is `0`–`7` (both 0 and 7 are Sunday). When both day fields are restricted, a day matching **either** runs (a field starting with `*` does not count as restricted, so `0 9 */2 * 1` means odd days that are Mondays). Names such as `MON` and `@daily` are not accepted
 - The directory is re-read every 30 seconds, so edits take effect without a restart. The time-zone offset is read once at startup, so **a daylight-saving change takes effect at the next start**
 - **Runs missed while the machine slept or was off, or while `run` was stopped, collapse into the latest one within `catchup_window`**, which runs once when things come back. Older ones are dropped. `0` means "only on time". **A run from before the file was last written (to the minute) is not made up**, so a routine you just created, re-enabled or edited does not immediately run the time that just passed
 - **If the previous run has not finished (waiting for input counts), that run is skipped**, not queued. A manual run (`totsuka routine run <name>`) is refused the same way. A manual run does not use up a scheduled one

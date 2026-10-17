@@ -3,7 +3,9 @@
 //! `minute hour day-of-month month day-of-week`, each field a `*`, a number,
 //! a range `a-b`, a step `*/n` / `a-b/n`, or a comma list of those. Day of
 //! week is `0`–`7` with both `0` and `7` meaning Sunday. As in Vixie cron,
-//! when both day fields are restricted a day matching **either** runs.
+//! when both day fields are restricted a day matching **either** runs; a
+//! field starting with `*` (`*`, `*/2`) counts as unrestricted for that rule,
+//! so `0 9 */2 * 1` is odd days that are Mondays.
 //!
 //! Names (`MON`, `JAN`) and the `@daily` shorthands are not accepted.
 //!
