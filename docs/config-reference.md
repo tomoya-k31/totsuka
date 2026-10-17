@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:2a7cb751b7c87ee4d08b067f77abde9085aeeb252fb2deaebd03e666146c68c9 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:8b30410aae8c112e198be9e98ef29d7fe6dd79df1753218e35a26e714d045f9e -->
 
 # Configuration reference
 
@@ -1222,22 +1222,7 @@ Things to know:
 - Unknown placeholders pass through and are logged as a warning at startup. **This is deliberately not an error**: the symptom is a visible `{token}` in the draft. The core's `rubric` fails hard instead, because it is the judging condition and a broken one only makes verification looser
 - These are **LLM prompts only**. A bad override degrades classification or draft quality; it cannot break completion detection. That difference in blast radius is why this table stayed while the core's prompt overrides were removed
 
-## `[herdr]`
-
-| Key | Type | Default | Meaning |
-|---|---|---|---|
-| `socket_path` | string? | none | Explicit socket path; highest precedence |
-| `session` | string? | none | Named session, resolved to a path under your herdr config. Used when `socket_path` is unset |
-| `[layout]` | table | see below | Pane layout for dispatched work |
-| `[kind_map]` | table | `{}` | Maps an executable name to herdr's own vocabulary |
-| `[identity]` | table | `{ enabled = true }` | Whether dispatch reports the repository and task to herdr |
-| `request_timeout_secs` | int | 30 | Timeout for a single socket call |
-
-Socket resolution order: `socket_path`, then `session`, then `HERDR_SOCKET_PATH`, then `HERDR_SESSION`, then the default path.
-
-**herdr 0.7.5 or newer is required.** Against anything older, initialization is refused and `config validate` and `doctor` name the version. The check reads herdr's own version, and **there is no upper bound** — a newer herdr is never refused.
-
-### `[discord]`
+## `[discord]`
 
 ```toml
 [discord]
@@ -1258,6 +1243,21 @@ Every `[discord]` key (unknown keys are an error; setup steps are in [Discord se
 | `watch_backfill_max_age_hours` | int? | 24 | How far back that re-read reaches. `0` is rejected |
 
 The trigger is `trigger = { channel = "…", channel_name = "…", repo = "…" }` (plus an optional `from`). **This source has no other kind of trigger**, so a configuration where no workflow watches a channel fails at startup.
+
+## `[herdr]`
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `socket_path` | string? | none | Explicit socket path; highest precedence |
+| `session` | string? | none | Named session, resolved to a path under your herdr config. Used when `socket_path` is unset |
+| `[layout]` | table | see below | Pane layout for dispatched work |
+| `[kind_map]` | table | `{}` | Maps an executable name to herdr's own vocabulary |
+| `[identity]` | table | `{ enabled = true }` | Whether dispatch reports the repository and task to herdr |
+| `request_timeout_secs` | int | 30 | Timeout for a single socket call |
+
+Socket resolution order: `socket_path`, then `session`, then `HERDR_SOCKET_PATH`, then `HERDR_SESSION`, then the default path.
+
+**herdr 0.7.5 or newer is required.** Against anything older, initialization is refused and `config validate` and `doctor` name the version. The check reads herdr's own version, and **there is no upper bound** — a newer herdr is never refused.
 
 ## `[herdr.identity]`
 
@@ -1307,6 +1307,88 @@ my-claude = "claude"
 - The default puts the agent on top at 80% with a shell below
 - **The companion shell does not get the hook environment variables**, including the bearer token, so that a shell you type into does not hold one
 - **A failed layout does not fail the dispatch.** It warns and continues, falling back to no shell or herdr's own default arrangement. An invalid `ratio` rejected by herdr takes the same path
+
+## `[orca]`
+
+```toml
+[plugins.orca]
+enabled = true
+kind = "agent_ide"
+
+[orca]                      # every key is optional
+# orca_bin = "orca"
+# request_timeout_secs = 30
+
+[orca.layout]
+# shell = false
+# direction = "vertical"    # "horizontal" or "vertical" (orca's terminal split vocabulary)
+
+[orca.identity]
+# enabled = true
+```
+
+Every `[orca]` key (unknown keys are an error, nested tables included):
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `orca_bin` | string | `"orca"` | The `orca` CLI (a name on `PATH` or an absolute path) |
+| `request_timeout_secs` | int | `30` | The longest one `orca` call may run before it is stopped. A call that asks for its own wait (`terminal wait --timeout-ms`, `terminal send --wait-submit`) is stopped at the **larger** of that wait plus 10 seconds and this value — not the sum |
+| `[layout]` | table | see below | How the agent's tab is arranged |
+| `[identity]` | table | `{ enabled = true }` | Whether dispatch names the task in orca's sidebar |
+
+`[orca.layout]`:
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `shell` | bool | `false` | Whether to split a companion shell off the agent's terminal. **The opposite of herdr's default**: orca already shows the task's worktree in its sidebar, one click from a terminal. The split also moves orca's focus to the new pane |
+| `direction` | `"horizontal"` or `"vertical"` | none (orca's default) | The split direction. A misspelling is a startup error; the split itself is best-effort |
+
+`[orca.identity]`:
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `enabled` | bool | `true` | Names the worktree `{repo}: {title}` in orca's sidebar. A refusal never fails the dispatch |
+
+- **Register each repository with orca first** (`orca repo add --path <repository>`). Otherwise dispatch fails and says so.
+- **Removed keys are refused by name.** `agent`, `setup`, `repo_selector`, `plan_prompt_prefix` and `poll_interval_ms` fail at startup with a message naming what replaced them (`[tools]` / `default_tool` and so on).
+
+## `[macos]`
+
+Notification settings. **The menu bar app reads the same `[macos]`**: it passes `run`'s notifications through `filter` before showing them, and a click on a notification or a task row brings the `activate_bundle_id` app to the front for a herdr workflow (for a workflow whose `agent` is orca it brings Orca forward instead and ignores this key).
+
+**`[macos]` needs a `[plugins.macos]` entry** (without one, `config validate` fails with "unknown top-level table"). If only the app should notify, declare the plugin disabled:
+
+```toml
+[plugins.macos]
+enabled = false             # the app notifies; set true to also notify from a CLI run
+kind = "notifier"
+
+[macos]
+backend = "terminal_notifier"            # a click opens the task's pane (below)
+activate_bundle_id = "org.alacritty"     # depends on your terminal
+
+[macos.filter.events]                    # every workflow; everything is on by default
+done = false
+
+[macos.filter.workflows.slack-reply]     # one workflow; wins over the global toggles
+waiting_input = false
+```
+
+Every `[macos]` key (unknown keys are an error, nested tables included). **Only an enabled notifier plugin rejects unknown keys**: `config validate` does not start a disabled plugin, so with the `enabled = false` form above a typo such as `donee = false` passes, and the app silently ignores keys it does not know. When only the app reads `[macos]`, copy key names from this table. Click-to-focus is set up in [click-to-focus setup](click-to-focus-setup.md):
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `backend` | `"osascript"` or `"terminal_notifier"` | `"osascript"` | How notifications are shown. `osascript` always works, but a click does not open the pane. `terminal_notifier` runs `click_command` and brings `activate_bundle_id` to the front on a click (and falls back to `osascript` per notification when `terminal-notifier` is missing) |
+| `osascript_bin` | string | `"osascript"` | The `osascript` executable |
+| `terminal_notifier_bin` | string | `"terminal-notifier"` | The `terminal-notifier` executable |
+| `activate_bundle_id` | string? | none | The bundle id of the app a click brings to the front, e.g. `org.alacritty`. Unset, the notifier plugin brings nothing forward; the app brings Orca forward for orca workflows regardless of this key |
+| `click_command` | string | `"totsuka focus {task_id}"` | The shell command a click runs. `{task_id}` is inserted shell-quoted. An empty string turns it off |
+| `[filter.events]` | table | all on | Per-event on/off for every workflow |
+| `[filter.workflows.<name>]` | table | none | Per-event on/off for one workflow; wins over `[filter.events]` |
+
+Both filter tables take the same six `bool` keys, each falling back to the level above and finally to on: `waiting_input`, `done`, `failed`, `pending`, `escalated`, `verification_pending`.
+
+**The nesting is `[macos.filter.events]`, not `[macos.notifier.filter.events]`** — the contents of `[macos]` are the settings themselves.
 
 ## Example
 
