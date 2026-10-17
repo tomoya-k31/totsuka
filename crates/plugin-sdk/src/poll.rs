@@ -61,6 +61,14 @@ pub async fn poll_loop<S, F, Fut>(
                             reason.as_deref().unwrap_or("no reason given")
                         );
                     }
+                    SubmitOutcome::Busy { reason } => {
+                        tracing::info!(
+                            task = %task_id,
+                            workflow = %trigger.workflow,
+                            "task skipped, its series is still running: {}",
+                            reason.as_deref().unwrap_or("no reason given")
+                        );
+                    }
                     SubmitOutcome::GaveUp { error } => {
                         tracing::error!(
                             task = %task_id,

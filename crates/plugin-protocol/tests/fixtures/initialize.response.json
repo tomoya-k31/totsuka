@@ -11,6 +11,7 @@
       "outputs": [],
       "task_claim": false,
       "label_writeback": false,
+      "task_trigger": false,
       "config_schema": false
     },
     "claimed_repos": [

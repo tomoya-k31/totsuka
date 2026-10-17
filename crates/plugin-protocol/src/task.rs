@@ -117,6 +117,19 @@ pub struct Task {
     /// agent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch_hint: Option<String>,
+    /// 0.7.8 (#918): the **series** this task belongs to — tasks that are
+    /// repeated runs of one thing (a routine firing on a schedule), as
+    /// distinct from [`id`](Self::id), which is one run.
+    ///
+    /// While a task of the same source and series has not finished (waiting
+    /// on a human counts as unfinished), the Orchestrator answers
+    /// `task/submit` with
+    /// [`TaskSubmitStatus::Busy`](crate::methods::TaskSubmitStatus::Busy)
+    /// instead of starting a second run beside it.
+    ///
+    /// `None` is the normal case: no series, no such check.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub series: Option<String>,
 }
 
 #[cfg(test)]
@@ -140,6 +153,7 @@ mod tests {
             instructions: None,
             handle: None,
             branch_hint: None,
+            series: None,
         };
         // Parse to a JSON object and assert on keys (robust against values
         // that might contain field-name substrings).
@@ -175,6 +189,7 @@ mod tests {
             instructions: None,
             handle: None,
             branch_hint: None,
+            series: None,
         };
         let value = serde_json::to_value(&task).unwrap();
         assert_eq!(
@@ -209,6 +224,7 @@ mod tests {
             instructions: Some("返信案を日本語で作成してください。".into()),
             handle: None,
             branch_hint: None,
+            series: None,
         };
         let value = serde_json::to_value(&task).unwrap();
         assert_eq!(
@@ -242,6 +258,7 @@ mod tests {
             instructions: None,
             handle: None,
             branch_hint: Some("renovate/setup-uv-10.x".into()),
+            series: None,
         };
         let value = serde_json::to_value(&task).unwrap();
         assert_eq!(

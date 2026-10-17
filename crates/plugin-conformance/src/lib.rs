@@ -312,6 +312,7 @@ fn sample_params(method_name: &str) -> Value {
         method::TASK_UPDATE_STATUS => json!({"task_id": "42", "status": "done"}),
         method::TASK_UPDATE_LABELS => json!({"task_id": "42", "add": ["ai:needs-human"]}),
         method::TASK_CLAIM => json!({"task_id": "42"}),
+        method::TASK_TRIGGER => json!({"key": "nightly"}),
         method::RESULT_PUBLISH => json!({"task_id": "42", "content": "x", "format": "markdown"}),
         method::TASK_DISPATCH => json!({
             "task": {"id": "42", "source": "conformance", "title": "x"},
@@ -449,6 +450,7 @@ mod tests {
         parses::<rpc::TaskUpdateStatus>();
         parses::<rpc::TaskUpdateLabels>();
         parses::<rpc::TaskClaim>();
+        parses::<rpc::TaskTrigger>();
         parses::<rpc::ResultPublish>();
         parses::<rpc::TaskDispatch>();
         parses::<rpc::TaskCancel>();

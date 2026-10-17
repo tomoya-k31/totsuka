@@ -1,7 +1,7 @@
 > 🌐 [English](plugin-dev-guide.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:efe200f32dcf1016c6105f0f8949ff58fb4ef8f5a81c286ce9603683ba3c60a4 -->
+<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:4a95b01a85066e15fa4ce8cb93e20ca84e041a2e24bad4e72be371f88b64044d -->
 
 # プラグイン開発ガイド
 
@@ -96,6 +96,7 @@ Orchestrator は起動前に `protocol_version` の互換性を検査し、宣�
 | `task/submit` | **P→O request** | 見つけたタスクを、**属する workflow を名指して** push する。受け取った workflow 群に対して first-match を走らせたのは自分なので既に分かっており、Orchestrator はその名前が実在して自分のものかだけを確かめる。Orchestrator は永続化してから応答する |
 | `task/update_status` | O→P | タスクの状態遷移を伝える。ソース側へ反映する |
 | `task/update_labels` | O→P | ソース側のタスクのラベルを付け外しする（`{task_id, add, remove, projects}`）。**capability `label_writeback` を宣言したときだけ送られる**。付いていないラベルの削除は成功として扱うこと |
+| `task/trigger` | O→P | `{key}` に対応するタスクを今すぐ 1 つ作り、**submit せず応答として**（`TaskSubmitParams`）返す。totsuka が `task/submit` と同じように取り込む。**capability `task_trigger` を宣言したときだけ送られる**。知らない key は JSON-RPC エラーで返す |
 | `result/publish` | O→P | 成果物をソースへ書き戻す |
 
 `task/submit` の応答は次の 3 つのいずれかで、**すべて最終**である。これらを理由に同じタスクを再送してはならない。
@@ -103,6 +104,7 @@ Orchestrator は起動前に `protocol_version` の互換性を検査し、宣�
 - `accepted` — 永続化された
 - `duplicate` — 冪等キーが衝突した。破棄してよい
 - `rejected` — 恒久的に処理できない（理由付き）
+- `busy` — 同じ `series` の未終了タスクがあるので、今回は走らせない（`series` を付けたタスクにしか返らない）
 
 転送レベルのエラー（`NOT_ACCEPTING` / `SUBMIT_OVERLOADED` / `INTERNAL_ERROR`）は別で、submit は冪等なのでバックオフして再送してよい。
 
@@ -162,11 +164,11 @@ JSON-RPC の行処理（パースエラー、notification への無応答、`shu
 
 | kind | 実装する trait | stdio に載せる形 |
 |---|---|---|
-| `task_source` | `TaskSourceHandler`（initialize / config_validate / update_status / result_publish、任意で task_claim / update_labels / config_schema） | `serve(TaskSourceServer(handler), &stdio)`。server 自身が handler を兼ねるなら、`LineHandler` を `plugin_sdk::dispatch::handle_line(self, line)` で実装する |
+| `task_source` | `TaskSourceHandler`（initialize / config_validate / update_status / result_publish、任意で task_claim / update_labels / task_trigger / config_schema） | `serve(TaskSourceServer(handler), &stdio)`。server 自身が handler を兼ねるなら、`LineHandler` を `plugin_sdk::dispatch::handle_line(self, line)` で実装する |
 | `agent_ide` | `AgentIdeHandler`（initialize / config_validate / task_dispatch / session_attach / task_cancel / state_subscribe、任意で session_focus / session_release / session_list / diagnostics_snapshot / config_schema） | `serve(AgentIdeServer::new(handler, stdio.writer.clone()), &stdio)` |
 
 - 各メソッドは params の型を受け取り、result の型か `plugin_protocol::jsonrpc::Error` を返す。`initialize` 前の呼び出しには `plugin_sdk::not_initialized()` を返す。 `initialized()` を上書きしておくと、`initialize` 前に params の壊れた request が来たときも `INVALID_PARAMS` でなく同じ「initialize が先」の応答になる。
-- **能力で守られたメソッドは既定で `METHOD_NOT_FOUND` を返す**（`task_claim`、`update_labels`（`label_writeback`）、`session_focus` / `session_release` / `session_list`、`diagnostics_snapshot`、`config_schema`（`config_schema`））。上書きするなら対応する capability を宣言し、宣言するなら上書きすること。
+- **能力で守られたメソッドは既定で `METHOD_NOT_FOUND` を返す**（`task_claim`、`update_labels`（`label_writeback`）、`task_trigger`（`task_trigger`）、`session_focus` / `session_release` / `session_list`、`diagnostics_snapshot`、`config_schema`（`config_schema`））。上書きするなら対応する capability を宣言し、宣言するなら上書きすること。
 - **`state_subscribe` は状態変化の受信チャネルを返すだけでよい。** 応答を先に返してから `state/notification` を流す順序は `AgentIdeServer` が保証する。
 - 設定可能なプロンプトや指示文の `{placeholder}` 置換には `plugin_sdk::template::render` を使う。単一パスで置換するので、外部の内容に書かれた `{…}` を展開しない。agent_ide がエージェントへ渡すプロンプトは `plugin_sdk::compose_prompt` で組み立てられる。
 

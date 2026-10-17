@@ -39,6 +39,8 @@
         "name": "tomo-prj",
         "options": { "owner": "tomoya-k31", "owner_type": "user", "project_number": 7 }
       }
-    ]
+    ],
+    "config_dir": "/Users/me/.config/totsuka",
+    "host": "mbp"
   }
 }

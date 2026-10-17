@@ -50,6 +50,12 @@ pub enum SubmitOutcome {
         /// Cause + next action from the Orchestrator.
         reason: Option<String>,
     },
+    /// A task of the same [`series`](plugin_protocol::Task::series) is still
+    /// unfinished, so this one was skipped (0.7.8, #918). Final: drop it.
+    Busy {
+        /// Which task is running, from the Orchestrator.
+        reason: Option<String>,
+    },
     /// All retries exhausted (transport gone or persistent errors). The
     /// source system remains the durable origin.
     GaveUp {
@@ -138,6 +144,9 @@ impl SubmitClient {
                         TaskSubmitStatus::Accepted => SubmitOutcome::Accepted,
                         TaskSubmitStatus::Duplicate => SubmitOutcome::Duplicate,
                         TaskSubmitStatus::Rejected => SubmitOutcome::Rejected {
+                            reason: result.reason,
+                        },
+                        TaskSubmitStatus::Busy => SubmitOutcome::Busy {
                             reason: result.reason,
                         },
                     };
