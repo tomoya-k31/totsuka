@@ -1,0 +1,17 @@
+name = "routine"
+kind = "task_source"
+version = "0.1.0"
+# 0.7.8 (#918) is where `Task.series`, `task/trigger` and
+# `InitializeParams.config_dir` / `host` arrived. An older Orchestrator would
+# ignore `series` (runs overlap), never send `task/trigger`, and give this
+# plugin no directory to read — it would start and run nothing.
+protocol_version = ">=0.7.8, <0.8"
+
+# No `[capabilities] outputs`: the deliverable is the agent's to write
+# itself, so this plugin publishes nothing.
+
+[capabilities]
+# Answers `task/trigger` (`totsuka routine run <name>`).
+task_trigger = true
+# ADR-0113: answers `config/schema` before `initialize` (protocol 0.7.7).
+config_schema = true

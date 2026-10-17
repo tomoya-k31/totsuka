@@ -1,9 +1,9 @@
 ---
 type: Guide
 title: 設定リファレンス（config.toml）
-description: "config.toml の全キー・デフォルト値・意味の一覧。設定ファイルは 1 本で、プラグイン個別設定もトップレベルの [<name>] テーブルに入る。シークレット参照、設定スキーマのバージョニング方針、[[projects]] の domain 宣言とワークフローからの参照、プラグインが定義する追加プロパティ、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-github の [github]、task-source-notion の [notion]、task-source-slack の [slack]、task-source-discord の [discord]、agent-ide-herdr の [herdr]、agent-ide-orca の [orca]、notifier-macos の [macos] を含む。"
+description: "config.toml の全キー・デフォルト値・意味の一覧。設定ファイルは 1 本で、プラグイン個別設定もトップレベルの [<name>] テーブルに入る。シークレット参照、設定スキーマのバージョニング方針、[[projects]] の domain 宣言とワークフローからの参照、プラグインが定義する追加プロパティ、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-github の [github]、task-source-notion の [notion]、task-source-slack の [slack]、task-source-discord の [discord]、task-source-routine の [routine]、agent-ide-herdr の [herdr]、agent-ide-orca の [orca]、notifier-macos の [macos] を含む。"
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
-tags: [config, reference, toml, secrets, workflow, worktree, github, notion, slack, hooks, versioning]
+tags: [config, reference, toml, secrets, workflow, worktree, github, notion, slack, routine, hooks, versioning]
 generated: { by: claude-code/opus-5.5, at: 2026-10-18T21:30:00+09:00 }
 status: stable
 owner: tomoya-k31
@@ -250,6 +250,7 @@ github / notion のトリガーは次の規則で読む（slack / discord は起
 | notion | `status`（文字列）/ `assignee` / `filter` / `exclude` | `status`（配列可）/ `assignee`。**`filter` は書けない**（下記） |
 | slack | `mention` / `to_group` / `reaction` / `from_bot` / `channel` / `channel_name` / `repo` / `from` | なし |
 | discord | `channel` / `channel_name` / `repo` / `from` | なし |
+| routine | なし（`trigger = {}`。何を走らせるかは各 routine のファイルが持つ） | なし |
 
 ### `status`
 
@@ -1327,6 +1328,54 @@ operator_user_id = "111111111111111111"    # 必須。自分の Discord ユー�
 | `watch_backfill_max_age_hours` | int? | 24 | 同バックフィルが遡る時間の上限。`0` は拒否 |
 
 トリガは `trigger = { channel = "…", channel_name = "…", repo = "…" }`（+ 任意の `from`）で、[チャンネル監視トリガ](/glossary/channel-watch.md)の語彙は Slack と共通。**このソースにはトリガ種別がこれしか無い**ので、監視ワークフローが 1 本も無い設定は起動時エラーになる（何もしないまま起動するのは常に間違い）。
+
+# `[routine]`（task-source-routine、#918）
+
+routine（定期実行）は**ファイル**で定義し、`config.toml` には置かない（[ADR-0117](/decisions/adr-0117-routines.md)）。routine 1 つ = `<config dir>/routines/<host>/<name>.md` 1 ファイルで、`<host>` は `hosts/<host>.toml` と同じ名前（[ADR-0106](/decisions/adr-0106-per-host-config-file.md)）。`<config dir>` は `--config` があればその親、無ければ `$XDG_CONFIG_HOME/totsuka`。自分の host のディレクトリが無いマシンでは何も走らない。
+
+```markdown
+---
+repo: my-repo              # 必須。[[repositories]] の name と完全一致
+schedule: "0 9 * * 1-5"    # 必須。cron 5 フィールド（分 時 日 月 曜日）、ローカル時刻
+workflow: routine          # このソースを名指す workflow が 1 つなら省略可
+catchup_window: 6h         # 省略時は [routine].catchup_window
+enabled: false             # 省略時 true。false はスケジュールだけを止める（手動実行は可）
+---
+依存関係の更新を確認して、必要なら PR を出してください。
+```
+
+- frontmatter は YAML ではなく平らな `key: value` 行。値は `"…"` / `'…'` で囲んでよく、空白の後の `#` はコメント。**未知のキー・同じキーの重複・必須キーの欠落・空の本文はその routine のエラー**（ログに 1 回 warn し、他の routine は止めない）
+- `schedule` の各フィールドは `*`・数値・`a-b`・`*/n`・`a-b/n`・カンマ区切り。曜日は `0`–`7`（0 と 7 が日曜）。日と曜日の両方を制限すると**どちらかに合えば**走る。`MON` などの名前と `@daily` は使えない
+- 30 秒ごとにディレクトリを読み直すので、編集は再起動なしで効く。時差は起動時に 1 回取るので、**夏時間の切り替えは次の起動まで反映されない**
+- **逃した実行（PC のスリープ・停止、`run` の停止中）は `catchup_window` 以内の直近 1 回にまとめて**、戻ったときに 1 回だけ走る。それより古い回は捨てる。`0` は「時刻どおりの分だけ」
+- **前回の実行が終わっていなければ（入力待ちも含む）その回は飛ばす**（キューに積まない）。手動実行（`totsuka routine run <name>`）も同じで、実行中なら断られる。手動実行は定期の回を消費しない
+
+`[routine]` の全キー（`deny_unknown_fields`）:
+
+| キー | 型 | 既定 | 意味 |
+|---|---|---|---|
+| `catchup_window` | string | `24h` | 逃した実行を取り戻す範囲。`0` / `90m` / `24h` / `7d` の形。routine 自身の `catchup_window` が勝つ |
+| `source_name` | string | `routine` | このソースインスタンス名（`Task.source` に入る） |
+
+routine の workflow は `source = "routine"` の `[[projects]]` を名指す。**このソースは何も publish しない**ので `output = "none"`。無人で走るので **`design` / `implement` profile は向かない**（完了時に pane 上で人間の承認を待つ）、`answer` / `triage` は既定の出力が `source` で弾かれる。profile を書かず `mode` と `output` を明示する:
+
+```toml
+[plugins.routine]
+enabled = true
+kind = "task_source"
+
+[[projects]]
+name = "routines"
+source = "routine"
+
+[[workflows]]
+name = "routine"
+projects = ["routines"]
+trigger = {}               # キーは読まない。書くと起動時エラー
+agent = "herdr"
+mode = "implement"
+output = "none"
+```
 
 # `[herdr]`（agent-ide-herdr）
 

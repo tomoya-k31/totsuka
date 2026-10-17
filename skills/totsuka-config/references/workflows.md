@@ -34,6 +34,7 @@ What each source supports:
 | notion | no | with `"output": "none"` | yes | yes |
 | slack | yes | yes | no | yes |
 | discord | yes | yes | yes | yes |
+| routine | no | no | no | no: no profile, `"mode"` and `"output": "none"` (see routine.md) |
 
 - **GitHub and Notion cannot post a reply.** `answer` and `triage` default to output `source`, which `validate --offline` rejects there with "does not declare the `source` output capability". `answer` has no other product, so it is out; `triage` works with `"output": "none"` (the filed item's URL is still checked).
 - **Slack has no design instructions.** A Slack `design` workflow posts nothing, and validation still passes. Steer the user to `triage`.
@@ -53,6 +54,7 @@ What each source supports:
 | github | the card re-enters a `status` trigger column (including after it finished); a different workflow's column continues the same conversation |
 | notion | never: each page runs once, across all workflows |
 | slack, discord | never: each message is one task; a new mention or reaction makes a new one |
+| routine | at each scheduled time, as a new task |
 
 ## Running unattended
 

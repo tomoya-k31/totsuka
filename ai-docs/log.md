@@ -5,6 +5,9 @@
 * **Update**: [POST /agent-events](/apis/agent-events.md) — 制御エンドポイント `POST /routine/run`（`{"key"}` → `task/trigger` → `task/submit` と同じ取り込み → `{"ok", "task_id"?, "reason"?}`）
 * **Update**: [orchestrator-core](/components/orchestrator-core.md) — `Task.series` を持つ新しい会話は同じ series の未終了タスクがあれば `busy`、`ControlPort::trigger` と `Engine::trigger_task`、プラグインの `initialize` に `config_dir` / `host` を渡す（[ADR-0117](/decisions/adr-0117-routines.md)）
 * **Update**: [設定リファレンス](/development/config-reference.md) / [ADR-0117](/decisions/adr-0117-routines.md) — 無人用の profile `unattended`（implement・output none・`defaultMode = auto`・deny は `AskUserQuestion` だけ・完了の人間承認なし）。明示記法には permissions ブロックが入らず claude が許可プロンプトで止まりうることを明記
+* **Creation**: [task-source-routine プラグイン](/components/task-source-routine.md) — `routines/<host>/<name>.md` を cron で submit する task_source（逃した分は直近 1 回、状態を持たない、`task/trigger` で手動実行）
+* **Update**: [設定リファレンス](/development/config-reference.md) — `[routine]`（`catchup_window` / `source_name`）と routine ファイルの書式、無人実行に合う workflow の形
+* **Update**: [ADR-0117](/decisions/adr-0117-routines.md) — 時差は起動時に 1 回だけ取る（夏時間は次の起動から）、workflow は profile を書かず `mode` と `output = "none"`
 * **Decision**: [ADR-0117 routines — host ごとの定期実行](/decisions/adr-0117-routines.md) — `routines/<host>/<name>.md` を `task-source-routine` プラグインが時刻ごとに submit する。逃した分は直近 1 回、冪等性は既存の重複検査、実行中の重複は `Task.series` と `busy`、手動実行は `task/trigger`
 * **Update**: [plugin-protocol](/components/plugin-protocol.md) — 0.7.8 で `Task.series`・`TaskSubmitStatus::Busy`・`task/trigger`・`Capabilities.task_trigger`・`InitializeParams.config_dir` / `host`
 * **Update**: [plugin-sdk](/components/plugin-sdk.md) / [プラグイン開発ガイド](/development/plugin-dev-guide.md) — `TaskSourceHandler::task_trigger`（既定 `METHOD_NOT_FOUND`、`task_trigger` でゲート）と `SubmitOutcome::Busy`
