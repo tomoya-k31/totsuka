@@ -1,6 +1,6 @@
 # Routines (`routine`)
 
-A routine runs a prompt in one repository on a cron schedule, like a Claude routine. Work in this order, with `totsuka config validate --offline` after each config write: `[routine]`, the project, the workflow, then the routine files. Source-independent workflow rules are in [workflows.md](workflows.md).
+A routine runs a prompt in one repository on a cron schedule, like a Claude routine. Work in this order, with `totsuka config validate --offline` after each write: `[routine]`, the project, the workflow. The routine files come after, from the totsuka-routine skill. Source-independent workflow rules are in [workflows.md](workflows.md).
 
 ## `[routine]`
 
@@ -25,22 +25,4 @@ Routines run unattended, so do not use a profile: `design` / `implement` wait fo
 
 ## Routine files
 
-Routines are files, not config: write each one directly (no `config set`). The directory is `<config dir>/routines/<host>/`: `<config dir>` is the directory holding `config.toml` (when `config_path` is `hosts/<host>.toml`, it is the parent of `hosts/`), and `<host>` is the machine's host key, the same name `hosts/` uses: `hostname | cut -d. -f1 | tr '[:upper:]' '[:lower:]'`. A machine without its own directory runs nothing.
-
-One file per routine, `<name>.md`; the name identifies it:
-
-```markdown
----
-repo: web-app
-schedule: "0 9 * * 1-5"
----
-Check the dependencies for updates and open a PR if any are needed.
-```
-
-Questions: what should run, in which repository (`repo` must be exactly a `[[repositories]]` name), and when. Turn "weekdays at 9" into the five cron fields `minute hour day month weekday`, local time, and read the schedule back in words before writing. Optional keys: `workflow`, `catchup_window` (overrides `[routine]`), `enabled: false` (stops the schedule).
-
-- The frontmatter is `key: value` lines, not YAML. An unknown key, a repeated key, a missing `repo` / `schedule`, or an empty body makes the routine fail (logged once; the others keep running).
-- No `MON` / `JAN` names, no `@daily`.
-- If a run is still going at the next time, that time is skipped.
-
-After writing a file, run `totsuka routine list`: it reads the files the way the plugin does and shows each routine's next run, or why it cannot run (a `!` line). To try one right away while totsuka is running: `totsuka routine run <name>`.
+The routines themselves are files, not config, and have their own skill: **totsuka-routine** writes them with the user, checks them with `totsuka routine list`, and can try one with `totsuka routine run`. If it is not installed, offer `npx skills add tomoya-k31/totsuka --skill totsuka-routine` once the workflow validates, and hand over to it. The running app does not reload `config.toml`, so the user needs Stop then Start before the first routine can run.

@@ -5,6 +5,7 @@
 * **Update**: [orchestrator-cli](/components/orchestrator-cli.md) — `totsuka routine list [--json]`（routine-schedule でファイルを読み、次回・前回・走れない理由を出す）と `totsuka routine run <name>`（`POST /routine/run`、断られたら非ゼロ終了）
 * **Update**: [運用ガイド](/operations/operations-guide.md) — doctor の `routines` チェックと routine コマンド
 * **Update**: [routine-schedule](/components/routine-schedule.md) — `Schedule::next_after`（一覧の次回）
+* **Update**: [ADR-0117](/decisions/adr-0117-routines.md) — routine の作成・変更・一覧・試し実行を行う `npx skills` 配布の専用スキル `totsuka-routine` を足した
 * **Update**: [POST /agent-events](/apis/agent-events.md) — 制御エンドポイント `POST /routine/run`（`{"key"}` → `task/trigger` → `task/submit` と同じ取り込み → `{"ok", "task_id"?, "reason"?}`）
 * **Update**: [orchestrator-core](/components/orchestrator-core.md) — `Task.series` を持つ新しい会話は同じ series の未終了タスクがあれば `busy`、`ControlPort::trigger` と `Engine::trigger_task`、プラグインの `initialize` に `config_dir` / `host` を渡す（[ADR-0117](/decisions/adr-0117-routines.md)）
 * **Creation**: [task-source-routine プラグイン](/components/task-source-routine.md) — `routines/<host>/<name>.md` を cron で submit する task_source（逃した分は直近 1 回、状態を持たない、`task/trigger` で手動実行）

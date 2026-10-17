@@ -45,4 +45,5 @@ Claude のルーティンのように「決まった時刻に、決まったリ�
 - `duplicate` による冪等性は tasks の行が残っていることが前提になる。`catchup_window` より新しい行を消す掃除は入れないこと。
 - cron は依存を足さずに自前で解析する（照合は分単位で、範囲を 1 分ずつ遡って走査する）。
 - cron はローカル時刻で照合し、時差はプラグインの起動時に tokio のランタイムを作る前に 1 回だけ取る（`time` はマルチスレッドでの取得を拒む。[ADR-0097](/decisions/adr-0097-log-timestamps-local-display.md) と同じ方式）。**夏時間の切り替えは次の起動まで反映されない**。
+- routine の作成・変更・一覧・試し実行は、`npx skills add tomoya-k31/totsuka --skill totsuka-routine` で入る専用スキル `skills/totsuka-routine/` が対話で行う（配り方は [ADR-0116](/decisions/adr-0116-totsuka-config-skill.md) と同じ）。routine は初期設定と違って繰り返し足すものなので、`totsuka-config` とは別の入口にした。`npx skills` はスキルのディレクトリしかコピーしないので、初回だけ要るプラグイン・project・workflow の設定も自前で持つ（`totsuka-config` の `references/routine.md` はその 3 点だけを持ち、ファイルの作成はこのスキルへ案内する）。
 - routine は無人で走るので、`design` / `implement` profile（完了時に pane 上で人間の承認を待つ）は向かず、`answer` / `triage` は既定の出力が `source` で使えない。workflow は profile を書かず `mode` と `output = "none"` を明示する。
