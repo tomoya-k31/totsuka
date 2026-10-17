@@ -96,7 +96,7 @@ How often a polling source fetches is its own business: put `poll_interval_secs`
 | `task/trigger` | O→P | Build one task for `{key}` right now and **return it as the response** (a `TaskSubmitParams`) instead of submitting it. totsuka ingests it exactly like a `task/submit`. **Sent only if you declare the `task_trigger` capability.** Answer an unknown key with a JSON-RPC error |
 | `result/publish` | O→P | Hands you the result to write back to the source |
 
-`task/submit` answers with one of three **final** outcomes, and you must not resend the same task because of any of them:
+`task/submit` answers with one of four **final** outcomes, and you must not resend the same task because of any of them:
 
 - `accepted` — persisted
 - `duplicate` — the idempotency key collided; discard it

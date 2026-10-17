@@ -99,7 +99,7 @@ Orchestrator は起動前に `protocol_version` の互換性を検査し、宣�
 | `task/trigger` | O→P | `{key}` に対応するタスクを今すぐ 1 つ作り、**submit せず応答として**（`TaskSubmitParams`）返す。totsuka が `task/submit` と同じように取り込む。**capability `task_trigger` を宣言したときだけ送られる**。知らない key は JSON-RPC エラーで返す |
 | `result/publish` | O→P | 成果物をソースへ書き戻す |
 
-`task/submit` の応答は次の 3 つのいずれかで、**すべて最終**である。これらを理由に同じタスクを再送してはならない。
+`task/submit` の応答は次の 4 つのいずれかで、**すべて最終**である。これらを理由に同じタスクを再送してはならない。
 
 - `accepted` — 永続化された
 - `duplicate` — 冪等キーが衝突した。破棄してよい
