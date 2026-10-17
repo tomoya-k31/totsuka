@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:4b203c9dba26e75e21cc3e3af40520b20224dc80fcd0e390030af8a8e86a42a2 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:8b30410aae8c112e198be9e98ef29d7fe6dd79df1753218e35a26e714d045f9e -->
 
 # 設定リファレンス
 
@@ -1331,7 +1331,7 @@ kind = "agent_ide"
 | キー | 型 | 既定 | 意味 |
 |---|---|---|---|
 | `orca_bin` | string | `"orca"` | `orca` CLI（`PATH` 上の名前か絶対パス） |
-| `request_timeout_secs` | int | `30` | `orca` 1 回の呼び出しの上限秒。超えたら止める。何かを待つ呼び出しには、その待ち時間が上乗せされる |
+| `request_timeout_secs` | int | `30` | `orca` 1 回の呼び出しの上限秒。超えたら止める。`terminal wait --timeout-ms` / `terminal send --wait-submit` のように自分で待ち時間を指定する呼び出しだけは、「その待ち時間 + 10 秒」とこの値の**大きいほう**で止める（足し算ではない） |
 | `[layout]` | テーブル | 下記 | エージェントのタブの配置 |
 | `[identity]` | テーブル | `{ enabled = true }` | dispatch がタスク名を orca のサイドバーへ出すか |
 
@@ -1373,14 +1373,14 @@ done = false
 waiting_input = false
 ```
 
-`[macos]` の全キー（未知のキーはエラー。入れ子のテーブルも同じ）。クリックで pane を開く設定は [click-to-focus のセットアップ](click-to-focus-setup.ja.md):
+`[macos]` の全キー（未知のキーはエラー。入れ子のテーブルも同じ）。**ただし未知のキーを拒否するのは有効な notifier プラグインだけです。** `config validate` は無効なプラグインを起動しないので、上の `enabled = false` の形では `donee = false` のような綴り違いも通り、アプリは知らないキーを黙って無視します。アプリだけで使うなら、キー名はこの表から写してください。クリックで pane を開く設定は [click-to-focus のセットアップ](click-to-focus-setup.ja.md):
 
 | キー | 型 | 既定 | 意味 |
 |---|---|---|---|
 | `backend` | `"osascript"` か `"terminal_notifier"` | `"osascript"` | 通知の出し方。`osascript` はいつでも使えますが、クリックしても pane は開きません。`terminal_notifier` はクリックで `click_command` を実行し、`activate_bundle_id` を前面に出します（`terminal-notifier` が無ければ通知ごとに `osascript` へ落ちます） |
 | `osascript_bin` | string | `"osascript"` | `osascript` の実行ファイル |
 | `terminal_notifier_bin` | string | `"terminal-notifier"` | `terminal-notifier` の実行ファイル |
-| `activate_bundle_id` | string? | なし | クリックで前面に出すアプリの bundle id（例 `org.alacritty`）。未設定ならどのアプリも前面に出しません |
+| `activate_bundle_id` | string? | なし | クリックで前面に出すアプリの bundle id（例 `org.alacritty`）。未設定なら notifier プラグインは何も前面に出しません。アプリは orca のワークフローではこのキーに関係なく Orca を前面に出します |
 | `click_command` | string | `"totsuka focus {task_id}"` | クリックで実行するシェルコマンド。`{task_id}` はシェル引用して埋め込まれます。空文字列で無効になります |
 | `[filter.events]` | テーブル | 全部 on | 全ワークフロー共通の、イベントごとの on/off |
 | `[filter.workflows.<name>]` | テーブル | なし | ワークフロー別の on/off。`[filter.events]` より優先されます |

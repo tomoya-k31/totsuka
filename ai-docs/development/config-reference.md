@@ -1439,7 +1439,7 @@ kind = "agent_ide"
 | キー | 型 | 既定 | 意味 |
 |---|---|---|---|
 | `orca_bin` | string | `"orca"` | `orca` CLI の実行ファイル（PATH 上の名前か絶対パス） |
-| `request_timeout_secs` | int | `30` | `orca` 1 回の呼び出しの上限秒。超えたらプロセスを止める。`terminal wait` などの待ちには、その待ち時間がこの上に足される |
+| `request_timeout_secs` | int | `30` | `orca` 1 回の呼び出しの上限秒。超えたらプロセスを止める。`terminal wait --timeout-ms` / `terminal send --wait-submit` のように自分で待ち時間を指定する呼び出しだけは、「その待ち時間 + 10 秒」とこの値の**大きいほう**で止める（足し算ではない） |
 | `[layout]` | テーブル | 下記 | エージェントのタブの配置 |
 | `[identity]` | テーブル | `{ enabled = true }` | dispatch がタスク名を orca のサイドバーへ出すか |
 
@@ -1481,14 +1481,14 @@ done = false
 waiting_input = false
 ```
 
-全キー（`deny_unknown_fields`。ネストした `[macos.filter.*]` にも効く）。詳細は [notifier-macos](/components/notifier-macos.md)、クリックで pane を開く設定は [click-to-focus の導入手順](/operations/click-to-focus-setup.md):
+全キー（`deny_unknown_fields`。ネストした `[macos.filter.*]` にも効く）。**ただし未知キーを拒否するのは有効な notifier プラグインだけ**である —— `config validate` は無効なプラグインを起動しないので、上の `enabled = false` の形では `donee = false` のような綴り違いも通り、アプリは知らないキーを黙って無視する（実測）。アプリだけで使うなら、キー名をこの表から写すこと。詳細は [notifier-macos](/components/notifier-macos.md)、クリックで pane を開く設定は [click-to-focus の導入手順](/operations/click-to-focus-setup.md):
 
 | キー | 型 | 既定 | 意味 |
 |---|---|---|---|
 | `backend` | `"osascript"` \| `"terminal_notifier"` | `"osascript"` | 通知の出し方。`osascript` はいつでも使えるが、クリックしても pane は開かない。`terminal_notifier` はクリックで `click_command` を実行し `activate_bundle_id` を前面に出す（`terminal-notifier` が無ければ送信ごとに `osascript` へ落ちる） |
 | `osascript_bin` | string | `"osascript"` | `osascript` の実行ファイル |
 | `terminal_notifier_bin` | string | `"terminal-notifier"` | `terminal-notifier` の実行ファイル |
-| `activate_bundle_id` | string? | なし | クリックで前面に出す GUI アプリの bundle id（例 `org.alacritty`）。未設定なら前面化はしない |
+| `activate_bundle_id` | string? | なし | クリックで前面に出す GUI アプリの bundle id（例 `org.alacritty`）。未設定なら notifier プラグインは前面化しない。アプリは orca のワークフローではこのキーに関係なく Orca を前面に出す |
 | `click_command` | string | `"totsuka focus {task_id}"` | クリックで実行するシェルコマンド。`{task_id}` はシェル引用して埋め込まれる。空文字列でクリック時の実行を無効にする |
 | `[filter.events]` | テーブル | 全部 on | 全ワークフロー共通の、イベントごとの on/off |
 | `[filter.workflows.<name>]` | テーブル | なし | ワークフロー別の on/off。`[filter.events]` より優先される |

@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:4b203c9dba26e75e21cc3e3af40520b20224dc80fcd0e390030af8a8e86a42a2 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:8b30410aae8c112e198be9e98ef29d7fe6dd79df1753218e35a26e714d045f9e -->
 
 # Configuration reference
 
@@ -1332,7 +1332,7 @@ Every `[orca]` key (unknown keys are an error, nested tables included):
 | Key | Type | Default | Meaning |
 |---|---|---|---|
 | `orca_bin` | string | `"orca"` | The `orca` CLI (a name on `PATH` or an absolute path) |
-| `request_timeout_secs` | int | `30` | The longest one `orca` call may run before it is stopped. Calls that wait for something get that wait on top |
+| `request_timeout_secs` | int | `30` | The longest one `orca` call may run before it is stopped. A call that asks for its own wait (`terminal wait --timeout-ms`, `terminal send --wait-submit`) is stopped at the **larger** of that wait plus 10 seconds and this value — not the sum |
 | `[layout]` | table | see below | How the agent's tab is arranged |
 | `[identity]` | table | `{ enabled = true }` | Whether dispatch names the task in orca's sidebar |
 
@@ -1374,14 +1374,14 @@ done = false
 waiting_input = false
 ```
 
-Every `[macos]` key (unknown keys are an error, nested tables included). Click-to-focus is set up in [click-to-focus setup](click-to-focus-setup.md):
+Every `[macos]` key (unknown keys are an error, nested tables included). **Only an enabled notifier plugin rejects unknown keys**: `config validate` does not start a disabled plugin, so with the `enabled = false` form above a typo such as `donee = false` passes, and the app silently ignores keys it does not know. When only the app reads `[macos]`, copy key names from this table. Click-to-focus is set up in [click-to-focus setup](click-to-focus-setup.md):
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
 | `backend` | `"osascript"` or `"terminal_notifier"` | `"osascript"` | How notifications are shown. `osascript` always works, but a click does not open the pane. `terminal_notifier` runs `click_command` and brings `activate_bundle_id` to the front on a click (and falls back to `osascript` per notification when `terminal-notifier` is missing) |
 | `osascript_bin` | string | `"osascript"` | The `osascript` executable |
 | `terminal_notifier_bin` | string | `"terminal-notifier"` | The `terminal-notifier` executable |
-| `activate_bundle_id` | string? | none | The bundle id of the app a click brings to the front, e.g. `org.alacritty`. Unset means no app is brought forward |
+| `activate_bundle_id` | string? | none | The bundle id of the app a click brings to the front, e.g. `org.alacritty`. Unset, the notifier plugin brings nothing forward; the app brings Orca forward for orca workflows regardless of this key |
 | `click_command` | string | `"totsuka focus {task_id}"` | The shell command a click runs. `{task_id}` is inserted shell-quoted. An empty string turns it off |
 | `[filter.events]` | table | all on | Per-event on/off for every workflow |
 | `[filter.workflows.<name>]` | table | none | Per-event on/off for one workflow; wins over `[filter.events]` |
