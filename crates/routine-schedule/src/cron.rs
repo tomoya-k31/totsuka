@@ -124,6 +124,16 @@ impl Schedule {
             .map(|back| floor - Duration::minutes(back))
             .find(|t| self.matches(*t))
     }
+
+    /// The first slot after `now`, within a year — what `totsuka routine
+    /// list` shows as the next run. `None` for a schedule that never matches
+    /// (`0 0 31 2 *`).
+    pub fn next_after(&self, now: OffsetDateTime) -> Option<OffsetDateTime> {
+        let floor = now.replace_second(0).ok()?.replace_nanosecond(0).ok()?;
+        (1..=366 * 24 * 60)
+            .map(|ahead| floor + Duration::minutes(ahead))
+            .find(|t| self.matches(*t))
+    }
 }
 
 #[cfg(test)]
@@ -197,5 +207,17 @@ mod tests {
             Some(datetime!(2026-10-19 9:00 +9))
         );
         assert_eq!(daily_9.latest_within(now, Duration::ZERO), None);
+    }
+
+    #[test]
+    fn next_after_skips_to_the_following_match() {
+        assert_eq!(
+            s("30 8 * * 1").next_after(datetime!(2026-10-19 8:30 +9)),
+            Some(datetime!(2026-10-26 8:30 +9))
+        );
+        assert_eq!(
+            s("0 0 31 2 *").next_after(datetime!(2026-10-19 8:30 +9)),
+            None
+        );
     }
 }

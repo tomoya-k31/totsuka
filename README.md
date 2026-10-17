@@ -167,6 +167,14 @@ npx skills add tomoya-k31/totsuka --skill totsuka-config
 
 Then ask your agent, e.g. "set up totsuka for my GitHub board".
 
+For scheduled prompts (routines: "every weekday at 9, check the dependencies
+and open a PR"), the `totsuka-routine` skill writes and checks the routine
+files with you:
+
+```sh
+npx skills add tomoya-k31/totsuka --skill totsuka-routine
+```
+
 ## Documentation
 
 - **What totsuka is**: [docs/orchestrator-spec.md](./docs/orchestrator-spec.md)

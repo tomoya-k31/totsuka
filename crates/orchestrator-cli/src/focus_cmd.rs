@@ -43,7 +43,8 @@ pub fn run(cx: &Cx, task_id: i64) -> Result<(), CliError> {
         Ok(token) => token,
         Err(e) => return skipped(format!("cannot read the hook token: {e}")),
     };
-    match post_focus(&socket, token.as_ref().map(|t| t.expose()), task_id) {
+    let body = format!(r#"{{"task_id":{task_id}}}"#);
+    match post_control(&socket, token.as_ref().map(|t| t.expose()), "/focus", &body) {
         Ok((200, body)) => report_outcome(task_id, &body),
         Ok((status, _)) => skipped(format!(
             "control endpoint at {} answered {status}",
@@ -77,7 +78,7 @@ fn skipped(reason: String) -> Result<(), CliError> {
 
 /// Whether `path` is an existing Unix domain socket (a live receiver's).
 #[cfg(unix)]
-fn is_socket(path: &Path) -> bool {
+pub(crate) fn is_socket(path: &Path) -> bool {
     use std::os::unix::fs::FileTypeExt;
     std::fs::symlink_metadata(path)
         .map(|m| m.file_type().is_socket())
@@ -85,16 +86,18 @@ fn is_socket(path: &Path) -> bool {
 }
 
 #[cfg(not(unix))]
-fn is_socket(_path: &Path) -> bool {
+pub(crate) fn is_socket(_path: &Path) -> bool {
     false
 }
 
-/// POST `/focus` over the UDS and return `(status, body)`.
+/// POST a JSON `body` to the control endpoint `path` over the UDS and return
+/// `(status, body)` — `/focus` here, `/routine/run` for `totsuka routine run`.
 #[cfg(unix)]
-fn post_focus(
+pub(crate) fn post_control(
     socket_path: &Path,
     token: Option<&str>,
-    task_id: i64,
+    path: &str,
+    body: &str,
 ) -> std::io::Result<(u16, String)> {
     use std::io::{Read, Write};
     use std::time::Duration;
@@ -105,12 +108,11 @@ fn post_focus(
     stream.set_read_timeout(Some(Duration::from_secs(10)))?;
     stream.set_write_timeout(Some(Duration::from_secs(3)))?;
 
-    let body = format!(r#"{{"task_id":{task_id}}}"#);
     let auth = token
         .map(|t| format!("Authorization: Bearer {t}\r\n"))
         .unwrap_or_default();
     let request = format!(
-        "POST /focus HTTP/1.1\r\n\
+        "POST {path} HTTP/1.1\r\n\
          Host: localhost\r\n\
          {auth}\
          Content-Type: application/json\r\n\
@@ -133,10 +135,11 @@ fn post_focus(
 }
 
 #[cfg(not(unix))]
-fn post_focus(
+pub(crate) fn post_control(
     _socket_path: &Path,
     _token: Option<&str>,
-    _task_id: i64,
+    _path: &str,
+    _body: &str,
 ) -> std::io::Result<(u16, String)> {
     Err(std::io::Error::new(
         std::io::ErrorKind::Unsupported,

@@ -1,7 +1,7 @@
 > 🌐 [English](operations-guide.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/operations-guide.md sha256:d15a842a5080d650ecc9352307502d31491dedf5deb90495d1801ba248350542 -->
+<!-- generated-from: ai-docs/operations/operations-guide.md sha256:b0932bd455f95514478b0e3c18ef96a8a8c4623252399ddd4d1a495636862ff1 -->
 
 # 運用ガイド
 
@@ -22,6 +22,7 @@
 | `llm-online` | プロバイダが API キーを受理した（`--online` 時のみ） | 401 / 403 ならプロバイダで鍵を再発行し `[llm].api_key_ref` を更新する。到達不能や 5xx は警告止まり |
 | `worktrees` | 孤児 worktree が無い | 対話的に掃除を提案する |
 | `panes` | 孤児 pane が無い | 対話的に解放を提案する |
+| `routines` | routine プラグインが有効なときだけ出る。このマシンの routine の数と、読む場所（`<config dir>/routines/<host>`）を報告する | **warning**: そのディレクトリが無い（同じ `routines/` にある他の host のディレクトリ名を並べる。hostname が変わったのが疑わしい）、または走れない routine がある（ファイルごとの理由。`totsuka routine list` でも同じものが見える） |
 | `projects` | 起票先を claim しているリポジトリの数を報告する | **検出ではなく報告** — 重複はもう書けない。各リポジトリは `project` で 1 つの `[[projects]]` を、その要素は `source` で 1 つのプラグインを指す。probe できなかったソースがあると skip（`cmd:` トークンのプラグインは doctor から起動されない）、どのソースも何も claim していない構成では出ない |
 
 `worktree-location` の失敗は放置すると厄介で、**worktree を作るのはタスクを割り当てる瞬間**なので、`run` は正常に起動したまま全タスクが失敗する。
@@ -178,6 +179,8 @@ Host *
 | `totsuka task show <id>` | 状態、セッション履歴、worktree、イベントの全履歴 |
 | `totsuka task cancel <id>` | タスクを中止する |
 | `totsuka task retry <id>` | 失敗・中止したタスクを、worktree とセッションを再利用して再開する |
+| `totsuka routine list [--json]` | このマシンの routine と、それぞれの次回・前回の実行、または走れない理由。`run` が止まっていても見える |
+| `totsuka routine run <name>` | routine を今すぐ 1 回実行する（`run` が動いている必要がある）。前回の実行が終わっていなければ断られる。定期の回は消費しない |
 | `totsuka logs [-f] [--task <id>] [--utc]` | ログの整形表示。時刻はローカル時刻で出る（`--utc` で保存どおり UTC）。機密は無条件にマスクされる |
 
 `retry` が受け付けるのは失敗・中止したタスクだけで、完了したタスクは再実行できない。

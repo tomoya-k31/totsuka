@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](operations-guide.ja.md)
 
-<!-- generated-from: ai-docs/operations/operations-guide.md sha256:d15a842a5080d650ecc9352307502d31491dedf5deb90495d1801ba248350542 -->
+<!-- generated-from: ai-docs/operations/operations-guide.md sha256:b0932bd455f95514478b0e3c18ef96a8a8c4623252399ddd4d1a495636862ff1 -->
 
 # Operations guide
 
@@ -21,6 +21,7 @@ Day-to-day operation: reading `doctor`, cleaning up worktrees and panes, stoppin
 | `llm-online` | The provider accepted the API key (only with `--online`) | On 401 or 403, reissue the key with your provider and update `[llm].api_key_ref`. Unreachable hosts and 5xx responses stay warnings |
 | `worktrees` | No orphaned worktrees | Offers to clean them up interactively |
 | `panes` | No orphaned panes | Offers to release them interactively |
+| `routines` | Shown only when the routine plugin is enabled. Reports how many routines this machine has and where they are read from (`<config dir>/routines/<host>`) | **Warning** when that directory does not exist (it lists the other hosts' directories under the same `routines/`, since a changed hostname is the likely cause), or when a routine cannot run (the reason for each file; `totsuka routine list` shows the same) |
 | `projects` | Reports how many repositories have a project to file into | **A report, not a detection** — a conflict can no longer be written: each repository names one `[[projects]]` entry via `project`, and that entry names one plugin via `source`. Skipped when some source could not be probed (a `cmd:` token keeps doctor from launching it); absent when nothing claims anything |
 
 A failing `worktree-location` is the nastiest of these: worktrees are created **at the moment a task is dispatched**, so `run` starts up perfectly normally and then every task fails.
@@ -177,6 +178,8 @@ Host *
 | `totsuka task show <id>` | State, session history, worktree, and the full event history |
 | `totsuka task cancel <id>` | Cancel a task |
 | `totsuka task retry <id>` | Restart a failed or cancelled task, reusing its worktree and session |
+| `totsuka routine list [--json]` | This machine's routines, with each one's next and last run, or why it cannot run. Works while `run` is stopped |
+| `totsuka routine run <name>` | Run a routine now, once (`run` must be running). Refused while its previous run is unfinished. It does not use up a scheduled run |
 | `totsuka logs [-f] [--task <id>] [--utc]` | Formatted logs, with timestamps in local time (`--utc` shows them in UTC, as stored). Secrets are masked unconditionally |
 
 `retry` only accepts failed or cancelled tasks — a completed task cannot be re-run.
