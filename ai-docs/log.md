@@ -7,6 +7,7 @@
 * **Update**: [Discord セットアップ Quickstart](/operations/discord-quickstart.md) の `[plugins.discord]` の例を直した（#904）。未知のキー `command` を含み `kind` を欠いていたため、そのまま写すと config の読み込みで失敗していた（隔離環境で確認）。`kind = "task_source"` にした。
 * **Update**: [設定リファレンス](/development/config-reference.md) に `[orca]`（agent-ide-orca）と `[macos]`（notifier-macos）の章を足し、`[herdr]` の中に紛れていた `[discord]` を独立した章に出した（#905）。`[macos]` は `[plugins.macos]` の宣言が要り、メニューバーアプリだけで通知するなら `enabled = false` で宣言すればよいこと（隔離環境で確認）、アプリも同じ `[macos]` のフィルタと `activate_bundle_id` を読むことを書いた。
 * **Update**: `totsuka setup` の雛形のレシピ「Design → implement handoff」と [設定リファレンス](/development/config-reference.md) の例に、GitHub 限定であることを書いた（#907）。Notion のページは全ワークフローを通して 1 回しか走らない（[ADR-0064](/decisions/adr-0064-notion-at-most-once.md)）ので、このレシピを Notion に当てはめると design を通ったページを implement が拾わない。検証は通り起動時のエラーも出ないため、黙って動かない設定になっていた。
+* **Update**: herdr **0.9.4** と **0.9.5** の schema スライスを取り込み、`wire::NEWEST_CHECKED` を 0.9.3 → 0.9.5 に上げた（#901 / #902）。[ADR-0055](/decisions/adr-0055-herdr-schema-typed-wire.md) の protocol 実測表に 2 行を足した — protocol は 22 のまま据え置きで、切り出した 22 メソッドのスライスは 0.9.3 → 0.9.4 → 0.9.5 のどちらも `sliced_from` を除いて同一（変化 0）。`herdr-schema-check.sh` は 0 error（下限 0.7.5 / 上位 7 版 / 22 メソッド）。
 
 ## 2026-10-11
 
