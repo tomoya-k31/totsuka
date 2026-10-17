@@ -44,6 +44,46 @@ pub struct Routine {
     pub prompt: String,
 }
 
+impl Routine {
+    /// Whether this routine can run against the configured `repos`
+    /// (`[[repositories]]` names) and `workflows` (those drawing from the
+    /// routine source), and if so the workflow it runs under: the one it
+    /// names, or the only one there is.
+    pub fn check(&self, repos: &[String], workflows: &[String]) -> Result<String, String> {
+        if !repos.contains(&self.repo) {
+            return Err(format!(
+                "repo `{}` is not a [[repositories]] name → one of: {}",
+                self.repo,
+                list(repos)
+            ));
+        }
+        match (&self.workflow, workflows) {
+            (Some(name), names) if names.contains(name) => Ok(name.clone()),
+            (None, [only]) => Ok(only.clone()),
+            (named, names) => {
+                let what = match named {
+                    Some(name) => {
+                        format!("workflow `{name}` does not draw from the routine source")
+                    }
+                    None => "no `workflow` is named".to_string(),
+                };
+                Err(format!(
+                    "{what} → name one of the workflows whose projects use the routine source: {}",
+                    list(names)
+                ))
+            }
+        }
+    }
+}
+
+fn list(names: &[String]) -> String {
+    if names.is_empty() {
+        "(none)".to_string()
+    } else {
+        names.join(", ")
+    }
+}
+
 /// Parse a routine named `name` from the text of its file.
 pub fn parse(name: &str, text: &str) -> Result<Routine, String> {
     let rest = text
