@@ -5,7 +5,7 @@ AI ツール（Claude Code / Codex / opencode）の機能不足を totsuka 側�
 
 ## 項目の読み方
 
-- **id**: 起票時の重複判定キー（issue 本文の印 `<!-- tool-upgrade-watch: item=<id> -->`）。**変えない**。
+- **id**: 起票時の重複判定キー（issue 本文の印 `<!-- tool-upgrade-watch: item=<id> tool=<tool> -->`）。**変えない**。
 - **種別**:
   - `feature` — ツール側の新機能で置き換えられる。changelog / docs の監視対象。
   - `policy` — 機能はもうあるが、ADR で**意図して使っていない**。新機能が出ても自動では起票せず、
@@ -56,10 +56,14 @@ changelog はこの版から最新までを読む。これより古い版で入�
 - 現状: trust のキーが `path:event:idx:0` なので配列の index を動かさないよう in-place で置き換える。
   doctor が `config.toml` の `[hooks.state]` を読み、黙ってスキップされた hook を検出する。初回は TUI で
   "Trust all" を人間が押す必要がある。
-- 置き換え条件: trust が安定した id / 名前で引かれる、非対話で trust できるコマンド・フラグがある、
-  あるいは未 trust の hook が無音でなく警告になる — のいずれか。
+- 置き換え条件: trust が配列の位置ではなく安定した id / 名前で引かれ、**かつ** totsuka のエントリだけを非対話で
+  trust できる（ユーザー自身の hook の trust を巻き込まない）。満たすのが一部だけなら「部分的」:
+  - 未 trust の hook が警告になるだけ → 検出（doctor）は縮むが、index 保存も初回の対話承認も残る
+  - 起動単位で trust を飛ばすフラグ（`--dangerously-bypass-hook-trust` 等）→ 同じ pane のユーザーの未承認 hook まで
+    動くので、採るかは判断が要る（隣のユーザー hook の trust を守るのが index 保存の目的、`codex.rs` の in-place 更新）
 - 検索語: `trust`, `trusted_hash`, `hooks\.state`, `untrusted`, `dangerously-bypass-hook-trust`
-- 置き換え後: `untrusted_events` / `hook_states` / `event_key` と index 保存の規則、runbook の TUI 手順を削る。
+- 置き換え後: 確認できた機能が解消する分だけを削る（警告なら doctor の検出、安定キーなら index 保存の規則、
+  非対話 trust なら runbook の TUI 手順）。
 
 ### codex-no-notification
 
@@ -219,7 +223,10 @@ changelog はこの版から最新までを読む。これより古い版で入�
 - 置き換え条件: 承認 / 拒否が決まったときに発火するイベント（承認結果の hook、通知の解消イベント等）が docs にある。
   拒否側だけのイベント（auto mode の拒否のみ等）は「部分的」。
 - 検索語: `PermissionResolved`, `PermissionDecision`, `PermissionDenied`, `approved`, `dismiss`
-- 置き換え後: `on-post-tool-use.sh` と登録（Claude settings / Codex `MANAGED_HOOKS`）を削り、ネイティブイベントでフラグを外す。
+- 置き換え後: **イベントを確認できたツールの登録だけ**を外し、そのイベントでフラグを外す（Claude なら
+  `render_settings` の PostToolUse）。Codex は `MANAGED_HOOKS` の PostToolUse で同じ解除をしているので、
+  Codex に同等のイベントが無い間は `on-post-tool-use.sh` と Codex の登録を残す（消すと承認後の作業時間が
+  沈黙監視から外れたままになる）。
 
 ### question-pending
 
@@ -274,7 +281,9 @@ changelog はこの版から最新までを読む。これより古い版で入�
 - 置き換え条件: パス限定の `Write(...)` ルールが実際に効くと docs / changelog にある。docs が `Edit(path)` で
   Write も覆うと書いている場合は、`Edit(path)` で置き換えられるかを判定する（`Write(path)` そのものは来ないかもしれない）。
 - 検索語: `Write\(`, `path-scoped`, `NotebookEdit`, `permission rule`
-- 置き換え後: worktree 外だけを塞ぐ細かい deny にできる。
+- 置き換え後: 読み取り専用 profile の契約（worktree とリポジトリへの書き込み禁止、`permissions.rs` の
+  `deny_rules`）は**弱めない**。パス限定が効いて得られるのは、その禁止を保ったまま worktree 外（一時ファイル等）
+  への書き込みだけを許す、という緩和の余地だけ。禁止範囲が狭まる置き換えは候補にしない。
 
 ### claude-resume-cwd
 

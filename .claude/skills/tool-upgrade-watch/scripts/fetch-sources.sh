@@ -83,8 +83,8 @@ lv="$(local_version opencode)"
 # v1 の docs は dev branch の .mdx が正典。v2 は 2.0 branch の .mdx が更新されておらず v1 の API の
 # ままなので（session.idle 等、v2 に無いイベントが載っている）、v2 は opencode.ai/v2/docs の HTML を読む。
 case "$lv" in
-*v1.* | *" 1."*) tracks="v1" ;;
-*v2.* | *" 2."*) tracks="v2" ;;
+1.* | *v1.* | *" 1."*) tracks="v1" ;;
+2.* | *v2.* | *" 2."*) tracks="v2" ;;
 *) tracks="v1 v2" ;;
 esac
 for t in $tracks; do

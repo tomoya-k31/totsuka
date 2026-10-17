@@ -22,11 +22,13 @@ hooks 指定が無いので `~/.codex/hooks.json` に差し込む、opencode の
 ## 1. 取得する
 
 ```bash
-out="${TMPDIR:-/tmp}/tool-upgrade-watch-$(date +%Y%m%d)"   # セッションに scratchpad があればそちらを使う
+out="$(mktemp -d "${TMPDIR:-/tmp}/tool-upgrade-watch.XXXXXX")"   # セッションに scratchpad があればその下に作る
 bash .claude/skills/tool-upgrade-watch/scripts/fetch-sources.sh "$out"
 bash .claude/skills/tool-upgrade-watch/scripts/check-anchors.sh
 ```
 
+- 作業ディレクトリは**実行ごとに新しく作る**。使い回すと、前回取った別系列の docs（opencode の v1 / v2 など）が
+  残って判定に混ざる。
 - `fetch-sources.sh` は各ツールの版（`versions.txt`）・changelog・現行 docs を `$out/<tool>/` に落とす。
   台帳の「読む docs」に無いページが要りそうなら、各ツールの `llms.txt` からページを探して追加で取ってよい。
   取れなかった URL は `$out/FAILED.txt` に出る。欠けたソースに依存する項目は「判定不能」とし、推測で埋めない。
@@ -77,9 +79,14 @@ bash .claude/skills/tool-upgrade-watch/scripts/check-anchors.sh
 gh label create tool-upgrade --color 1d76db --force \
   --description "AI ツールの新機能で totsuka のワークアラウンドを置き換える候補（tool-upgrade-watch が起票）"
 marker='<!-- tool-upgrade-watch: item=<id> tool=<claude|codex|opencode> -->'
-gh issue list --state all --label tool-upgrade --limit 200 --json number,state,body \
-  | jq -r --arg m "$marker" 'map(select(.body // "" | contains($m))) | .[0] // empty | "\(.number) \(.state)"'
+existing="$(set -o pipefail
+  gh issue list --state all --label tool-upgrade --limit 200 --json number,state,body \
+    | jq -r --arg m "$marker" 'map(select(.body // "" | contains($m))) | .[0] // empty | "\(.number) \(.state)"')" \
+  || { echo "issue 一覧の取得に失敗 — 起票を中止する"; exit 1; }
 ```
+
+**一覧の取得が失敗したら起票しない。** `pipefail` が無いと、`gh` が落ちても空入力の `jq` が終了コード 0 で
+何も出さず、「既存なし」と区別できずに重複起票する（`herdr-schema-watch.yml` が同じ罠を書き残している）。
 
 `gh issue list --search` は使わない。タイトルの `refactor(hooks):` の括弧を GitHub 検索がグルーピング演算子と
 解釈して、エラーにならずに 0 件を返す（`herdr-schema-watch.yml` で実際に重複起票した）。
@@ -129,7 +136,8 @@ gh issue create --label enhancement --label tool-upgrade \
 ## 4. レポート
 
 起票の有無にかかわらず、最後に会話へ次の形で出す。候補が 1 つも無いときは、表を省いて
-「候補なし（確認した版: …）」の 1 行と、STALE・取得失敗があればその一覧だけにする。
+「候補なし（確認した版: …）」の 1 行と、policy 項目の前提変化・`marker-protocol` の「n/3」・STALE・
+取得失敗のうち該当するものだけにする。
 
 ```markdown
 ## ツール更新チェック（YYYY-MM-DD）

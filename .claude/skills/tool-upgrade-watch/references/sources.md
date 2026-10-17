@@ -58,5 +58,5 @@ URL が 404 / 移転になったら、ここと script を同時に直す。
   v1 の API のまま更新されておらず（v2 に無い `session.idle` が載っている）、判定を誤らせる。
 - changelog は <https://opencode.ai/changelog>（HTML・両系列混在）と、v1 の GitHub Releases。
   v2 で「いつから」を正確に引きたいときは `2.0` branch の `release: v2.0.N` コミット間の差分を見る。
-- llms.txt は無い（404）。v2 docs の `.md` 版も 404 なので repo の `.mdx` を使う。
+- llms.txt は無い（404）。v2 docs の `.md` 版も 404 なので、v2 は上のとおり HTML を読む（repo の `.mdx` は v1 用）。
 - プラグイン API の版は `@opencode-ai/plugin`（totsuka の JS プラグインが import する側）。
