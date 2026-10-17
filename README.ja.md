@@ -166,6 +166,14 @@ npx skills add tomoya-k31/totsuka --skill totsuka-config
 
 あとはエージェントに「GitHub のボードで totsuka を設定して」のように頼みます。
 
+決まった時刻にプロンプトを走らせたいとき（routine。「平日 9 時に依存関係を確認して
+PR を出す」など）は、スキル `totsuka-routine` が routine ファイルを一緒に書いて
+確かめます:
+
+```sh
+npx skills add tomoya-k31/totsuka --skill totsuka-routine
+```
+
 ## ドキュメント
 
 - **totsuka とは**: [docs/orchestrator-spec.ja.md](./docs/orchestrator-spec.ja.md)
