@@ -1,0 +1,1 @@
+* **Update**: [設定リファレンス](/development/config-reference.md) に `[orca]`（agent-ide-orca）と `[macos]`（notifier-macos）の章を足し、`[herdr]` の中に紛れていた `[discord]` を独立した章に出した（#905）。`[macos]` は `[plugins.macos]` の宣言が要り、メニューバーアプリだけで通知するなら `enabled = false` で宣言すればよいこと（隔離環境で確認）、アプリも同じ `[macos]` のフィルタと `activate_bundle_id` を読むことを書いた。

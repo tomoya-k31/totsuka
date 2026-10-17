@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:2a7cb751b7c87ee4d08b067f77abde9085aeeb252fb2deaebd03e666146c68c9 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:5cedecfaf17f89aa433bb868ca1ce472fd6cdf945f2ddacae00dce08803d82c1 -->
 
 # 設定リファレンス
 
@@ -1221,22 +1221,7 @@ kind = "task_source"
 - 未知のプレースホルダはそのまま出力され、起動時に警告としてログに出る。**エラーにしないのは意図的である** — 症状は下書きに見える `{token}` であって目に見える。コアの `rubric` がエラーにするのは、あちらが検収の判定条件で、壊れても症状が「検収が緩くなる」だけだからである
 - ここは **LLM 向けのプロンプトのみ**である。悪い上書きは分類の劣化や返信案の質低下に留まり、完了検知は壊せない。この被害範囲の違いが、コア側の上書き面を削除しつつ**このテーブルを残した**理由である
 
-## `[herdr]`
-
-| キー | 型 | 既定 | 意味 |
-|---|---|---|---|
-| `socket_path` | string? | なし | ソケットの明示パス。解決順の最上位 |
-| `session` | string? | なし | 名前付きセッション。`socket_path` 未設定時に使う |
-| `[herdr.layout]` | テーブル | 下記 | ディスパッチした pane の配置 |
-| `[herdr.kind_map]` | テーブル | `{}` | 実行ファイル名を herdr 側の語彙へ写像する |
-| `[identity]` | テーブル | `{ enabled = true }` | ディスパッチがリポジトリとタスクを herdr へ報告するか |
-| `request_timeout_secs` | int | 30 | ソケット呼び出し 1 本あたりのタイムアウト |
-
-ソケットの解決順は `socket_path` > `session` > `HERDR_SOCKET_PATH` > `HERDR_SESSION` > 既定パス。
-
-**herdr は 0.7.5 以降が必要。** それより古い herdr に対しては初期化を拒否し、`config validate` と `doctor` がバージョンを名指しで報告する。検査は herdr 自身のバージョンを読むもので、**上限は無い** — 新しい herdr を拒否することはない。
-
-### `[discord]`
+## `[discord]`
 
 ```toml
 [discord]
@@ -1257,6 +1242,21 @@ operator_user_id = "111111111111111111"    # 必須。自分の Discord ユー�
 | `watch_backfill_max_age_hours` | int? | 24 | 起動時に遡る時間の上限。`0` は拒否 |
 
 トリガは `trigger = { channel = "…", channel_name = "…", repo = "…" }`（+ 任意の `from`）です。**このソースにはトリガがこれしかない**ので、監視するワークフローが 1 本も無い設定は起動時にエラーになります。
+
+## `[herdr]`
+
+| キー | 型 | 既定 | 意味 |
+|---|---|---|---|
+| `socket_path` | string? | なし | ソケットの明示パス。解決順の最上位 |
+| `session` | string? | なし | 名前付きセッション。`socket_path` 未設定時に使う |
+| `[herdr.layout]` | テーブル | 下記 | ディスパッチした pane の配置 |
+| `[herdr.kind_map]` | テーブル | `{}` | 実行ファイル名を herdr 側の語彙へ写像する |
+| `[identity]` | テーブル | `{ enabled = true }` | ディスパッチがリポジトリとタスクを herdr へ報告するか |
+| `request_timeout_secs` | int | 30 | ソケット呼び出し 1 本あたりのタイムアウト |
+
+ソケットの解決順は `socket_path` > `session` > `HERDR_SOCKET_PATH` > `HERDR_SESSION` > 既定パス。
+
+**herdr は 0.7.5 以降が必要。** それより古い herdr に対しては初期化を拒否し、`config validate` と `doctor` がバージョンを名指しで報告する。検査は herdr 自身のバージョンを読むもので、**上限は無い** — 新しい herdr を拒否することはない。
 
 ## `[herdr.identity]`
 
@@ -1306,6 +1306,88 @@ my-claude = "claude"
 - 既定は「エージェントを上 80%、シェルを下 20%」
 - **併設シェルにはフックの環境変数（Bearer トークンを含む）が渡らない。** 人間が直接叩くシェルにトークンを常駐させないためである
 - **レイアウトの失敗はディスパッチを落とさない。** 警告を出して続行し、シェルなし（または herdr の既定配置）に落ちる。`ratio` が不正で herdr が拒否した場合も同じ経路になる
+
+## `[orca]`
+
+```toml
+[plugins.orca]
+enabled = true
+kind = "agent_ide"
+
+[orca]                      # すべて省略可
+# orca_bin = "orca"
+# request_timeout_secs = 30
+
+[orca.layout]
+# shell = false
+# direction = "vertical"    # "horizontal" / "vertical"（orca の terminal split の語彙）
+
+[orca.identity]
+# enabled = true
+```
+
+`[orca]` の全キー（未知のキーはエラー。入れ子のテーブルも同じ）:
+
+| キー | 型 | 既定 | 意味 |
+|---|---|---|---|
+| `orca_bin` | string | `"orca"` | `orca` CLI（`PATH` 上の名前か絶対パス） |
+| `request_timeout_secs` | int | `30` | `orca` 1 回の呼び出しの上限秒。超えたら止める。何かを待つ呼び出しには、その待ち時間が上乗せされる |
+| `[layout]` | テーブル | 下記 | エージェントのタブの配置 |
+| `[identity]` | テーブル | `{ enabled = true }` | dispatch がタスク名を orca のサイドバーへ出すか |
+
+`[orca.layout]`:
+
+| キー | 型 | 既定 | 意味 |
+|---|---|---|---|
+| `shell` | bool | `false` | エージェントの端末から併設シェルを分割するか。**herdr の既定と逆**です。orca はタスクの worktree をサイドバーに出しており、端末はそこから 1 クリックで開けます。分割すると orca のフォーカスも新しい pane へ移ります |
+| `direction` | `"horizontal"` か `"vertical"` | なし（orca の既定） | 分割の方向。綴り違いは起動時のエラーになります（分割そのものは best-effort） |
+
+`[orca.identity]`:
+
+| キー | 型 | 既定 | 意味 |
+|---|---|---|---|
+| `enabled` | bool | `true` | orca のサイドバーで worktree の名前を `{repo}: {title}` にする。拒否されても dispatch は失敗しません |
+
+- **先に各リポジトリを orca に登録してください**（`orca repo add --path <repository>`）。未登録だと dispatch はその旨のエラーで失敗します。
+- **廃止キーは名指しで拒否されます。** `agent` / `setup` / `repo_selector` / `plan_prompt_prefix` / `poll_interval_ms` は、代わりの設定（`[tools]` / `default_tool` など）を示すメッセージで起動時に落ちます。
+
+## `[macos]`
+
+通知の設定です。**メニューバーアプリも同じ `[macos]` を読みます。** アプリは `run` の通知を `filter` に通してから出し、通知やタスク行のクリックで `activate_bundle_id` のアプリを前面に出します。
+
+**`[macos]` を書くには `[plugins.macos]` の宣言が要ります**（無いと `config validate` が「unknown top-level table」で落とします）。アプリだけに通知させるなら、プラグインを無効にして宣言します:
+
+```toml
+[plugins.macos]
+enabled = false             # 通知はアプリが出す。CLI の run からも通知したいなら true
+kind = "notifier"
+
+[macos]
+backend = "terminal_notifier"            # クリックでタスクの pane を開く（下記）
+activate_bundle_id = "org.alacritty"     # 使っているターミナルによる
+
+[macos.filter.events]                    # 全ワークフローに効く。既定は全部 on
+done = false
+
+[macos.filter.workflows.slack-reply]     # ワークフロー別。全体の設定より優先される
+waiting_input = false
+```
+
+`[macos]` の全キー（未知のキーはエラー。入れ子のテーブルも同じ）。クリックで pane を開く設定は [click-to-focus のセットアップ](click-to-focus-setup.ja.md):
+
+| キー | 型 | 既定 | 意味 |
+|---|---|---|---|
+| `backend` | `"osascript"` か `"terminal_notifier"` | `"osascript"` | 通知の出し方。`osascript` はいつでも使えますが、クリックしても pane は開きません。`terminal_notifier` はクリックで `click_command` を実行し、`activate_bundle_id` を前面に出します（`terminal-notifier` が無ければ通知ごとに `osascript` へ落ちます） |
+| `osascript_bin` | string | `"osascript"` | `osascript` の実行ファイル |
+| `terminal_notifier_bin` | string | `"terminal-notifier"` | `terminal-notifier` の実行ファイル |
+| `activate_bundle_id` | string? | なし | クリックで前面に出すアプリの bundle id（例 `org.alacritty`）。未設定ならどのアプリも前面に出しません |
+| `click_command` | string | `"totsuka focus {task_id}"` | クリックで実行するシェルコマンド。`{task_id}` はシェル引用して埋め込まれます。空文字列で無効になります |
+| `[filter.events]` | テーブル | 全部 on | 全ワークフロー共通の、イベントごとの on/off |
+| `[filter.workflows.<name>]` | テーブル | なし | ワークフロー別の on/off。`[filter.events]` より優先されます |
+
+2 つのフィルタのテーブルに書けるキーは同じ 6 つの `bool` で、書かなければ上の段に従い、最後は on です: `waiting_input` / `done` / `failed` / `pending` / `escalated` / `verification_pending`。
+
+**入れ子は `[macos.filter.events]` で、`[macos.notifier.filter.events]` ではありません。** `[macos]` の中身がそのまま設定です。
 
 ## 例
 

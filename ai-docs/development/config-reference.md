@@ -1,10 +1,10 @@
 ---
 type: Guide
 title: 設定リファレンス（config.toml）
-description: "config.toml の全キー・デフォルト値・意味の一覧。設定ファイルは 1 本で、プラグイン個別設定もトップレベルの [<name>] テーブルに入る。シークレット参照、設定スキーマのバージョニング方針、[[projects]] の domain 宣言とワークフローからの参照、プラグインが定義する追加プロパティ、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-github の [github]、task-source-notion の [notion]、task-source-slack の [slack]、agent-ide-herdr の [herdr] を含む。"
+description: "config.toml の全キー・デフォルト値・意味の一覧。設定ファイルは 1 本で、プラグイン個別設定もトップレベルの [<name>] テーブルに入る。シークレット参照、設定スキーマのバージョニング方針、[[projects]] の domain 宣言とワークフローからの参照、プラグインが定義する追加プロパティ、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-github の [github]、task-source-notion の [notion]、task-source-slack の [slack]、task-source-discord の [discord]、agent-ide-herdr の [herdr]、agent-ide-orca の [orca]、notifier-macos の [macos] を含む。"
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
 tags: [config, reference, toml, secrets, workflow, worktree, github, notion, slack, hooks, versioning]
-generated: { by: claude-code/opus-5.5, at: 2026-10-03T15:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-17T11:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -1305,27 +1305,7 @@ kind = "task_source"
 - 未知のプレースホルダはそのまま出力され、`initialize` 時に警告としてログに出る。**エラーにしないのは意図的である**（このプラグインは `config/validate` フックを持っているのでエラーにもできる）— 未知キーはそのまま描画されるので症状はドラフト中に見える `{token}` である。core 側の `rubric` がこれをエラーにするのは、あちらが llm 検収の判定条件で、壊れた症状が「検収が緩くなる」だけだからである。
 - ここは **LLM 向けのプロンプトのみ**である。悪い上書きは分類の劣化（スレッド内ピッカーへフォールバックする）や返信案の質低下に留まり、完了検知は壊せない。この危険度の違いが、core 側の上書き面を #465 で削除しつつ**このテーブルを残した**理由である。
 
-# `[herdr]`（agent-ide-herdr）
-
-全キー（`deny_unknown_fields`。ネストした `[layout]` にも効く）:
-
-| キー | 型 | 既定 | 意味 |
-|---|---|---|---|
-| `socket_path` | string? | なし | herdr ソケットの明示パス。解決順の最上位 |
-| `session` | string? | なし | 名前付きセッション（`~/.config/herdr/sessions/{name}/herdr.sock` に解決）。`socket_path` 未設定時に使う |
-| `[layout]` | テーブル | 下記の既定 | dispatch した pane の配置（#356、下記） |
-| `[kind_map]` | テーブル | `{}` | 実行ファイル名 → herdr の `kind` の写像（[ADR-0032](/decisions/adr-0032-herdr-protocol-17.md) D-1、下記） |
-| `[identity]` | テーブル | `{ enabled = true }` | dispatch が「どのリポジトリの・どのタスクか」を herdr へ報告するか（#417、[ADR-0039](/decisions/adr-0039-herdr-sidebar-identity.md)、下記） |
-| `request_timeout_secs` | int | 30 | herdr socket 呼び出し 1 本あたりのタイムアウト |
-
-ソケットの解決順: `socket_path` > `session` 名 > `HERDR_SOCKET_PATH` > `HERDR_SESSION` > 既定 `~/.config/herdr/herdr.sock`。
-
-**herdr は 0.7.5 以降が必要。** それより古い herdr に対しては `initialize` が
-`CONFIG_INVALID` で初期化を拒否し、`totsuka config validate` / `doctor` がバージョンを名指しで報告する
-（[ADR-0032](/decisions/adr-0032-herdr-protocol-17.md) D-6）。判定は **`ping` の `version` の semver
-比較**で、`protocol` 整数は見ない（#520）。**上限は無い** — 新しい herdr を拒否することはない。
-
-## `[discord]`（task-source-discord、#618）
+# `[discord]`（task-source-discord、#618）
 
 ```toml
 [discord]
@@ -1346,6 +1326,26 @@ operator_user_id = "111111111111111111"    # 必須。自分の Discord ユー�
 | `watch_backfill_max_age_hours` | int? | 24 | 同バックフィルが遡る時間の上限。`0` は拒否 |
 
 トリガは `trigger = { channel = "…", channel_name = "…", repo = "…" }`（+ 任意の `from`）で、[チャンネル監視トリガ](/glossary/channel-watch.md)の語彙は Slack と共通。**このソースにはトリガ種別がこれしか無い**ので、監視ワークフローが 1 本も無い設定は起動時エラーになる（何もしないまま起動するのは常に間違い）。
+
+# `[herdr]`（agent-ide-herdr）
+
+全キー（`deny_unknown_fields`。ネストした `[layout]` にも効く）:
+
+| キー | 型 | 既定 | 意味 |
+|---|---|---|---|
+| `socket_path` | string? | なし | herdr ソケットの明示パス。解決順の最上位 |
+| `session` | string? | なし | 名前付きセッション（`~/.config/herdr/sessions/{name}/herdr.sock` に解決）。`socket_path` 未設定時に使う |
+| `[layout]` | テーブル | 下記の既定 | dispatch した pane の配置（#356、下記） |
+| `[kind_map]` | テーブル | `{}` | 実行ファイル名 → herdr の `kind` の写像（[ADR-0032](/decisions/adr-0032-herdr-protocol-17.md) D-1、下記） |
+| `[identity]` | テーブル | `{ enabled = true }` | dispatch が「どのリポジトリの・どのタスクか」を herdr へ報告するか（#417、[ADR-0039](/decisions/adr-0039-herdr-sidebar-identity.md)、下記） |
+| `request_timeout_secs` | int | 30 | herdr socket 呼び出し 1 本あたりのタイムアウト |
+
+ソケットの解決順: `socket_path` > `session` 名 > `HERDR_SOCKET_PATH` > `HERDR_SESSION` > 既定 `~/.config/herdr/herdr.sock`。
+
+**herdr は 0.7.5 以降が必要。** それより古い herdr に対しては `initialize` が
+`CONFIG_INVALID` で初期化を拒否し、`totsuka config validate` / `doctor` がバージョンを名指しで報告する
+（[ADR-0032](/decisions/adr-0032-herdr-protocol-17.md) D-6）。判定は **`ping` の `version` の semver
+比較**で、`protocol` 整数は見ない（#520）。**上限は無い** — 新しい herdr を拒否することはない。
 
 ## `[herdr.identity]` — サイドバーに出す identity の報告（#417）
 
@@ -1414,6 +1414,88 @@ my-claude = "claude"
   ベアラトークンを常駐させないため（[hook のセキュリティ](/security/hook-security.md)）。エージェント pane には従来どおり載る。
 - **レイアウト適用の失敗は dispatch を落とさない**。警告を出して続行し、シェルなし（またはherdr の既定配置）に落ちる。
   `ratio` が不正で herdr が拒否した場合もこの経路になる。
+
+# `[orca]`（agent-ide-orca）
+
+全キー（`deny_unknown_fields`。ネストした `[orca.layout]` / `[orca.identity]` にも効く）。詳細は [agent-ide-orca](/components/agent-ide-orca.md):
+
+```toml
+[plugins.orca]
+enabled = true
+kind = "agent_ide"
+
+[orca]                      # すべて省略可
+# orca_bin = "orca"
+# request_timeout_secs = 30
+
+[orca.layout]
+# shell = false
+# direction = "vertical"    # "horizontal" / "vertical"（orca の terminal split の語彙）
+
+[orca.identity]
+# enabled = true
+```
+
+| キー | 型 | 既定 | 意味 |
+|---|---|---|---|
+| `orca_bin` | string | `"orca"` | `orca` CLI の実行ファイル（PATH 上の名前か絶対パス） |
+| `request_timeout_secs` | int | `30` | `orca` 1 回の呼び出しの上限秒。超えたらプロセスを止める。`terminal wait` などの待ちには、その待ち時間がこの上に足される |
+| `[layout]` | テーブル | 下記 | エージェントのタブの配置 |
+| `[identity]` | テーブル | `{ enabled = true }` | dispatch がタスク名を orca のサイドバーへ出すか |
+
+`[orca.layout]`:
+
+| キー | 型 | 既定 | 意味 |
+|---|---|---|---|
+| `shell` | bool | `false` | エージェントの端末から併設シェルを分割するか。**herdr（既定 `true`）と逆**である —— orca はタスクの worktree をサイドバーに出し、端末はそこから 1 クリックで開けるため。分割すると orca のフォーカスも新しい pane へ移る |
+| `direction` | `"horizontal"` \| `"vertical"` | なし（orca の既定） | `terminal split --direction` の値。閉じた集合なので、綴り違いは `initialize` でエラーになる（分割そのものは best-effort） |
+
+`[orca.identity]`:
+
+| キー | 型 | 既定 | 意味 |
+|---|---|---|---|
+| `enabled` | bool | `true` | worktree の表示名を `{repo}: {title}` にする（herdr の `[herdr.identity]` と同じ役割）。拒否されても dispatch は失敗しない |
+
+- **前提: 対象リポジトリを orca に登録しておく**（`orca repo add --path <repository>`）。未登録だと dispatch はその旨のエラーで失敗する。
+- **廃止キーは名指しで拒否される。** `agent` / `setup` / `repo_selector` / `plan_prompt_prefix` / `poll_interval_ms` は、それぞれ代わりの設定（`[tools]` / `default_tool` など）を案内する文面で `initialize` が落とす。
+
+# `[macos]`（notifier-macos）
+
+macOS の通知の設定。**メニューバーアプリも同じ `[macos]` を読む**（[macos-app](/components/macos-app.md)）—— アプリは `run` の通知を自分の名義で出すときに `filter` を通し、通知やタスク行のクリックで `activate_bundle_id` のアプリを前面に出す。
+
+**`[macos]` を書くには `[plugins.macos]` の宣言が要る**（無いと `config validate` が「unknown top-level table」で落とす）。アプリの通知だけを使い、notifier プラグインは動かさないなら、`enabled = false` で宣言すればよい（実測で `config validate` が通る）:
+
+```toml
+[plugins.macos]
+enabled = false             # アプリだけで通知する。CLI の run でも通知したいなら true
+kind = "notifier"
+
+[macos]
+backend = "terminal_notifier"            # クリックで pane を開く（下記）
+activate_bundle_id = "org.alacritty"     # 環境依存
+
+[macos.filter.events]                    # 全ワークフローに効く。既定は全部 on
+done = false
+
+[macos.filter.workflows.slack-reply]     # ワークフロー別。全体より優先される
+waiting_input = false
+```
+
+全キー（`deny_unknown_fields`。ネストした `[macos.filter.*]` にも効く）。詳細は [notifier-macos](/components/notifier-macos.md)、クリックで pane を開く設定は [click-to-focus の導入手順](/operations/click-to-focus-setup.md):
+
+| キー | 型 | 既定 | 意味 |
+|---|---|---|---|
+| `backend` | `"osascript"` \| `"terminal_notifier"` | `"osascript"` | 通知の出し方。`osascript` はいつでも使えるが、クリックしても pane は開かない。`terminal_notifier` はクリックで `click_command` を実行し `activate_bundle_id` を前面に出す（`terminal-notifier` が無ければ送信ごとに `osascript` へ落ちる） |
+| `osascript_bin` | string | `"osascript"` | `osascript` の実行ファイル |
+| `terminal_notifier_bin` | string | `"terminal-notifier"` | `terminal-notifier` の実行ファイル |
+| `activate_bundle_id` | string? | なし | クリックで前面に出す GUI アプリの bundle id（例 `org.alacritty`）。未設定なら前面化はしない |
+| `click_command` | string | `"totsuka focus {task_id}"` | クリックで実行するシェルコマンド。`{task_id}` はシェル引用して埋め込まれる。空文字列でクリック時の実行を無効にする |
+| `[filter.events]` | テーブル | 全部 on | 全ワークフロー共通の、イベントごとの on/off |
+| `[filter.workflows.<name>]` | テーブル | なし | ワークフロー別の on/off。`[filter.events]` より優先される |
+
+`[filter.events]` と `[filter.workflows.<name>]` に書けるキーは同じ 6 つ（`bool`、書かなければ上位の設定に従い、最後は on）: `waiting_input` / `done` / `failed` / `pending` / `escalated` / `verification_pending`。
+
+**入れ子は `[macos.filter.events]` であって `[macos.notifier.filter.events]` ではない。** `[macos]` の中身がそのまま設定になる。
 
 # 例
 
