@@ -11,6 +11,16 @@ Note: the plugin protocol is versioned independently of the application (see
 `crates/plugin-protocol`); a totsuka release does not imply a protocol-version
 change.
 
+## [0.10.12](https://github.com/tomoya-k31/totsuka/compare/v0.10.11...v0.10.12) (2026-10-17)
+
+
+### Features
+
+* **cli:** totsuka routine list / run・doctor チェック・totsuka-routine スキルを足す ([#922](https://github.com/tomoya-k31/totsuka/issues/922)) ([89fdf23](https://github.com/tomoya-k31/totsuka/commit/89fdf2399bc187a1e154369e021f3f5ccc553040))
+* **core:** series が実行中なら busy を返し、POST /routine/run で task/trigger を取り込む ([#920](https://github.com/tomoya-k31/totsuka/issues/920)) ([9a6529c](https://github.com/tomoya-k31/totsuka/commit/9a6529c5b2e1e4568883e06cf5703614bc5e05ea))
+* **protocol:** 定期実行のための Task.series・busy・task/trigger を足す (0.7.8) ([#919](https://github.com/tomoya-k31/totsuka/issues/919)) ([acbd2f8](https://github.com/tomoya-k31/totsuka/commit/acbd2f80372ab8f4dacb86d3632995347ac68475))
+* **routine:** routines/&lt;host&gt;/*.md を cron で submit する task-source-routine プラグインを足す ([#921](https://github.com/tomoya-k31/totsuka/issues/921)) ([ea5913d](https://github.com/tomoya-k31/totsuka/commit/ea5913de3e3250e11de5bbf887d157438a4cef69))
+
 ## [0.10.11](https://github.com/tomoya-k31/totsuka/compare/v0.10.10...v0.10.11) (2026-10-17)
 
 
