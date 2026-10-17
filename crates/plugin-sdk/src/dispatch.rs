@@ -8,7 +8,7 @@ use plugin_protocol::jsonrpc::{Error, Response, error_code};
 use plugin_protocol::methods::{
     ConfigSchemaParams, ConfigSchemaResult, ConfigValidateParams, ConfigValidateResult,
     InitializeParams, InitializeResult, ResultPublishParams, TaskClaimParams, TaskClaimResult,
-    TaskUpdateLabelsParams, TaskUpdateStatusParams,
+    TaskSubmitParams, TaskTriggerParams, TaskUpdateLabelsParams, TaskUpdateStatusParams,
 };
 use plugin_protocol::{RequestId, method};
 use serde::Serialize;
@@ -169,6 +169,25 @@ pub trait TaskSourceHandler: Send {
             ))
         }
     }
+
+    /// `task/trigger` (0.7.8, #918): answer with the task to run now for
+    /// `params.key`, which the Orchestrator ingests as a `task/submit`.
+    ///
+    /// Defaulted to `METHOD_NOT_FOUND` for the same reason as
+    /// [`task_claim`](Self::task_claim), gated on the `task_trigger`
+    /// capability.
+    fn task_trigger(
+        &mut self,
+        params: TaskTriggerParams,
+    ) -> impl Future<Output = Result<TaskSubmitParams, Error>> + Send {
+        let _ = params;
+        async {
+            Err(Error::new(
+                error_code::METHOD_NOT_FOUND,
+                "task/trigger is not supported by this plugin → do not declare the `task_trigger` capability",
+            ))
+        }
+    }
 }
 
 /// The error for a method that needs `initialize` first — the same code and
@@ -292,6 +311,7 @@ pub async fn handle_line<H: TaskSourceHandler>(handler: &mut H, line: &str) -> R
         method::TASK_UPDATE_STATUS => call!(TaskUpdateStatusParams, update_status),
         method::TASK_UPDATE_LABELS => call!(TaskUpdateLabelsParams, update_labels),
         method::TASK_CLAIM => call!(TaskClaimParams, task_claim),
+        method::TASK_TRIGGER => call!(TaskTriggerParams, task_trigger),
         method::RESULT_PUBLISH => call!(ResultPublishParams, result_publish),
         method::SHUTDOWN => Reply::shutdown_ack(id),
         other => unknown_method(id, other),
@@ -370,6 +390,18 @@ mod tests {
         assert_eq!(err.code, error_code::METHOD_NOT_FOUND);
         assert!(!err.message.contains("  "), "{:?}", err.message);
         assert!(err.message.contains("label_writeback"), "{}", err.message);
+    }
+
+    /// Same contract for the default `task_trigger`.
+    #[tokio::test]
+    async fn default_task_trigger_refuses_with_a_clean_message() {
+        let err = Bare
+            .task_trigger(TaskTriggerParams { key: "x".into() })
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, error_code::METHOD_NOT_FOUND);
+        assert!(!err.message.contains("  "), "{:?}", err.message);
+        assert!(err.message.contains("task_trigger"), "{}", err.message);
     }
 
     /// Same contract for the default `config_schema`, and it is reachable

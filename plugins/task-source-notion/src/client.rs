@@ -546,6 +546,7 @@ impl<T: NotionTransport> NotionClient<T> {
             // unless the Orchestrator asked for a kind (#398), which keeps
             // every pre-profile config behaving exactly as before.
             instructions,
+            series: None,
         })
     }
 

@@ -2346,6 +2346,7 @@ mod tests {
                 instructions: None,
                 handle: None,
                 branch_hint: None,
+                series: None,
             },
             worktree_path: "/wt".into(),
             mode: plugin_protocol::methods::ExecutionMode::Plan,

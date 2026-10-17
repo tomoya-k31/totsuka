@@ -1021,7 +1021,8 @@ async fn submit<S: Submitter>(
         SubmitOutcome::Duplicate => {
             tracing::info!(task_id, "mention already submitted earlier; dropped");
         }
-        SubmitOutcome::Rejected { reason } => {
+        // `Busy` needs a `series`, which this source never sets.
+        SubmitOutcome::Rejected { reason } | SubmitOutcome::Busy { reason } => {
             tracing::warn!(
                 task_id,
                 "orchestrator rejected the task: {}",
@@ -1544,6 +1545,7 @@ fn build_task(
         // message rather than a duplicate.
         message_key: Some(mention.message_key()),
         instructions: Some(instructions),
+        series: None,
     };
     let pending = PendingMention {
         channel: mention.channel.clone(),

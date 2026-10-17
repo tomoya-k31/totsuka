@@ -27,7 +27,8 @@ use crate::methods::{
     ResultPublishParams, SessionAttachParams, SessionAttachResult, SessionFocusParams,
     SessionFocusResult, SessionListParams, SessionListResult, SessionReleaseParams,
     SessionReleaseResult, StateSubscribeParams, TaskCancelParams, TaskClaimParams, TaskClaimResult,
-    TaskDispatchParams, TaskDispatchResult, TaskUpdateLabelsParams, TaskUpdateStatusParams,
+    TaskDispatchParams, TaskDispatchResult, TaskSubmitParams, TaskTriggerParams,
+    TaskUpdateLabelsParams, TaskUpdateStatusParams,
 };
 
 /// A JSON-RPC request method: its name and the types it carries each way.
@@ -72,6 +73,8 @@ methods! {
     TaskUpdateLabels = TASK_UPDATE_LABELS, TaskUpdateLabelsParams => IgnoredAny;
     /// `task/claim` (O→P, #556).
     TaskClaim = TASK_CLAIM, TaskClaimParams => TaskClaimResult;
+    /// `task/trigger` (O→P, 0.7.8, #918).
+    TaskTrigger = TASK_TRIGGER, TaskTriggerParams => TaskSubmitParams;
     /// `result/publish` (O→P, F-07).
     ResultPublish = RESULT_PUBLISH, ResultPublishParams => IgnoredAny;
     /// `task/dispatch` (O→P).

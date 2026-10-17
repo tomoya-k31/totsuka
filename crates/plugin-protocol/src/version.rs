@@ -437,7 +437,29 @@ use semver::{Version, VersionReq};
 /// has to move. As with 0.7.6, the new capability field is a **source** break
 /// for code that builds `Capabilities` with a struct literal and no
 /// `..Default::default()`.
-pub const PROTOCOL_VERSION: &str = "0.7.7";
+///
+/// 0.7.8 (#918): scheduled routines.
+///
+/// - [`Task::series`](crate::task::Task::series) and
+///   [`TaskSubmitStatus::Busy`](crate::methods::TaskSubmitStatus::Busy): a
+///   task naming a series is refused while another task of that series is
+///   unfinished, so a slow run is skipped rather than overlapped.
+/// - [`method::TASK_TRIGGER`](crate::method::TASK_TRIGGER) (O→P) with
+///   [`TaskTriggerParams`](crate::methods::TaskTriggerParams), gated by
+///   [`Capabilities::task_trigger`](crate::Capabilities::task_trigger): the
+///   source answers with the task to run now, and the Orchestrator ingests it
+///   as a `task/submit` — answering rather than submitting, so the host never
+///   waits on a reply while a submit from the same plugin waits on it.
+/// - [`InitializeParams::config_dir`](crate::methods::InitializeParams::config_dir)
+///   and [`InitializeParams::host`](crate::methods::InitializeParams::host),
+///   for a plugin that keeps per-host files next to `config.toml`.
+///
+/// **Patch and additive.** `Busy` is only ever sent for a task that set
+/// `series`, which no plugin predating the field does, so no plugin meets a
+/// variant it cannot parse. The capability follows the 0.6.1 reason. As with
+/// 0.7.5 and 0.7.6, the new fields are a **source** break for code that builds
+/// `Task`, `InitializeParams` or `Capabilities` with a struct literal.
+pub const PROTOCOL_VERSION: &str = "0.7.8";
 
 /// [`PROTOCOL_VERSION`] parsed into a [`Version`].
 pub fn protocol_version() -> Version {
@@ -461,7 +483,7 @@ mod tests {
 
     #[test]
     fn current_version_parses() {
-        assert_eq!(protocol_version(), Version::new(0, 7, 7));
+        assert_eq!(protocol_version(), Version::new(0, 7, 8));
     }
 
     #[test]

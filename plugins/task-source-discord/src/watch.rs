@@ -174,6 +174,7 @@ impl WatchTriggers {
             // That is the at-most-once the watch wants.
             message_key: None,
             instructions: Some(instructions_for(watched.instructions_kind.as_deref())),
+            series: None,
         }
     }
 }

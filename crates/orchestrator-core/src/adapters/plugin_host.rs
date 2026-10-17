@@ -526,6 +526,9 @@ impl Plugin {
             projects: std::mem::take(&mut spec.projects),
             llm: spec.llm.take(),
             workflows: std::mem::take(&mut spec.workflows),
+            // Filled in by the next layer, which resolves them (#918).
+            config_dir: None,
+            host: None,
         };
         let plugin = Self::spawn(spec)?;
 

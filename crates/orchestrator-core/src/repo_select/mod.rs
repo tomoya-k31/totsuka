@@ -232,6 +232,7 @@ mod tests {
             instructions: None,
             handle: None,
             branch_hint: None,
+            series: None,
         }
     }
 

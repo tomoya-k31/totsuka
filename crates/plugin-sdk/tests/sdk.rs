@@ -7,8 +7,8 @@ use plugin_protocol::Task;
 use plugin_protocol::jsonrpc::{Error, error_code};
 use plugin_protocol::methods::{
     ConfigSchemaParams, ConfigSchemaResult, ConfigValidateParams, ConfigValidateResult,
-    InitializeParams, InitializeResult, ResultPublishParams, TaskUpdateLabelsParams,
-    TaskUpdateStatusParams, WorkflowInfo,
+    InitializeParams, InitializeResult, ResultPublishParams, TaskSubmitParams, TaskTriggerParams,
+    TaskUpdateLabelsParams, TaskUpdateStatusParams, WorkflowInfo,
 };
 use plugin_sdk::{
     LineHandler, Lookup, LookupClient, SubmitClient, SubmitOutcome, Submitter, TaskSourceHandler,
@@ -33,6 +33,7 @@ fn sample_task(id: &str) -> Task {
         instructions: None,
         handle: None,
         branch_hint: None,
+        series: None,
     }
 }
 
@@ -88,6 +89,20 @@ impl TaskSourceHandler for Recording {
         Ok(Value::Null)
     }
 
+    async fn task_trigger(&mut self, params: TaskTriggerParams) -> Result<TaskSubmitParams, Error> {
+        self.calls.push("task_trigger");
+        Ok(TaskSubmitParams {
+            task: serde_json::from_value(json!({
+                "id": format!("{}@manual", params.key),
+                "source": "routine",
+                "title": params.key,
+                "series": params.key,
+            }))
+            .unwrap(),
+            workflow: "routine".into(),
+        })
+    }
+
     async fn config_schema(
         &mut self,
         _params: ConfigSchemaParams,
@@ -138,6 +153,20 @@ async fn typed_dispatch_covers_the_wire_protocol() {
         .await;
     let response: Value = serde_json::from_str(&reply.line.unwrap()).unwrap();
     assert_eq!(response["result"], Value::Null, "{response}");
+
+    // task/trigger → routed to the typed handler, answered with the task.
+    let reply = server
+        .handle_line(&line(json!({
+            "jsonrpc": "2.0", "id": 8, "method": "task/trigger",
+            "params": { "key": "nightly" }
+        })))
+        .await;
+    let response: Value = serde_json::from_str(&reply.line.unwrap()).unwrap();
+    assert_eq!(
+        response["result"]["task"]["series"], "nightly",
+        "{response}"
+    );
+    assert_eq!(response["result"]["workflow"], "routine", "{response}");
 
     // config/schema → routed to the typed handler.
     let reply = server
@@ -191,6 +220,7 @@ async fn typed_dispatch_covers_the_wire_protocol() {
             "initialize",
             "result_publish",
             "update_labels",
+            "task_trigger",
             "config_schema"
         ]
     );

@@ -502,7 +502,7 @@ fn forward_submit(
         .send(PluginEvent::TaskSubmit {
             source: source.to_string(),
             workflow: params.workflow,
-            task: params.task,
+            task: Box::new(params.task),
             respond: otx,
         })
         .is_err()
@@ -583,6 +583,7 @@ mod tests {
             instructions: None,
             handle: None,
             branch_hint: None,
+            series: None,
         }
     }
 

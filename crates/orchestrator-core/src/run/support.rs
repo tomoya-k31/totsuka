@@ -221,6 +221,7 @@ pub(super) fn task_from_record(record: &domain::Task) -> Task {
             instructions: None,
             handle: None,
             branch_hint: None,
+            series: None,
         })
 }
 
@@ -367,6 +368,7 @@ mod tests {
             instructions: None,
             handle: None,
             branch_hint: None,
+            series: None,
         };
         let db = StateDb::open_in_memory().unwrap();
         let id = db
