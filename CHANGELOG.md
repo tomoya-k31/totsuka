@@ -11,6 +11,26 @@ Note: the plugin protocol is versioned independently of the application (see
 `crates/plugin-protocol`); a totsuka release does not imply a protocol-version
 change.
 
+## [0.10.11](https://github.com/tomoya-k31/totsuka/compare/v0.10.10...v0.10.11) (2026-10-17)
+
+
+### Features
+
+* **skills:** config.toml を対話で組み立てるスキル totsuka-config を npx skills で配る ([#908](https://github.com/tomoya-k31/totsuka/issues/908)) ([d87f859](https://github.com/tomoya-k31/totsuka/commit/d87f8599e317d8eddfa218c2ba54c47be44dcfc9))
+
+
+### Bug Fixes
+
+* **deps:** Gateway の rustls を 0.23.46 に上げる (RUSTSEC-2026-0346〜0349) ([#914](https://github.com/tomoya-k31/totsuka/issues/914)) ([204aace](https://github.com/tomoya-k31/totsuka/commit/204aacea3c3db9e6171c52e616a1d28dbbef1957))
+* **skills:** 開発用スキルを npx skills の一覧から隠し、YAML の解析エラーを直す ([#906](https://github.com/tomoya-k31/totsuka/issues/906)) ([7204d35](https://github.com/tomoya-k31/totsuka/commit/7204d35a15acd94e66871bdfbde22f1f194d0f83))
+
+
+### Documentation
+
+* **ai-docs:** config-reference に [orca] / [macos] の章を足し、[discord] を独立した章にする ([#911](https://github.com/tomoya-k31/totsuka/issues/911)) ([60a74e5](https://github.com/tomoya-k31/totsuka/commit/60a74e535f1147198aac3251e640d509e15cbd54))
+* **ai-docs:** discord-quickstart の [plugins.discord] の例に kind を書き、未知のキー command を消す ([#910](https://github.com/tomoya-k31/totsuka/issues/910)) ([262711f](https://github.com/tomoya-k31/totsuka/commit/262711f52b9cbb89fe2bc15f5da75c1af05af938)), closes [#904](https://github.com/tomoya-k31/totsuka/issues/904)
+* **cli:** 雛形の「Design → implement handoff」レシピが GitHub 限定であることを書く ([#912](https://github.com/tomoya-k31/totsuka/issues/912)) ([836cbdf](https://github.com/tomoya-k31/totsuka/commit/836cbdfa95432371e2546846cdf1ced549670fb2))
+
 ## [0.10.10](https://github.com/tomoya-k31/totsuka/compare/v0.10.9...v0.10.10) (2026-10-11)
 
 
