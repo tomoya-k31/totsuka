@@ -26,13 +26,13 @@ Only when `routine list` says no routine plugin is enabled. Each step ends with 
 1. `totsuka plugin install --bundled routine --yes`, then `totsuka config set /plugins/routine '{"kind":"task_source","enabled":true}'`.
 2. `totsuka config set /routine '{}'`. Add `{"catchup_window": "6h"}` only if the user wants a different catch-up window (`"0"` = only on time; also `90m`, `7d`).
 3. `totsuka config set /projects/- '{"name":"routines","source":"routine"}'`.
-4. The workflow. Ask which agent IDE runs it — `totsuka plugin list` shows the installed `agent_ide` plugins (herdr or orca). Do **not** use a `profile`: `design` / `implement` wait for a human to approve in the pane, and `answer` / `triage` default to posting back to the source, which this source cannot do. Write:
+4. The workflow. Ask which agent IDE runs it — `totsuka plugin list` shows the installed `agent_ide` plugins (herdr or orca). Use the `unattended` profile, made for this: no permission prompts, no approval at the end, nothing posted back. The other profiles stop an unattended run (`design` / `implement` wait for a human to approve in the pane; `answer` / `triage` post back to the source, which this source cannot do), and so does a workflow with no profile (no permission settings, so Claude waits at a permission prompt). Write:
 
    ```bash
-   totsuka config set /workflows/- '{"name":"routine","projects":["routines"],"trigger":{},"agent":"<agent>","mode":"implement","output":"none"}'
+   totsuka config set /workflows/- '{"name":"routine","projects":["routines"],"trigger":{},"agent":"<agent>","profile":"unattended"}'
    ```
 
-   `trigger` stays empty: any key in it fails at start. Use `"mode": "plan"` instead if every routine only reads and reports.
+   `trigger` stays empty: any key in it fails at start. If the workflow already exists without `"profile": "unattended"`, change it to that (remove any `mode` / `verification` with `totsuka config unset`).
 5. The repositories a routine may name are the `[[repositories]]` entries: `totsuka config get | jq -r '.config.repositories[].name'`. If the one the user wants is missing, add `{"name","path"}` with `set /repositories/-` (check the path with `git -C <path> rev-parse --show-toplevel`).
 6. The running app does not reload `config.toml`: the user clicks **Stop**, then **Start** in the menu bar app (or restarts `totsuka run --watch`). Then `totsuka routine list` must print the routines directory.
 
@@ -55,7 +55,7 @@ Ask, one at a time: what should happen (the prompt), in which repository, when, 
    ```
 
    Optional lines: `workflow: <name>` (needed only when more than one workflow uses the routine source), `catchup_window: 6h` (this routine only), `enabled: false` (stops the schedule; `routine run` still works).
-5. `totsuka routine list`: the new routine shows its next run. A line starting with `!` under it says why it cannot run — fix the file and list again. No restart is needed for routine files.
+5. `totsuka routine list`: the new routine shows its next run. A new (or just edited, or re-enabled) routine waits for its next time: times that passed before the file was written are not made up. A line starting with `!` under it says why it cannot run — fix the file and list again. No restart is needed for routine files.
 6. Offer a trial run: `totsuka routine run <name>` starts it now and prints the task number (`totsuka task show <n>` follows it). It needs totsuka running, and it does not use up a scheduled run.
 
 The frontmatter is `key: value` lines, not YAML: values may be quoted, `#` after a space starts a comment, and an unknown or repeated key, a missing `repo` / `schedule`, or an empty prompt makes the routine fail (`routine list` shows why).
@@ -63,7 +63,7 @@ The frontmatter is `key: value` lines, not YAML: values may be quoted, `#` after
 ## 4. Change, pause or remove
 
 - **List**: `totsuka routine list` (`--json` for details) shows each routine's schedule, repository, next run and last run with its state.
-- **Change**: edit the file. Changes apply within 30 seconds; renaming the file makes it a new routine.
+- **Change**: edit the file. Changes apply within 30 seconds; renaming the file makes it a new routine. Editing right after a missed run means that run is not made up.
 - **Pause**: add `enabled: false` to the frontmatter (remove it to resume).
 - **Remove**: delete the file, after confirming with the user.
 - **A run that is stuck** blocks the next ones: `totsuka task cancel <n>` (the task number from `routine list`'s last run).
