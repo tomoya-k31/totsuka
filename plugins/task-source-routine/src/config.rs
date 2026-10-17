@@ -4,7 +4,7 @@
 use serde::Deserialize;
 use time::Duration;
 
-use crate::routine::parse_duration;
+use routine_schedule::parse_duration;
 
 /// How far back a missed slot is run when nothing says otherwise.
 pub const DEFAULT_CATCHUP_WINDOW: &str = "24h";

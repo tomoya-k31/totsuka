@@ -9,6 +9,4 @@
 //! makes the next one `busy` through [`plugin_protocol::Task::series`].
 
 pub mod config;
-pub mod cron;
-pub mod routine;
 pub mod server;
