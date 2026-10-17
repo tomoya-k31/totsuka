@@ -75,32 +75,7 @@ impl Site {
 
     /// The task for one run of `routine`, with `id`, or why it cannot run.
     pub fn task(&self, routine: &Routine, id: String) -> Result<TaskSubmitParams, String> {
-        if !self.repos.contains(&routine.repo) {
-            return Err(format!(
-                "repo `{}` is not a [[repositories]] name → one of: {}",
-                routine.repo,
-                self.repos.join(", ")
-            ));
-        }
-        let workflow = match (&routine.workflow, self.workflows.as_slice()) {
-            (Some(name), names) if names.contains(name) => name.clone(),
-            (None, [only]) => only.clone(),
-            (named, names) => {
-                let what = match named {
-                    Some(name) => format!("workflow `{name}` does not draw from this source"),
-                    None => "no `workflow` is named".to_string(),
-                };
-                return Err(format!(
-                    "{what} → name one of the workflows whose projects belong to `{}`: {}",
-                    self.source,
-                    if names.is_empty() {
-                        "(none)".to_string()
-                    } else {
-                        names.join(", ")
-                    }
-                ));
-            }
-        };
+        let workflow = routine.check(&self.repos, &self.workflows)?;
         Ok(TaskSubmitParams {
             task: Task {
                 id,
