@@ -151,7 +151,11 @@ pub fn required(profile: Option<Profile>) -> &'static [AgentPrereq] {
     match profile {
         // The deliverable is a pull request, whatever the source.
         Some(Profile::Implement) => &[AgentPrereq::Gh],
-        Some(Profile::Triage | Profile::Design | Profile::Answer) | None => &[],
+        // `unattended`'s deliverable is the prompt's to name, and a routine
+        // that only reads would wait forever for a tool it never uses.
+        Some(Profile::Triage | Profile::Design | Profile::Answer | Profile::Unattended) | None => {
+            &[]
+        }
     }
 }
 

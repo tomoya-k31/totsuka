@@ -458,6 +458,8 @@ fn task_id_prefix(profile: crate::domain::Profile) -> Option<&'static str> {
         // `design` is GitHub/Notion-sourced, where the task id is the issue's
         // own — there is no sibling task to collide with.
         Profile::Design | Profile::Answer => None,
+        // A routine run's id is already its own (`<name>@<slot>`).
+        Profile::Unattended => None,
     }
 }
 
@@ -474,7 +476,9 @@ fn instructions_kind(profile: crate::domain::Profile) -> Option<&'static str> {
         Profile::Triage => Some("triage"),
         Profile::Design => Some("design"),
         Profile::Implement => Some("implement"),
-        Profile::Answer => None,
+        // Its source writes the whole prompt; there is no source-side
+        // instruction set to pick.
+        Profile::Answer | Profile::Unattended => None,
     }
 }
 

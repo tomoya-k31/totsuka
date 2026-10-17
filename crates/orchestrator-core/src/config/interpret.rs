@@ -295,7 +295,7 @@ agent = "herdr"
             assert_eq!(wf.name, name);
             assert_eq!(wf.mode, mode, "{name} mode");
             assert_eq!(wf.output, output, "{name} output");
-            // All four judge with the llm verifier; #398 varies the rubric, not
+            // All five judge with the llm verifier; #398 varies the rubric, not
             // the mode.
             assert_eq!(wf.verification, VerificationMode::Llm, "{name}");
         }

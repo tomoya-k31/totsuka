@@ -497,13 +497,13 @@ pub struct WorkflowConfig {
     ))]
     #[schemars(with = "serde_json::Map<String, serde_json::Value>")]
     pub trigger: toml::Table,
-    /// One of the four archetypes (#393 D5). Supplies all three of `mode`,
+    /// One of the five archetypes (#393 D5, #918). Supplies all three of `mode`,
     /// `output` and `verification`. `mode` and `verification` must then not
     /// also be written out; `output` may, and an explicit one wins.
     #[serde(default)]
     #[schemars(extend(
         "x-title" = "Profile",
-        "x-help" = "answer, triage, design or implement. Sets the mode, output and verification together."
+        "x-help" = "answer, triage, design, implement or unattended (nobody at the pane). Sets the mode, output and verification together."
     ))]
     pub profile: Option<Profile>,
     /// Execution mode. Required unless [`profile`](Self::profile) supplies it.

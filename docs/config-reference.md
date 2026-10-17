@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:5796beb7e589cf07f0812e514f3b2d9b152f72183613154ec64041ec2401b5e8 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:7e4d65fb5b8560294ac99cac9697271e81d5386c87687dd43ab8f618c0ec2213 -->
 
 # Configuration reference
 
@@ -186,7 +186,7 @@ There is no `log_level` key: plugin logs are filtered by `[log] level` like ever
 | `name` | string | required | Workflow name |
 | `projects` | array of strings | required | The `[[projects]]` entries this workflow **draws tasks from**, by `name`. **The task source is not written here** — it is the owner of those domains. An empty list is an error (there would be nothing to route it to). Naming more than one states that those domains share a lane vocabulary; naming domains owned by different sources is an error. Note the plural: `[[repositories]].project` is a single value, this is a list |
 | `trigger` | table | `{}` | Trigger condition. **Deciding which tasks match is the source plugin's job.** Keys are ANDed, a list is an OR, and `exclude` drops a task matching any one of its conditions — the rules and the keys each source reads are in "The `trigger` vocabulary" below |
-| `profile` | enum? | none | One of `answer`, `triage`, `design`, `implement`. Decides `mode`, `output`, and `verification` together |
+| `profile` | enum? | none | One of `answer`, `triage`, `design`, `implement`, `unattended`. Decides `mode`, `output`, and `verification` together |
 | `mode` | enum | required without `profile` | `plan` or `implement` |
 | `agent` | string | required | Agent instance name |
 | `output` | enum | required without `profile` | `source` or `none` |
@@ -419,7 +419,7 @@ initial_prompt = "Use the /grill-me skill and produce a detailed design."
 
 **If you write instructions that make the agent ask a human something, an unattended pane will hang** — nothing fires while a tool waits for an answer, so it stays stuck until `timeout_secs` escalates it, or indefinitely if you left `timeout_secs` at its default of `0`. totsuka does not append a caveat automatically, because that could contradict what you wrote.
 
-### `profile` — the four archetypes
+### `profile` — the five archetypes
 
 A profile names a combination of `mode`, `output`, and `verification` that fits together.
 
@@ -429,6 +429,7 @@ A profile names a combination of `mode`, `output`, and `verification` that fits 
 | `triage` | `plan` | `source` | `llm` | Filing an issue in GitHub or Notion |
 | `design` | `plan` | `none` | `llm` | Writing a detailed design into an issue comment or page |
 | `implement` | `implement` | `none` | `llm` | Implementing and opening a pull request |
+| `unattended` | `implement` | `none` | `llm` | Running to the end **with nobody at the pane** (routines). It does not wait for your approval when done, denies only `AskUserQuestion`, and asks for no deliverable URL |
 
 ```toml
 [[workflows]]
@@ -450,7 +451,7 @@ on_success = { status = "Designed" }
 | An `on_*.labels` label that does not exist | **Error.** Labels to add and to remove alike are checked in every `[[repositories]]` entry bound to the boards the workflow names (a misspelt `-name` matches nothing and silently succeeds, so it is as dangerous as a misspelt `+name`). Like the status check, this runs **only in the online part of `config validate` and in `doctor`**. `[[repositories]]` has no owner, so each repository is looked up **under the board's owner**; one not found there could not be checked and is reported as a **warning** (this happens with a correct config when the repository and the board have different owners) |
 | `status` write-backs that form a **cycle of columns** | **Error.** Columns are nodes and write-backs are edges; a cycle re-runs forever with **no human in it**, dispatching an agent every lap. Writing back into your own trigger column is the length-1 case. The error names the actual route; the fix is to route one hop through a column no workflow triggers on, so a person moves the card out of it. Checked per `[[projects]]` entry, lexically only — two different boards that happen to share a column name are not a cycle, because the graph is kept separate per domain. A card does move between boards, but only because a person moved it, which needs a human every lap and so is not what this check is for. A workflow naming several domains contributes its write-backs to each of them, and one interlocking group is reported once, naming the board the check reached it on |
 
-Profiles are optional. Combinations they cannot express — `verification = "human"`, for instance, since all four resolve to `llm` — are written out explicitly.
+Profiles are optional. Combinations they cannot express — `verification = "human"`, for instance, since all five resolve to `llm` — are written out explicitly. **The explicit form gets no permission settings at all** (no `auto` mode, no deny list), so a Claude pane can stop at its default permission prompt. To run with nobody watching, use `unattended`.
 
 **When rolling back:** a configuration using `profile` fails to parse on an older binary. Roll your configuration back along with totsuka.
 
@@ -458,7 +459,7 @@ A profile also decides several behaviours beyond those three keys:
 
 | Behaviour | Profiles |
 |---|---|
-| Injects a `permissions.deny` set into Claude's settings | answer, triage, design |
+| Injects a `permissions.deny` set into Claude's settings | answer, triage, design (unattended: `AskUserQuestion` only) |
 | Denies `Bash` as a whole, so no command can run | answer |
 | Does **not** pass Claude's `--permission-mode plan` | answer, triage, design |
 | Fails the task if the worktree ends up on a branch, instead of treating it as success | answer, triage, design |

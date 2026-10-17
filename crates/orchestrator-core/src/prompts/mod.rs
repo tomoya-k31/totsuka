@@ -448,7 +448,10 @@ impl Prompts {
     fn profile_verifies_an_artifact(profile: Profile) -> bool {
         match profile {
             Profile::Triage | Profile::Design | Profile::Implement => true,
-            Profile::Answer => false,
+            // The prompt names the deliverable — a pull request, a comment,
+            // possibly nothing at all for a check that found nothing to do — so
+            // a URL demand would fail runs that did exactly what was asked.
+            Profile::Answer | Profile::Unattended => false,
         }
     }
 }

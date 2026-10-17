@@ -1046,8 +1046,8 @@ rubric = "回答は対象リポジトリの実調査に基づくこと"
         // `render_settings` reads `verification` off the raw config rather than
         // the domain `Workflow`, so it is the one place a profile could go
         // unnoticed. Missing the prompt hook here is silent: the run would look
-        // fine and simply never verify. All four profiles resolve to llm.
-        for profile in ["answer", "triage", "design", "implement"] {
+        // fine and simply never verify. All five profiles resolve to llm.
+        for profile in ["answer", "triage", "design", "implement", "unattended"] {
             let cfg = workflows_config(&format!(
                 r#"
 [[projects]]
@@ -1080,6 +1080,7 @@ agent = "herdr"
             ("implement", true),
             ("answer", false),
             ("triage", false),
+            ("unattended", false),
         ] {
             let cfg = workflows_config(&format!(
                 r#"
@@ -1343,7 +1344,7 @@ agent = "herdr"
     /// unattended hang #409 removed at `ExitPlanMode`, returning at `Bash`.
     #[test]
     fn every_profile_pins_the_permission_mode() {
-        for profile in ["answer", "triage", "design", "implement"] {
+        for profile in ["answer", "triage", "design", "implement", "unattended"] {
             let cfg = workflows_config(&format!(
                 r#"
 [[projects]]
