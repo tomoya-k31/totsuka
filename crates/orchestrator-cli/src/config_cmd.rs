@@ -17,7 +17,7 @@ use orchestrator_core::config::{self, FindingSeverity};
 use orchestrator_core::platform::supplied;
 use orchestrator_core::ports::SecretRef;
 
-use orchestrator_core::plugins::{check_workflow_options, plugin_spec};
+use orchestrator_core::plugins::check_workflow_options;
 
 use crate::common::{CliError, Cx};
 
@@ -402,7 +402,7 @@ fn validate(cx: &Cx, offline: bool) -> Result<(), CliError> {
             // `[<name>]` table into `init_config`; reuse it rather than
             // resolving secrets twice
             // (a second Keychain access could trigger a second Touch prompt).
-            let spec = plugin_spec(&cx.store(), &cfg, name, &env)?;
+            let spec = cx.plugin_spec(&cfg, name, &env)?;
             let init_config = spec.init_config.clone();
             specs.push((spec, init_config));
         }

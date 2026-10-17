@@ -59,6 +59,8 @@ protocol_version = ">=0.6.0, <0.8"
         projects: vec![],
         workflows: vec![],
         timeout: Duration::from_secs(10),
+        config_dir: None,
+        host: None,
     }
 }
 

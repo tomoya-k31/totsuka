@@ -295,6 +295,33 @@ impl Cx {
     /// call, never stored, so a plugin installed with `--bundled` follows the
     /// CLI across an upgrade with nothing to re-run. `None` here is normal for
     /// a `cargo install` build, which ships no plugins.
+    /// [`plugin_spec`](orchestrator_core::plugins::plugin_spec) plus where
+    /// the config lives (#918): the parent of `--config`, else the XDG config
+    /// directory (also when `hosts/<host>.toml` was chosen), and the host key.
+    pub fn plugin_spec(
+        &self,
+        cfg: &RootConfig,
+        name: &str,
+        env: &std::collections::HashMap<String, String>,
+    ) -> Result<orchestrator_core::adapters::PluginSpec, orchestrator_core::plugins::SpecError>
+    {
+        let mut spec = orchestrator_core::plugins::plugin_spec(&self.store(), cfg, name, env)?;
+        spec.config_dir = Some(self.config_home().display().to_string());
+        spec.host = self.host.clone();
+        Ok(spec)
+    }
+
+    /// The directory the config lives in: the parent of `--config`, else the
+    /// XDG config directory — also when `hosts/<host>.toml` was chosen, whose
+    /// parent is `hosts/` and not where siblings of it live.
+    fn config_home(&self) -> &Path {
+        if self.config_overridden {
+            self.config_path.parent().unwrap_or(Path::new("."))
+        } else {
+            self.paths.config_dir()
+        }
+    }
+
     pub fn store(&self) -> PluginStore {
         PluginStore::new(self.paths.data_dir().join("plugins"))
             .with_bundled_root(crate::bundled::locate(None))
@@ -556,6 +583,19 @@ mod tests {
         let cx = host_cx("host-match", Some(&["m2.toml"]), Some("m2"), None);
         assert_eq!(cx.config_path, cx.paths.config_dir().join("hosts/m2.toml"));
         assert_eq!(cx.host_fallback_warning(), None);
+        // #918: the home of `routines/` is the config dir, not `hosts/`.
+        assert_eq!(cx.config_home(), cx.paths.config_dir());
+    }
+
+    #[test]
+    fn the_config_home_of_an_override_is_its_parent() {
+        let cx = host_cx(
+            "host-home-override",
+            None,
+            Some("m2"),
+            Some(Path::new("/e2e/config.toml")),
+        );
+        assert_eq!(cx.config_home(), Path::new("/e2e"));
     }
 
     #[test]

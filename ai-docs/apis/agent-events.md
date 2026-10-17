@@ -1,10 +1,10 @@
 ---
 type: API Endpoint
 title: POST /agent-events（UDS フック受信）
-description: エージェント CLI（Claude Code / Codex / OpenCode）のフック/プラグインが完了/通知/セッションイベントを orchestrator-core へ通知する UDS 上の HTTP エンドポイント。Bearer 認証・即 200・AgentSignal 正規化。制御エンドポイント POST /focus（click-to-focus、F-94）と POST /task/cancel・/task/retry（#760）も同一ソケットに同居。
+description: エージェント CLI（Claude Code / Codex / OpenCode）のフック/プラグインが完了/通知/セッションイベントを orchestrator-core へ通知する UDS 上の HTTP エンドポイント。Bearer 認証・即 200・AgentSignal 正規化。制御エンドポイント POST /focus（click-to-focus、F-94）と POST /task/cancel・/task/retry（#760）、POST /routine/run（#918）も同一ソケットに同居。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/adapters/hook_uds.rs
 tags: [api, uds, hook, claude-code, codex, opencode, signal, ingress]
-generated: { by: claude-code/opus-5.5, at: 2026-09-26T11:05:14+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-18T14:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -15,12 +15,12 @@ herdr ペイン上のエージェント CLI（Claude Code / Codex は共有フ�
 
 driving adapter [`adapters::hook_uds`](/components/orchestrator-core.md) が実装し、正規化した [`domain::signal::AgentSignal`](/components/orchestrator-core.md) を `ports::SignalPort` 経由で Engine へ投入する。
 
-> **旧名について（#196 rename）**: 本エンドポイントは ≤0.2.2 では `POST /claude-events`（ソケット名 `claude-events.sock`）だった。ツール抽象化（claude 固定の解消）に伴い `agent-events` へ改名。受信側は制御パス（`/focus`・`/task/cancel`・`/task/retry`）の完全一致以外の**全パスをシグナル受信として扱う**ため、旧パス `/claude-events` への POST も引き続き受理される（互換窓は事実上恒久。旧 concept: [claude-events](claude-events.md) は deprecated）。
+> **旧名について（#196 rename）**: 本エンドポイントは ≤0.2.2 では `POST /claude-events`（ソケット名 `claude-events.sock`）だった。ツール抽象化（claude 固定の解消）に伴い `agent-events` へ改名。受信側は制御パス（`/focus`・`/task/cancel`・`/task/retry`・`/routine/run`）の完全一致以外の**全パスをシグナル受信として扱う**ため、旧パス `/claude-events` への POST も引き続き受理される（互換窓は事実上恒久。旧 concept: [claude-events](claude-events.md) は deprecated）。
 
 # トランスポート
 
 - **Unix domain socket**。既定パス `${XDG_RUNTIME_DIR}/totsuka/agent-events.sock`（`[hooks].socket_path` で上書き可）。パーミッションは **0600**（同一ユーザのみ接続可＝第一の認証層、E-03）。旧既定名 `claude-events.sock` の stale ソケットは `totsuka run` 起動時に掃除される。
-- **最小 HTTP/1.1**。ヘッダを `\r\n\r\n` まで読み、`Content-Length` バイト分の body を読む。**chunked 転送は非対応**（フックは固定長 `curl --data` POST）。method は検査せず、path は**完全一致の `/focus`・`/task/cancel`・`/task/retry`（制御エンドポイント、下記）のみ**ルーティングし、それ以外の全 method/path はシグナル受信として扱う（E-08 前方互換。パスは慣例上 `/agent-events`、旧 `/claude-events` も可）。
+- **最小 HTTP/1.1**。ヘッダを `\r\n\r\n` まで読み、`Content-Length` バイト分の body を読む。**chunked 転送は非対応**（フックは固定長 `curl --data` POST）。method は検査せず、path は**完全一致の `/focus`・`/task/cancel`・`/task/retry`・`/routine/run`（制御エンドポイント、下記）のみ**ルーティングし、それ以外の全 method/path はシグナル受信として扱う（E-08 前方互換。パスは慣例上 `/agent-events`、旧 `/claude-events` も可）。
 - **1 接続 1 リクエスト**で close（keep-alive 非対応）。
 
 # 認証（E-03）
@@ -80,6 +80,14 @@ driving adapter [`adapters::hook_uds`](/components/orchestrator-core.md) が実�
 - 認証（Bearer）・body 上限・1 接続 1 リクエスト・10 秒 deadline は `/focus` と同一。Engine 側は `PluginEvent::TaskControl`（oneshot 応答付き）として処理する。
 - CLI（`totsuka task cancel` / `retry`）はまだこのルートを使わず DB を直接書く。ソケット優先への切り替えは後続 PR（#760 の PR 2）。
 
+# 制御エンドポイント POST /routine/run（#918）
+
+`totsuka routine run <name>` の受け口（[ADR-0117](/decisions/adr-0117-routines.md)）。body は `{"key": "<routine 名>"}`。
+
+- Engine は `task_trigger` を宣言した**ただ 1 つの**タスクソースに `task/trigger {key}` を送り、プラグインが**応答として**返したタスクを `task/submit` と同じ経路（`on_task_submit`）で取り込む。プラグインに submit させないので、Engine が応答を待つ間にそのプラグインの submit を待たせる再入は起きない。
+- **応答**: `200` + JSON。始まったら `{"ok": true, "task_id": <行 id>}`。始まらなかったら `{"ok": false, "reason": "<次の一手>"}` の正常応答で、理由は次のいずれか: 宣言したソースが居ない（routine プラグインの設定と `run --watch` を案内）／2 つ以上居る／プラグインが返したエラー（知らない key など。文言はプラグインのもの）／同じ series が実行中（`busy`。実行中のタスク番号を含む）／同時刻に既に始めた（`duplicate`）。
+- **HTTP ステータス**は認証（401）・形式（400。`key` 欠落・空・非文字列、JSON でない）・サイズ（413）・Engine の応答不能（503）だけ。Engine 側は `PluginEvent::Trigger`（oneshot 応答付き）として処理する。
+
 # Examples
 
 ```bash
@@ -103,6 +111,14 @@ curl --unix-socket "${XDG_RUNTIME_DIR}/totsuka/agent-events.sock" \
   --data '{"task_id":42}' \
   http://localhost/task/cancel
 # → {"ok":true,"from":"running","state":"cancelled"}
+
+# routine を今すぐ 1 回実行（#918）
+curl --unix-socket "${XDG_RUNTIME_DIR}/totsuka/agent-events.sock" \
+  -H "Authorization: Bearer $TOTSUKA_HOOK_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data '{"key":"nightly"}' \
+  http://localhost/routine/run
+# → {"ok":true,"task_id":57}
 ```
 
 # 関連

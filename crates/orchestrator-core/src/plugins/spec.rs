@@ -98,6 +98,10 @@ pub fn plugin_spec(
         projects,
         llm,
         workflows,
+        // Where the config lives is the caller's to say (it alone knows about
+        // `--config`); see the CLI's `Cx::plugin_spec`.
+        config_dir: None,
+        host: None,
         timeout,
     })
 }
@@ -157,6 +161,8 @@ pub async fn plugin_schemas(
                             llm: None,
                             workflows: vec![],
                             timeout: SCHEMA_TIMEOUT,
+                            config_dir: None,
+                            host: None,
                         },
                     )
                 })

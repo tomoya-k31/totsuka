@@ -61,6 +61,8 @@ protocol_version = ">=0.6.0, <0.8"
         projects: vec![],
         workflows: vec![],
         timeout: Duration::from_secs(10),
+        config_dir: None,
+        host: None,
     })
     .await
     .expect("launch mock plugin")
@@ -739,6 +741,104 @@ async fn three_unknown_stops_escalate_with_snapshot() {
         notes.iter().any(|n| n["params"]["event"] == "escalated"),
         "escalated notification delivered: {notes:?}"
     );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// #918: `POST /routine/run` → `Engine::trigger_task` → the one source
+/// declaring `task_trigger` answers `task/trigger` with a task, which is
+/// ingested like a `task/submit` — so a second run of the same series is
+/// `busy`, and a key the source does not know comes back as its own words.
+#[tokio::test]
+async fn trigger_task_ingests_the_answer_of_the_triggerable_source() {
+    let base = scratch("hook_trigger");
+    let notify_log = base.join("notify.ndjson");
+    let answer = |id: &str| {
+        json!({
+            "task": { "id": id, "source": "mock_src", "title": "nightly", "series": "nightly" },
+            "workflow": "wf",
+        })
+    };
+    let mut plugins = plugin_set(json!({}), &notify_log).await;
+    plugins.sources.insert(
+        "mock_src".to_string(),
+        launch(
+            "task_source",
+            "mock_src",
+            json!({
+                "task_trigger": true,
+                "trigger": { "nightly": answer("n@1"), "again": answer("n@2") },
+            }),
+        )
+        .await,
+    );
+    let mut engine = Engine::new(
+        StateDb::open(&base.join("state.db")).unwrap(),
+        engine_settings(workflows("none", "none"), None),
+        plugins,
+        SystemGitRunner::default(),
+        no_llm(),
+    )
+    .await;
+
+    let started = engine.trigger_task("nightly".into()).await.unwrap();
+    assert!(started.ok, "{started:?}");
+    let row = engine
+        .db()
+        .find_by_source("mock_src", &SourceTaskId("n@1".into()))
+        .unwrap()
+        .expect("the answered task was ingested");
+    assert_eq!(started.task_id, Some(row.id));
+
+    let busy = engine.trigger_task("again".into()).await.unwrap();
+    assert!(!busy.ok, "{busy:?}");
+    assert!(
+        busy.reason
+            .as_deref()
+            .unwrap()
+            .contains(&format!("#{}", row.id.0)),
+        "{busy:?}"
+    );
+
+    let unknown = engine.trigger_task("nope".into()).await.unwrap();
+    assert!(!unknown.ok);
+    assert!(
+        unknown
+            .reason
+            .as_deref()
+            .unwrap()
+            .contains("no routine named `nope`"),
+        "{unknown:?}"
+    );
+
+    engine.shutdown(GRACE).await;
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// #918: with no source declaring `task_trigger`, a run is refused with the
+/// fix, not attempted.
+#[tokio::test]
+async fn trigger_task_without_a_triggerable_source_is_refused() {
+    let base = scratch("hook_trigger_none");
+    let notify_log = base.join("notify.ndjson");
+    let mut engine = Engine::new(
+        StateDb::open(&base.join("state.db")).unwrap(),
+        engine_settings(workflows("none", "none"), None),
+        plugin_set(json!({}), &notify_log).await,
+        SystemGitRunner::default(),
+        no_llm(),
+    )
+    .await;
+    let outcome = engine.trigger_task("nightly".into()).await.unwrap();
+    assert!(!outcome.ok);
+    assert!(
+        outcome
+            .reason
+            .as_deref()
+            .unwrap()
+            .contains("routine plugin"),
+        "{outcome:?}"
+    );
+    engine.shutdown(GRACE).await;
     let _ = std::fs::remove_dir_all(&base);
 }
 
