@@ -72,6 +72,7 @@ fn dispatch_task() -> Task {
         instructions: None,
         handle: None,
         branch_hint: None,
+        series: None,
     }
 }
 

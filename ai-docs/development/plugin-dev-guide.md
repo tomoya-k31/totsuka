@@ -4,7 +4,7 @@ title: プラグイン開発ガイド
 description: totsuka プラグインの作り方。plugin-protocol クレートの型、JSON-RPC(NDJSON/stdio) メソッド、plugin.toml マニフェスト、capability 宣言、開発ループ（plugin install --from-source）・適合テスト（plugin-conformance）とビルド手順（bin 名 = plugin.toml の name という不変条件）、install/enable の流れ、参照実装。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/plugin-protocol
 tags: [plugin, protocol, json-rpc, manifest, guide]
-generated: { by: claude-code/opus-5.5, at: 2026-10-03T01:29:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-18T12:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -88,9 +88,10 @@ Orchestrator は起動前に `protocol_version` の互換性を検査し（F-54�
 
 | メソッド | 方向 | 内容 |
 |---|---|---|
-| `task/submit` | **P→O request** | プラグインが見つけたタスクを Orchestrator へ push（persist-before-ack）。**`workflow` を必ず名指す**（0.6.0、#554）— 受け取った `workflows` に対して first-match を走らせるのはプラグインで、Orchestrator は名前が実在し、その workflow の `projects` の所有プラグインが自分かだけを検証する（#626）。応答は `accepted`（永続化）/ `duplicate`（冪等キー衝突、破棄してよい）/ `rejected`（恒久的に処理不能、reason 付き）のいずれかで**すべて最終**（同じタスクを reason で再送しない）。`NOT_ACCEPTING`/`SUBMIT_OVERLOADED`/`INTERNAL_ERROR` は再送可能（submit は冪等なのでバックオフ再送してよい） |
+| `task/submit` | **P→O request** | プラグインが見つけたタスクを Orchestrator へ push（persist-before-ack）。**`workflow` を必ず名指す**（0.6.0、#554）— 受け取った `workflows` に対して first-match を走らせるのはプラグインで、Orchestrator は名前が実在し、その workflow の `projects` の所有プラグインが自分かだけを検証する（#626）。応答は `accepted`（永続化）/ `duplicate`（冪等キー衝突、破棄してよい）/ `rejected`（恒久的に処理不能、reason 付き）/ `busy`（0.7.8。同じ `series` の未終了タスクがあるので今回は走らせない。`series` を付けたタスクにしか返らない）のいずれかで**すべて最終**（同じタスクを reason で再送しない）。`NOT_ACCEPTING`/`SUBMIT_OVERLOADED`/`INTERNAL_ERROR` は再送可能（submit は冪等なのでバックオフ再送してよい） |
 | `task/update_status` | O→P | ソース側ステータス遷移（F-84） |
 | `task/update_labels` | O→P | ソース側のラベルを付け外しする（`{task_id, add, remove, projects}`、0.7.6、[ADR-0108](/decisions/adr-0108-label-writeback.md)）。**capability `label_writeback` を宣言したプラグインにだけ送られる**。付いていないラベルの削除は成功として扱うこと |
+| `task/trigger` | O→P | `{key}` に対応するタスクを今すぐ 1 つ作り、**submit せず応答として** `TaskSubmitParams` を返す（0.7.8、[ADR-0117](/decisions/adr-0117-routines.md)）。Orchestrator が `task/submit` と同じ経路で ingest する。**capability `task_trigger` を宣言したプラグインにだけ送られる**。知らない key は JSON-RPC エラーで返す |
 | `result/publish` | O→P | 成果物をソースへ書き戻し（F-07） |
 
 ## agent_ide
@@ -148,11 +149,11 @@ JSON-RPC の行処理（パースエラー、notification への無応答、`shu
 
 | kind | 実装する trait | stdio に載せる形 |
 |---|---|---|
-| `task_source` | `TaskSourceHandler`（initialize / config_validate / update_status / result_publish、任意で task_claim / update_labels / config_schema） | `serve(TaskSourceServer(handler), &stdio)`。server 自身が handler を兼ねるなら、`LineHandler` を `plugin_sdk::dispatch::handle_line(self, line)` で実装する |
+| `task_source` | `TaskSourceHandler`（initialize / config_validate / update_status / result_publish、任意で task_claim / update_labels / task_trigger / config_schema） | `serve(TaskSourceServer(handler), &stdio)`。server 自身が handler を兼ねるなら、`LineHandler` を `plugin_sdk::dispatch::handle_line(self, line)` で実装する |
 | `agent_ide` | `AgentIdeHandler`（initialize / config_validate / task_dispatch / session_attach / task_cancel / state_subscribe、任意で session_focus / session_release / session_list / diagnostics_snapshot / config_schema） | `serve(AgentIdeServer::new(handler, stdio.writer.clone()), &stdio)` |
 
 - 各メソッドは params の型を受け取り、result の型か `plugin_protocol::jsonrpc::Error` を返す。`initialize` 前の呼び出しには `plugin_sdk::not_initialized()` を返す。 `initialized()` を上書きしておくと、`initialize` 前に params の壊れた request が来たときも `INVALID_PARAMS` でなく同じ「initialize が先」の応答になる。
-- **能力で守られたメソッドは既定で `METHOD_NOT_FOUND` を返す**（`task_claim`、`update_labels`（`label_writeback`）、`session_focus` / `session_release` / `session_list`、`diagnostics_snapshot`、`config_schema`（`config_schema`））。上書きするなら対応する capability を宣言し、宣言するなら上書きすること。
+- **能力で守られたメソッドは既定で `METHOD_NOT_FOUND` を返す**（`task_claim`、`update_labels`（`label_writeback`）、`task_trigger`（`task_trigger`）、`session_focus` / `session_release` / `session_list`、`diagnostics_snapshot`、`config_schema`（`config_schema`））。上書きするなら対応する capability を宣言し、宣言するなら上書きすること。
 - **`state_subscribe` は状態変化の受信チャネルを返すだけでよい。** ACK を先に返してから `state/notification` を流す順序（F-38）は `AgentIdeServer` が保証する。
 - 設定可能なプロンプトや指示文の `{placeholder}` 置換には `plugin_sdk::template::render` を使う（単一パス。外部入力に書かれた `{…}` を展開しない）。agent_ide がエージェントへ渡すプロンプトは `plugin_sdk::compose_prompt` で組み立てられる。
 

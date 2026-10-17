@@ -491,6 +491,7 @@ impl<T: GithubTransport> GithubClient<T> {
                         &[(number_key, issue_number.as_str()), ("repo", repo)],
                     )
                 }),
+            series: None,
         })
     }
 

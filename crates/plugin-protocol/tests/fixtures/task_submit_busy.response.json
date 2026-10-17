@@ -1,0 +1,8 @@
+{
+  "jsonrpc": "2.0",
+  "id": "submit-8",
+  "result": {
+    "status": "busy",
+    "reason": "task #12 of series \"nightly\" is still running"
+  }
+}

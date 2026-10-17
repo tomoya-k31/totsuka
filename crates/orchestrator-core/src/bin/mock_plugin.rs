@@ -203,6 +203,7 @@ fn main() {
                             diagnostics_snapshot: flag("diagnostics_snapshot"),
                             task_claim: flag("task_claim"),
                             label_writeback: flag("label_writeback"),
+                            task_trigger: flag("task_trigger"),
                             config_schema: flag("config_schema"),
                             outputs: vec![OutputCapability::Source],
                             // No `..Default::default()`: removing

@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](plugin-dev-guide.ja.md)
 
-<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:efe200f32dcf1016c6105f0f8949ff58fb4ef8f5a81c286ce9603683ba3c60a4 -->
+<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:4a95b01a85066e15fa4ce8cb93e20ca84e041a2e24bad4e72be371f88b64044d -->
 
 # Plugin development guide
 
@@ -93,13 +93,15 @@ How often a polling source fetches is its own business: put `poll_interval_secs`
 | `task/submit` | **P→O request** | Pushes a task you found, **naming the workflow it belongs to**. You ran first-match over the workflows you were given, so you already know; the orchestrator only checks that the name exists and is yours. The orchestrator persists before acknowledging |
 | `task/update_status` | O→P | Tells you the task moved, so you can reflect it in the source |
 | `task/update_labels` | O→P | Add / remove labels on the source task (`{task_id, add, remove, projects}`). **Sent only if you declare the `label_writeback` capability.** Treat removing a label that is not there as success |
+| `task/trigger` | O→P | Build one task for `{key}` right now and **return it as the response** (a `TaskSubmitParams`) instead of submitting it. totsuka ingests it exactly like a `task/submit`. **Sent only if you declare the `task_trigger` capability.** Answer an unknown key with a JSON-RPC error |
 | `result/publish` | O→P | Hands you the result to write back to the source |
 
-`task/submit` answers with one of three **final** outcomes, and you must not resend the same task because of any of them:
+`task/submit` answers with one of four **final** outcomes, and you must not resend the same task because of any of them:
 
 - `accepted` — persisted
 - `duplicate` — the idempotency key collided; discard it
 - `rejected` — permanently unprocessable, with a reason
+- `busy` — an unfinished task of the same `series` exists, so this run is skipped (only ever returned for a task that sets `series`)
 
 Transport-level errors (`NOT_ACCEPTING`, `SUBMIT_OVERLOADED`, `INTERNAL_ERROR`) are different: submit is idempotent, so back off and retry those.
 
@@ -167,11 +169,11 @@ You do not have to write the JSON-RPC line handling yourself (parse errors, sile
 
 | Kind | Trait to implement | How to put it on stdio |
 |---|---|---|
-| `task_source` | `TaskSourceHandler` (initialize / config_validate / update_status / result_publish, optionally task_claim / update_labels / config_schema) | `serve(TaskSourceServer(handler), &stdio)`. If your server is itself the handler, implement `LineHandler` with `plugin_sdk::dispatch::handle_line(self, line)` |
+| `task_source` | `TaskSourceHandler` (initialize / config_validate / update_status / result_publish, optionally task_claim / update_labels / task_trigger / config_schema) | `serve(TaskSourceServer(handler), &stdio)`. If your server is itself the handler, implement `LineHandler` with `plugin_sdk::dispatch::handle_line(self, line)` |
 | `agent_ide` | `AgentIdeHandler` (initialize / config_validate / task_dispatch / session_attach / task_cancel / state_subscribe, optionally session_focus / session_release / session_list / diagnostics_snapshot / config_schema) | `serve(AgentIdeServer::new(handler, stdio.writer.clone()), &stdio)` |
 
 - Each method receives its params type and returns its result type or a `plugin_protocol::jsonrpc::Error`. Return `plugin_sdk::not_initialized()` for calls that arrive before `initialize`. Override `initialized()` as well, so that a request with malformed params arriving before `initialize` gets the same "initialize first" answer instead of `INVALID_PARAMS`.
-- **Methods gated on a capability answer `METHOD_NOT_FOUND` by default** (`task_claim`, `update_labels` (`label_writeback`), `session_focus` / `session_release` / `session_list`, `diagnostics_snapshot`, `config_schema` (`config_schema`)). If you override one, declare its capability; if you declare the capability, override the method.
+- **Methods gated on a capability answer `METHOD_NOT_FOUND` by default** (`task_claim`, `update_labels` (`label_writeback`), `task_trigger` (`task_trigger`), `session_focus` / `session_release` / `session_list`, `diagnostics_snapshot`, `config_schema` (`config_schema`)). If you override one, declare its capability; if you declare the capability, override the method.
 - **`state_subscribe` only has to return a receiver of state changes.** `AgentIdeServer` guarantees the order: the reply first, then the `state/notification`s.
 - For `{placeholder}` substitution in configurable prompts and instructions, use `plugin_sdk::template::render`. It substitutes in a single pass, so `{...}` written inside external content is never expanded. An agent_ide can build the prompt it hands the agent with `plugin_sdk::compose_prompt`.
 

@@ -42,7 +42,8 @@ use plugin_protocol::methods::{
     SessionListResult, SessionReleaseParams, SessionReleaseResult, StateNotification,
     StateSubscribeParams, TaskCancelParams, TaskClaimOutcome, TaskClaimParams, TaskClaimResult,
     TaskDispatchParams, TaskDispatchResult, TaskLookupParams, TaskLookupResult, TaskSubmitParams,
-    TaskSubmitResult, TaskSubmitStatus, TaskUpdateLabelsParams, TaskUpdateStatusParams,
+    TaskSubmitResult, TaskSubmitStatus, TaskTriggerParams, TaskUpdateLabelsParams,
+    TaskUpdateStatusParams,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -245,11 +246,20 @@ fn task_submit_wire() {
     check_request::<TaskSubmitParams>("task_submit.request.json", method::TASK_SUBMIT);
     check_response::<TaskSubmitResult>("task_submit.response.json");
     check_response::<TaskSubmitResult>("task_submit_rejected.response.json");
+    // 0.7.8: a run skipped because its series is still running.
+    check_response::<TaskSubmitResult>("task_submit_busy.response.json");
     // Retryable conditions are JSON-RPC errors, never a TaskSubmitStatus.
     check_error_response(
         "task_submit_not_accepting.error.json",
         error_code::NOT_ACCEPTING,
     );
+}
+
+#[test]
+fn task_trigger_wire() {
+    check_request::<TaskTriggerParams>("task_trigger.request.json", method::TASK_TRIGGER);
+    // The answer is the task the plugin would have submitted.
+    check_response::<TaskSubmitParams>("task_trigger.response.json");
 }
 
 #[test]

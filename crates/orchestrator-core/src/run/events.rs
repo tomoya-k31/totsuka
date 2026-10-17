@@ -79,7 +79,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                 respond,
             } => {
                 let task_id = task.id.clone();
-                match self.on_task_submit(source.clone(), workflow, task) {
+                match self.on_task_submit(source.clone(), workflow, *task) {
                     Ok(result) => {
                         // Host API audit (#497): a plugin asked the
                         // Orchestrator to create work, and this is the only

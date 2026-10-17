@@ -215,8 +215,9 @@ pub(crate) enum PluginEvent {
         source: String,
         /// The workflow the plugin says this task belongs to (0.6.0, #554).
         workflow: String,
-        /// The task in the common schema.
-        task: Task,
+        /// The task in the common schema. Boxed: it is by far the largest
+        /// payload on the channel, and every event would otherwise pay for it.
+        task: Box<Task>,
         /// Where the forwarder awaits the ack.
         respond: SubmitRespond,
     },

@@ -72,6 +72,11 @@ pub struct Capabilities {
     /// Orchestrator refuses a workflow that names `labels` on it at startup
     /// instead of silently never sending them.
     pub label_writeback: bool,
+    /// Answers `task/trigger` — producing one task on demand for a key it
+    /// names (task_source, 0.7.8, #918).
+    ///
+    /// Undeclared means `totsuka routine run` is refused for this source.
+    pub task_trigger: bool,
     /// Answers `config/schema` with a JSON Schema of its own config table,
     /// before `initialize` (any kind, 0.7.7, ADR-0113).
     ///

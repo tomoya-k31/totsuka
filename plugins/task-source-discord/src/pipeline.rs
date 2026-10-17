@@ -254,7 +254,8 @@ async fn submit_admitted<S: Submitter>(
         // wrote is byte-identical to the one already there anyway: both are
         // derived from the same message.
         SubmitOutcome::Duplicate => None,
-        SubmitOutcome::Rejected { reason } => {
+        // `Busy` needs a `series`, which this source never sets.
+        SubmitOutcome::Rejected { reason } | SubmitOutcome::Busy { reason } => {
             tracing::warn!(
                 task_id,
                 workflow = %workflow,

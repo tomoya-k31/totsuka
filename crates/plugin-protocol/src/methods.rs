@@ -64,6 +64,14 @@ pub mod method {
     pub const TASK_CLAIM: &str = "task/claim";
     /// Publish a result back to the source (O→P, F-07).
     pub const RESULT_PUBLISH: &str = "result/publish";
+    /// Ask the source to produce one task **now**, for a key it names
+    /// (O→P, 0.7.8, #918) — `totsuka routine run <name>`. The plugin answers
+    /// with the task instead of submitting it, and the Orchestrator ingests
+    /// the answer exactly as a `task/submit`. Only sent to plugins whose
+    /// [`Capabilities`] declare [`task_trigger`](crate::Capabilities::task_trigger).
+    ///
+    /// [`Capabilities`]: crate::Capabilities
+    pub const TASK_TRIGGER: &str = "task/trigger";
 
     // agent_ide.
     /// Dispatch a task to the agent (O→P); returns a session id.
@@ -137,6 +145,11 @@ pub const HOST_REQUESTS: &[HostRequest] = &[
         method: method::TASK_CLAIM,
         kind: PluginKind::TaskSource,
         sent_to: |caps| caps.task_claim,
+    },
+    HostRequest {
+        method: method::TASK_TRIGGER,
+        kind: PluginKind::TaskSource,
+        sent_to: |caps| caps.task_trigger,
     },
     HostRequest {
         method: method::RESULT_PUBLISH,
@@ -233,6 +246,18 @@ pub struct InitializeParams {
     /// whose `source` is this plugin), 0.6.0 / #554. Empty for other kinds.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub projects: Vec<ProjectInfo>,
+    /// The directory the Orchestrator's config lives in (0.7.8, #918): the
+    /// parent of `--config` when one was given, else `$XDG_CONFIG_HOME/totsuka`.
+    /// For a plugin that keeps files of its own next to `config.toml`
+    /// (`routines/`). `None` from an older Orchestrator.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_dir: Option<String>,
+    /// This machine's host key (0.7.8, #918) — the `<host>` of
+    /// `hosts/<host>.toml` (ADR-0106), so a plugin keying files by host uses
+    /// the same name instead of deriving its own. `None` from an older
+    /// Orchestrator.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
 }
 
 /// One workflow, as supplied to the plugins it names in
@@ -646,6 +671,12 @@ pub enum TaskSubmitStatus {
     /// Permanently unprocessable (e.g. the named workflow does not exist,
     /// or belongs to a different source). `reason` says why; drop and log.
     Rejected,
+    /// 0.7.8 (#918): a task of the same source and
+    /// [`series`](crate::Task::series) has not finished, so this run was not
+    /// started. `reason` names the running task. Final like the others: the
+    /// run is skipped, not deferred. Only ever sent for a task that set
+    /// `series`.
+    Busy,
 }
 
 /// `task/submit` result (O→P, 0.1.6).
@@ -656,6 +687,15 @@ pub struct TaskSubmitResult {
     /// Cause + next action, present for [`TaskSubmitStatus::Rejected`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+}
+
+/// `task/trigger` params (O→P, 0.7.8, #918). The result is a
+/// [`TaskSubmitParams`] — the task the plugin would have submitted.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskTriggerParams {
+    /// What to run, in the source's own terms (a routine's name). A key the
+    /// source does not know is a JSON-RPC error whose message says so.
+    pub key: String,
 }
 
 /// `task/lookup` params (P→O request, 0.2.4, #242).
@@ -1219,6 +1259,7 @@ mod tests {
             instructions: None,
             handle: None,
             branch_hint: None,
+            series: None,
         }
     }
 
@@ -1261,6 +1302,8 @@ mod tests {
                     .unwrap()
                     .clone(),
             }],
+            config_dir: None,
+            host: None,
         });
         round_trip(&InitializeResult {
             plugin_version: Version::new(1, 0, 0),
@@ -1297,6 +1340,8 @@ mod tests {
             projects: vec![],
             llm: None,
             workflows: vec![],
+            config_dir: None,
+            host: None,
         };
         let wire = serde_json::to_string(&empty).unwrap();
         assert!(!wire.contains("repositories"));

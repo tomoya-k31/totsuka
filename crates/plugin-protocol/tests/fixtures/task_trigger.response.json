@@ -1,0 +1,16 @@
+{
+  "jsonrpc": "2.0",
+  "id": 9,
+  "result": {
+    "task": {
+      "id": "nightly@manual-20261018T0930",
+      "source": "routine",
+      "title": "nightly",
+      "body": "依存関係の更新を確認して、必要なら PR を出してください。",
+      "repo_hint": "tomoya-k31/totsuka",
+      "priority": 0,
+      "series": "nightly"
+    },
+    "workflow": "routine"
+  }
+}
