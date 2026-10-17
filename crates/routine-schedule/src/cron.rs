@@ -48,8 +48,10 @@ impl FromStr for Schedule {
             days: field(day, "day", 1, 31)? as u32,
             months: field(month, "month", 1, 12)? as u16,
             weekdays: ((weekdays | (weekdays >> 7)) & 0x7f) as u8,
-            days_any: day == "*",
-            weekdays_any: weekday == "*",
+            // Vixie cron treats a field starting with `*` (`*`, `*/2`) as
+            // unrestricted when deciding how the two day fields combine.
+            days_any: day.starts_with('*'),
+            weekdays_any: weekday.starts_with('*'),
         })
     }
 }
@@ -164,6 +166,11 @@ mod tests {
         assert!(first_or_monday.matches(datetime!(2026-10-19 9:00 +9))); // a Monday
         assert!(!first_or_monday.matches(datetime!(2026-10-20 9:00 +9)));
         assert!(!s("0 9 1 * *").matches(datetime!(2026-10-19 9:00 +9)));
+        // A `*`-started step is "unrestricted" for that rule: AND, not OR.
+        let odd_mondays = s("0 9 */2 * 1");
+        assert!(odd_mondays.matches(datetime!(2026-10-19 9:00 +9))); // Monday the 19th
+        assert!(!odd_mondays.matches(datetime!(2026-10-26 9:00 +9))); // Monday the 26th
+        assert!(!odd_mondays.matches(datetime!(2026-10-21 9:00 +9))); // Wednesday the 21st
     }
 
     #[test]

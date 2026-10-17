@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:a73c8b8a401c0d0e027ced353282f80c8cf914b5935235e6fa03c61b31692fd5 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:7478871bba1c0c497be4837d27ad7c5cd98e1b358428e34413408cfcefd8886b -->
 
 # 設定リファレンス
 
@@ -1263,7 +1263,7 @@ enabled: false             # 省略時 true。false はスケジュールだけ�
 - frontmatter は YAML ではなく平らな `key: value` 行です。値は `"…"` / `'…'` で囲んでよく、空白の後の `#` はコメントです。**未知のキー・同じキーの重複・必須キーの欠落・空の本文は、その routine のエラー**になります（ログに 1 回出し、他の routine は動き続けます）
 - `schedule` の各フィールドは `*`・数値・`a-b`・`*/n`・`a-b/n`・それらのカンマ区切りです。曜日は `0`–`7`（0 と 7 が日曜）。日と曜日の両方を制限すると、**どちらかに合う日**に走ります。`MON` などの名前と `@daily` は使えません
 - ディレクトリは 30 秒ごとに読み直すので、編集は再起動なしで効きます。時差は起動時に 1 回だけ取るので、**夏時間の切り替えは次の起動から反映されます**
-- **PC のスリープ・停止中や `run` の停止中に逃した実行は、`catchup_window` 以内の直近 1 回にまとめて**、戻ったときに 1 回だけ走ります。それより古い回は捨てます。`0` は「時刻どおりのときだけ」です
+- **PC のスリープ・停止中や `run` の停止中に逃した実行は、`catchup_window` 以内の直近 1 回にまとめて**、戻ったときに 1 回だけ走ります。それより古い回は捨てます。`0` は「時刻どおりのときだけ」です。**ファイルを書いた時刻（分に切り捨て）より前の回は取り戻しません** —— 作ったばかり・`enabled` に戻したばかり・編集したばかりの routine が、直前に過ぎた回をすぐ走らせることはありません
 - **前回の実行が終わっていなければ（入力待ちも含む）その回は飛ばします**（キューに積みません）。手動実行（`totsuka routine run <name>`）も同じ理由で断られます。手動実行は定期の回を消費しません
 
 `[routine]` の全キー（未知のキーはエラー）:
@@ -1273,7 +1273,7 @@ enabled: false             # 省略時 true。false はスケジュールだけ�
 | `catchup_window` | string | `24h` | 逃した実行を取り戻す範囲。`0` / `90m` / `24h` / `7d` の形。routine 自身の `catchup_window` が勝つ |
 | `source_name` | string | `routine` | このソースの名前（タスクの `source` に入る） |
 
-routine の workflow は `source = "routine"` の `[[projects]]` を指します。**このソースは何も書き戻さない**ので `output = "none"` にします。無人で走るため **`design` / `implement` profile は向きません**（完了時に pane 上であなたの承認を待つため）。`answer` / `triage` は既定の出力が `source` なので弾かれます。`profile` を書かず、`mode` と `output` を明示してください:
+routine の workflow は `source = "routine"` の `[[projects]]` を指します。**このソースは何も書き戻さない**ので `output = "none"` にします。無人で走るため **`profile = "unattended"`** を使ってください。`design` / `implement` は完了時に pane 上であなたの承認を待ち、`answer` / `triage` は既定の出力が `source` なので弾かれ、profile を書かないと許可の設定が入らず Claude が許可プロンプトで止まりえます:
 
 ```toml
 [plugins.routine]
@@ -1289,8 +1289,7 @@ name = "routine"
 projects = ["routines"]
 trigger = {}               # キーは読まない。書くと起動時にエラー
 agent = "herdr"
-mode = "implement"
-output = "none"
+profile = "unattended"     # implement・出力 none・許可プロンプトなし・完了承認なし
 ```
 
 ## `[herdr]`

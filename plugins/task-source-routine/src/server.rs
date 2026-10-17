@@ -98,12 +98,23 @@ impl Site {
         })
     }
 
-    /// The slot a tick at `now` owes `routine`, if any.
+    /// The slot a tick at `now` owes `routine`, if any: the latest one in its
+    /// catch-up window that is not older than its file (the minute it was
+    /// written counts), so creating or re-enabling a routine does not run the
+    /// slot that just passed.
     pub fn due(&self, routine: &Routine, now: OffsetDateTime) -> Option<OffsetDateTime> {
         let window = routine.catchup_window.unwrap_or(self.window);
-        routine
+        let slot = routine
             .schedule
-            .latest_within(now.to_offset(self.offset), window)
+            .latest_within(now.to_offset(self.offset), window)?;
+        let written_minute = routine.written.map(|w| {
+            w - time::Duration::seconds(w.second().into())
+                - time::Duration::nanoseconds(w.nanosecond().into())
+        });
+        match written_minute {
+            Some(written) if slot < written => None,
+            _ => Some(slot),
+        }
     }
 }
 
@@ -397,7 +408,16 @@ mod tests {
     fn site(name: &str, files: &[(&str, &str)]) -> Site {
         let dir = test_support::scratch(name);
         for (file, text) in files {
-            std::fs::write(dir.join(file), text).unwrap();
+            let path = dir.join(file);
+            std::fs::write(&path, text).unwrap();
+            // Written long before the fixed `now`s below, so a slot is never
+            // held back as older than its file — whatever today's date is.
+            std::fs::File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000))
+                .unwrap();
         }
         Site {
             dir: Some(dir),
@@ -484,6 +504,21 @@ mod tests {
         )
         .await;
         assert_eq!(recorder.ids(), ["e-now@20261019T0400Z"]);
+    }
+
+    /// A routine written after a slot does not owe it; the minute it was
+    /// written still counts.
+    #[test]
+    fn a_slot_older_than_the_file_is_not_caught_up() {
+        let site = site("routine-due-written", &[]);
+        let mut routine = routine_schedule::parse("r", DAILY_9).unwrap();
+        let now = datetime!(2026-10-19 13:00 +9);
+        routine.written = Some(datetime!(2026-10-19 12:00 +9));
+        assert_eq!(site.due(&routine, now), None);
+        routine.written = Some(datetime!(2026-10-19 9:00:40 +9));
+        assert_eq!(site.due(&routine, now), Some(datetime!(2026-10-19 9:00 +9)));
+        routine.written = Some(datetime!(2026-10-18 20:00 +9));
+        assert_eq!(site.due(&routine, now), Some(datetime!(2026-10-19 9:00 +9)));
     }
 
     #[test]

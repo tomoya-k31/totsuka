@@ -20,6 +20,7 @@ routine 1 つ = `<config dir>/routines/<host>/<name>.md` 1 ファイル。`<conf
 プラグインは「最後に実行した時刻」を保存しない。代わりに:
 
 - **task id = `<name>@<予定時刻（UTC、分単位）>`**（例 `nightly@20261019T0000Z`）。同じ予定時刻を再送すると Orchestrator の `(source, id)` 重複検査で `duplicate` になる。daemon の再起動・スリープ復帰・プラグインのクラッシュ再起動をまたいでも二重に走らない
+- **ファイルを書いた時刻より前の予定時刻は取り戻さない**（`Routine::written`、分に切り捨て）。作ったばかり・`enabled` に戻したばかりの routine が、直前に過ぎた回をすぐ走らせないため。状態を持たずに済む唯一の「いつから有効か」の手がかりがファイルの更新時刻である
 - **`Task.series` = routine 名**。前回の実行が終わっていなければ（入力待ちも含む）Orchestrator が `busy` を返し、その回は飛ばす
 - メモリ上の `last`（routine ごとに最後に決着した id）は、毎 tick 同じ問い合わせを繰り返さないためだけのもの。消えても上の 2 つが正しさを守る
 
@@ -45,7 +46,7 @@ cron は**ローカル時刻**で照合する。時差は `main` が **tokio の
 
 routine は workflow を名前で参照する（`workflow:`。このソースを名指す workflow が 1 つなら省略可）。workflow の `projects` は `source = "routine"` の `[[projects]]` を指す。**このソースは何も publish しない**（`outputs` を宣言しない）ので、workflow は `output = "none"`。成果物はエージェントがプロンプトに従って PR やスキルで外へ出す。
 
-無人で走るので、**`design` / `implement` profile は向かない**（完了時に pane 上で人間の承認を待つ）。`answer` / `triage` は既定の出力が `source` なので弾かれる。profile を書かず `mode` と `output = "none"` を明示するのが基本形（[設定リファレンス](/development/config-reference.md)）。
+無人で走るので、workflow は **`profile = "unattended"`**（[設定リファレンス](/development/config-reference.md)）。`design` / `implement` は完了時に pane 上で人間の承認を待ち、`answer` / `triage` は既定の出力が `source` なので弾かれ、profile を書かない明示記法には許可の設定が入らず claude が許可プロンプトで止まる（止まった回は未終了のまま残り、以降の回は `busy` で飛ぶ）。
 
 trigger のキーは 1 つも読まないので、workflow の `trigger` に書いたキーは起動時エラーになる（`trigger = {}`）。`on_*` の status 書き戻しは受け付けて何もしない。
 

@@ -471,8 +471,8 @@
 #   projects = ["routines"]
 #   trigger = {}                            # no keys: what runs is in each file
 #   agent = "herdr"
-#   mode = "implement"
-#   output = "none"                         # this source publishes nothing
+#   profile = "unattended"                  # nobody at the pane: no permission prompts, no
+#                                           #   approval when done, output none
 
 # [routine]
 # catchup_window = "24h"                    # how far back a run missed while the machine was off is

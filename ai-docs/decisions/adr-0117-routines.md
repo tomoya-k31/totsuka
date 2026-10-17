@@ -35,7 +35,7 @@ Claude のルーティンのように「決まった時刻に、決まったリ�
 4. **冪等性は既存の重複検査に任せ、プラグインは状態を持たない**。task id を `routine:<name>@<予定時刻>` にすると、同じ予定時刻の再送は `(source, id)` の UNIQUE で `duplicate` になる。daemon の再起動やスリープからの復帰をまたいでも二重に走らない。
 5. **実行中の重複は本体が止める**: プロトコル 0.7.8 で `Task.series` と `TaskSubmitStatus::Busy` を足す。同じ source・series のタスクが終わっていなければ（入力待ちも含む）submit は `busy` になり、その回は飛ばす（キューに積まない）。プラグインからはタスクの状態が見えないので、判定は状態を持つ本体に置く。どのソースでも使える汎用の仕組みにする。
 6. **手動実行 `totsuka routine run <name>` は `task/trigger`**: control UDS（[ADR-0094](/decisions/adr-0094-task-control-endpoints.md)）に `POST /routine/run` を足し、本体がプラグインに `task/trigger {key}` を送る。プラグインは **submit せず、応答として `TaskSubmitParams` を返し**、本体がそれを `task/submit` と同じ経路で ingest して、結果（accepted / busy＋実行中のタスク / 知らない key）を CLI に返す。プラグインが応答の途中で `task/submit` を呼び返す形にしなかったのは、本体が trigger の応答を待つ間にそのプラグインの submit を待たせる再入を作らないため。
-7. **プラグインへの受け渡し**: `InitializeParams` に `config_dir`（`--config` があればその親、無ければ `$XDG_CONFIG_HOME/totsuka`）と `host`（ADR-0106 の host key）を足す。プラグインは protocol / sdk 以外に依存できない（arch-lint）ので、host key の求め方を複製させない。
+7. **プラグインへの受け渡し**: `InitializeParams` に `config_dir`（`--config` があればその親、無ければ `$XDG_CONFIG_HOME/totsuka`）と `host`（ADR-0106 の host key）を足す。host key の求め方をプラグインに複製させない（プラグインが依存できるのは arch-lint の許可リストにあるクレートだけで、core はそこに無い）。
 8. **無人用の profile `unattended` を足す。** routine は pane に誰も居ないまま走る。既存の profile はどれも合わない（`design` / `implement` は完了時に pane 上で人間の承認を待ち、`answer` / `triage` は既定の出力が `source` で、このソースは何も publish しない）。profile を書かない明示記法には permissions ブロックが入らず（[ADR-0041](/decisions/adr-0041-unattended-permission-mode.md) が意図して避けた形）、claude は既定の許可プロンプトで止まる。止まった回は未終了のまま残るので、以降の回はすべて `busy` で飛ぶ。`unattended` は mode `implement`・output `none`・verification `llm`・`permissions.defaultMode = "auto"`、deny は `AskUserQuestion` だけ（答える人が居ないので訊かせない）、完了の人間承認・成果物 URL の要求・`gh` の前提検査は無し。routine 以外の無人実行にも使える名前にした。
 
 # Consequences
@@ -46,4 +46,5 @@ Claude のルーティンのように「決まった時刻に、決まったリ�
 - `duplicate` による冪等性は tasks の行が残っていることが前提になる。`catchup_window` より新しい行を消す掃除は入れないこと。
 - cron は依存を足さずに自前で解析する（照合は分単位で、範囲を 1 分ずつ遡って走査する）。
 - cron はローカル時刻で照合し、時差はプラグインの起動時に tokio のランタイムを作る前に 1 回だけ取る（`time` はマルチスレッドでの取得を拒む。[ADR-0097](/decisions/adr-0097-log-timestamps-local-display.md) と同じ方式）。**夏時間の切り替えは次の起動まで反映されない**。
-- routine は無人で走るので、`design` / `implement` profile（完了時に pane 上で人間の承認を待つ）は向かず、`answer` / `triage` は既定の出力が `source` で使えない。workflow は profile を書かず `mode` と `output = "none"` を明示する。
+- routine の workflow は `profile = "unattended"`（決定 8）。
+- ファイルを書いた時刻（分に切り捨て）より前の予定時刻は取り戻さない。状態を持たないプラグインが「この routine はいつから有効か」を知る手がかりはファイルの更新時刻だけで、これが無いと、作ったばかり・`enabled` に戻したばかりの routine が直前に過ぎた回をすぐ走らせる。代わりに、停止中に逃した回の直後にファイルを編集すると、その回は取り戻されない。

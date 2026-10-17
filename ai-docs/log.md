@@ -9,6 +9,7 @@
 * **Creation**: [routine-schedule](/components/routine-schedule.md) — routine ファイルの解析と cron の照合を持つ leaf の共有クレート（プラグインと `totsuka routine list` が共有）。[依存境界ルール](/architecture/workspace-dependency-rules.md) に `routine-leaf` を追加
 * **Update**: [設定リファレンス](/development/config-reference.md) — `[routine]`（`catchup_window` / `source_name`）と routine ファイルの書式、無人実行に合う workflow の形
 * **Update**: [ADR-0117](/decisions/adr-0117-routines.md) — 時差は起動時に 1 回だけ取る（夏時間は次の起動から）、workflow は profile を書かず `mode` と `output = "none"`
+* **Update**: [task-source-routine](/components/task-source-routine.md) / [設定リファレンス](/development/config-reference.md) — routine の workflow は `profile = "unattended"`。ファイルを書いた時刻より前の予定時刻は取り戻さない。日・曜日フィールドは `*` 始まりを「制限なし」とみなす（Vixie cron と同じ）
 * **Decision**: [ADR-0117 routines — host ごとの定期実行](/decisions/adr-0117-routines.md) — `routines/<host>/<name>.md` を `task-source-routine` プラグインが時刻ごとに submit する。逃した分は直近 1 回、冪等性は既存の重複検査、実行中の重複は `Task.series` と `busy`、手動実行は `task/trigger`
 * **Update**: [plugin-protocol](/components/plugin-protocol.md) — 0.7.8 で `Task.series`・`TaskSubmitStatus::Busy`・`task/trigger`・`Capabilities.task_trigger`・`InitializeParams.config_dir` / `host`
 * **Update**: [plugin-sdk](/components/plugin-sdk.md) / [プラグイン開発ガイド](/development/plugin-dev-guide.md) — `TaskSourceHandler::task_trigger`（既定 `METHOD_NOT_FOUND`、`task_trigger` でゲート）と `SubmitOutcome::Busy`

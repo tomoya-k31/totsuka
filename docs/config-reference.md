@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:a73c8b8a401c0d0e027ced353282f80c8cf914b5935235e6fa03c61b31692fd5 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:7478871bba1c0c497be4837d27ad7c5cd98e1b358428e34413408cfcefd8886b -->
 
 # Configuration reference
 
@@ -1264,7 +1264,7 @@ Check the dependencies for updates and open a PR if any are needed.
 - The frontmatter is flat `key: value` lines, not YAML. Values may be wrapped in `"…"` or `'…'`, and a `#` after a space starts a comment. **An unknown key, a repeated key, a missing required key, or an empty body is an error for that routine** (logged once; the other routines keep running)
 - Each `schedule` field is `*`, a number, `a-b`, `*/n`, `a-b/n`, or a comma list of those. Weekday is `0`–`7` (both 0 and 7 are Sunday). When both day fields are restricted, a day matching **either** runs. Names such as `MON` and `@daily` are not accepted
 - The directory is re-read every 30 seconds, so edits take effect without a restart. The time-zone offset is read once at startup, so **a daylight-saving change takes effect at the next start**
-- **Runs missed while the machine slept or was off, or while `run` was stopped, collapse into the latest one within `catchup_window`**, which runs once when things come back. Older ones are dropped. `0` means "only on time"
+- **Runs missed while the machine slept or was off, or while `run` was stopped, collapse into the latest one within `catchup_window`**, which runs once when things come back. Older ones are dropped. `0` means "only on time". **A run from before the file was last written (to the minute) is not made up**, so a routine you just created, re-enabled or edited does not immediately run the time that just passed
 - **If the previous run has not finished (waiting for input counts), that run is skipped**, not queued. A manual run (`totsuka routine run <name>`) is refused the same way. A manual run does not use up a scheduled one
 
 Every `[routine]` key (unknown keys are an error):
@@ -1274,7 +1274,7 @@ Every `[routine]` key (unknown keys are an error):
 | `catchup_window` | string | `24h` | How far back a missed run is made up. `0` / `90m` / `24h` / `7d`. A routine's own `catchup_window` wins |
 | `source_name` | string | `routine` | This source's name (it appears as the task's `source`) |
 
-A routine's workflow draws from a `[[projects]]` entry with `source = "routine"`. **This source posts nothing back**, so use `output = "none"`. Routines run unattended, so **the `design` and `implement` profiles do not fit** (they wait for your approval in the pane when done), and `answer` / `triage` default to `source` output, which is rejected. Leave out `profile` and write `mode` and `output`:
+A routine's workflow draws from a `[[projects]]` entry with `source = "routine"`. **This source posts nothing back**, so use `output = "none"`. Routines run unattended, so use **`profile = "unattended"`**. `design` and `implement` wait for your approval in the pane when done, `answer` / `triage` default to `source` output, which is rejected, and without a profile no permission settings are applied, so Claude can stop at a permission prompt:
 
 ```toml
 [plugins.routine]
@@ -1290,8 +1290,7 @@ name = "routine"
 projects = ["routines"]
 trigger = {}               # no keys are read; writing one fails at startup
 agent = "herdr"
-mode = "implement"
-output = "none"
+profile = "unattended"     # implement, output none, no permission prompts, no approval
 ```
 
 ## `[herdr]`

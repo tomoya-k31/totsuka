@@ -34,7 +34,7 @@ What each source supports:
 | notion | no | with `"output": "none"` | yes | yes |
 | slack | yes | yes | no | yes |
 | discord | yes | yes | yes | yes |
-| routine | no | no | no | no: no profile, `"mode"` and `"output": "none"` (see routine.md) |
+| routine | no | no | no | no: use `"profile": "unattended"` (see routine.md) |
 
 - **GitHub and Notion cannot post a reply.** `answer` and `triage` default to output `source`, which `validate --offline` rejects there with "does not declare the `source` output capability". `answer` has no other product, so it is out; `triage` works with `"output": "none"` (the filed item's URL is still checked).
 - **Slack has no design instructions.** A Slack `design` workflow posts nothing, and validation still passes. Steer the user to `triage`.

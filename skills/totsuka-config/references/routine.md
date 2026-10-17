@@ -12,11 +12,11 @@ Nothing is required: `{}`. Offer `catchup_window` only if the user asks how miss
 
 ## Workflow
 
-Routines run unattended, so do not use a profile: `design` / `implement` wait for the user's approval in the pane when done, and `answer` / `triage` default to output `source`, which this source rejects (it posts nothing back). Write `mode` and `output` instead:
+Routines run unattended, so use the `unattended` profile: `design` / `implement` wait for the user's approval in the pane when done, `answer` / `triage` default to output `source`, which this source rejects (it posts nothing back), and a workflow without a profile gets no permission settings, so Claude stops at a permission prompt with nobody to answer it.
 
 ```json
 {"name": "routine", "projects": ["routines"], "trigger": {}, "agent": "herdr",
- "mode": "implement", "output": "none"}
+ "profile": "unattended"}
 ```
 
 - `trigger` stays empty: any key in it fails at Start.

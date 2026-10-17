@@ -40,6 +40,10 @@ pub struct Routine {
     /// Whether the schedule fires. A disabled routine can still be run by
     /// hand.
     pub enabled: bool,
+    /// When its file was last written, as read by [`load_dir`]. A slot from
+    /// before this is not caught up: a routine created, re-enabled or edited
+    /// just now does not owe the runs from before it said so.
+    pub written: Option<time::OffsetDateTime>,
     /// The body: what the agent is asked to do.
     pub prompt: String,
 }
@@ -141,6 +145,7 @@ pub fn parse(name: &str, text: &str) -> Result<Routine, String> {
             Some("false") => false,
             Some(other) => return Err(format!("`enabled: {other}` → write true or false")),
         },
+        written: None,
         prompt,
     })
 }
@@ -179,11 +184,13 @@ pub fn parse_duration(text: &str) -> Result<Duration, String> {
     }
     let split = text.len().checked_sub(1).ok_or_else(bad)?;
     let (n, unit) = text.split_at(split);
-    let n: i64 = n.parse().map_err(|_| bad())?;
+    // Unsigned and 32-bit: a negative window means nothing, and a huge one
+    // would overflow `Duration` instead of failing here.
+    let n: u32 = n.parse().map_err(|_| bad())?;
     match unit {
-        "m" => Ok(Duration::minutes(n)),
-        "h" => Ok(Duration::hours(n)),
-        "d" => Ok(Duration::days(n)),
+        "m" => Ok(Duration::minutes(n.into())),
+        "h" => Ok(Duration::hours(n.into())),
+        "d" => Ok(Duration::days(n.into())),
         _ => Err(bad()),
     }
 }
@@ -198,9 +205,14 @@ pub fn load_dir(dir: &Path) -> Vec<(String, Result<Routine, String>)> {
         .filter_map(|e| e.ok()?.path().into())
         .filter_map(|path: std::path::PathBuf| {
             let name = path.file_name()?.to_str()?.strip_suffix(".md")?.to_string();
+            let written = std::fs::metadata(&path)
+                .and_then(|m| m.modified())
+                .ok()
+                .map(time::OffsetDateTime::from);
             let parsed = std::fs::read_to_string(&path)
                 .map_err(|e| format!("cannot read: {e}"))
-                .and_then(|text| parse(&name, &text));
+                .and_then(|text| parse(&name, &text))
+                .map(|routine| Routine { written, ..routine });
             Some((name, parsed))
         })
         .collect();
@@ -282,7 +294,7 @@ Open a PR if any moved.\n";
         assert_eq!(parse_duration("0"), Ok(Duration::ZERO));
         assert_eq!(parse_duration("90m"), Ok(Duration::minutes(90)));
         assert_eq!(parse_duration("7d"), Ok(Duration::days(7)));
-        for bad in ["", "h", "24", "1.5h", "-"] {
+        for bad in ["", "h", "24", "1.5h", "-", "-5h", "99999999999d"] {
             assert!(parse_duration(bad).is_err(), "{bad:?}");
         }
     }
@@ -299,7 +311,7 @@ Open a PR if any moved.\n";
         let names: Vec<_> = loaded.iter().map(|(n, _)| n.as_str()).collect();
         assert_eq!(names, ["a", "b"]);
         assert!(loaded[0].1.is_err());
-        assert!(loaded[1].1.is_ok());
+        assert!(loaded[1].1.as_ref().unwrap().written.is_some());
         assert!(load_dir(&dir.join("missing")).is_empty());
     }
 }
