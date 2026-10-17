@@ -319,6 +319,24 @@ fn main() {
                     }
                 }
             }
+            // `task/trigger` (0.7.8, #918): the answer for each key is staged
+            // as `"trigger": {"<key>": {"task": {...}, "workflow": "..."}}`;
+            // an unstaged key is the JSON-RPC error a real source returns.
+            "task/trigger" => {
+                record(&config, method, &params);
+                let key = params["key"].as_str().unwrap_or_default();
+                match config.get("trigger").and_then(|t| t.get(key)) {
+                    Some(answer) => Response::result(request_id(&id), answer.clone()),
+                    None => Response::error(
+                        request_id(&id),
+                        Error {
+                            code: error_code::INVALID_PARAMS,
+                            message: format!("no routine named `{key}`"),
+                            data: None,
+                        },
+                    ),
+                }
+            }
             // `dispatch_error` (#261): answer with an arbitrary JSON-RPC error
             // instead of a session id — the only way to drive the
             // orchestrator's *code-specific* dispatch paths from a test. The

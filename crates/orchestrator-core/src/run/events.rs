@@ -67,6 +67,13 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                 let _ = respond.send(outcome);
                 Ok(())
             }
+            // A control-UDS routine run (#918). Like a cancel, a DB failure
+            // propagates and drops `respond` (503 to the caller).
+            PluginEvent::Trigger { key, respond } => {
+                let outcome = self.trigger_task(key).await?;
+                let _ = respond.send(outcome);
+                Ok(())
+            }
             // A pushed task (`task/submit`, 0.1.6): persist, ack only after
             // the commit, then run repo selection so the loop's dispatch pass
             // can pick the task up. A persistence error answers the plugin

@@ -57,6 +57,8 @@ fn spec(protocol_req: &str) -> PluginSpec {
         projects: vec![],
         workflows: vec![],
         timeout: Duration::from_secs(10),
+        config_dir: None,
+        host: None,
     }
 }
 

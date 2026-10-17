@@ -38,7 +38,8 @@ use plugin_protocol::methods::{
     AgentState, ExecutionMode, NotReleased, NotifierEvent, NotifyParams, ResultPublishParams,
     SessionReleaseParams, StateNotification, TaskClaimOutcome, TaskClaimParams, TaskClaimResult,
     TaskDispatchParams, TaskDispatchResult, TaskLookupParams, TaskLookupResult, TaskSubmitParams,
-    TaskSubmitResult, TaskSubmitStatus, TaskUpdateLabelsParams, TaskUpdateStatusParams,
+    TaskSubmitResult, TaskSubmitStatus, TaskTriggerParams, TaskUpdateLabelsParams,
+    TaskUpdateStatusParams,
 };
 use plugin_protocol::{Notification, Task, jsonrpc, rpc};
 use serde_json::Value;
@@ -68,7 +69,7 @@ use crate::ports::llm::{
     Candidate, Classification, ClassifyError, ClassifyRequest, RepoClassifier,
 };
 use crate::ports::secret::SecretString;
-use crate::ports::signal_ingress::{FocusOutcome, TaskControlOutcome, TaskOp};
+use crate::ports::signal_ingress::{FocusOutcome, TaskControlOutcome, TaskOp, TriggerOutcome};
 use crate::recovery::{self, RecoveryReport, RetryPlan};
 use crate::repo_select::{ReadmeCache, RepoDecision, SelectConfig, select_repo};
 use crate::scheduler::{Limits, ReadyTask, SlotManager, counts_toward_slot, plan_dispatch};
@@ -205,6 +206,15 @@ pub(crate) enum PluginEvent {
         task_id: TaskId,
         /// Where the adapter awaits the outcome.
         respond: tokio::sync::oneshot::Sender<TaskControlOutcome>,
+    },
+    /// A `POST /routine/run` control request (#918): ask the source that can
+    /// trigger for the task of `key` (`task/trigger`), ingest it as a
+    /// `task/submit`, and answer over `respond`.
+    Trigger {
+        /// The source's own name for what to run (a routine's name).
+        key: String,
+        /// Where the adapter awaits the outcome.
+        respond: tokio::sync::oneshot::Sender<TriggerOutcome>,
     },
     /// A `task/submit` from a task source (P→O, 0.1.6): persist the task and
     /// answer the ack over `respond` **after** the durable write committed

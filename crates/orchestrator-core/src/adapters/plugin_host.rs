@@ -89,6 +89,11 @@ pub struct PluginSpec {
     /// and, for either kind, the plugin-owned options written on each
     /// workflow. Empty when no workflow names it (omitted from the wire).
     pub workflows: Vec<plugin_protocol::methods::WorkflowInfo>,
+    /// The directory the config lives in, supplied at `initialize` (#918).
+    /// `None` leaves it off the wire.
+    pub config_dir: Option<String>,
+    /// This machine's host key (ADR-0106), supplied at `initialize` (#918).
+    pub host: Option<String>,
     /// Per-call RPC timeout.
     pub timeout: Duration,
 }
@@ -526,9 +531,8 @@ impl Plugin {
             projects: std::mem::take(&mut spec.projects),
             llm: spec.llm.take(),
             workflows: std::mem::take(&mut spec.workflows),
-            // Filled in by the next layer, which resolves them (#918).
-            config_dir: None,
-            host: None,
+            config_dir: spec.config_dir.clone(),
+            host: spec.host.clone(),
         };
         let plugin = Self::spawn(spec)?;
 

@@ -2033,7 +2033,7 @@ fn check_plugins(
             not_probed.push((name.clone(), skip.summary));
             continue;
         }
-        match plugin_spec(&cx.store(), cfg, name, env) {
+        match cx.plugin_spec(cfg, name, env) {
             // `plugin_spec` already resolved the plugin's `[<name>]` table
             // into `init_config`; reuse it rather than re-reading and hitting
             // the Keychain a second time.

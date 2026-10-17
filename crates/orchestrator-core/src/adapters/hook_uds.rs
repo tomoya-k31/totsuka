@@ -18,9 +18,9 @@
 //!   bytes. Chunked transfer-encoding is rejected by design (the hook scripts
 //!   send fixed-length `curl --data` POSTs). The method is **not** inspected
 //!   (deliberately — same-user 0600 + Bearer make method routing pure surface),
-//!   and the path only minimally: the exact paths `/focus`, `/task/cancel` and
-//!   `/task/retry` — whatever the method — are the control endpoints (F-94,
-//!   #760, below); **every other path** is signal ingestion (E-08
+//!   and the path only minimally: the exact paths `/focus`, `/task/cancel`,
+//!   `/task/retry` and `/routine/run` — whatever the method — are the control
+//!   endpoints (F-94, #760, #918, below); **every other path** is signal ingestion (E-08
 //!   forward-compat for the hook scripts is unchanged).
 //! - **Auth** (E-03): `Authorization: Bearer <token>`, constant-time compared
 //!   to the token `run` generated ([`hooks::token`](crate::hooks::token)). A mismatch is `401` + a warning;
@@ -73,6 +73,15 @@
 //! `{"ok": bool, "from"?, "state"?, "requeued"?, "reason"?}`: a refusal (task
 //! unknown, already finished, not retryable) is `ok: false` with the advice in
 //! `reason`, never an error status. Everything else is as for `/focus`.
+//!
+//! ## Control endpoint (`POST /routine/run`, #918)
+//!
+//! `{"key": "nightly"}` asks the engine to have the source that declares
+//! `task_trigger` produce the task for that key now (`task/trigger`) and
+//! ingest it like a `task/submit`. The reply is `200` with
+//! `{"ok": bool, "task_id"?, "reason"?}`: an unknown key, a series still
+//! running, or no source able to trigger is `ok: false` with the advice in
+//! `reason`. Everything else is as for `/focus`.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -244,6 +253,7 @@ async fn handle_connection<P: SignalPort, C: ControlPort>(
         "/task/retry" => {
             return handle_task(&mut stream, control, TaskOp::Retry, &request.body).await;
         }
+        "/routine/run" => return handle_trigger(&mut stream, control, &request.body).await,
         _ => {}
     }
 
@@ -325,6 +335,35 @@ async fn handle_task<C: ControlPort>(
     }
 }
 
+/// Answer a `POST /routine/run` control request (#918): parse `{"key": …}`,
+/// ask the engine through the [`ControlPort`], and reply the
+/// [`TriggerOutcome`](crate::ports::TriggerOutcome) as JSON.
+async fn handle_trigger<C: ControlPort>(
+    stream: &mut UnixStream,
+    control: &C,
+    body: &[u8],
+) -> io::Result<()> {
+    let key = serde_json::from_slice::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.get("key")?.as_str().map(str::to_string))
+        .filter(|k| !k.is_empty());
+    let Some(key) = key else {
+        tracing::warn!("routine run request rejected: body is not {{\"key\": <non-empty string>}}");
+        return write_response(stream, 400, "Bad Request").await;
+    };
+    match control.trigger(key).await {
+        Ok(outcome) => {
+            let body =
+                serde_json::to_string(&outcome).unwrap_or_else(|_| r#"{"ok":false}"#.to_string());
+            write_json_response(stream, &body).await
+        }
+        Err(e) => {
+            tracing::error!("routine run request failed: {e}");
+            write_response(stream, 503, "Service Unavailable").await
+        }
+    }
+}
+
 /// Extract `task_id` from a control request body. Accepts a JSON number or a
 /// numeric string (`{"task_id": 42}` / `{"task_id": "42"}` — the notifier's
 /// `click_command` template renders it as text).
@@ -349,7 +388,7 @@ fn parse_task_id(body: &[u8]) -> Result<TaskId, String> {
 /// A parsed request: the request path, lower-cased header names, and the raw
 /// body bytes. Of the request line only the path is kept, and it is inspected
 /// only for the exact control endpoints (`/focus`, F-94; `/task/cancel` and
-/// `/task/retry`, #760) — the method and any other path stay uninterpreted
+/// `/task/retry`, #760; `/routine/run`, #918) — the method and any other path stay uninterpreted
 /// (E-08).
 struct Request {
     path: String,
@@ -804,6 +843,7 @@ mod tests {
     struct RecordingControl {
         asked: Arc<Mutex<Vec<i64>>>,
         tasks: Arc<Mutex<Vec<(TaskOp, i64)>>>,
+        triggers: Arc<Mutex<Vec<String>>>,
     }
 
     impl ControlPort for RecordingControl {
@@ -843,6 +883,25 @@ mod tests {
                 }
                 (_, false) => TaskControlOutcome::refused("task is already done"),
             };
+            async move { Ok(outcome) }
+        }
+
+        fn trigger(
+            &self,
+            key: String,
+        ) -> impl std::future::Future<
+            Output = Result<
+                crate::ports::signal_ingress::TriggerOutcome,
+                crate::ports::signal_ingress::SignalError,
+            >,
+        > + Send {
+            use crate::ports::signal_ingress::TriggerOutcome;
+            let outcome = if key == "nightly" {
+                TriggerOutcome::started(TaskId(5))
+            } else {
+                TriggerOutcome::refused(format!("no routine named `{key}`"))
+            };
+            self.triggers.lock().unwrap().push(key);
             async move { Ok(outcome) }
         }
     }
@@ -1149,6 +1208,43 @@ mod tests {
             response.ends_with(r#"{"ok":false,"reason":"task is already done"}"#),
             "response was {response:?}"
         );
+        stop(stop_tx, handle).await;
+    }
+
+    #[tokio::test]
+    async fn routine_run_answers_the_outcome_and_needs_a_key() {
+        let (socket, sink, control, stop_tx, handle) = spawn_server(None);
+        let started = send_raw_full(
+            &socket,
+            &control_post("/routine/run", None, r#"{"key":"nightly"}"#),
+        )
+        .await;
+        assert!(
+            started.ends_with(r#"{"ok":true,"task_id":5}"#),
+            "response was {started:?}"
+        );
+        let refused = send_raw_full(
+            &socket,
+            &control_post("/routine/run", None, r#"{"key":"nope"}"#),
+        )
+        .await;
+        assert!(
+            refused.starts_with("HTTP/1.1 200"),
+            "response was {refused:?}"
+        );
+        assert!(
+            refused.contains(r#""ok":false"#),
+            "response was {refused:?}"
+        );
+        for body in [r#"{"key":""}"#, r#"{"name":"nightly"}"#, "not json"] {
+            let status = send_raw(&socket, &control_post("/routine/run", None, body)).await;
+            assert!(status.contains("400"), "{body}: status was {status:?}");
+        }
+        assert_eq!(
+            control.triggers.lock().unwrap().as_slice(),
+            ["nightly", "nope"]
+        );
+        assert!(sink.signals().is_empty());
         stop(stop_tx, handle).await;
     }
 
