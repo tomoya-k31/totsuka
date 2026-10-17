@@ -1,0 +1,1 @@
+* **Update**: [Discord セットアップ Quickstart](/operations/discord-quickstart.md) の `[plugins.discord]` の例を直した（#904）。未知のキー `command` を含み `kind` を欠いていたため、そのまま写すと config の読み込みで失敗していた（隔離環境で確認）。`kind = "task_source"` にした。

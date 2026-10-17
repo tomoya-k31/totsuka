@@ -4,7 +4,7 @@ title: Discord セットアップ Quickstart（task-source-discord）
 description: "専用サーバーの用意 → Developer Portal でのアプリ/bot 作成 → MESSAGE CONTENT INTENT の有効化 → bot 招待 → id の取得 → config.toml の記述 → doctor → run --watch までの導入手順と、詰まりやすい 4 箇所の対処。"
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-discord
 tags: [operations, playbook, discord, setup, channel-watch]
-generated: { by: claude-code/opus-5, at: 2026-09-06T06:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-17T10:40:00+09:00 }
 status: stable
 owner: tomoya-k31
 stale_after: 2027-03-06
@@ -53,7 +53,7 @@ path = "~/Workspace/my-docs"
 
 [plugins.discord]
 enabled = true
-command = "discord"
+kind = "task_source"
 
 [discord]
 bot_token = "op://Dev/Discord/bot_token"   # 必須

@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](discord-setup.ja.md)
 
-<!-- generated-from: ai-docs/operations/discord-quickstart.md sha256:3ef2a232c07fa03c82dcf2bc435064a8e21105f52701e238034769f23e556ea5 -->
+<!-- generated-from: ai-docs/operations/discord-quickstart.md sha256:05ab8a0f02ea5fc9f86cf80794366cd2e976c6fdf5e51913664458d8ba60dd8a -->
 
 # Setting up the Discord source
 
@@ -45,7 +45,7 @@ path = "~/Workspace/my-docs"
 
 [plugins.discord]
 enabled = true
-command = "discord"
+kind = "task_source"
 
 [discord]
 bot_token = "op://Dev/Discord/bot_token"
