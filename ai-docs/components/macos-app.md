@@ -43,7 +43,7 @@ owner: tomoya-k31
 
 # テスト
 
-- `apps/macos/test.sh`（`TotsukaKit` の swift-testing。終了コードの方針、版の比較、イベントの解釈、通知フィルタ、`secret:` の名前の収集（`env_file` の中も）、`gh auth token` の引数（ホストの変換と、決められない値の除外）、`$TERMINAL` / `$EDITOR` のシェル行と引用、ログファイルの書き直し、ログインシェルの環境、整数の往復、エージェント IDE の抽出・herdr ソケットの解決順・orca の稼働判定・focus 先アプリ、Recent 行の Retry と「Retry in」の候補）
+- `apps/macos/test.sh`（`TotsukaKit` の swift-testing。終了コードの方針、版の比較、イベントの解釈、通知フィルタ、`secret:` の名前の収集（`env_file` の中も）、`gh auth token` の引数（ホストの変換と、決められない値の除外）、`$TERMINAL` / `$EDITOR` のシェル行と引用、ログファイルの書き直し、ログインシェルの環境、整数の往復、エージェント IDE の抽出・herdr ソケットの解決順・orca の稼働判定・focus 先アプリ、Recent 行の Retry と「Retry in」の候補、`routine list --json` の読み取りと routine のファイルの場所）
 - CI の `macos-app.yml`（`apps/macos/**` を触った PR と手動実行だけ。`on: paths` はワークフロー単位でしか効かないので `ci.yml` とは分けた）: `swift test` と、XcodeGen + `xcodebuild` での `.app` のビルド。ビルドした `.app` は `ditto` で zip にして artifact `Totsuka.app`（7 日）に残す —— 実機で試すにはこれを `~/Applications` に展開する（`/tmp` に置くと通知が許可されない）
 - UI と、実機の Keychain・通知・ログイン項目の挙動はテストが無い。ADR-0113 の「実測」がプロトタイプでの確認の記録
 
