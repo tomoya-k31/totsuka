@@ -1,6 +1,8 @@
 ---
 name: okf-search
-description: ai-docs/ 配下（OKF Knowledge Bundle）を type/status/owner/resource/tags/generated/verified などの frontmatter で横断的に絞り込んでから読むときに使う。トリガー: 「type が Decision の一覧」「status が deprecated なdocsを教えて」「特定resourceに関するドキュメントを探して」「最近更新されたdocsは？」「〇〇タグのドキュメントをまとめて」「人間が検証済みのdocsは？」「賞味期限切れのdocsは？」等、ディレクトリ構造を1つずつ辿るより先にメタデータで候補を絞りたい依頼。
+description: "ai-docs/ 配下（OKF Knowledge Bundle）を type/status/owner/resource/tags/generated/verified などの frontmatter で横断的に絞り込んでから読むときに使う。トリガー: 「type が Decision の一覧」「status が deprecated なdocsを教えて」「特定resourceに関するドキュメントを探して」「最近更新されたdocsは？」「〇〇タグのドキュメントをまとめて」「人間が検証済みのdocsは？」「賞味期限切れのdocsは？」等、ディレクトリ構造を1つずつ辿るより先にメタデータで候補を絞りたい依頼。"
+metadata:
+  internal: true
 ---
 
 # OKF Search Skill
