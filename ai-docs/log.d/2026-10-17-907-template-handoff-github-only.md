@@ -1,0 +1,1 @@
+* **Update**: `totsuka setup` の雛形のレシピ「Design → implement handoff」と [設定リファレンス](/development/config-reference.md) の例に、GitHub 限定であることを書いた（#907）。Notion のページは全ワークフローを通して 1 回しか走らない（[ADR-0064](/decisions/adr-0064-notion-at-most-once.md)）ので、このレシピを Notion に当てはめると design を通ったページを implement が拾わない。検証は通り起動時のエラーも出ないため、黙って動かない設定になっていた。

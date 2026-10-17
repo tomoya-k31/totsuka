@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:8b30410aae8c112e198be9e98ef29d7fe6dd79df1753218e35a26e714d045f9e -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:b5cf0475daf50a88b34a76e3e9d8d1f9935fcbd8d633c678f56331d363b703a6 -->
 
 # Configuration reference
 
@@ -1392,7 +1392,7 @@ Both filter tables take the same six `bool` keys, each falling back to the level
 
 ## Example
 
-A design-to-implementation handoff:
+A design-to-implementation handoff (**GitHub only**: a Notion page runs once across all workflows, so a page that went through design is never picked up by implement):
 
 ```toml
 [[workflows]]

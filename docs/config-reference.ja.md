@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:8b30410aae8c112e198be9e98ef29d7fe6dd79df1753218e35a26e714d045f9e -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:b5cf0475daf50a88b34a76e3e9d8d1f9935fcbd8d633c678f56331d363b703a6 -->
 
 # 設定リファレンス
 
@@ -1391,7 +1391,7 @@ waiting_input = false
 
 ## 例
 
-設計から実装へのハンドオフ。
+設計から実装へのハンドオフ（**GitHub のみ**。Notion のページは全ワークフローを通して 1 回しか実行されないので、design を通ったページを implement が拾うことはありません）。
 
 ```toml
 [[workflows]]
