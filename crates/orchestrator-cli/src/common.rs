@@ -288,13 +288,6 @@ impl Cx {
         Ok(StateDb::open_no_migrate(&path)?)
     }
 
-    /// The plugin store under the data directory, told where this build's
-    /// bundled plugins live (#611).
-    ///
-    /// The bundled root is resolved from the **running** executable on every
-    /// call, never stored, so a plugin installed with `--bundled` follows the
-    /// CLI across an upgrade with nothing to re-run. `None` here is normal for
-    /// a `cargo install` build, which ships no plugins.
     /// [`plugin_spec`](orchestrator_core::plugins::plugin_spec) plus where
     /// the config lives (#918): the parent of `--config`, else the XDG config
     /// directory (also when `hosts/<host>.toml` was chosen), and the host key.
@@ -322,6 +315,13 @@ impl Cx {
         }
     }
 
+    /// The plugin store under the data directory, told where this build's
+    /// bundled plugins live (#611).
+    ///
+    /// The bundled root is resolved from the **running** executable on every
+    /// call, never stored, so a plugin installed with `--bundled` follows the
+    /// CLI across an upgrade with nothing to re-run. `None` here is normal for
+    /// a `cargo install` build, which ships no plugins.
     pub fn store(&self) -> PluginStore {
         PluginStore::new(self.paths.data_dir().join("plugins"))
             .with_bundled_root(crate::bundled::locate(None))
