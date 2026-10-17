@@ -186,6 +186,18 @@ struct MenuContent: View {
                         .help("Open config.toml in $EDITOR")
                     Button { app.openLogs() } label: { Label("Logs", systemImage: "doc.text") }
                         .help("Follow totsuka run's output in $TERMINAL")
+                    // Opening only: a new routine is written with the
+                    // totsuka-routine skill or by hand (#918).
+                    if let routines = app.routines {
+                        Menu {
+                            ForEach(routines.routines, id: \.name) { routine in
+                                Button(routine.name) { app.openRoutine(routine.name) }
+                            }
+                        } label: {
+                            Label("Routines", systemImage: "clock.arrow.circlepath")
+                        }
+                        .help("Open a routine file in $EDITOR")
+                    }
                     Divider()
                     Toggle(isOn: Binding(
                         get: { app.launchesAtLogin }, set: { app.launchesAtLogin = $0 })

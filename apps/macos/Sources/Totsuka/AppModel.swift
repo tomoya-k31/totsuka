@@ -36,6 +36,11 @@ final class AppModel: ObservableObject {
     /// The last `config get`, re-read with every IDE check.
     private var config: JSONValue?
     private var checkingIDEs = false
+    /// This machine's routines (#918), re-read with every IDE check. `nil`
+    /// when there are none to open — no routine plugin, no files, or a CLI
+    /// older than `routine list` — and the menu then shows no Routines item.
+    @Published private(set) var routines: RoutineList?
+    private var listingRoutines = false
     private var iconTimer: Timer?
     private var refreshing = false
     /// The last lines of `run`'s stderr, for the failure message. The full
@@ -408,12 +413,31 @@ final class AppModel: ObservableObject {
                 notice = "There is no config.toml yet at \(doc.configPath) → run `totsuka init`"
                 return
             }
-            if let line = editorCommand(environment: cli.environment, path: doc.configPath) {
-                launch(line, what: "$TERMINAL -e $EDITOR")
-            } else {
-                launch("exec open -t \(shellQuote(doc.configPath))", what: "open -t")
-            }
+            openInEditor(doc.configPath)
         }
+    }
+
+    /// `path` in `$EDITOR` inside `$TERMINAL`, else in the default text editor.
+    private func openInEditor(_ path: String) {
+        guard let cli else { return }
+        if let line = editorCommand(environment: cli.environment, path: path) {
+            launch(line, what: "$TERMINAL -e $EDITOR")
+        } else {
+            launch("exec open -t \(shellQuote(path))", what: "open -t")
+        }
+    }
+
+    /// A routine's file (#918), opened like config.toml. Never creates one:
+    /// a file deleted since the last listing is reported instead, because an
+    /// editor given a missing path would start a new routine.
+    func openRoutine(_ name: String) {
+        guard let routines else { return }
+        let path = routines.path(of: name)
+        guard FileManager.default.fileExists(atPath: path) else {
+            notice = "\(name).md is gone from \(routines.dir)"
+            return
+        }
+        openInEditor(path)
     }
 
     /// Logs: `run`'s stderr followed with `tail -F` in `$TERMINAL`, else in
@@ -491,10 +515,16 @@ final class AppModel: ObservableObject {
                 self?.checkBundle()
             }
         }
-        Task { await checkAgentIDEs() }
+        Task {
+            await checkAgentIDEs()
+            await listRoutines()
+        }
         // Less often than the menu: an orca check runs the orca CLI.
         Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
-            Task { @MainActor in await self?.checkAgentIDEs() }
+            Task { @MainActor in
+                await self?.checkAgentIDEs()
+                await self?.listRoutines()
+            }
         }
     }
 
@@ -530,6 +560,21 @@ final class AppModel: ObservableObject {
             }
         }
         agentIDEs = checked
+    }
+
+    /// `routine list --json` into [`routines`]. Any failure — the routine
+    /// plugin not enabled, an old CLI — means nothing to open.
+    private func listRoutines() async {
+        guard !listingRoutines, let cli else { return }
+        listingRoutines = true
+        defer { listingRoutines = false }
+        guard let result = try? await cli.run(["routine", "list", "--json"]), result.status == 0,
+            let list = try? RoutineList.decode(result.stdout), !list.routines.isEmpty
+        else {
+            routines = nil
+            return
+        }
+        routines = list
     }
 
     func refreshMenu() async {

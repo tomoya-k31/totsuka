@@ -115,6 +115,28 @@ public struct ConfigDocument: Sendable {
     }
 }
 
+/// `totsuka routine list --json` (#918): this machine's routine files, in
+/// the CLI's order (file name). Only what the menu opens is kept.
+public struct RoutineList: Decodable, Equatable, Sendable {
+    /// `<config dir>/routines/<host>`.
+    public let dir: String
+    public let routines: [Routine]
+
+    public struct Routine: Decodable, Equatable, Sendable {
+        /// The file name without `.md`.
+        public let name: String
+    }
+
+    /// The file of the routine `name`.
+    public func path(of name: String) -> String {
+        URL(fileURLWithPath: dir).appendingPathComponent("\(name).md").path
+    }
+
+    public static func decode(_ data: Data) throws -> RoutineList {
+        try snakeCaseDecoder.decode(RoutineList.self, from: data)
+    }
+}
+
 let snakeCaseDecoder: JSONDecoder = {
     let decoder = JSONDecoder()
     decoder.keyDecodingStrategy = .convertFromSnakeCase
