@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:b5cf0475daf50a88b34a76e3e9d8d1f9935fcbd8d633c678f56331d363b703a6 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:5796beb7e589cf07f0812e514f3b2d9b152f72183613154ec64041ec2401b5e8 -->
 
 # Configuration reference
 
@@ -225,7 +225,7 @@ GitHub and Notion triggers follow these rules (Slack and Discord pick a *kind* o
 
 #### `status`
 
-For GitHub's `status` triggers, **entering the column is the request**: even after completion, a human moving the card back into the trigger column re-runs the same workflow (who re-runs it is decided by the assignee and the claim). If the card lands in **another** workflow's trigger column, the conversation is handed over to that workflow — the next stage of a column pipeline continues with the same worktree and the same agent session. Only a finished conversation is handed over. A delivery that arrives while a stage is still running is passed over: with a **polling** source (github / notion) the next tick brings it back and the handoff happens then, but Slack acks first and never re-sends, so that trigger is lost — re-issue it once the run has finished.
+For GitHub's `status` triggers, **entering the column is the request**: even after completion, a human moving the card back into the trigger column re-runs the same workflow (who re-runs it is decided by the assignee and the claim). If the card lands in **another** workflow's trigger column, the conversation is handed over to that workflow — the next stage of a column pipeline continues with the same worktree and the same agent session. Only a finished conversation is handed over. A delivery that arrives while a stage is still running is passed over: on **github** the next tick brings it back and the handoff happens then (notion runs each page once, so it has no handoff at all), but Slack acks first and never re-sends, so that trigger is lost — re-issue it once the run has finished.
 
 #### `label` (GitHub)
 
