@@ -480,7 +480,7 @@ mod tests {
     /// pattern", because there are two ways to be unable to run it and #410
     /// showed the pattern is the weaker one.
     #[test]
-    fn only_implement_may_open_a_pull_request() {
+    fn read_only_profiles_cannot_open_a_pull_request() {
         for profile in [Profile::Answer, Profile::Triage, Profile::Design] {
             let rules = deny_rules(profile).unwrap();
             assert!(
