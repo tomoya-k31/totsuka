@@ -21,7 +21,14 @@ A plugin's keys appear only after the plugin is installed.
 
 Every branch below writes the file the same way.
 
-- **Write with `totsuka config set <JSON Pointer> '<json>'`**, and read with `totsuka config get`. `set` keeps the file's comments, writes atomically, follows a symlinked config (GNU Stow) to its real file, and refuses any write that would leave the file unparseable.
+- **Read the file only through this filter**, which hides every secret-looking value that is not a `secret:` reference and keeps only its kind (`op`, `cmd`, `literal`, …):
+
+  ```bash
+  totsuka config get | jq 'walk(if type == "object" then with_entries(if (.key | test("(^|_)token$|^api_key(_ref)?$")) and (.value | type == "string") and (.value | startswith("secret:") | not) then .value = (((.value | capture("^(?<s>[a-z]+):") | .s) // "literal") + " (hidden)") else . end) else . end)'
+  ```
+
+  `config get` prints the file as it is, and an older config may hold a token in plain text. If the schema marks an `x-secret` key whose name the filter does not match, add it to the pattern.
+- **Write with `totsuka config set <JSON Pointer> '<json>'`**. `set` keeps the file's comments, writes atomically, follows a symlinked config (GNU Stow) to its real file, and refuses any write that would leave the file unparseable.
 - **One object per `set`.** `set` refuses a table that is missing a required key, so write a whole entry at once: `set /plugins/github '{"kind":"task_source","enabled":true}'`, not `enabled` alone.
 - **Append to an array with `/-`**: `set /projects/- '{...}'`. With no array yet, `/projects/0` creates a table literally named `"0"` and is refused.
 - **Key names come from the schema only.** `set` and `validate --offline` accept a misspelt key inside a plugin's table (`[github]`, `[slack]`, …): only the plugin checks its own keys, and that happens at the app's Start.
@@ -33,15 +40,15 @@ Every branch below writes the file the same way.
 
 1. `totsuka --version` must print 0.10.5 or later (`config set` arrived in 0.10.4, the app's "Use gh auth token" in 0.10.5). If it is older, or totsuka is missing, point to `brew install tomoya-k31/tap/totsuka` / `brew upgrade totsuka` and stop.
 2. The menu bar app must exist, since only it can hand `secret:` values to totsuka: `ls -d /Applications/Totsuka.app ~/Applications/Totsuka.app "$(brew --prefix)/opt/totsuka/Totsuka.app" 2>/dev/null`. If none exists, stop and say why.
-3. `totsuka config get` prints `config_path`, `exists` and the current contents. Tell the user which file you will edit (on some machines it is `hosts/<host>.toml`, not `config.toml`).
-4. In an existing file, look for secrets outside `secret:`: any string starting `op://`, `cmd:`, `bw:` or `keychain:`. If there are any, offer to replace each one with its `secret:<dotted key path>` before doing anything else, and explain that the app will ask for those values at the next Start.
+3. Read the file with the filter above: it prints `config_path`, `exists` and the contents. Tell the user which file you will edit (on some machines it is `hosts/<host>.toml`, not `config.toml`).
+4. In an existing file, look for secrets outside `secret:`: the filter shows them as `op (hidden)`, `cmd (hidden)`, `literal (hidden)` and so on. If there are any, offer to replace each one with its `secret:<dotted key path>` before doing anything else, and explain that the app will ask for those values at the next Start.
 5. Tell the user once that with `secret:` references, `totsuka doctor` and `totsuka run` in a terminal cannot resolve the secrets; the app is how totsuka is started.
 
 ## 2. Route
 
 Decide from the user's request:
 
-- No file, or the user wants a fresh setup → **3. New config**.
+- No file, or a file with nothing but `version` → **3. New config**. When a filled file exists and the user wants to start over, ask them to move it aside themselves (`mv <config_path> <config_path>.bak`); `set` only adds to a file, so building a new config on top of the old one would keep the old entries running.
 - "add Slack", "another board", "a new repo", "a workflow that …" → **4. Add**.
 - "change the trigger", "make it design instead", "move the repo" → **5. Change**.
 
@@ -63,14 +70,14 @@ Install and register a missing plugin first, exactly as in step 3.2. Then follow
 
 - **A task source** → its file (as in step 3.4), then offer to add a workflow for it.
 - **A project** (another board, another database) → the project entry from the source's file. A GitHub or Notion project with no repository linked to it fails at Start, so link a repository in the same sitting, then offer a workflow.
-- **A repository** → `{"name", "path"}` (check the path is a git checkout: `git -C <path> rev-parse --show-toplevel`), plus `"project"` to link it. A repository links to one project. Linking one that already points at a GitHub or Notion board would leave that board without a repository, so offer a repository that is not linked yet. Then offer a workflow.
+- **A repository** → `{"name", "path"}` (check the path is a git checkout: `git -C <path> rev-parse --show-toplevel`), plus `"project"` to link it. A repository links to one project. Linking one that already points at a GitHub or Notion board would leave that board without a repository, so offer a repository that is not linked yet. Then offer a workflow. If `[slack]` exists without `[[slack.repos]]`, every repository is a Slack candidate: when this one makes two and neither `[llm]` nor `[slack.llm]` exists, Slack refuses to start, so add `[llm]` in the same sitting (see slack.md).
 - **A workflow** → follow the order in [workflows.md](references/workflows.md), with the questions, recipes and trigger keys from the source's file.
 
 Finish with **6. Hand-off**. The running app does not reload the file: the user needs Stop then Start.
 
 ## 5. Change
 
-1. Show the current value: `totsuka config get | jq '.config.workflows[] | select(.name == "<name>")'`.
+1. Show the current value (workflows hold no secrets, so a direct read is fine here): `totsuka config get | jq '.config.workflows[] | select(.name == "<name>")'`.
 2. Names that other entries refer to stay as they are: `projects[].name`, plugin names, `workflows[].name`. If the user wants to rename one, explain which entries refer to it and leave the edit to them.
 3. A secret's value never lives in the file: to change one, the user picks **… → Forget saved secrets…** in the app and enters it again at the next Start.
 4. Write the new value with `set` at its exact pointer (`/workflows/<index>/trigger`, `/repositories/<index>/path`, …). For a change to the profile, trigger, write-backs or `initial_prompt`, re-read that part of [workflows.md](references/workflows.md) and the source's file first. A profile cannot sit next to `mode` / `verification`, so remove those with `totsuka config unset` if present.

@@ -54,10 +54,10 @@ sudo xattr -dr com.apple.quarantine /usr/local/lib/totsuka
 
 **この経路でだけ `xattr` が要る。** ブラウザでダウンロードすると `com.apple.quarantine` が付き、Gatekeeper が**プラグインの起動だけ**を黙って殺す。`doctor` は「crashed or exited」としか言えず、本体は動くので原因が見えにくい。brew 経路では素の `curl` が取るので、この属性は付かない（実測）。
 
-**メニューバーアプリで起動するなら、2〜4 はエージェントに任せられる**（[ADR-0116](/decisions/adr-0116-totsuka-config-skill.md)）。
+**メニューバーアプリで起動するなら、2・3 はエージェントに任せ、4 はアプリの Start で行う**（[ADR-0116](/decisions/adr-0116-totsuka-config-skill.md)）。
 `npx skills add tomoya-k31/totsuka --skill totsuka-config` でスキルを入れ、エージェントに「totsuka を設定して」と頼むと、
 雛形を使わずに `config set` で 1 段ずつ確認しながら書き、シークレットはすべて `secret:` 参照にする。値はアプリが
-Start で尋ねるので、3 の登録コマンドは要らない。その場合も 1 の配置（CLI とアプリ）は先に済ませておく。
+Start で尋ねるので、3 の登録コマンドは要らない。`secret:` はターミナルの `doctor` / `run` からは解決できないので、4 の代わりにアプリの Start が全体の検査と起動を行う。1 の配置（CLI とアプリ）は先に済ませておく。
 
 ## 2. `totsuka setup`
 

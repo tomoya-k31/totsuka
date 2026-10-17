@@ -32,11 +32,11 @@ The full guide is [Slack setup](https://github.com/tomoya-k31/totsuka/blob/main/
 
 Each Slack task needs a repository, picked in this order:
 
-1. `"repo": "<name>"` in the workflow's trigger fixes it; nothing else runs.
+1. `"repo": "<name>"` in a mention trigger (`{"mention": true, "repo": "web-app"}`) fixes it for that workflow; nothing else runs. `repo` is not allowed next to `reaction` (Start fails with "has `repo` in its trigger but no `channel`"): a reaction task takes the repository its thread already has, or goes through the steps below. A channel watch always names its `repo`.
 2. `[[slack.channel_groups]]` (`{"prefix": "dev-", "repos": [...]}`) narrows the candidates by channel name, and `fallback_repo` catches the channels no group matches.
 3. With two or more candidates left, an LLM picks. That needs `[slack.llm]` or the top-level `[llm]` whenever the file lists more than one repository, even if every path above is fixed. Without it, the plugin refuses to start. Ask which OpenAI-compatible API the user has, then write `set /llm '{"base_url": "<API base URL>", "model": "<model>", "api_key_ref": "secret:llm.api_key_ref"}'` (`model` is required; other keys are in the schema).
 
-Ask which repositories questions are about. With one, pin it with `repo` and skip the LLM.
+Ask which repositories questions are about. With a single candidate, no LLM is involved and nothing needs pinning.
 
 ## Workflows
 

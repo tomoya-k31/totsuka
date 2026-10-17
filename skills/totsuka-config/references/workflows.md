@@ -11,7 +11,7 @@ Build one entry in this order, asking only what the user has not already said, t
 5. `timeout_secs` and `initial_prompt`: [Running unattended](#running-unattended), [`initial_prompt`](#initial_prompt).
 6. `rubric`, `tool`, `cleanup`, and the explicit `mode` form only when the user asks: [Rarely needed keys](#rarely-needed-keys).
 
-Workflows are matched in file order and the first match wins, so a narrower trigger goes before a broader one on the same board. A misspelt trigger key does not narrow the trigger, it widens it (the condition is dropped), and only the app's Start catches it; take key names from the schema.
+Workflows are matched in file order and the first match wins, so a narrower trigger goes before a broader one on the same board. Each source rejects a trigger key it does not know, but only when the plugin starts: `validate --offline` passes it, and with `secret:` the online check skips the plugin too, so a misspelling first shows up as a failed Start. Take key names from the schema.
 
 ## Profiles
 
@@ -30,12 +30,12 @@ What each source supports:
 
 | source | answer | triage | design | implement |
 |---|---|---|---|---|
-| github | no | yes | yes | yes |
-| notion | no | yes | yes | yes |
+| github | no | with `"output": "none"` | yes | yes |
+| notion | no | with `"output": "none"` | yes | yes |
 | slack | yes | yes | no | yes |
 | discord | yes | yes | yes | yes |
 
-- **GitHub and Notion cannot post a reply**, so `answer` has nowhere to go. `validate --offline` rejects it with "does not declare the `source` output capability".
+- **GitHub and Notion cannot post a reply.** `answer` and `triage` default to output `source`, which `validate --offline` rejects there with "does not declare the `source` output capability". `answer` has no other product, so it is out; `triage` works with `"output": "none"` (the filed item's URL is still checked).
 - **Slack has no design instructions.** A Slack `design` workflow posts nothing, and validation still passes. Steer the user to `triage`.
 - **Slack and Discord get a result back only with output `source`**: the default for `answer` and `triage`; add `"output": "source"` for `design` / `implement`. `output` is the one key that may sit next to a profile.
 
