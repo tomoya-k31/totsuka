@@ -647,16 +647,6 @@ enum CliProbe {
     },
 }
 
-/// Run a backend CLI's two **non-prompting** probes: `--version` for presence,
-/// then `session_args` for the session.
-///
-/// `session_args` must name a query that never prompts on its own — `op
-/// whoami` and `bw status` do not, unlike `op read` and `bw get`. Getting that
-/// wrong reopens exactly the unattended hang the gate exists to prevent.
-///
-/// `session_ok` reads the verdict out of the query's output, because the exit
-/// code is not always the answer: `bw status` succeeds in every state and
-/// reports the state in its JSON.
 /// The `routines` check (#918): where this machine's routines are read from,
 /// and every file the routine plugin cannot run. `None` when no routine
 /// plugin is enabled.
@@ -722,6 +712,16 @@ fn check_routines(cx: &Cx, cfg: &RootConfig) -> Option<Check> {
     })
 }
 
+/// Run a backend CLI's two **non-prompting** probes: `--version` for presence,
+/// then `session_args` for the session.
+///
+/// `session_args` must name a query that never prompts on its own — `op
+/// whoami` and `bw status` do not, unlike `op read` and `bw get`. Getting that
+/// wrong reopens exactly the unattended hang the gate exists to prevent.
+///
+/// `session_ok` reads the verdict out of the query's output, because the exit
+/// code is not always the answer: `bw status` succeeds in every state and
+/// reports the state in its JSON.
 fn probe_cli(spec: &BackendProbe, env: &HashMap<String, String>) -> CliProbe {
     let Some(path) = which(spec.binary, env) else {
         return CliProbe::Missing;
