@@ -12,6 +12,7 @@ members = [
     "plugins/task-source-notion",
     "plugins/task-source-slack",
     "plugins/task-source-discord",
+    "plugins/task-source-routine",
     "plugins/agent-ide-herdr",
     "plugins/agent-ide-orca",
     "plugins/notifier-macos",

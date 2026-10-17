@@ -1603,6 +1603,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "task-source-routine"
+version = "0.10.11"
+dependencies = [
+ "plugin-conformance",
+ "plugin-protocol",
+ "plugin-sdk",
+ "schemars",
+ "semver",
+ "serde",
+ "serde_json",
+ "test-support",
+ "time",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "task-source-slack"
 version = "0.10.11"
 dependencies = [

@@ -129,6 +129,11 @@
 # enabled = true
 # kind = "task_source"
 
+# totsuka:section plugin=routine
+# [plugins.routine]
+# enabled = true
+# kind = "task_source"
+
 # totsuka:section plugin=herdr
 # [plugins.herdr]
 # enabled = true
@@ -444,6 +449,36 @@
 # max_retries = 3
 # api_url = "https://discord.com/api/v10"
 # source_name = "discord"
+
+# totsuka:section plugin=routine label=Routines — scheduled prompts
+# ============================================================================
+# [routine] — task-source-routine
+# ============================================================================
+#
+# The routines themselves are files, one per routine:
+# <config dir>/routines/<host>/<name>.md — `<host>` is the same name as in
+# hosts/<host>.toml. A frontmatter (`repo`, `schedule` as five-field cron in
+# local time, optional `workflow` / `catchup_window` / `enabled`) and the
+# prompt as the body. Its workflow draws from a project whose source is this
+# plugin:
+#
+#   [[projects]]
+#   name = "routines"
+#   source = "routine"
+#
+#   [[workflows]]
+#   name = "routine"
+#   projects = ["routines"]
+#   trigger = {}                            # no keys: what runs is in each file
+#   agent = "herdr"
+#   mode = "implement"
+#   output = "none"                         # this source publishes nothing
+
+# [routine]
+# catchup_window = "24h"                    # how far back a run missed while the machine was off is
+#                                           #   made up, once. "0" runs only on time; a routine's own
+#                                           #   `catchup_window` wins
+# source_name = "routine"
 
 # totsuka:section plugin=herdr label=herdr — runs agents in tmux panes
 # ============================================================================
