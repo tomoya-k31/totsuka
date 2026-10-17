@@ -1,5 +1,9 @@
 # Bundle Update Log
 
+## 2026-10-18
+
+* **Creation**: [tool-upgrade-watch スキル](/components/tool-upgrade-watch.md) を追加した。Claude Code / Codex / opencode の新しい版の機能を現行 docs と changelog から調べ、totsuka がツールの機能不足を肩代わりしているロジック（台帳 25 項目）を置き換えられるようになったかを判定して、候補があれば `gh` で issue を起票する。手動で実行する。
+
 ## 2026-10-17
 
 * **Creation**: [ADR-0116](/decisions/adr-0116-totsuka-config-skill.md) を書いた（#903）。config.toml を 1 段ずつ確認しながら組み立てるエージェントスキル `skills/totsuka-config/` を同梱し、`npx skills add tomoya-k31/totsuka --skill totsuka-config` で配る。スキルは config の知識を持たず `config schema` / `set` / `validate` に聞き、秘密は `secret:` に統一し、最終確認はメニューバーアプリの Start に引き渡す。
