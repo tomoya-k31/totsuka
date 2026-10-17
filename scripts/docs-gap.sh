@@ -22,13 +22,12 @@ set -u
 
 range=${range:-main...HEAD}
 changed=$(git diff --name-only "${range}")
-new_crates=$(git diff --name-only --diff-filter=A "${range}" -- '*/*/Cargo.toml' \
-  | xargs -n1 dirname | xargs -n1 basename)
+new_crates=$(git diff --name-only --diff-filter=A "${range}" -- '*/*/Cargo.toml' |
+  xargs -n1 dirname | xargs -n1 basename)
 
 findings=$(
   echo "### 1. new crate / plugin / service without ai-docs/components/<name>.md"
-  git diff --name-only --diff-filter=A "${range}" -- '*/*/Cargo.toml' |
-    xargs -n1 dirname | xargs -n1 basename |
+  echo "${new_crates}" | grep . |
     while read -r n; do
       test -f "ai-docs/components/${n}.md" || echo "missing: ai-docs/components/${n}.md"
     done
@@ -50,11 +49,15 @@ findings=$(
 
   echo "### 4. config fields: added but not in config-reference.md / removed but still named"
   config_diff=$(git diff "${range}" -- crates/orchestrator-core/src/config/schema.rs 'plugins/*/src/config.rs')
-  echo "${config_diff}" | sed -nE 's/^\+[[:space:]]*pub ([a-z_][a-z0-9_]*):.*/\1/p' | sort -u |
+  added=$(echo "${config_diff}" | sed -nE 's/^\+[[:space:]]*pub ([a-z_][a-z0-9_]*):.*/\1/p' | sort -u)
+  # a name both removed and re-added (type change, moved between structs) is not a removal
+  removed=$(echo "${config_diff}" | sed -nE 's/^-[[:space:]]*pub ([a-z_][a-z0-9_]*):.*/\1/p' | sort -u |
+    comm -23 - <(echo "${added}"))
+  echo "${added}" | grep . |
     while read -r k; do
       grep -qw "${k}" ai-docs/development/config-reference.md || echo "missing: ${k}"
     done
-  echo "${config_diff}" | sed -nE 's/^-[[:space:]]*pub ([a-z_][a-z0-9_]*):.*/\1/p' | sort -u |
+  echo "${removed}" | grep . |
     while read -r k; do
       git grep -n -w "${k}" -- ai-docs/development/config-reference.md skills/totsuka-config |
         sed "s/^/still named (${k}): /"
@@ -66,8 +69,7 @@ findings=$(
     grep -vE '^ai-docs/(decisions|releases|log\.d)/' | sort -u | grep -vxF "${changed}"
 
   echo "### 6. new task source / agent IDE plugin missing from the totsuka-config skill"
-  git diff --name-only --diff-filter=A "${range}" -- 'plugins/*/Cargo.toml' |
-    xargs -n1 dirname | xargs -n1 basename | while read -r n; do
+  echo "${new_crates}" | grep . | while read -r n; do
     s=${n#task-source-}
     s=${s#agent-ide-}
     case "${n}" in
