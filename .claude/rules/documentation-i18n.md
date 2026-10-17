@@ -57,3 +57,5 @@ and `docs/index.ja.md` are the exception: they are hand-written.
 - Vendored / build output: `node_modules/`, `dist/`, `.next/`, `build/` — and
   anything else listed in `.gitignore`.
 - Claude system prompts: `.claude/**/*.md`.
+- Agent skills distributed with `npx skills`: `skills/**/*.md` (English only,
+  the agent talks to the user in the user's language; → ADR-0116).

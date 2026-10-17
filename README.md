@@ -152,6 +152,21 @@ cp ~/.config/totsuka/config.toml ~/dotfiles/totsuka-config.toml
 New machine, dev checkout, token rotation, and recovery are covered end to end
 in the [setup playbook](docs/setup-playbook.md).
 
+### Or let your AI agent write the config
+
+If you start totsuka from the menu bar app, the `totsuka-config` agent skill
+builds `config.toml` with you one confirmed step at a time — sources, projects,
+repositories and workflows — instead of the commented template. It reads keys
+from your installed `totsuka` (`config schema`), writes with `config set`,
+stores every secret as a `secret:` reference the app asks for at **Start**, and
+never sees a secret value. It needs totsuka 0.10.5 or later and the app.
+
+```sh
+npx skills add tomoya-k31/totsuka --skill totsuka-config
+```
+
+Then ask your agent, e.g. "set up totsuka for my GitHub board".
+
 ## Documentation
 
 - **What totsuka is**: [docs/orchestrator-spec.md](./docs/orchestrator-spec.md)

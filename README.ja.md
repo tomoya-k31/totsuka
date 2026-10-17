@@ -151,6 +151,21 @@ cp ~/.config/totsuka/config.toml ~/dotfiles/totsuka-config.toml
 新マシン・開発機・トークンローテーション・復旧は
 [セットアップ Playbook](docs/setup-playbook.ja.md) が通しで扱います。
 
+### AI エージェントに config を書かせる
+
+totsuka をメニューバーアプリから起動するなら、コメントだらけの雛形の代わりに、
+エージェントスキル `totsuka-config` が `config.toml` を 1 段ずつ確認しながら
+組み立てます（ソース・project・リポジトリ・ワークフロー）。キーは手元の `totsuka` の
+`config schema` から取り、`config set` で書き、シークレットはすべてアプリが **Start** で
+尋ねる `secret:` 参照にするので、スキルが値に触れることはありません。totsuka 0.10.5
+以降とアプリが要ります。
+
+```sh
+npx skills add tomoya-k31/totsuka --skill totsuka-config
+```
+
+あとはエージェントに「GitHub のボードで totsuka を設定して」のように頼みます。
+
 ## ドキュメント
 
 - **totsuka とは**: [docs/orchestrator-spec.ja.md](./docs/orchestrator-spec.ja.md)

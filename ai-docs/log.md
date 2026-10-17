@@ -1,5 +1,10 @@
 # Bundle Update Log
 
+## 2026-10-17
+
+* **Creation**: [ADR-0116](/decisions/adr-0116-totsuka-config-skill.md) を書いた（#903）。config.toml を 1 段ずつ確認しながら組み立てるエージェントスキル `skills/totsuka-config/` を同梱し、`npx skills add tomoya-k31/totsuka --skill totsuka-config` で配る。スキルは config の知識を持たず `config schema` / `set` / `validate` に聞き、秘密は `secret:` に統一し、最終確認はメニューバーアプリの Start に引き渡す。
+* **Update**: [config CLI](/apis/config-cli.md) にスキルを 2 つ目の利用者として書き、[ADR-0113](/decisions/adr-0113-native-menubar-app.md) の「使い道が無いなら消すかを改めて決める」に ADR-0116 で残すと決めたことを追記した。[セットアップ Playbook](/operations/setup-playbook.md) にスキルで config を書かせる道を足した。
+
 ## 2026-10-11
 
 * **Update**: メニューに「Recent」節を足した（#896、[ADR-0115](/decisions/adr-0115-task-retry-repo.md)）。`menu --json` の `recent` は過去 24 時間に `failed` / `cancelled` / `skipped` で終わったタスクで、バッジには数えない。[macos-app](/components/macos-app.md) はその行に「Retry」と「Retry in」（`task retry --repo` を設定済みの他のリポジトリから選ぶサブメニュー）を出し、まだ動いている行には「Cancel…」だけを出す。それまで「Retry」は `retry` が受け付けない状態の行にしか出ず、必ず拒否されていた。[orchestrator-cli](/components/orchestrator-cli.md)・[運用ガイド](/operations/operations-guide.md) を更新した。

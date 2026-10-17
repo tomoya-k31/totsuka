@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](setup-playbook.ja.md)
 
-<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:41e005da8a030b44df992c395c130fe2089438b8597bcf2fe04b19ca3a6532ba -->
+<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:92a01d9043859f8af0d6fe94f2fbf4e690ec50b043afe64fa9637e0d5f01001f -->
 
 # Setup playbook
 
@@ -41,6 +41,14 @@ sudo xattr -dr com.apple.quarantine /usr/local/lib/totsuka
 ```
 
 **Only this route needs the `xattr` step.** A browser download carries `com.apple.quarantine`, and Gatekeeper then silently kills **plugin startup only**. The main binary works, which makes this hard to spot; `doctor` can only report "crashed or exited". Homebrew fetches with plain `curl`, which never sets the attribute.
+
+**If you start totsuka from the menu bar app, an AI agent can do steps 2–4 for
+you.** Install the skill with
+`npx skills add tomoya-k31/totsuka --skill totsuka-config` and ask your agent to
+set up totsuka. It skips the template, writes the config one confirmed step at a
+time with `config set`, and makes every secret a `secret:` reference. The app
+asks for those values at **Start**, so step 3's registration commands are not
+needed. Step 1 (the CLI and the app) still comes first.
 
 ### 2. Run `totsuka setup`
 

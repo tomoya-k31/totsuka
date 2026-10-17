@@ -21,7 +21,7 @@ docs-only change cannot fail `cargo clippy`, so the Rust set is pointless there.
 | `ai-docs/**` | **Docs checks** (below) + the docs obligation |
 | one of the 5 generation sources under `ai-docs/` (see the `human-docs` skill) | regenerate the matching `docs/` pages with the **`human-docs` skill** in the same PR, then `bash scripts/docs-freshness.sh` |
 | `docs/**` | `bash scripts/docs-freshness.sh` to zero errors + `rumdl check .`. Do **not** run `okf-lint` on it — it is not an OKF bundle |
-| a prose `*.md` outside the OKF/vendored exclusions and outside `.claude/**` | update its `.ja.md` sibling (→ [documentation-i18n.md](documentation-i18n.md)) |
+| a prose `*.md` outside the OKF/vendored exclusions, `.claude/**` and `skills/**` | update its `.ja.md` sibling (→ [documentation-i18n.md](documentation-i18n.md)) |
 | `crates/orchestrator-cli/templates/config.toml` and no `*.rs` | `bash scripts/config-template-lint.sh` alone — the rest of the Rust set cannot see a template-only edit |
 | `.github/workflows/**` | read the SHA-pin + `ubuntu-slim` rules, validate YAML (`yq . <file>`); if you changed `ci.yml`'s commands, also run the affected Rust set |
 | `apps/macos/**` (the menu bar app, ADR-0113) | `apps/macos/test.sh` (`swift test`; works on Command Line Tools alone) and `swift build` there. `apps/macos/build-app.sh` assembles a `.app` without Xcode for trying it locally; the shipped one (asset catalog via `actool`) is built by CI's `macos-app.yml` |
