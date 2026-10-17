@@ -6,7 +6,7 @@
 #
 # チェック内容:
 #   [E] plugin-deps   : plugins/* の [dependencies] は plugin-protocol / plugin-sdk /
-#                       repo-classifier のみ
+#                       repo-classifier / routine-schedule のみ
 #   [E] plugin-dev    : plugins/* の [dev-dependencies] は 上記 + test-support / plugin-conformance のみ
 #   [E] plugin-build  : plugins/* の [build-dependencies] にワークスペース内依存なし
 #   [E] sdk-deps      : plugin-sdk の依存は plugin-protocol（dev は + test-support）のみ、
@@ -16,6 +16,8 @@
 #   [E] protocol-leaf : plugin-protocol はワークスペース内クレートに一切依存しない
 #   [E] classifier-leaf : repo-classifier はワークスペース内クレートに一切依存しない
 #                       （core と plugins の双方が使う共有部品なので、どちらにも寄らない）
+#   [E] routine-leaf  : routine-schedule はワークスペース内クレートに一切依存しない
+#                       （task-source-routine と cli の双方が使う共有部品、#918）
 #   [E] cycle         : ワークスペース内に依存循環がない
 #   [E] plugin-bin-name : plugins/* は bin ターゲットをちょうど 1 つ持ち、その名前が
 #                       同ディレクトリの plugin.toml の `name` と一致する
@@ -49,8 +51,8 @@ set -euo pipefail
 # 区別できるようにするためにある。理由なしで足さないこと。
 DECLARATION_EXEMPT=""
 
-PLUGIN_ALLOWED_NORMAL="plugin-protocol plugin-sdk repo-classifier"
-PLUGIN_ALLOWED_DEV="plugin-protocol plugin-sdk repo-classifier test-support plugin-conformance"
+PLUGIN_ALLOWED_NORMAL="plugin-protocol plugin-sdk repo-classifier routine-schedule"
+PLUGIN_ALLOWED_DEV="plugin-protocol plugin-sdk repo-classifier routine-schedule test-support plugin-conformance"
 SDK_ALLOWED_NORMAL="plugin-protocol"
 SDK_ALLOWED_DEV="plugin-protocol test-support"
 # plugin-conformance はプラグインを外（stdio）から検査するキット。検査対象の
@@ -138,6 +140,9 @@ while IFS="$(printf '\t')" read -r pkg kind dep manifest; do
       ;;
     repo-classifier)
       error classifier-leaf "$pkg" "leaf クレートがワークスペース内クレート '$dep' に依存（種別: ${kind}）"
+      ;;
+    routine-schedule)
+      error routine-leaf "$pkg" "leaf クレートがワークスペース内クレート '$dep' に依存（種別: ${kind}）"
       ;;
     esac
     ;;

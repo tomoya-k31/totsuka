@@ -1,10 +1,10 @@
 ---
 type: Architecture
 title: ワークスペース依存境界ルール（Fitness Function）
-description: ヘキサゴナル構成の依存不変条件（plugins → plugin-protocol / plugin-sdk / repo-classifier のみ（dev は + test-support / plugin-conformance）、plugin-protocol と repo-classifier は leaf、plugin-conformance は plugin-protocol のみ、依存循環なし、core の domain / ports は config と adapters を参照しない）と、それを CI で機械検証する scripts/arch-lint.sh の仕組み・正当な依存追加時の更新手順。
+description: ヘキサゴナル構成の依存不変条件（plugins → plugin-protocol / plugin-sdk / repo-classifier / routine-schedule のみ（dev は + test-support / plugin-conformance）、plugin-protocol と repo-classifier と routine-schedule は leaf、plugin-conformance は plugin-protocol のみ、依存循環なし、core の domain / ports は config と adapters を参照しない）と、それを CI で機械検証する scripts/arch-lint.sh の仕組み・正当な依存追加時の更新手順。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/scripts/arch-lint.sh
 tags: [architecture, fitness-function, ci, workspace, dependency]
-generated: { by: claude-code/opus-5.5, at: 2026-09-26T18:30:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-18T18:00:00+09:00 }
 status: stable
 ---
 
@@ -19,9 +19,10 @@ graph BT
     protocol["plugin-protocol<br/>(leaf・唯一の公開型クレート)"]
     sdk["plugin-sdk"]
     classifier["repo-classifier<br/>(leaf・リポジトリ分類の共有部品)"]
+    routine["routine-schedule<br/>(leaf・routine ファイルと cron の共有部品)"]
     core["orchestrator-core"]
     cli["orchestrator-cli"]
-    plugins["plugins/* 6種"]
+    plugins["plugins/* 8種"]
     ts["test-support<br/>(dev のみで利用)"]
     conf["plugin-conformance<br/>(dev のみで利用・黒箱の適合キット)"]
 
@@ -33,8 +34,9 @@ graph BT
     plugins -. "現状の利用は task-source-* のみ（許可は全 plugins/*）" .-> sdk
     core --> classifier
     plugins -. "現状の利用は task-source-slack のみ（許可は全 plugins/*）" .-> classifier
+    plugins -. "現状の利用は task-source-routine のみ（許可は全 plugins/*）" .-> routine
     conf --> protocol
-    plugins -. "dev（#767・全 7 本の tests/conformance.rs）" .-> conf
+    plugins -. "dev（#767・全 8 本の tests/conformance.rs）" .-> conf
     core -. dev .-> ts
     cli -. dev .-> ts
     cli -. "dev（#349・生成した plugins/*.toml の検証用）" .-> plugins
@@ -50,11 +52,12 @@ graph BT
 
 | 対象 | `[dependencies]` | `[dev-dependencies]` | `[build-dependencies]` |
 |---|---|---|---|
-| `plugins/*` | `plugin-protocol` / `plugin-sdk` / `repo-classifier` のみ | 左記 + `test-support` / `plugin-conformance` | なし |
+| `plugins/*` | `plugin-protocol` / `plugin-sdk` / `repo-classifier` / `routine-schedule` のみ | 左記 + `test-support` / `plugin-conformance` | なし |
 | `plugin-sdk` | `plugin-protocol` のみ | `plugin-protocol` / `test-support` | なし |
 | `plugin-conformance` | `plugin-protocol` のみ | なし | なし |
 | `plugin-protocol` | なし（leaf） | なし | なし |
 | `repo-classifier` | なし（leaf） | なし | なし |
+| `routine-schedule` | なし（leaf） | なし | なし |
 | 全クレート | 依存循環なし（normal + build + dev の全エッジで検査） | | |
 
 - `orchestrator-core` / `orchestrator-cli` / `test-support` に個別の許可リストはない（循環検査のみ対象）。**したがって `cli → plugins`（dev）のようなエッジは arch-lint では検出できず、本ドキュメントのグラフが唯一の記録になる** — 追加したら必ずここに書く。
@@ -62,6 +65,7 @@ graph BT
 - dev-dependencies だけの循環は cargo 的には合法だが、本ワークスペースでは意図しない結合とみなしエラーにする。
 - **`plugin-conformance` が `plugin-protocol` 以外に依存しないこと**（`conformance-deps`、#767、[ADR-0104](/decisions/adr-0104-plugin-conformance-kit.md)）。これはプラグインのバイナリを stdio の外から検査するキットで、検査対象の中核は `plugin-sdk` のランタイムと dispatch である。キットが SDK の型や関数を使い始めると、SDK の誤りをキットが同じ誤りで打ち消し、緑のまま通ってしまいうる。外部開発者が git の dev-dependency で入れたときに不要な依存を引き込まないためでもある
 - **`repo-classifier` が leaf であること**（`classifier-leaf`）は、core と plugins の**両方**が依存する共有部品だから要る（#723、[ADR-0083](/decisions/adr-0083-repo-classifier-crate.md)）。これがワークスペース内の何か（たとえば `plugin-protocol`）に依存し始めると、プラグインから core 側の関心事へ届く抜け道になる。`plugin-protocol` が「プラグイン境界の公開型」なのに対し、こちらは「外部の分類 API をどう叩くか」で、プロトコルの一部ではない。
+- **`routine-schedule` が leaf であること**（`routine-leaf`）も同じ理由で、`task-source-routine` と `orchestrator-cli`（`totsuka routine list`）の**両方**が依存する共有部品だから要る（#918、[ADR-0117](/decisions/adr-0117-routines.md)）。routine ファイルの読み方と cron の照合を 1 箇所に置き、「一覧が示すこと」と「プラグインが実際にすること」がずれないようにする。CLI がプラグインのクレートに依存する形は、プラグインがプロセス境界の向こうで差し替えられる前提（ADR-0011）と緊張するので採らなかった。
 
 ### プラグイン成果物の命名
 

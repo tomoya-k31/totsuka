@@ -7,11 +7,13 @@ members = [
     "crates/plugin-sdk",
     "crates/plugin-conformance",
     "crates/repo-classifier",
+    "crates/routine-schedule",
     "crates/test-support",
     "plugins/task-source-github",
     "plugins/task-source-notion",
     "plugins/task-source-slack",
     "plugins/task-source-discord",
+    "plugins/task-source-routine",
     "plugins/agent-ide-herdr",
     "plugins/agent-ide-orca",
     "plugins/notifier-macos",
@@ -77,6 +79,7 @@ plugin-sdk = { path = "crates/plugin-sdk" }
 plugin-conformance = { path = "crates/plugin-conformance" }
 repo-classifier = { path = "crates/repo-classifier" }
 test-support = { path = "crates/test-support" }
+routine-schedule = { path = "crates/routine-schedule" }
 # Dev-only, for orchestrator-cli: the setup wizard generates `plugins/<name>.toml`
 # and its test asserts the plugins' own deserializers accept it.
 task-source-github = { path = "plugins/task-source-github" }

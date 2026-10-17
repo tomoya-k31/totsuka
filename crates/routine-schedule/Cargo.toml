@@ -1,0 +1,19 @@
+[package]
+name = "routine-schedule"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Routine files and five-field cron schedules for totsuka: what task-source-routine runs and what `totsuka routine list` shows."
+# Internal crate, shared by task-source-routine and orchestrator-cli.
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+time.workspace = true
+
+[dev-dependencies]
+time = { workspace = true, features = ["macros"] }

@@ -43,4 +43,6 @@ Claude のルーティンのように「決まった時刻に、決まったリ�
 - 結果は投稿しない（routine 用 workflow は `output = "none"`）。成果物はエージェントがプロンプトに従って PR やスキルで外に出す。経過は `totsuka task show` とメニューバーで見る。
 - routine は `branch_hint` を使わない。`branch_hint` は origin に既にあるブランチを指すもので、見つからないとタスクが失敗する。新しいブランチの名前はエージェントが決める。
 - `duplicate` による冪等性は tasks の行が残っていることが前提になる。`catchup_window` より新しい行を消す掃除は入れないこと。
-- cron は依存を足さずに自前で解析する（照合は分単位で、範囲を 1 分ずつ遡って走査する）。DST で重複・欠落する時刻もこの走査がそのまま扱う。
+- cron は依存を足さずに自前で解析する（照合は分単位で、範囲を 1 分ずつ遡って走査する）。
+- cron はローカル時刻で照合し、時差はプラグインの起動時に tokio のランタイムを作る前に 1 回だけ取る（`time` はマルチスレッドでの取得を拒む。[ADR-0097](/decisions/adr-0097-log-timestamps-local-display.md) と同じ方式）。**夏時間の切り替えは次の起動まで反映されない**。
+- routine は無人で走るので、`design` / `implement` profile（完了時に pane 上で人間の承認を待つ）は向かず、`answer` / `triage` は既定の出力が `source` で使えない。workflow は profile を書かず `mode` と `output = "none"` を明示する。
