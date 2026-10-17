@@ -9,6 +9,9 @@
 #   [E] unknown-key : 雛形にあるキーがどの config struct にも無い（タイポ・削除残り）
 #
 # 使い方: scripts/config-template-lint.sh
+#         scripts/config-template-lint.sh --code-keys <root>
+#           <root> 配下の config struct のキーだけを 1 行 1 件で出して終わる（雛形は見ない）。
+#           docs-gap.sh が base / head 2 つのツリーのキー集合を比べるのに使う
 # 終了コード: 違反 1 件以上で 1、前提ツール欠如・検査自体の失敗で 2
 #
 # ---------------------------------------------------------------------------
@@ -79,9 +82,14 @@ for tool in awk grep; do
 done
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+CODE_KEYS_ONLY=""
+if [ "${1:-}" = "--code-keys" ]; then
+  ROOT="${2:?config-template-lint: --code-keys には <root> が要る}"
+  CODE_KEYS_ONLY=1
+fi
 TEMPLATE="$ROOT/crates/orchestrator-cli/templates/config.toml"
 
-[ -f "$TEMPLATE" ] || {
+[ -n "$CODE_KEYS_ONLY" ] || [ -f "$TEMPLATE" ] || {
   echo "config-template-lint: 雛形が見つかりません: $TEMPLATE" >&2
   exit 2
 }
@@ -229,6 +237,10 @@ CODE_KEYS="$(extract_code_keys)" || {
   echo "config-template-lint: config struct の走査に失敗" >&2
   exit 2
 }
+if [ -n "$CODE_KEYS_ONLY" ]; then
+  echo "$CODE_KEYS"
+  exit 0
+fi
 TEMPLATE_KEYS="$(extract_template_keys all)" || {
   echo "config-template-lint: 雛形の走査に失敗" >&2
   exit 2
