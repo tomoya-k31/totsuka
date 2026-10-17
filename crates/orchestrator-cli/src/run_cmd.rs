@@ -16,7 +16,7 @@ use orchestrator_core::config::{self, PluginKind, RootConfig, secret_resolver};
 use orchestrator_core::domain::TaskId;
 use orchestrator_core::logging::{self, LogConfig};
 use orchestrator_core::platform::PlatformProcessProbe;
-use orchestrator_core::plugins::{check_workflow_options, plugin_spec};
+use orchestrator_core::plugins::check_workflow_options;
 use orchestrator_core::ports::SecretString;
 use orchestrator_core::run::{Engine, HookRuntime, PluginSet, RunSummary, settings_from_config};
 
@@ -342,7 +342,7 @@ async fn launch_plugins(
             tracing::info!(plugin = %name, "notifier not started: --events-jsonl delivers notifications");
             continue;
         }
-        let spec = plugin_spec(&cx.store(), cfg, name, env).map_err(needs_fix)?;
+        let spec = cx.plugin_spec(cfg, name, env).map_err(needs_fix)?;
         // Keep the spec: it is everything a relaunch needs (#495), and
         // re-deriving it later would re-resolve the plugin's secrets — a
         // Keychain/1Password round trip per crash, on the engine loop.

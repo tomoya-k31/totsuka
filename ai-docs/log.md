@@ -2,6 +2,8 @@
 
 ## 2026-10-18
 
+* **Update**: [POST /agent-events](/apis/agent-events.md) — 制御エンドポイント `POST /routine/run`（`{"key"}` → `task/trigger` → `task/submit` と同じ取り込み → `{"ok", "task_id"?, "reason"?}`）
+* **Update**: [orchestrator-core](/components/orchestrator-core.md) — `Task.series` を持つ新しい会話は同じ series の未終了タスクがあれば `busy`、`ControlPort::trigger` と `Engine::trigger_task`、プラグインの `initialize` に `config_dir` / `host` を渡す（[ADR-0117](/decisions/adr-0117-routines.md)）
 * **Decision**: [ADR-0117 routines — host ごとの定期実行](/decisions/adr-0117-routines.md) — `routines/<host>/<name>.md` を `task-source-routine` プラグインが時刻ごとに submit する。逃した分は直近 1 回、冪等性は既存の重複検査、実行中の重複は `Task.series` と `busy`、手動実行は `task/trigger`
 * **Update**: [plugin-protocol](/components/plugin-protocol.md) — 0.7.8 で `Task.series`・`TaskSubmitStatus::Busy`・`task/trigger`・`Capabilities.task_trigger`・`InitializeParams.config_dir` / `host`
 * **Update**: [plugin-sdk](/components/plugin-sdk.md) / [プラグイン開発ガイド](/development/plugin-dev-guide.md) — `TaskSourceHandler::task_trigger`（既定 `METHOD_NOT_FOUND`、`task_trigger` でゲート）と `SubmitOutcome::Busy`

@@ -138,8 +138,47 @@ impl TaskControlOutcome {
     }
 }
 
-/// Accepts control requests from a driving adapter: `POST /focus` (F-94)
-/// and `POST /task/cancel` / `POST /task/retry` (#760).
+/// The engine's answer to a `POST /routine/run` control request (#918): the
+/// task a source produced for the key, or why none was started.
+///
+/// Same convention as [`TaskControlOutcome`]: a refusal (unknown key, the
+/// series still running, no source that can trigger) is `ok: false` with a
+/// `reason`, never an error status.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct TriggerOutcome {
+    /// Whether a task was started.
+    pub ok: bool,
+    /// The started task's row id. `None` when not `ok`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<TaskId>,
+    /// Why nothing was started, and what to do instead. `None` when `ok`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+impl TriggerOutcome {
+    /// A started task.
+    pub fn started(task_id: TaskId) -> Self {
+        Self {
+            ok: true,
+            task_id: Some(task_id),
+            reason: None,
+        }
+    }
+
+    /// A refusal: nothing started.
+    pub fn refused(reason: impl Into<String>) -> Self {
+        Self {
+            ok: false,
+            task_id: None,
+            reason: Some(reason.into()),
+        }
+    }
+}
+
+/// Accepts control requests from a driving adapter: `POST /focus` (F-94),
+/// `POST /task/cancel` / `POST /task/retry` (#760) and `POST /routine/run`
+/// (#918).
 ///
 /// One port for all of them because they share everything but the verb: the
 /// same socket, the same auth, and the same request-response trip through the
@@ -158,4 +197,11 @@ pub trait ControlPort: Send + Sync {
         op: TaskOp,
         task_id: TaskId,
     ) -> impl Future<Output = Result<TaskControlOutcome, SignalError>> + Send;
+
+    /// Ask the engine to have a source produce the task for `key` now
+    /// (`task/trigger`) and ingest it, and wait for the outcome.
+    fn trigger(
+        &self,
+        key: String,
+    ) -> impl Future<Output = Result<TriggerOutcome, SignalError>> + Send;
 }
