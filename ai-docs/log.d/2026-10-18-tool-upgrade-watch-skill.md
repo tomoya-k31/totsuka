@@ -1,0 +1,1 @@
+* **Creation**: [tool-upgrade-watch スキル](/components/tool-upgrade-watch.md) を追加した。Claude Code / Codex / opencode の新しい版の機能を現行 docs と changelog から調べ、totsuka がツールの機能不足を肩代わりしているロジック（台帳 25 項目）を置き換えられるようになったかを判定して、候補があれば `gh` で issue を起票する。手動で実行する。
