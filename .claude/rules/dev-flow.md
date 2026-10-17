@@ -21,10 +21,11 @@ docs-only change cannot fail `cargo clippy`, so the Rust set is pointless there.
 | `ai-docs/**` | **Docs checks** (below) + the docs obligation |
 | one of the 5 generation sources under `ai-docs/` (see the `human-docs` skill) | regenerate the matching `docs/` pages with the **`human-docs` skill** in the same PR, then `bash scripts/docs-freshness.sh` |
 | `docs/**` | `bash scripts/docs-freshness.sh` to zero errors + `rumdl check .`. Do **not** run `okf-lint` on it — it is not an OKF bundle |
-| a prose `*.md` outside the OKF/vendored exclusions, `.claude/**` and `skills/**` | update its `.ja.md` sibling (→ [documentation-i18n.md](documentation-i18n.md)) |
+| a prose `*.md` outside the OKF/vendored exclusions, `.claude/**`, `.github/**` and `skills/**` | update its `.ja.md` sibling (→ [documentation-i18n.md](documentation-i18n.md)) |
 | `crates/orchestrator-cli/templates/config.toml` and no `*.rs` | `bash scripts/config-template-lint.sh` alone — the rest of the Rust set cannot see a template-only edit |
 | `.github/workflows/**` | read the SHA-pin + `ubuntu-slim` rules, validate YAML (`yq . <file>`); if you changed `ci.yml`'s commands, also run the affected Rust set |
 | `apps/macos/**` (the menu bar app, ADR-0113) | `apps/macos/test.sh` (`swift test`; works on Command Line Tools alone) and `swift build` there. `apps/macos/build-app.sh` assembles a `.app` without Xcode for trying it locally; the shipped one (asset catalog via `actool`) is built by CI's `macos-app.yml` |
+| `crates/**`, `plugins/**`, `services/**`, `apps/**` | **Docs gap search** (below) |
 | `.claude/**` (settings / hooks / rules) | validate JSON (`python3 -m json.tool .claude/settings.json`); no Rust, no `.ja.md` |
 | none of the above touch Rust/Cargo (docs-only, `.claude`-only, …) | **skip the Rust set entirely** |
 
@@ -235,6 +236,32 @@ for why. CI's own flags stay exactly as they are:
 - **Keep every ledger edit in ONE commit.** `git rebase` replays commit by
   commit, so a branch that touches `ai-docs/log.md` in three commits stops for the
   same conflict three times. One commit → at most one stop.
+
+**Docs gap search** — when code under `crates/` / `plugins/` / `services/` /
+`apps/` changed. `okf-lint` validates only the docs that exist, so a doc the
+PR *should* have touched is invisible to every CI check (PR #320: a new
+`pub mod` with no row in its component doc):
+
+- `bash scripts/docs-gap.sh` (`range=<rev-range>` to check something other
+  than `main...HEAD`). Exit 1 means a `missing:` / `still named` line: fix each
+  one in this PR, or state in the PR body why it does not apply. Its checks:
+  new crate without `ai-docs/components/<name>.md`, new `pub mod` not named in
+  that doc, `ai-docs/` changed without a new `log.d/` fragment, config field
+  added but absent from `config-reference.md` (or removed but still named there
+  or in `skills/totsuka-config/`), new task source / agent IDE plugin missing
+  from the `totsuka-config` skill.
+- Section 5 of its output is not counted: concepts whose frontmatter
+  `resource` is a changed path but which the PR did not touch. **Read each
+  one** and update it if it still describes the old behaviour.
+- Then search by name, which no script can pick for you: for every function,
+  CLI flag, config key, profile, or message whose behaviour you changed,
+  renamed, or removed, run
+  `git grep -n -F '<name>' -- ai-docs docs README.md README.ja.md skills` and
+  fix each hit that now states the old behaviour (`docs/` is generated — fix
+  its `ai-docs/` source).
+- What stays a judgement call (is an ADR due, is this a new glossary term, is
+  the prose right) is left to you and to Copilot's review
+  (`.github/instructions/*.instructions.md`).
 
 **Always** (any PR, regardless of what changed):
 
