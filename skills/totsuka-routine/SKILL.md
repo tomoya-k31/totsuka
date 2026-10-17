@@ -41,7 +41,7 @@ Only when `routine list` says no routine plugin is enabled. Each step ends with 
 Ask, one at a time: what should happen (the prompt), in which repository, when, and what it should leave behind. Then:
 
 1. **Name**: short, lowercase, `-` between words (`dep-update`). It is the file name and how the user refers to it later; tasks are named after it.
-2. **Schedule**: turn "weekdays at 9" into five cron fields `minute hour day month weekday`, local time — `0 9 * * 1-5`. Each field is `*`, a number, `a-b`, `*/n` or a comma list; weekday `0`–`7` (0 and 7 are Sunday). No `MON` / `JAN` names, no `@daily`. When both day-of-month and weekday are restricted, a day matching **either** runs. Read the schedule back in words before writing.
+2. **Schedule**: turn "weekdays at 9" into five cron fields `minute hour day month weekday`, local time — `0 9 * * 1-5`. Each field is `*`, a number, `a-b`, `*/n` or a comma list; weekday `0`–`7` (0 and 7 are Sunday). No `MON` / `JAN` names, no `@daily`. When both day-of-month and weekday are restricted, a day matching **either** runs; a field starting with `*` (`*/2`) does not count as restricted, so `0 9 */2 * 1` is odd days that are Mondays. Read the schedule back in words before writing.
 3. **Prompt**: what the agent does and what it leaves behind, written so it works with nobody watching. The agent's skills can be named in it.
 4. Write `<routines directory>/<name>.md` (create the directory if needed; it is the one `routine list` printed):
 
