@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:5cedecfaf17f89aa433bb868ca1ce472fd6cdf945f2ddacae00dce08803d82c1 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:4b203c9dba26e75e21cc3e3af40520b20224dc80fcd0e390030af8a8e86a42a2 -->
 
 # 設定リファレンス
 
@@ -1353,7 +1353,7 @@ kind = "agent_ide"
 
 ## `[macos]`
 
-通知の設定です。**メニューバーアプリも同じ `[macos]` を読みます。** アプリは `run` の通知を `filter` に通してから出し、通知やタスク行のクリックで `activate_bundle_id` のアプリを前面に出します。
+通知の設定です。**メニューバーアプリも同じ `[macos]` を読みます。** アプリは `run` の通知を `filter` に通してから出し、通知やタスク行のクリックで、herdr のワークフローなら `activate_bundle_id` のアプリを前面に出します（`agent` が orca のワークフローでは Orca アプリを前面に出し、このキーは読みません）。
 
 **`[macos]` を書くには `[plugins.macos]` の宣言が要ります**（無いと `config validate` が「unknown top-level table」で落とします）。アプリだけに通知させるなら、プラグインを無効にして宣言します:
 

@@ -1461,7 +1461,7 @@ kind = "agent_ide"
 
 # `[macos]`（notifier-macos）
 
-macOS の通知の設定。**メニューバーアプリも同じ `[macos]` を読む**（[macos-app](/components/macos-app.md)）—— アプリは `run` の通知を自分の名義で出すときに `filter` を通し、通知やタスク行のクリックで `activate_bundle_id` のアプリを前面に出す。
+macOS の通知の設定。**メニューバーアプリも同じ `[macos]` を読む**（[macos-app](/components/macos-app.md)）—— アプリは `run` の通知を自分の名義で出すときに `filter` を通し、通知やタスク行のクリックで、herdr のワークフローなら `activate_bundle_id` のアプリを前面に出す（`agent` が orca のワークフローでは Orca アプリを前面に出し、このキーは読まない）。
 
 **`[macos]` を書くには `[plugins.macos]` の宣言が要る**（無いと `config validate` が「unknown top-level table」で落とす）。アプリの通知だけを使い、notifier プラグインは動かさないなら、`enabled = false` で宣言すればよい（実測で `config validate` が通る）:
 

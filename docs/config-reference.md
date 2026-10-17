@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](config-reference.ja.md)
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:5cedecfaf17f89aa433bb868ca1ce472fd6cdf945f2ddacae00dce08803d82c1 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:4b203c9dba26e75e21cc3e3af40520b20224dc80fcd0e390030af8a8e86a42a2 -->
 
 # Configuration reference
 
@@ -1354,7 +1354,7 @@ Every `[orca]` key (unknown keys are an error, nested tables included):
 
 ## `[macos]`
 
-Notification settings. **The menu bar app reads the same `[macos]`**: it passes `run`'s notifications through `filter` before showing them, and a click on a notification or a task row brings the `activate_bundle_id` app to the front.
+Notification settings. **The menu bar app reads the same `[macos]`**: it passes `run`'s notifications through `filter` before showing them, and a click on a notification or a task row brings the `activate_bundle_id` app to the front for a herdr workflow (for a workflow whose `agent` is orca it brings Orca forward instead and ignores this key).
 
 **`[macos]` needs a `[plugins.macos]` entry** (without one, `config validate` fails with "unknown top-level table"). If only the app should notify, declare the plugin disabled:
 
