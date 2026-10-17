@@ -1,1 +1,1 @@
-* **Update**: [ADR-0088](/decisions/adr-0088-renovate.md) の Renovate のスケジュールを `before 6am on monday` から `on monday`（月曜まるごと）に広げた。Mend ホストの App の実行間隔は数時間から 1 日半で、6 時間の枠では 2026-10-12 に実行が 1 回も入らず、Awaiting Schedule の更新が 1 週間持ち越された。
+* **Update**: [ADR-0088](/decisions/adr-0088-renovate.md) の Renovate のスケジュールを `before 6am on monday` から `on monday`（月曜まるごと）に広げた。Mend ホストの App の実行間隔は数時間から 1 日半で、6 時間の枠では 2026-10-12 に実行が 1 回も入らず、Awaiting Schedule の更新が 1 週間持ち越された。`lockFileMaintenance` は組み込みの既定 `before 4am on monday` がトップレベルより優先されるため、同じ値を個別にも書いた。
