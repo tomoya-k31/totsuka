@@ -549,6 +549,8 @@
 # 2) Design → implement handoff
 #    Two stages with a human review in between. The conversation, its worktree
 #    and its agent session carry over when a card enters the next stage's column.
+#    GitHub only: a Notion page runs once across all workflows, so a page that
+#    went through design is never picked up by implement.
 #    Needs: recipe 1's prerequisites and its [[projects]] block.
 #
 # [[workflows]]

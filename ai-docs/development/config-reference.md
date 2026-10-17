@@ -4,7 +4,7 @@ title: 設定リファレンス（config.toml）
 description: "config.toml の全キー・デフォルト値・意味の一覧。設定ファイルは 1 本で、プラグイン個別設定もトップレベルの [<name>] テーブルに入る。シークレット参照、設定スキーマのバージョニング方針、[[projects]] の domain 宣言とワークフローからの参照、プラグインが定義する追加プロパティ、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-github の [github]、task-source-notion の [notion]、task-source-slack の [slack]、task-source-discord の [discord]、agent-ide-herdr の [herdr]、agent-ide-orca の [orca]、notifier-macos の [macos] を含む。"
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
 tags: [config, reference, toml, secrets, workflow, worktree, github, notion, slack, hooks, versioning]
-generated: { by: claude-code/opus-5.5, at: 2026-10-17T11:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-17T11:40:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -253,7 +253,7 @@ github / notion のトリガーは次の規則で読む（slack / discord は起
 
 ### `status`
 
-github の `status` トリガーは**列への入場がリクエスト**（#556）: 完了後でも人間がカードをトリガー列へ差し戻せば同じワークフローが再実行される（誰が再実行するかは assignee と claim が決める）。**別のワークフローのトリガー列へ入った場合は、その会話がそのワークフローへ引き渡される**（#565、列パイプライン）— worktree とエージェントのセッションを保ったまま次の段が始まる。引き渡しは**完了済みの会話だけ**。実行中に別ワークフローの列へ移された配送は見送られ、**ポーリング型のソース（github / notion）なら次の tick で運び直されて引き渡しが成立する**が、ack を先に返す Slack は再配送しないのでそのトリガーは失われる（実行が終わってから付け直すこと）。
+github の `status` トリガーは**列への入場がリクエスト**（#556）: 完了後でも人間がカードをトリガー列へ差し戻せば同じワークフローが再実行される（誰が再実行するかは assignee と claim が決める）。**別のワークフローのトリガー列へ入った場合は、その会話がそのワークフローへ引き渡される**（#565、列パイプライン）— worktree とエージェントのセッションを保ったまま次の段が始まる。引き渡しは**完了済みの会話だけ**。実行中に別ワークフローの列へ移された配送は見送られ、**github なら次の tick で運び直されて引き渡しが成立する**が（notion は 1 ページ 1 回なのでそもそも引き渡しが無い、[ADR-0064](/decisions/adr-0064-notion-at-most-once.md)）、ack を先に返す Slack は再配送しないのでそのトリガーは失われる（実行が終わってから付け直すこと）。
 
 ### `label`（github）
 
@@ -1499,7 +1499,7 @@ waiting_input = false
 
 # 例
 
-`[Spec §4.6/§4.9](/product/orchestrator-spec.ja.md)` の例は `totsuka setup` の雛形末尾の**レシピ集**にコメントアウトで含まれる。設計→実装ハンドオフの典型:
+`[Spec §4.6/§4.9](/product/orchestrator-spec.ja.md)` の例は `totsuka setup` の雛形末尾の**レシピ集**にコメントアウトで含まれる。設計→実装ハンドオフの典型（**GitHub のみ**。Notion のページは全ワークフローを通して 1 回しか実行されないので、design を通ったページを implement が拾うことは無い —— [ADR-0064](/decisions/adr-0064-notion-at-most-once.md)）:
 
 ```toml
 [[workflows]]
