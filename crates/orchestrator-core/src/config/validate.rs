@@ -207,7 +207,7 @@ pub enum ValidationError {
     /// (#394). `mode`/`output` were required before profiles existed; this
     /// keeps them required whenever no profile stands in for them.
     #[error(
-        "workflow `{workflow}` has no profile and no `{key}` → set `profile` to one of answer/triage/design/implement, or write `{key}` out"
+        "workflow `{workflow}` has no profile and no `{key}` → set `profile` to one of answer/triage/design/implement/unattended, or write `{key}` out"
     )]
     WorkflowMissingKey { workflow: String, key: &'static str },
 

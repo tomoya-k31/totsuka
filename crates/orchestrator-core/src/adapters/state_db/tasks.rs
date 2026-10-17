@@ -221,6 +221,40 @@ impl StateDb {
             .map_err(StateError::from)
     }
 
+    /// The unfinished task of `source` whose submitted `Task.series` is
+    /// `series` (#918), if any — what makes a `task/submit` naming that
+    /// series `busy`.
+    ///
+    /// "Unfinished" is `finished_at IS NULL`, which every transition writes
+    /// from [`TaskState::is_terminal`], so a task waiting on a human counts.
+    /// The series is read from `source_payload` (the submitted task, verbatim)
+    /// rather than a column: only the unfinished tasks of one source are
+    /// scanned, and this schema keeps no `json_extract`.
+    pub fn unfinished_task_in_series(
+        &self,
+        source: &str,
+        series: &str,
+    ) -> Result<Option<Task>, StateError> {
+        let sql = format!(
+            "SELECT {TASK_COLUMNS} FROM tasks WHERE source = ?1 AND finished_at IS NULL ORDER BY id"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(params![source], row_to_task)?;
+        for task in rows {
+            let task = task?;
+            let in_series = task
+                .source_payload
+                .as_ref()
+                .and_then(|p| p.get("series"))
+                .and_then(serde_json::Value::as_str)
+                == Some(series);
+            if in_series {
+                return Ok(Some(task));
+            }
+        }
+        Ok(None)
+    }
+
     /// Tasks currently in `state` (used by `status` and slot rebuild).
     pub fn tasks_in_state(&self, state: TaskState) -> Result<Vec<Task>, StateError> {
         let sql = format!("SELECT {TASK_COLUMNS} FROM tasks WHERE state = ?1 ORDER BY id");

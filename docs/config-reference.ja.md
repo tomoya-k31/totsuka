@@ -1,7 +1,7 @@
 > 🌐 [English](config-reference.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/config-reference.md sha256:5796beb7e589cf07f0812e514f3b2d9b152f72183613154ec64041ec2401b5e8 -->
+<!-- generated-from: ai-docs/development/config-reference.md sha256:7e4d65fb5b8560294ac99cac9697271e81d5386c87687dd43ab8f618c0ec2213 -->
 
 # 設定リファレンス
 
@@ -187,7 +187,7 @@ project = "tomo-prj"
 | `name` | string | 必須 | ワークフロー名 |
 | `projects` | 文字列配列 | 必須 | このワークフローが**タスクを引く先**の `[[projects]].name`。**タスクソースは書かない** —— 名指した domain の所有者がそれである。空配列はエラー（配る先が無い）。複数書くのは「それらの domain が同じレーン語彙を共有する」という意味で、異なるソースの domain を混ぜるのはエラー。複数形であることに注意: `[[repositories]].project` は 1 つ、こちらは配列 |
 | `trigger` | テーブル | `{}` | トリガー条件。**どのタスクが一致するかを決めるのはソースプラグインである。** キー同士は AND・配列は OR・`exclude` はどれか 1 つに一致したら除外、という規則と、ソースごとに読めるキーは下の「`trigger` の語彙」にまとめてある |
-| `profile` | enum? | なし | `answer` / `triage` / `design` / `implement` のいずれか。`mode` / `output` / `verification` をまとめて決める |
+| `profile` | enum? | なし | `answer` / `triage` / `design` / `implement` / `unattended` のいずれか。`mode` / `output` / `verification` をまとめて決める |
 | `mode` | enum | `profile` が無ければ必須 | `plan` / `implement` |
 | `agent` | string | 必須 | agent_ide のインスタンス名 |
 | `output` | enum | `profile` が無ければ必須 | `source` / `none` |
@@ -420,7 +420,7 @@ initial_prompt = "/grill-me スキルを使用して、詳細設計を行って�
 
 **人間に問いかけさせる指示を書くと、無人 pane ではハングする。** ツールの応答待ちでは何も発火しないので、`timeout_secs` を書いていればエスカレートするまで、既定の `0` のままなら無期限に止まる。totsuka は但し書きを自動で足さない — 書いた内容と矛盾する指示が混ざりうるためである。
 
-### `profile` — 4 つの原型
+### `profile` — 5 つの原型
 
 噛み合う `mode` / `output` / `verification` の組み合わせに名前を付けたもの。
 
@@ -430,6 +430,7 @@ initial_prompt = "/grill-me スキルを使用して、詳細設計を行って�
 | `triage` | `plan` | `source` | `llm` | GitHub や Notion へ起票する |
 | `design` | `plan` | `none` | `llm` | 詳細設計を issue コメントやページへ書く |
 | `implement` | `implement` | `none` | `llm` | 実装してプルリクエストを出す |
+| `unattended` | `implement` | `none` | `llm` | **pane に誰も居ない**前提で最後まで走る（routine など）。完了時にあなたの承認を待たず、`AskUserQuestion` だけを禁止し、成果物の URL も求めない |
 
 ```toml
 [[workflows]]
@@ -451,7 +452,7 @@ on_success = { status = "設計済み" }
 | 存在しない `on_*.labels` のラベルを名指す | **エラー**。付ける側も外す側も、workflow が名指したボードに紐づく各 `[[repositories]]` で存在を確かめる（綴り違いの `-name` は何にも一致せず黙って成功するので、`+name` と同じだけ危ない）。走るのは status の検査と同じく **`config validate` のオンライン部と `doctor` だけ**。`[[repositories]]` は owner を持たないので**ボードの owner の下**で探し、見つからないリポジトリは検査できなかったとして**警告**にする（ボードと owner が違うリポジトリでは設定が正しくてもそうなる） |
 | `status` の書き戻しが作る**列の閉路** | **エラー**。列を節点・書き戻しを辺とするグラフに閉路があると、**人間が 1 人も挟まらないまま永久に再実行**され、毎周エージェントが起動する。自分のトリガー列へ書き戻すのはその長さ 1 の場合。エラー文は実際の経路を名指しする。直し方は「どのワークフローもトリガーにしていない列を 1 hop 挟む」（人がそこからカードを動かす）。検査は `[[projects]]` エントリごと・字面の一致のみ — 列名がたまたま同じだけの別のボードは閉路ではなく、グラフが domain ごとに分かれている。ボード間のカード移動は実在するが動かすのは人間で、毎周人手が要るのでこの検査の対象ではない。複数の domain を名指したワークフローは各 domain に書き戻しの辺を張るが、絡み合った 1 グループは 1 件として報告され、検査が到達したボードを名指す |
 
-profile は必須ではない。4 原型で表せない組み合わせ（たとえば `verification = "human"` — 4 原型はいずれも `llm` に解決する）は明示記法で書く。
+profile は必須ではない。5 原型で表せない組み合わせ（たとえば `verification = "human"` — 5 原型はいずれも `llm` に解決する）は明示記法で書く。**明示記法には許可の設定が一切入らない**（`auto` モードも禁止リストも無い）ので、Claude の pane は既定の許可プロンプトで止まりうる。誰も見ていない状態で走らせるなら `unattended` を使う。
 
 **戻すときの注意:** `profile` を書いた設定は、古いバイナリではパースエラーになる。totsuka を戻すときは設定も戻すこと。
 
@@ -459,7 +460,7 @@ profile はこの 3 キー以外にも次を決める。
 
 | 決まる挙動 | 対象 profile |
 |---|---|
-| Claude の設定へ `permissions.deny` を注入する | answer / triage / design |
+| Claude の設定へ `permissions.deny` を注入する | answer / triage / design（unattended は `AskUserQuestion` だけ） |
 | `Bash` をツールごと deny する（コマンドを 1 つも実行できない） | answer |
 | Claude の `--permission-mode plan` を**渡さない** | answer / triage / design |
 | worktree がブランチ上にあったら成功扱いにせず失敗させる | answer / triage / design |

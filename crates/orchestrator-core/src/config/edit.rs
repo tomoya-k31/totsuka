@@ -155,7 +155,7 @@ pub struct WorkflowDraft<'a> {
     pub projects: &'a [&'a str],
     /// Inline-table fragment, or `None` to match every task from the source.
     pub trigger: Option<&'a str>,
-    /// One of the four archetypes (#394). When set, `mode` and `verification`
+    /// One of the five archetypes (#394, #918). When set, `mode` and `verification`
     /// must be `None` — the profile supplies them, and writing both is a
     /// `ProfileConflict`.
     pub profile: Option<Profile>,
@@ -1048,6 +1048,7 @@ path = "/dotfiles"
             Profile::Triage,
             Profile::Design,
             Profile::Implement,
+            Profile::Unattended,
         ] {
             let out = upsert_workflow(
                 "",

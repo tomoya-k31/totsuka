@@ -268,7 +268,7 @@ tool = "claude"                              # AI ツールの明示ピン（#19
 name = "implement"
 projects = ["tomo-prj"]
 trigger = { status = "実装待ち" }
-profile = "implement"                        # answer | triage | design | implement
+profile = "implement"                        # answer | triage | design | implement | unattended
 agent = "herdr"
 on_success = { status = "レビュー待ち" }
 rubric = "テストが追加されており、cargo clippy / cargo fmt が通っていること"

@@ -14,6 +14,7 @@ use crate::domain::TaskId;
 use crate::domain::signal::AgentSignal;
 use crate::ports::signal_ingress::{
     ControlPort, FocusOutcome, SignalAck, SignalError, SignalPort, TaskControlOutcome, TaskOp,
+    TriggerOutcome,
 };
 use crate::run::PluginEvent;
 
@@ -86,6 +87,22 @@ impl ControlPort for EngineSignalSink {
                 task_id,
                 respond,
             })
+            .map_err(|_| SignalError::Closed);
+        async move {
+            sent?;
+            outcome.await.map_err(|_| SignalError::Closed)
+        }
+    }
+
+    fn trigger(
+        &self,
+        key: String,
+    ) -> impl std::future::Future<Output = Result<TriggerOutcome, SignalError>> + Send {
+        // The same request-response trip as `focus` (#918).
+        let (respond, outcome) = oneshot::channel();
+        let sent = self
+            .tx
+            .send(PluginEvent::Trigger { key, respond })
             .map_err(|_| SignalError::Closed);
         async move {
             sent?;

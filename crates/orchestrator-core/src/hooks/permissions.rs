@@ -284,8 +284,8 @@ pub fn plan_mode_only_adds_the_gate(profile: Option<Profile>) -> bool {
     profile.is_some_and(Profile::is_read_only)
 }
 
-/// The deny rules for `profile`, or `None` when the profile is meant to write
-/// (only `implement`).
+/// The deny rules for `profile`, or `None` when the profile denies nothing
+/// (`implement`).
 ///
 /// Assembled from the shared fragments above rather than written out per
 /// profile, so the read-only sets cannot drift apart when one is edited.
@@ -316,6 +316,12 @@ pub fn deny_rules(profile: Profile) -> Option<Vec<&'static str>> {
             rules.extend(DENY_REPO_ADMIN);
         }
         Profile::Implement => return None,
+        // Writable like implement (#918): a routine may change files, commit
+        // and open a pull request. The one thing denied is asking — nobody is
+        // at the pane, so a question would sit there until the next run finds
+        // the series busy. Denied, the agent decides, or reports NEEDS_INPUT,
+        // which reaches a human as a notification.
+        Profile::Unattended => rules.push("AskUserQuestion"),
     }
     Some(rules)
 }
@@ -393,6 +399,17 @@ mod tests {
         assert_eq!(deny_rules(Profile::Implement), None);
     }
 
+    /// #918: nobody is at an unattended pane, so it may write everything and
+    /// ask nothing.
+    #[test]
+    fn unattended_denies_only_asking() {
+        assert_eq!(
+            deny_rules(Profile::Unattended),
+            Some(vec!["AskUserQuestion"])
+        );
+        assert!(!plan_mode_only_adds_the_gate(Some(Profile::Unattended)));
+    }
+
     /// Every read-only profile must deny the file-editing tools by their **bare
     /// names**. A path-scoped `Write(path)` is accepted by Claude Code and then
     /// never consulted, so a "fix" that scoped these to the worktree would read
@@ -463,7 +480,7 @@ mod tests {
     /// pattern", because there are two ways to be unable to run it and #410
     /// showed the pattern is the weaker one.
     #[test]
-    fn only_implement_may_open_a_pull_request() {
+    fn read_only_profiles_cannot_open_a_pull_request() {
         for profile in [Profile::Answer, Profile::Triage, Profile::Design] {
             let rules = deny_rules(profile).unwrap();
             assert!(

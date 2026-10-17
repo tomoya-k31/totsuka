@@ -4,7 +4,7 @@ title: 設定リファレンス（config.toml）
 description: "config.toml の全キー・デフォルト値・意味の一覧。設定ファイルは 1 本で、プラグイン個別設定もトップレベルの [<name>] テーブルに入る。シークレット参照、設定スキーマのバージョニング方針、[[projects]] の domain 宣言とワークフローからの参照、プラグインが定義する追加プロパティ、出力ポリシー、掃除ポリシー、並列上限、[hooks]・検収設定、task-source-github の [github]、task-source-notion の [notion]、task-source-slack の [slack]、task-source-discord の [discord]、agent-ide-herdr の [herdr]、agent-ide-orca の [orca]、notifier-macos の [macos] を含む。"
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-core/src/config/schema.rs
 tags: [config, reference, toml, secrets, workflow, worktree, github, notion, slack, hooks, versioning]
-generated: { by: claude-code/opus-5.5, at: 2026-10-17T11:40:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-18T21:30:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -214,7 +214,7 @@ project = "tomo-prj"
 | `name` | string | 必須 | ワークフロー名 |
 | `projects` | 文字列配列 | 必須 | このワークフローが**タスクを引く先**の `[[projects]].name`（#626、[ADR-0069](/decisions/adr-0069-workflow-projects.md)）。**タスクソースは書かない** —— 名指した domain の所有者として導出される。空配列はエラー（配る先が無い）。複数書くのは「**これらの domain は同じレーン語彙を共有する**」という主張で、`source` が全ボードを暗黙に含んでいたのを列挙に変えたもの。異なる source の domain を混ぜるのはエラー（下記の引き取り規則が claimant を一意に決められない）。スカラーの `[[repositories]].project` と arity が違うので**キー名が複数形**である |
 | `trigger` | テーブル | `{}` | トリガー条件。**中身を解釈してタスクを選ぶのはプラグインである**（#554）。キー同士は AND・配列は OR・`exclude` はどれか 1 つに一致したら除外、という共通規則と、ソースごとに読めるキーは下の「`trigger` の語彙」節にまとめてある |
-| `profile` | enum? | なし | 4 原型のいずれか（`answer` / `triage` / `design` / `implement`）。`mode` / `output` / `verification` の 3 つをまとめて決める。うち `mode` / `verification` は併記不可、`output` は併記すればそちらが勝つ（下記） |
+| `profile` | enum? | なし | 5 原型のいずれか（`answer` / `triage` / `design` / `implement` / `unattended`）。`mode` / `output` / `verification` の 3 つをまとめて決める。うち `mode` / `verification` は併記不可、`output` は併記すればそちらが勝つ（下記） |
 | `mode` | enum | `profile` が無ければ必須 | `plan`（設計・起案。worktree は作るが push・PR は**想定していない** — F-82。ただし**強制はされていない**、下記）/ `implement` |
 | `agent` | string | 必須 | agent_ide インスタンス名 |
 | `output` | enum | `profile` が無ければ必須 | `source` / `none`。**`pull_request` は廃止** — push と PR 作成はエージェントの責務になった（F-86、[ADR-0026](/decisions/adr-0026-agent-owned-branch-and-push.md)）。残っていると起動時に `unknown variant` で落ちるので `source` に変更し、PR 作成手順はリポジトリの規約に書く |
@@ -442,7 +442,7 @@ initial_prompt = "/grill-me スキルを使用して、詳細設計を行って�
 
 `rubric`（下記）とは**別レイヤ**。あちらは llm 検収の判定条件の置換で、プレースホルダ検査に照らして厳格に検証される。`initial_prompt` は指示の上乗せで、置換対象が存在せず、送り先も違う。
 
-## `profile` — 4 原型（#394、[ADR-0033](/decisions/adr-0033-workflow-profile.md)）
+## `profile` — 5 原型（#394、[ADR-0033](/decisions/adr-0033-workflow-profile.md)。`unattended` は #918）
 
 `mode` / `output` / `verification` の噛み合う組み合わせに名前を付けたもの。解決テーブルは Rust 固定で、設定側からは原型名を選ぶだけになる（deny セットのような権限に関わる決定を設定文字列から到達可能にしないため — [ADR-0023](/decisions/adr-0023-configurable-prompt-surface.md) と同じ理由）。
 
@@ -452,6 +452,7 @@ initial_prompt = "/grill-me スキルを使用して、詳細設計を行って�
 | `triage` | `plan` | `source` | `llm` | 依頼を GitHub / Notion へ起票する |
 | `design` | `plan` | `none` | `llm` | 詳細設計を issue コメント / ページへ書く |
 | `implement` | `implement` | `none` | `llm` | 実装して PR を出す |
+| `unattended` | `implement` | `none` | `llm` | **pane に誰も居ない**前提で最後まで走る（routine など）。完了の人間承認を待たず、`AskUserQuestion` だけを deny し、成果物 URL も要求しない（[ADR-0117](/decisions/adr-0117-routines.md)） |
 
 ```toml
 [[workflows]]
@@ -475,7 +476,7 @@ on_success = { status = "設計済み" }
 | 存在しない `on_*.labels` のラベルを名指す | **エラー**（ADR-0108）。付ける側も外す側も、workflow が名指したボードに紐づく各 `[[repositories]]` で存在を確かめる（綴り違いの `-name` は何にも一致せず黙って成功するので、`+name` と同じだけ危ない）。走るのは status の検査と同じく **`config validate` のオンライン部と `doctor` だけ**。`[[repositories]]` は owner を持たないので**ボードの owner の下**で探し、見つからないリポジトリは検査できなかったとして**警告**にする（ボードと owner が違うリポジトリでは設定が正しくてもそうなる） |
 | `status`（`on_start` / `on_success` / `on_failure`）が作る**列の閉路** | **エラー**（#556 → #565 で一般化）。列を節点・書き戻しを辺とするグラフに閉路があると、**人間が 1 人も挟まらないまま永久に再実行され続ける**（毎周エージェントが起動して実費が出る）。自分のトリガー列へ書き戻す構成はその長さ 1 の場合。エラー文は実際の経路を名指しする。直し方は「どのワークフローもトリガーにしていない列を 1 hop 挟む」（人がそこからカードを動かす）。検査は**同一 `[[projects]]` エントリ内・字面の一致のみ** — 列名がたまたま同じだけの別のボードは閉路ではなく、グラフが domain ごとに分かれている（#626、[ADR-0069](/decisions/adr-0069-workflow-projects.md)）。**#626 より前はこの分割が `source` 単位で、同一プラグインの 2 枚のボードは同じ節点になっていた** —— ボード A の `Done` とボード B の `Done` が繋がり、走らない閉路が報告されえた。ボード跨ぎのカード移動は人間が動かすので毎周人手が要り、この検査の対象ではない。`projects` に複数書いた workflow は各 domain に辺を張るが、報告は 1 グループ 1 件で（直す構造は 1 つなので）、メッセージが到達したボードを名指す |
 
-`profile` は必須ではない。4 原型で表せない組み合わせ（例: `verification = "human"` — 4 原型はいずれも `llm` に解決する）は明示記法で書く。
+`profile` は必須ではない。5 原型で表せない組み合わせ（例: `verification = "human"` — 5 原型はいずれも `llm` に解決する）は明示記法で書く。ただし**明示記法には permissions ブロックが入らない**（`permissions.defaultMode = "auto"` も deny も無い）ので、claude の pane は既定の許可プロンプトで止まりうる。無人で走らせるなら `unattended` を使う。
 
 **ロールバック時の注意**: `profile` を書いた config は旧バイナリでは未知キーとして**パースエラー**になる。totsuka を前のバージョンへ戻すときは config も戻すこと。
 
@@ -483,7 +484,7 @@ on_success = { status = "設計済み" }
 
 | 追加された挙動 | 対象 profile | issue |
 |---|---|---|
-| claude の `--settings` へ `permissions.deny` を注入 | answer / triage / design | #395 |
+| claude の `--settings` へ `permissions.deny` を注入 | answer / triage / design（unattended は `AskUserQuestion` だけ、#918） | #395 |
 | `Bash` を**ツールごと** deny（コマンドを 1 つも実行できない） | answer | #410 |
 | claude の `--permission-mode plan` を**渡さない** | answer / triage / design | #410 / #409 |
 | worktree がブランチ上にあったら**成功として扱わず失敗**させる（走行中の検知では pane も閉じる） | answer / triage / design | #409 / #410 |

@@ -36,6 +36,7 @@ Claude のルーティンのように「決まった時刻に、決まったリ�
 5. **実行中の重複は本体が止める**: プロトコル 0.7.8 で `Task.series` と `TaskSubmitStatus::Busy` を足す。同じ source・series のタスクが終わっていなければ（入力待ちも含む）submit は `busy` になり、その回は飛ばす（キューに積まない）。プラグインからはタスクの状態が見えないので、判定は状態を持つ本体に置く。どのソースでも使える汎用の仕組みにする。
 6. **手動実行 `totsuka routine run <name>` は `task/trigger`**: control UDS（[ADR-0094](/decisions/adr-0094-task-control-endpoints.md)）に `POST /routine/run` を足し、本体がプラグインに `task/trigger {key}` を送る。プラグインは **submit せず、応答として `TaskSubmitParams` を返し**、本体がそれを `task/submit` と同じ経路で ingest して、結果（accepted / busy＋実行中のタスク / 知らない key）を CLI に返す。プラグインが応答の途中で `task/submit` を呼び返す形にしなかったのは、本体が trigger の応答を待つ間にそのプラグインの submit を待たせる再入を作らないため。
 7. **プラグインへの受け渡し**: `InitializeParams` に `config_dir`（`--config` があればその親、無ければ `$XDG_CONFIG_HOME/totsuka`）と `host`（ADR-0106 の host key）を足す。プラグインは protocol / sdk 以外に依存できない（arch-lint）ので、host key の求め方を複製させない。
+8. **無人用の profile `unattended` を足す。** routine は pane に誰も居ないまま走る。既存の profile はどれも合わない（`design` / `implement` は完了時に pane 上で人間の承認を待ち、`answer` / `triage` は既定の出力が `source` で、このソースは何も publish しない）。profile を書かない明示記法には permissions ブロックが入らず（[ADR-0041](/decisions/adr-0041-unattended-permission-mode.md) が意図して避けた形）、claude は既定の許可プロンプトで止まる。止まった回は未終了のまま残るので、以降の回はすべて `busy` で飛ぶ。`unattended` は mode `implement`・output `none`・verification `llm`・`permissions.defaultMode = "auto"`、deny は `AskUserQuestion` だけ（答える人が居ないので訊かせない）、完了の人間承認・成果物 URL の要求・`gh` の前提検査は無し。routine 以外の無人実行にも使える名前にした。
 
 # Consequences
 

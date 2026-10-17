@@ -158,6 +158,11 @@ pub enum Profile {
     Design,
     /// Implement and open a PR. The worktree is writable (WF 5, 7).
     Implement,
+    /// Work with nobody at the pane (#918, ADR-0117): a writable worktree,
+    /// no permission prompts, and a completion the agent reports itself
+    /// rather than one a human approves — what a scheduled routine needs.
+    /// The deliverable is the prompt's to name, so no artifact is demanded.
+    Unattended,
 }
 
 impl Profile {
@@ -168,6 +173,7 @@ impl Profile {
             Profile::Triage => "triage",
             Profile::Design => "design",
             Profile::Implement => "implement",
+            Profile::Unattended => "unattended",
         }
     }
 
@@ -182,7 +188,7 @@ impl Profile {
     pub fn is_read_only(self) -> bool {
         match self {
             Profile::Answer | Profile::Triage | Profile::Design => true,
-            Profile::Implement => false,
+            Profile::Implement | Profile::Unattended => false,
         }
     }
 
@@ -198,7 +204,9 @@ impl Profile {
     pub fn confirms_with_a_human(self) -> bool {
         match self {
             Profile::Design | Profile::Implement => true,
-            Profile::Answer | Profile::Triage => false,
+            // Nobody is there to approve: a completion that waited for one
+            // would park the task until a human happened to look.
+            Profile::Answer | Profile::Triage | Profile::Unattended => false,
         }
     }
 
@@ -206,7 +214,7 @@ impl Profile {
     /// writable worktree.
     pub fn mode(self) -> WorkflowMode {
         match self {
-            Profile::Implement => WorkflowMode::Implement,
+            Profile::Implement | Profile::Unattended => WorkflowMode::Implement,
             Profile::Answer | Profile::Triage | Profile::Design => WorkflowMode::Plan,
         }
     }
@@ -217,11 +225,11 @@ impl Profile {
     pub fn output(self) -> OutputPolicy {
         match self {
             Profile::Answer | Profile::Triage => OutputPolicy::Source,
-            Profile::Design | Profile::Implement => OutputPolicy::None,
+            Profile::Design | Profile::Implement | Profile::Unattended => OutputPolicy::None,
         }
     }
 
-    /// The verification mode this profile resolves to. All four verify with the
+    /// The verification mode this profile resolves to. All five verify with the
     /// llm judge; what differs is the rubric, which
     /// [#398](https://github.com/tomoya-k31/totsuka/issues/398) specialises.
     pub fn verification(self) -> VerificationMode {

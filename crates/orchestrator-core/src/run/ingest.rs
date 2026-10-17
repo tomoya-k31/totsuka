@@ -318,6 +318,29 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
                 )),
             });
         }
+        // A new run of a series while an earlier one is unfinished is skipped,
+        // not queued (#918). Only for a *new* conversation: a re-delivery of
+        // the running one is the ledger's `duplicate`, as for any source.
+        if let Some(series) = &task.series
+            && self
+                .db
+                .find_by_source(&task.source, &SourceTaskId(task.id.clone()))?
+                .is_none()
+            && let Some(running) = self.db.unfinished_task_in_series(&task.source, series)?
+        {
+            tracing::info!(
+                task = %task.id, series, running = running.id.0,
+                "series still running; this run is skipped"
+            );
+            return Ok(TaskSubmitResult {
+                status: TaskSubmitStatus::Busy,
+                reason: Some(format!(
+                    "task #{} of series `{series}` is still {} → it runs again at its next \
+                     time, or after `totsuka task cancel {}`",
+                    running.id.0, running.state, running.id.0
+                )),
+            });
+        }
         let (id, outcome) = self.ingest_task(wf, &task)?;
         match outcome {
             IngestOutcome::Created => {
@@ -343,6 +366,66 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
         Ok(TaskSubmitResult {
             status: outcome.ack(),
             reason: None,
+        })
+    }
+}
+
+impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
+    /// Answer a `POST /routine/run` (#918): ask the one source that declares
+    /// `task_trigger` for the task of `key`, and ingest the answer exactly as
+    /// a `task/submit` from that source.
+    ///
+    /// The plugin *answers* with the task rather than submitting it, so this
+    /// awaits nothing the plugin itself is waiting on.
+    pub async fn trigger_task(&mut self, key: String) -> Result<TriggerOutcome, EngineError> {
+        let mut triggerable = self
+            .plugins
+            .sources
+            .iter()
+            .filter(|(_, plugin)| plugin.capabilities().task_trigger);
+        let (name, plugin) = match (triggerable.next(), triggerable.next()) {
+            (Some(one), None) => one,
+            (None, _) => {
+                return Ok(TriggerOutcome::refused(
+                    "no running task source can trigger a run → add the routine plugin \
+                     to config.toml and start `totsuka run --watch`",
+                ));
+            }
+            // ponytail: one triggerable source is all there is (routine);
+            // name the source in the request if a second one ever appears.
+            (Some(_), Some(_)) => {
+                return Ok(TriggerOutcome::refused(
+                    "more than one task source can trigger a run, and the request \
+                     does not say which",
+                ));
+            }
+        };
+        let name = name.clone();
+        let params = match plugin
+            .request::<rpc::TaskTrigger>(&TaskTriggerParams { key: key.clone() })
+            .await
+        {
+            Ok(params) => params,
+            // The plugin's own words: an unknown key, a broken definition.
+            Err(e) => return Ok(TriggerOutcome::refused(e.to_string())),
+        };
+        let task_id = params.task.id.clone();
+        let result = self.on_task_submit(name.clone(), params.workflow, params.task)?;
+        Ok(match result.status {
+            TaskSubmitStatus::Accepted => {
+                match self.db.find_by_source(&name, &SourceTaskId(task_id))? {
+                    Some(row) => TriggerOutcome::started(row.id),
+                    None => TriggerOutcome::refused("the task was accepted but not found"),
+                }
+            }
+            TaskSubmitStatus::Duplicate => TriggerOutcome::refused(format!(
+                "`{key}` was already started at this time → run it again in a minute"
+            )),
+            TaskSubmitStatus::Rejected | TaskSubmitStatus::Busy => TriggerOutcome::refused(
+                result
+                    .reason
+                    .unwrap_or_else(|| "refused without a reason".to_string()),
+            ),
         })
     }
 }
@@ -649,6 +732,75 @@ mod tests {
         assert_eq!(
             messages.iter().map(|m| m.body.as_str()).collect::<Vec<_>>(),
             ["one", "two"]
+        );
+    }
+
+    /// #918: while a run of a series is unfinished, a new run of it is `busy`
+    /// and leaves no row; a re-delivery of the running one is still the
+    /// ledger's `duplicate`, another series is unaffected, and once the run
+    /// finishes the next one is accepted.
+    #[tokio::test]
+    async fn a_series_runs_one_at_a_time() {
+        let mut engine = ingest_test_engine().await;
+        let mut submit = |id: &str, series: &str| {
+            let task = Task {
+                series: Some(series.to_string()),
+                ..delivery(id, None, "routine")
+            };
+            engine
+                .on_task_submit("slack".into(), "implement".into(), task)
+                .unwrap()
+        };
+        assert_eq!(submit("n@1", "nightly").status, TaskSubmitStatus::Accepted);
+        let busy = submit("n@2", "nightly");
+        assert_eq!(
+            submit("n@1", "nightly").status,
+            TaskSubmitStatus::Duplicate,
+            "the running one re-delivered"
+        );
+        assert_eq!(
+            submit("w@1", "weekly").status,
+            TaskSubmitStatus::Accepted,
+            "another series"
+        );
+
+        let first = engine
+            .db
+            .find_by_source("slack", &SourceTaskId("n@1".into()))
+            .unwrap()
+            .unwrap()
+            .id;
+        assert_eq!(busy.status, TaskSubmitStatus::Busy);
+        let reason = busy.reason.unwrap();
+        assert!(reason.contains(&format!("#{}", first.0)), "{reason}");
+        assert!(!reason.contains("  "), "{reason:?}");
+        assert!(
+            engine
+                .db
+                .find_by_source("slack", &SourceTaskId("n@2".into()))
+                .unwrap()
+                .is_none(),
+            "a skipped run leaves no row"
+        );
+
+        engine
+            .db
+            .apply_event(engine.db.task_ref(first).unwrap(), TaskEvent::Cancel, None)
+            .unwrap();
+        let ack = engine
+            .on_task_submit(
+                "slack".into(),
+                "implement".into(),
+                Task {
+                    series: Some("nightly".into()),
+                    ..delivery("n@2", None, "routine")
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            ack.status,
+            TaskSubmitStatus::Accepted,
+            "the series is free once its run finished"
         );
     }
 

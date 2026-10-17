@@ -1,0 +1,3 @@
+* **Update**: [POST /agent-events](/apis/agent-events.md) — 制御エンドポイント `POST /routine/run`（`{"key"}` → `task/trigger` → `task/submit` と同じ取り込み → `{"ok", "task_id"?, "reason"?}`）
+* **Update**: [orchestrator-core](/components/orchestrator-core.md) — `Task.series` を持つ新しい会話は同じ series の未終了タスクがあれば `busy`、`ControlPort::trigger` と `Engine::trigger_task`、プラグインの `initialize` に `config_dir` / `host` を渡す（[ADR-0117](/decisions/adr-0117-routines.md)）
+* **Update**: [設定リファレンス](/development/config-reference.md) / [ADR-0117](/decisions/adr-0117-routines.md) — 無人用の profile `unattended`（implement・output none・`defaultMode = auto`・deny は `AskUserQuestion` だけ・完了の人間承認なし）。明示記法には permissions ブロックが入らず claude が許可プロンプトで止まりうることを明記
