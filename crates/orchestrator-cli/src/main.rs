@@ -13,6 +13,7 @@ mod from_source;
 mod logs_cmd;
 mod menu_cmd;
 mod plugin_cmd;
+mod routine_cmd;
 mod run_cmd;
 mod setup;
 mod status_cmd;
@@ -142,6 +143,11 @@ enum Command {
         #[command(flatten)]
         json: common::JsonFlag,
     },
+    /// This machine's routines: scheduled prompts (list / run).
+    Routine {
+        #[command(subcommand)]
+        cmd: routine_cmd::RoutineCommand,
+    },
     /// Bring a task's agent pane to the foreground (the notification's
     /// click target, F-94). Quietly no-ops when the orchestrator is stopped.
     Focus {
@@ -233,6 +239,7 @@ fn wants_json(command: &Command) -> bool {
             json.json
         }
         Command::Task { cmd } => cmd.wants_json(),
+        Command::Routine { cmd } => cmd.wants_json(),
         Command::Plugin { cmd } => cmd.wants_json(),
         Command::Config { cmd } => cmd.wants_json(),
         _ => false,
@@ -339,6 +346,7 @@ fn execute(
         Command::Status { json } => status_cmd::run(&cx, json.json),
         Command::Menu { .. } => unreachable!("handled above"),
         Command::Task { cmd } => task_cmd::run(&cx, cmd),
+        Command::Routine { cmd } => routine_cmd::run(&cx, cmd),
         Command::Focus { id } => focus_cmd::run(&cx, id),
         Command::Plugin { cmd } => plugin_cmd::run(&cx, cmd),
         Command::Config { cmd } => config_cmd::run(&cx, cmd),

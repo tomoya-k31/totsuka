@@ -22,9 +22,10 @@ A profile fixes what an agent may do and what counts as done. Ask the user what 
 | `answer` | a reply to a question | no; shell is denied too | an LLM judges the reply | yes |
 | `triage` | a filed issue or Notion page | no | an LLM finds the filed item's URL in the last message | yes |
 | `design` | a detailed design posted as an issue comment or page | no | the user approves in the agent's pane | no |
-| `implement` | code and a pull request | yes, the only one | the user approves in the agent's pane | no; add `"output": "source"` to reply |
+| `implement` | code and a pull request | yes | the user approves in the agent's pane | no; add `"output": "source"` to reply |
+| `unattended` | whatever the task asks for, with nobody at the pane | yes | the agent reports it done (no approval) | no; add `"output": "source"` to reply |
 
-`design` and `implement` need someone watching the pane; a run that should finish unattended uses `answer` or `triage`. The read-only profiles are not a sandbox: if the target repository's own rules tell agents to push and open PRs, the agent may still do so, and totsuka then fails the task. Ask whether the repository has such rules when choosing `answer` / `triage` / `design`.
+`design` and `implement` need someone watching the pane; a run that should finish unattended uses `answer` or `triage` (read-only, replies), or `unattended` (may change code; no permission prompts, and the agent is not allowed to ask questions). `unattended` works with every source; routines need it (see routine.md). The read-only profiles are not a sandbox: if the target repository's own rules tell agents to push and open PRs, the agent may still do so, and totsuka then fails the task. Ask whether the repository has such rules when choosing `answer` / `triage` / `design`.
 
 What each source supports:
 

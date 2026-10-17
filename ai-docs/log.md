@@ -2,6 +2,11 @@
 
 ## 2026-10-18
 
+* **Update**: [orchestrator-cli](/components/orchestrator-cli.md) — `totsuka routine list [--json]`（routine-schedule でファイルを読み、次回・前回・走れない理由を出す）と `totsuka routine run <name>`（`POST /routine/run`、断られたら非ゼロ終了）
+* **Update**: [運用ガイド](/operations/operations-guide.md) — doctor の `routines` チェックと routine コマンド
+* **Update**: [routine-schedule](/components/routine-schedule.md) — `Schedule::next_after`（一覧の次回）
+* **Update**: [ADR-0117](/decisions/adr-0117-routines.md) — routine の作成・変更・一覧・試し実行を行う `npx skills` 配布の専用スキル `totsuka-routine` を足した
+* **Update**: totsuka-routine スキル — workflow は `profile = "unattended"`、新しい routine は次の予定時刻を待つ（作成前の回は取り戻さない）
 * **Update**: [POST /agent-events](/apis/agent-events.md) — 制御エンドポイント `POST /routine/run`（`{"key"}` → `task/trigger` → `task/submit` と同じ取り込み → `{"ok", "task_id"?, "reason"?}`）
 * **Update**: [orchestrator-core](/components/orchestrator-core.md) — `Task.series` を持つ新しい会話は同じ series の未終了タスクがあれば `busy`、`ControlPort::trigger` と `Engine::trigger_task`、プラグインの `initialize` に `config_dir` / `host` を渡す（[ADR-0117](/decisions/adr-0117-routines.md)）
 * **Update**: [設定リファレンス](/development/config-reference.md) / [ADR-0117](/decisions/adr-0117-routines.md) — 無人用の profile `unattended`（implement・output none・`defaultMode = auto`・deny は `AskUserQuestion` だけ・完了の人間承認なし）。明示記法には permissions ブロックが入らず claude が許可プロンプトで止まりうることを明記

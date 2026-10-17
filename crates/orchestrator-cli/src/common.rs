@@ -307,7 +307,7 @@ impl Cx {
     /// The directory the config lives in: the parent of `--config`, else the
     /// XDG config directory — also when `hosts/<host>.toml` was chosen, whose
     /// parent is `hosts/` and not where siblings of it live.
-    fn config_home(&self) -> &Path {
+    pub(crate) fn config_home(&self) -> &Path {
         if self.config_overridden {
             self.config_path.parent().unwrap_or(Path::new("."))
         } else {

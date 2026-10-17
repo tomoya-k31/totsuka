@@ -515,6 +515,10 @@ pub fn run(cx: &Cx, args: DoctorArgs) -> Result<(), CliError> {
         }
     };
 
+    if let Some(check) = cfg.as_ref().and_then(|cfg| check_routines(cx, cfg)) {
+        checks.push(check);
+    }
+
     // State DB.
     let db = match cx.open_state_db() {
         Ok(db) => {
@@ -641,6 +645,71 @@ enum CliProbe {
         /// Whether the session query succeeded.
         session: bool,
     },
+}
+
+/// The `routines` check (#918): where this machine's routines are read from,
+/// and every file the routine plugin cannot run. `None` when no routine
+/// plugin is enabled.
+///
+/// A missing directory is a warning, not a failure: like `hosts/`, it is how
+/// a machine opts out, but next to a `routines/` holding other hosts' files it
+/// is more likely a hostname that changed.
+fn check_routines(cx: &Cx, cfg: &RootConfig) -> Option<Check> {
+    let site = match crate::routine_cmd::site(cx, cfg) {
+        Ok(site) => site?,
+        Err(why) => {
+            return Some(Check::warn(
+                "routines",
+                why,
+                "run on a machine with a usable hostname",
+            ));
+        }
+    };
+    if !site.dir.is_dir() {
+        let others: Vec<String> = site
+            .dir
+            .parent()
+            .and_then(|parent| std::fs::read_dir(parent).ok())
+            .into_iter()
+            .flatten()
+            .filter_map(|e| e.ok()?.file_name().into_string().ok())
+            .collect();
+        let detail = if others.is_empty() {
+            format!(
+                "{} does not exist, so no routine runs here",
+                site.dir.display()
+            )
+        } else {
+            format!(
+                "{} does not exist, so no routine runs here. routines/: {}",
+                site.dir.display(),
+                others.join(", ")
+            )
+        };
+        return Some(Check::warn(
+            "routines",
+            detail,
+            "create it and add <name>.md files, or disable the routine plugin on this machine",
+        ));
+    }
+    let now = time::OffsetDateTime::now_utc().to_offset(orchestrator_core::logging::local_offset());
+    let rows = site.rows(now, HashMap::new());
+    let problems: Vec<String> = rows
+        .iter()
+        .filter_map(|r| Some(format!("{}.md: {}", r.name, r.problem.as_ref()?)))
+        .collect();
+    Some(if problems.is_empty() {
+        Check::ok(
+            "routines",
+            format!("{} routine(s) in {}", rows.len(), site.dir.display()),
+        )
+    } else {
+        Check::warn(
+            "routines",
+            safe(&problems.join("; ")),
+            "fix those files; `totsuka routine list` shows each one",
+        )
+    })
 }
 
 /// Run a backend CLI's two **non-prompting** probes: `--version` for presence,

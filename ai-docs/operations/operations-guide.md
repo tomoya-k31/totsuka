@@ -4,7 +4,7 @@ title: 運用ガイド（doctor / worktree 掃除 / FAQ）
 description: totsuka 日常運用の手引き。doctor の読み方、ランタイム health（縮退）の読み方と doctor との守備範囲の違い、worktree 掃除ポリシーと孤児掃除、run 停止・回復と SSH keepalive の推奨設定、メニューバー表示（SwiftBar）の導入と読み方、よくある問題の切り分け。
 resource: https://github.com/tomoya-k31/totsuka
 tags: [operations, doctor, health, worktree, menu, swiftbar, faq, troubleshooting]
-generated: { by: claude-code/opus-5.5, at: 2026-10-11T12:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-18T20:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -27,6 +27,7 @@ owner: tomoya-k31
 | `llm-online` | プロバイダが API キーを**受理した**（`--online` 時のみ） | 401/403 = 鍵をプロバイダで再発行し `[llm].api_key_ref` を更新。到達不能・5xx は warning 止まり（鍵が悪いとは限らない） |
 | `worktrees` | 孤児 worktree なし | 対話的に掃除を提案（TTY） |
 | `panes` | 孤児 agent pane なし（#211） | 対話的に解放を提案（TTY）。`pane_control` 宣言 agent が無い構成では出ない |
+| `routines` | routine プラグインが有効なときだけ出る。このマシンの routine の数と読む場所（`<config dir>/routines/<host>`）を報告する（#918） | **warning**: ディレクトリが無い（同じ `routines/` にある他の host のディレクトリ名を並べる。hostname が変わった疑い）、または走れない routine がある（ファイルごとの理由。`totsuka routine list` で同じものが見える） |
 | `projects` | 起票先を claim しているリポジトリの数を報告する（#542、#554 で `trackers` から改名・縮小） | **検出ではなく報告**。重複はもう書けない — 1 リポジトリは `[[repositories]].project` で 1 つの `[[projects]]` を、その要素は `source` で 1 つのプラグインを指す。probe できなかったソースがあると skip（`cmd:` トークン等で doctor は起動しない）、claim が 1 件も無い構成では出ない |
 
 `--json` 出力は不具合報告に添付する（Issue テンプレートが要求、§10.3）。
@@ -202,6 +203,8 @@ Host *
 - `totsuka status [--json]`: 実行中 / 待機（waiting_input・pending）タスクと worktree 一覧。**`Queued` のまま動かないタスクに理由が付いていればそれも出す**（`not starting yet:` ブロック / `--json` の `wait_reason`）。現状の唯一の理由は `blocked_agent_tools`（#399 の外部ツール未整備）で、対処は [config.toml リファレンス](/development/config-reference.md) 参照
 - `totsuka task show <id>`: 状態・セッション履歴・worktree・イベント全履歴
 - `totsuka task cancel <id>` / `retry <id>`: retry は failed/cancelled のみ。worktree/セッションを再利用して再開（F-44）
+- `totsuka routine list [--json]`: このマシンの routine と、次回・前回の実行、走れない routine の理由（#918）。`run` が止まっていても見える
+- `totsuka routine run <name>`: routine を今すぐ 1 回実行する（`run` が動いている必要がある）。前回の実行が終わっていなければ断られる。定期の回は消費しない
 - `totsuka logs [-f] [--task <id>] [--utc]`: JSON Lines ログの整形表示。時刻はローカル時刻で出す（`--utc` で UTC。ファイルは UTC）。機密は logging layer で無条件マスク（§5.2）
 
 # メニューバー表示（SwiftBar）
