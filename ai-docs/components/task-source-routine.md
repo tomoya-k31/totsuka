@@ -4,7 +4,7 @@ title: task-source-routine プラグイン
 description: "host ごとの routine（routines/<host>/<name>.md。frontmatter の repo・cron 5 フィールドの schedule と、本文のプロンプト）を時刻どおりにタスクとして submit する公式 task_source プラグイン（stdio JSON-RPC 単体バイナリ）。逃した実行は catchup_window 内の直近 1 回にまとめ、状態は持たず、task/trigger で手動実行に応える。"
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-routine
 tags: [rust, crate, plugin, task-source, routine, schedule, cron]
-generated: { by: claude-code/opus-5.5, at: 2026-10-18T16:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-18T18:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -29,8 +29,7 @@ routine 1 つ = `<config dir>/routines/<host>/<name>.md` 1 ファイル。`<conf
 
 | モジュール | 内容 |
 |---|---|
-| `cron` | 5 フィールド（分 時 日 月 曜日）の解析と照合。各フィールドは `*`・数値・`a-b`・`*/n`・`a-b/n`・カンマ区切り。曜日は `0`–`7`（0 と 7 が日曜）。**日と曜日の両方を制限したら OR**（Vixie cron と同じ）。名前（`MON`）と `@daily` は受け付けない。`latest_within(now, window)` が「`now` 以前で `window` より新しい最新の予定時刻」を**現在から 1 分ずつ遡って**探す（月末などの繰り上がり計算を持たない）。|
-| `routine` | `.md` の解析。frontmatter は YAML ではなく平らな `key: value` 行（値の `"…"` / `'…'` は外す、空白の後の `#` はコメント）。**未知のキー・重複・欠落はエラー**で既定値に落とさない。本文が空でもエラー。`parse_duration`（`0` / `90m` / `24h` / `7d`）と、ディレクトリ内の `*.md` をファイル名順に読む `load_dir`（ディレクトリが無いのは「routine 0 件」でエラーではない） |
+| `cron` / `routine` | 共有クレート [routine-schedule](/components/routine-schedule.md) にある（`totsuka routine list` と同じ読み方をするため）。ファイルの解析・cron の照合・`load_dir` |
 | `config` | `[routine]` の設定（`catchup_window` 既定 `24h`、`source_name` 既定 `routine`、`deny_unknown_fields`） |
 | `server` | `TaskSourceHandler`。`initialize` で `Site`（ディレクトリ・既定の窓・このソースを名指す workflow 名・`[[repositories]]` 名・時差）を作り、30 秒ごとの tick を起動する。tick は毎回ディレクトリを読み直す（編集は再起動なしで効く）。壊れたファイル・存在しないリポジトリ・曖昧な workflow は**ファイルごとに 1 回だけ** warn し、他の routine は止めない。`task_trigger` が `totsuka routine run` に応える |
 
@@ -52,4 +51,4 @@ trigger のキーは 1 つも読まないので、workflow の `trigger` に書�
 
 # 依存
 
-plugin-protocol（0.7.8 以上）/ plugin-sdk / serde / schemars / time（`local-offset`）/ tokio / tracing。ネットワーク依存は無い。
+plugin-protocol（0.7.8 以上）/ plugin-sdk / [routine-schedule](/components/routine-schedule.md) / serde / schemars / time（`local-offset`）/ tokio / tracing。ネットワーク依存は無い。

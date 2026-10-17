@@ -249,7 +249,9 @@ Open a PR if any moved.\n";
 
     #[test]
     fn load_dir_reads_markdown_only_and_reports_each_file() {
-        let dir = test_support::scratch("routine-load-dir");
+        let dir = std::env::temp_dir().join(format!("routine-load-dir-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("b.md"), FULL).unwrap();
         std::fs::write(dir.join("a.md"), "nope").unwrap();
         std::fs::write(dir.join("notes.txt"), "ignored").unwrap();

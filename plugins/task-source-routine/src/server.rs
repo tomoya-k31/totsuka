@@ -24,7 +24,7 @@ use serde_json::Value;
 use time::{Duration, OffsetDateTime, UtcOffset};
 
 use crate::config::RoutineConfig;
-use crate::routine::{Routine, load_dir};
+use routine_schedule::{Routine, load_dir};
 
 /// How often the routines are looked at. Under a minute, so no minute of a
 /// schedule falls between two ticks while the machine is awake.
@@ -514,7 +514,7 @@ mod tests {
     #[test]
     fn the_workflow_must_be_named_when_there_is_a_choice() {
         let mut site = site("routine-workflow", &[]);
-        let routine = crate::routine::parse("r", DAILY_9).unwrap();
+        let routine = routine_schedule::parse("r", DAILY_9).unwrap();
         assert_eq!(
             site.task(&routine, "id".into()).unwrap().workflow,
             "routine"
@@ -525,7 +525,7 @@ mod tests {
             err.contains("no `workflow` is named") && err.contains("weekly"),
             "{err}"
         );
-        let named = crate::routine::parse(
+        let named = routine_schedule::parse(
             "r",
             "---\nrepo: totsuka\nschedule: * * * * *\nworkflow: weekly\n---\nx\n",
         )

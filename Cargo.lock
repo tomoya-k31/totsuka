@@ -1200,6 +1200,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "routine-schedule"
+version = "0.10.11"
+dependencies = [
+ "time",
+]
+
+[[package]]
 name = "rsqlite-vfs"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1609,6 +1616,7 @@ dependencies = [
  "plugin-conformance",
  "plugin-protocol",
  "plugin-sdk",
+ "routine-schedule",
  "schemars",
  "semver",
  "serde",
