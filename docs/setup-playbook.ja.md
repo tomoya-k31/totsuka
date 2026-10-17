@@ -1,7 +1,7 @@
 > 🌐 [English](setup-playbook.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:41e005da8a030b44df992c395c130fe2089438b8597bcf2fe04b19ca3a6532ba -->
+<!-- generated-from: ai-docs/operations/setup-playbook.md sha256:0d77d2280f6c45a90a49fa619c7a6c9dc7e1d577439eefb266890a059847caa0 -->
 
 # セットアップ Playbook
 
@@ -42,6 +42,14 @@ sudo xattr -dr com.apple.quarantine /usr/local/lib/totsuka
 ```
 
 **`xattr` が要るのはこの経路だけ。** ブラウザでダウンロードすると `com.apple.quarantine` が付き、Gatekeeper が**プラグインの起動だけ**を黙って止める。本体は動くので原因が見えにくく、`doctor` は「crashed or exited」としか言えない。Homebrew は素の `curl` で取るので、この属性は付かない。
+
+**メニューバーアプリで起動するなら、2・3 は AI エージェントに任せ、4 はアプリの Start で行います。**
+`npx skills add tomoya-k31/totsuka --skill totsuka-config` でスキルを入れ、
+エージェントに「totsuka を設定して」と頼むと、雛形を使わずに `config set` で
+1 段ずつ確認しながら書き、シークレットはすべて `secret:` 参照にします。値はアプリが
+**Start** で尋ねるので、3 の登録コマンドは要りません。`secret:` はターミナルの
+`doctor` / `run` からは解決できないので、4 の代わりにアプリの Start が全体の検査と
+起動を行います。1 の配置（CLI とアプリ）は先に済ませておいてください。
 
 ### 2. `totsuka setup` を走らせる
 

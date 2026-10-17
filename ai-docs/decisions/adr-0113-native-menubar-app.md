@@ -131,7 +131,7 @@ Apple Developer Program には**加入しない**。それでも友人に配り�
 
 - 仕様 §3.2 の「常駐デーモン / サーバ運用」の行を改訂した。常駐するのはメニューバーアプリで、`run` はその子プロセスとしてローカルに起動されるライフサイクルのままである
 - プロトコルは 0.7.7 になる（加算的・patch。`Capabilities` を構造体リテラルで組むコードには source break）
-- `config/schema`・`config schema` / `set` / `unset`・プラグインのスキーマ（`x-by-source` / `x-by-agent` を含む）は、設定画面を外した今は**同梱のどこからも使われない**。プラグインがキーを増やしたときにスキーマの追従を求めるテスト（`missing_help` や `TRIGGER_KEYS` との一致）は残るので、保守の手間は続く。使い道が無いまま残るなら、消すかどうかを改めて決める
+- `config/schema`・`config schema` / `set` / `unset`・プラグインのスキーマ（`x-by-source` / `x-by-agent` を含む）は、設定画面を外した今は**同梱のどこからも使われない**。プラグインがキーを増やしたときにスキーマの追従を求めるテスト（`missing_help` や `TRIGGER_KEYS` との一致）は残るので、保守の手間は続く。使い道が無いまま残るなら、消すかどうかを改めて決める。→ [ADR-0116](/decisions/adr-0116-totsuka-config-skill.md) で、config.toml を対話で組み立てるエージェントスキル totsuka-config がこれらを使うようになり、残すことにした
 - リポジトリに Swift と XcodeGen が入り、CI に macOS ランナーのジョブが増える（`apps/macos/` を触った PR だけでビルドする）
 - 機密を `--secrets-stdin` で渡す構成では、ターミナルから単独で `doctor` などを叩くと `secret:` を解決できない（ADR-0100 の帰結のまま）
 - `[[projects]]` / `[[workflows]]` に書くプラグイン所有のキー（`owner`・`project_number`・`trigger` の中身など）は、プラグインが `config/schema` の `project` / `workflow` で申告し、`config schema` がそれを要素のスキーマに `x-by-source` / `x-by-agent` として添える。申告しないプラグインの要素では core のキーしかフォームにならない。`on_*` は core のテーブルなので core のスキーマが `status` / `labels` を持つ

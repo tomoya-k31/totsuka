@@ -1,10 +1,10 @@
 ---
 type: Playbook
 title: セットアップ Playbook（新マシン / 開発機 / ローテーション / 復旧）
-description: "ゼロから totsuka が動くまでを通しで示す導入手順。新マシン（tarball 配置 → totsuka setup でプラグイン選択と config.toml 生成 → config.toml を編集 → シークレット登録 → doctor → run）、開発機（クローン → チェックアウトからのビルド）、トークンローテーション、中断・失敗時の復旧と別マシンでの再現を扱う。"
+description: "ゼロから totsuka が動くまでを通しで示す導入手順。新マシン（tarball 配置 → totsuka setup でプラグイン選択と config.toml 生成 → config.toml を編集 → シークレット登録 → doctor → run。メニューバーアプリで起動するなら、npx skills で入れる totsuka-config スキルに config.toml を対話で書かせる道もある）、開発機（クローン → チェックアウトからのビルド）、トークンローテーション、中断・失敗時の復旧と別マシンでの再現を扱う。"
 resource: https://github.com/tomoya-k31/totsuka/issues/350
 tags: [setup, onboarding, runbook, playbook, secrets, doctor, rotation]
-generated: { by: claude-code/opus-5.5, at: 2026-09-27T10:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-17T10:15:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -53,6 +53,11 @@ sudo xattr -dr com.apple.quarantine /usr/local/lib/totsuka
 ```
 
 **この経路でだけ `xattr` が要る。** ブラウザでダウンロードすると `com.apple.quarantine` が付き、Gatekeeper が**プラグインの起動だけ**を黙って殺す。`doctor` は「crashed or exited」としか言えず、本体は動くので原因が見えにくい。brew 経路では素の `curl` が取るので、この属性は付かない（実測）。
+
+**メニューバーアプリで起動するなら、2・3 はエージェントに任せ、4 はアプリの Start で行う**（[ADR-0116](/decisions/adr-0116-totsuka-config-skill.md)）。
+`npx skills add tomoya-k31/totsuka --skill totsuka-config` でスキルを入れ、エージェントに「totsuka を設定して」と頼むと、
+雛形を使わずに `config set` で 1 段ずつ確認しながら書き、シークレットはすべて `secret:` 参照にする。値はアプリが
+Start で尋ねるので、3 の登録コマンドは要らない。`secret:` はターミナルの `doctor` / `run` からは解決できないので、4 の代わりにアプリの Start が全体の検査と起動を行う。1 の配置（CLI とアプリ）は先に済ませておく。
 
 ## 2. `totsuka setup`
 
