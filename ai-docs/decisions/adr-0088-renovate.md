@@ -3,7 +3,7 @@ type: Decision
 title: ADR-0088 Renovate を Mend の GitHub App で入れ、automerge を Renovate 自身に持たせる
 description: "規約と ADR が前提にしていたのに実体が無かった Renovate を、Mend ホストの GitHub App と .github/renovate.json5 で導入した決定。必須チェックが lint だけの ruleset では GitHub の auto-merge が赤の PR を通すので automerge は Renovate 自身が全ステータスを待って行い、対象は patch・Actions の非 major・Docker digest・lockFileMaintenance に限り、PR の CI が実行しない release-please.yml の 4 action は人間レビューに残す。コミット type（chore / security は fix）、ブランチ名とラベル、週次スケジュールとグルーピング、minimumReleaseAge 3 日、Cargo の update-lockfile、MSRV の constraints、Dockerfile の tag@digest 化を記録する。"
 tags: [decision, ci, dependencies, renovate, release-please, automerge, adr]
-generated: { by: claude-code/opus-5, at: 2026-09-21T21:40:00+09:00 }
+generated: { by: claude-code/opus-5, at: 2026-10-17T12:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 sources:
@@ -58,7 +58,7 @@ stable。#728 の 2 本目の PR。1 本目は MSRV ゲート（[ADR-0087](/deci
 5. **コミットの type**: 通常の更新は `chore(deps)`、脆弱性の更新は `fix(deps)` にする。`config:recommended` は Cargo の `dependencies` を `fix` にするので、全パッケージを `chore` に戻すルールを置く。脆弱性の PR は `vulnerabilityAlerts` の `force` で `fix` に戻る。`osvVulnerabilityAlerts`（RustSec を含む OSV）も有効にする
 6. **ブランチ名は既定の `renovate/` のまま**にし、git-conventions に bot のブランチの例外として書く。release-please の `release-please--branches--main` も同じ例外で扱う
 7. **ラベル**: 全 PR に `renovate` を付ける。あわせて更新種別の `renovate:major|minor|patch|digest|lockfile|security` と、manager の `renovate:cargo|github-actions|dockerfile|terraform` を付ける
-8. **PR を出す時間帯と数**: `before 6am on monday`（Asia/Tokyo）、`prConcurrentLimit: 5`、`prHourlyLimit: 2`。Cargo の patch は `cargo patch` の 1 グループにまとめる。Actions の非 major は（4 action を除いて）1 グループにまとめる。脆弱性の PR は時間帯も待ち期間も無視して即座に出る（`vulnerabilityAlerts` の既定）
+8. **PR を出す時間帯と数**: `on monday`（Asia/Tokyo の月曜まるごと。`lockFileMaintenance` にも同じ値を書く）、`prConcurrentLimit: 5`、`prHourlyLimit: 2`。Cargo の patch は `cargo patch` の 1 グループにまとめる。Actions の非 major は（4 action を除いて）1 グループにまとめる。脆弱性の PR は時間帯も待ち期間も無視して即座に出る（`vulnerabilityAlerts` の既定）
 9. **`minimumReleaseAge: "3 days"`。** automerge を入れる以上、yank された版や乗っ取られた版を取り込まないための猶予が要る。ただし Docker と Actions は `minimumReleaseAgeBehaviour: "timestamp-optional"` にする（下の Consequences を参照）
 10. **Cargo の `rangeStrategy` は `update-lockfile`。** 宣言の範囲内の更新は `Cargo.lock` だけを変える
 11. **MSRV**: `constraints: { rust: "1.88.0" }` と `constraintsFiltering: "strict"` を入れる。crate datasource は crates.io index の `rust_version` を `constraints.rust` として読むので、MSRV を超える版を候補から外せる[^renovate-source]。ゲートは [ADR-0087](/decisions/adr-0087-msrv-gate.md) の `msrv` ジョブで、こちらは赤になることが確実な PR を出さないための工夫である
@@ -77,6 +77,7 @@ stable。#728 の 2 本目の PR。1 本目は MSRV ゲート（[ADR-0087](/deci
 - **`minimumReleaseAge` はリリース時刻を要求する。** 既定（`timestamp-required`）のままだと、時刻の取れない更新は永久に出ない。docker datasource が時刻を持つのは Docker Hub だけなので[^renovate-source]、gcr.io の distroless は黙って止まってしまう。そこで Docker と Actions だけ `timestamp-optional` にした。代償として、時刻の取れない更新には 3 日の猶予が効かない
 - **MSRV の版は 2 箇所に書かれる**（`Cargo.toml` の `rust-version` と `constraints.rust`）。上げるときは同じ PR で両方を直す。**`constraints.rust` は必ず `x.y.z` の 3 要素で書く。** strict filtering はリリースの `rust_version` を範囲として `matches(<設定値>, <rust_version>)` で判定し、cargo versioning は `"1.88"` を版として解釈しない。そのため `"1.88"` と書くと、`rust_version` を宣言する crate のほぼ全リリースが黙って候補から消える（1.70 も 1.88.0 も落ちる）。`"1.88.0"` なら 1.70 / 1.88 は通り、1.90 は落ちる（renovate 42.99.0 の cargo versioning で実測）[^renovate-source]
 - **`constraints.rust` そのものは Renovate の追従対象から外す。** App（Renovate 44.x）の `renovate-config` manager は、設定ファイルの `constraints` を依存として読み（`depType: "tool-constraint"`）、`rust 1.88.0 → 1.98.1` のような PR を出そうとする。導入直後の Dependency Dashboard（#749）で見つかった。[^renovate-config-manager][^dashboard-749]この値は MSRV のフィルタで、上げると `msrv` ジョブが落とす版を候補に戻してしまう。そこで `matchManagers: ["renovate-config"]` + `matchDepTypes: ["tool-constraint"]` + `matchDepNames: ["rust"]` を `enabled: false` にした。上げるのは上の規則どおり `rust-version` と同じ PR で、手で行う。ローカルの検証も `renovate@latest` で行う（npx のキャッシュに残る 42.x にはこの manager が無く、効いているかを確かめられない）
+- **時間帯は Renovate の実行間隔より広く取る。** Mend ホストの App がいつ実行されるかは設定できず、間隔は数時間から 1 日半ほどばらつく。導入時の `before 6am on monday`（6 時間）では 2026-10-12 の枠に実行が 1 回も入らず、Awaiting Schedule の 5 件が 1 週間持ち越された（#749 の編集履歴で、10/11 10:32 JST の次の実行は 10/12 15:40 JST）。そこで月曜まるごと（`on monday`）に広げた。`lockFileMaintenance` には Renovate 組み込みの既定 `before 4am on monday` があり、トップレベルの `schedule` より優先されるので、同じ値を `lockFileMaintenance.schedule` にも書く（書かないと 4 時間枠のまま取りこぼし続ける）。急ぐ更新は Dashboard のチェックボックスで即座に出せる[^dashboard-749]
 - **Alpine の接尾辞（`alpine3.24`）は Renovate では上がらない。** 別系統のタグとして扱われるので、手で上げる
 - **`warm-cache.yml` の `env: RUSTFLAGS` は触られない。** github-actions manager が書き換えるのは `uses:` 行だけである
 - Renovate のブランチに人間やエージェントが commit を積むと、Renovate はそのブランチの更新を止める（[ADR-0085](/decisions/adr-0085-branch-hint.md)）
