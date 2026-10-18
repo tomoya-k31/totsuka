@@ -975,6 +975,11 @@ async fn passes_reply_check<T: SlackTransport, C: HttpTransport>(
         None => Err("no `[llm]` is configured".to_string()),
     };
     let message_key = enriched.mention.message_key();
+    // Every piece of the headline is someone else's text: the sender chose
+    // their display name, and a chat model's reason (like an error) can echo
+    // the mention it read — so a crafted mention could otherwise plant a
+    // `<https://…|label>` link in a DM the operator trusts as the app's own.
+    let sender = escape_mrkdwn(&clip(&enriched.sender_name, HEADLINE_FIELD_CHARS));
     let headline = match outcome {
         Ok(Verdict::Reply) => return true,
         Ok(Verdict::NoReply { reason }) => {
@@ -984,8 +989,8 @@ async fn passes_reply_check<T: SlackTransport, C: HttpTransport>(
                 "the reply check found no reply needed; not making it a task"
             );
             format!(
-                "{} さんのメンションを返信不要と判断しました（{reason}）",
-                enriched.sender_name
+                "{sender} さんのメンションを返信不要と判断しました（{}）",
+                escape_mrkdwn(&clip(&reason, HEADLINE_FIELD_CHARS))
             )
         }
         Err(error) => {
@@ -995,8 +1000,8 @@ async fn passes_reply_check<T: SlackTransport, C: HttpTransport>(
                 "the reply check could not be made; the mention is stopped"
             );
             format!(
-                "{} さんのメンションの返信要否を判定できず、処理を中断しました（{error}）",
-                enriched.sender_name
+                "{sender} さんのメンションの返信要否を判定できず、処理を中断しました（{}）",
+                escape_mrkdwn(&clip(&error, HEADLINE_FIELD_CHARS))
             )
         }
     };
@@ -1016,6 +1021,28 @@ async fn passes_reply_check<T: SlackTransport, C: HttpTransport>(
     false
 }
 
+/// How much of each untrusted field (sender name, reason, error) the drop
+/// notice's headline keeps.
+const HEADLINE_FIELD_CHARS: usize = 200;
+
+/// `text` cut to `max` characters, with `…` when it was longer.
+fn clip(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let mut out: String = text.chars().take(max).collect();
+    out.push('…');
+    out
+}
+
+/// Slack's three control characters as entities, so `text` renders as
+/// written: no `<@U…>` mention, no `<url|label>` link, no `<!here>`.
+fn escape_mrkdwn(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
 /// How much of a dropped mention the notice quotes.
 const DROPPED_EXCERPT_LINES: usize = 3;
 const DROPPED_EXCERPT_CHARS: usize = 200;
@@ -1026,19 +1053,15 @@ const DROPPED_EXCERPT_CHARS: usize = 200;
 /// The excerpt is escaped, not rendered: a `<@U…>` in it would otherwise
 /// become a live mention in the operator's DM.
 fn dropped_block(text: &str, retrigger_emoji: Option<&str>) -> Value {
-    let mut excerpt: String = text
-        .lines()
-        .take(DROPPED_EXCERPT_LINES)
-        .collect::<Vec<_>>()
-        .join("\n");
-    if excerpt.chars().count() > DROPPED_EXCERPT_CHARS {
-        excerpt = excerpt.chars().take(DROPPED_EXCERPT_CHARS).collect();
-        excerpt.push('…');
-    }
-    let quoted: Vec<String> = excerpt
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
+    let excerpt = clip(
+        &text
+            .lines()
+            .take(DROPPED_EXCERPT_LINES)
+            .collect::<Vec<_>>()
+            .join("\n"),
+        DROPPED_EXCERPT_CHARS,
+    );
+    let quoted: Vec<String> = escape_mrkdwn(&excerpt)
         .lines()
         .map(|line| format!("> {line}"))
         .collect();
@@ -1878,6 +1901,30 @@ async fn thread_context<T: SlackTransport>(
 
 #[cfg(test)]
 mod tests {
+    /// The drop notice's headline carries other people's text (a display
+    /// name, a model's reason that may echo the mention): it must not become
+    /// a link, a mention or a broadcast in the operator's DM.
+    #[test]
+    fn untrusted_headline_fields_are_escaped_and_capped() {
+        let crafted = "<https://evil.test|再ログイン> <!here> & <@U_BOSS>";
+        let escaped = escape_mrkdwn(crafted);
+        assert!(
+            !escaped.contains('<') && !escaped.contains('>'),
+            "{escaped}"
+        );
+        assert!(
+            escaped.contains("&lt;https://evil.test|再ログイン&gt;"),
+            "{escaped}"
+        );
+        assert!(escaped.contains("&amp;"), "{escaped}");
+        let long = "x".repeat(HEADLINE_FIELD_CHARS + 10);
+        assert_eq!(
+            clip(&long, HEADLINE_FIELD_CHARS).chars().count(),
+            HEADLINE_FIELD_CHARS + 1
+        );
+        assert_eq!(clip("short", HEADLINE_FIELD_CHARS), "short");
+    }
+
     /// ADR-0120: the drop notice quotes the mention without letting its
     /// `<@U…>` ping anyone, and names the emoji that makes it a task.
     #[test]
