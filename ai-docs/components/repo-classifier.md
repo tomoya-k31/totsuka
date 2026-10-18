@@ -4,7 +4,7 @@ title: repo-classifier
 description: リポジトリ分類（タスク・メンションが設定済みリポジトリのどれに属するか）の共有クレート。RepoClassifier trait と検証済みの Classification（候補 or どれも当てはまらない）、HTTP の 1 往復を抽象した HttpTransport（本番は reqwest）、指数バックオフの RetryPolicy、OpenAI 互換 /chat/completions の ChatClassifier、判定専用モデル（TypeSafe Jev）の DecisionsClassifier、設定で選ぶ ConfiguredClassifier を持つ。orchestrator-core と task_source プラグインの双方が使う leaf クレート。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/repo-classifier
 tags: [rust, crate, llm, repo-select, classifier, http, shared]
-generated: { by: claude-code/opus-5.5, at: 2026-10-18T13:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-18T20:16:02+09:00 }
 verified:
   - { by: human:tomoya-k31, at: 2026-09-19T23:30:00+09:00 }
 status: deprecated

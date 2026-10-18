@@ -4,7 +4,7 @@ title: llm-choice
 description: LLM に固定の選択肢から 1 つ選ばせる共有クレート（旧 repo-classifier、ADR-0118）。問いは呼び出し側が ChoiceRequest（subject と Question の id・instructions・選択肢・none の有無）で渡し、ChoiceClassifier が検証済みの Answer（選択肢 or どれも当てはまらない）を返す。HTTP の 1 往復を抽象した HttpTransport（本番は reqwest）、指数バックオフの RetryPolicy、OpenAI 互換 /chat/completions の ChatClassifier、判定専用モデル（TypeSafe Jev）の DecisionsClassifier、設定で選ぶ ConfiguredClassifier を持ち、リポジトリ分類は repo モジュールの問いの 1 つ。orchestrator-core と task_source プラグインの双方が使う leaf クレート。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/llm-choice
 tags: [rust, crate, llm, repo-select, classifier, http, shared]
-generated: { by: claude-code/opus-5.5, at: 2026-10-18T13:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-18T20:16:02+09:00 }
 status: stable
 owner: tomoya-k31
 ---

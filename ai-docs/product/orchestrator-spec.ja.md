@@ -3,7 +3,7 @@ type: Spec
 title: totsuka — ローカルAIエージェント Orchestrator 要件定義（v1）
 description: totsuka Orchestrator CLI の要件定義 — タスクソース/Agent IDE/Notifier プラグイン、git worktree ライフサイクル、ワークフロー、並列実行制御、v1 スコープ。
 tags: [orchestrator, requirements, plugin, worktree, cli, rust]
-generated: { by: claude-code/opus-5.5, at: 2026-10-01T22:41:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-18T20:16:02+09:00 }
 status: draft
 owner: tomoya-k31
 ---
@@ -348,7 +348,7 @@ macOS のメニューバーのように**常時視界に入る面**へ状態を�
 | 言語 | Rust(edition 2024、stable toolchain) |
 | 主要クレート(案) | tokio, clap, serde, toml, toml_edit, tracing, rusqlite, reqwest, keyring |
 | 依存方針 | 最小主義は取らないが肥大化は避ける。差し替えが想定される箇所(JSON-RPC 層・永続化・シークレットストア)は必ず ports の trait 背後に置き、クレート選定を後から変更可能にする。JSON-RPC 層は serde_json + tokio による薄い自作から始め、要件次第でライブラリへ移行 |
-| アーキテクチャ | ヘキサゴナル。`core`(ドメイン・ステートマシン)/ `ports`(TaskSource, AgentIde, RepoClassifier, SecretStore の trait)/ `adapters`(JSON-RPC プラグインブリッジ、SQLite、Keychain) |
+| アーキテクチャ | ヘキサゴナル。`core`(ドメイン・ステートマシン)/ `ports`(TaskSource, AgentIde, ChoiceClassifier, SecretStore の trait)/ `adapters`(JSON-RPC プラグインブリッジ、SQLite、Keychain) |
 | ワークスペース構成 | `orchestrator-core` / `orchestrator-cli` / `plugin-protocol`(プラグイン開発者向けに公開する型定義クレート)/ 各公式プラグイン crate |
 | プラグイン管理 | `$XDG_DATA_HOME/totsuka/plugins/{name}/` にバイナリ + manifest を配置。enable/disable は設定側のフラグ |
 | AI Gateway | OpenAI 互換 `/chat/completions` を前提とし `base_url` / `model` / `api_key_ref` を設定可能 |

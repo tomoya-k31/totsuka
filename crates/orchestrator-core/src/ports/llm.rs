@@ -1,4 +1,5 @@
-//! Repository classifier port (F-11–F-14).
+//! LLM choice port: the classifier the engine asks questions of — today the
+//! repository question (F-11–F-14), [`llm_choice::repo`].
 //!
 //! The trait and its types live in the shared `llm-choice` crate, because
 //! task_source plugins classify with the same code and may only depend on

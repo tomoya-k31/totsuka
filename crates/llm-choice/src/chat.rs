@@ -15,7 +15,7 @@ use crate::{
 pub struct ChatPrompt {
     /// The system message (the output contract).
     pub system: String,
-    /// The user message (the work + the candidates).
+    /// The user message (what is judged + the options).
     pub user: String,
     /// When set, an unreadable answer is retried **once** inside
     /// [`choose`](ChoiceClassifier::choose): the malformed answer is echoed

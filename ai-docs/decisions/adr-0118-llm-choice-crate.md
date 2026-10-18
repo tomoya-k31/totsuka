@@ -4,7 +4,7 @@ title: ADR-0118 repo-classifier を問いを外から渡す llm-choice クレー
 description: 共有クレート repo-classifier を llm-choice へ改名し、「どのリポジトリか」に固定されていた問いを ChoiceRequest（question の id・instructions・選択肢・none の有無）として呼び出し側が渡す形に作り替えた決定。リポジトリ分類は llm_choice::repo のヘルパーが組む question の 1 つになり、挙動は変えない。chat の回答 JSON のキーは question の id なので、既存の classifier_* プロンプトの上書きはそのまま動く。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/llm-choice
 tags: [decision, llm, classifier, crate, refactor, adr]
-generated: { by: claude-code/opus-5.5, at: 2026-10-18T12:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-18T20:16:02+09:00 }
 status: stable
 owner: tomoya-k31
 ---

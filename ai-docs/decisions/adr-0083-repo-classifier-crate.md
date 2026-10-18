@@ -4,7 +4,7 @@ title: ADR-0083 リポジトリ分類を「分類」で切った共有クレー�
 description: core の LlmRouter（chat_json）は通信手段で切った抽象で、プロンプト・スキーマ・回答の解釈が repo_select に埋まり、Slack プラグインは同じ仕事を別実装で持っていた。trait を「タスクと候補を渡すと検証済みの判定が返る」RepoClassifier に切り直し、HTTP・再試行・エラー整形・chat 実装を leaf クレート repo-classifier に集めて core と plugins の両方から使う決定。chat の回答契約を出力モード（JsonSchema / Prose）で表す理由、閾値と訊き直しの方針を呼び出し側に残す理由、plugin-sdk に置かない理由を記録する。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/repo-classifier
 tags: [decision, adr, llm, repo-select, architecture, workspace, slack, refactor]
-generated: { by: claude-code/opus-5.5, at: 2026-10-18T13:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-18T20:16:02+09:00 }
 status: stable
 owner: tomoya-k31
 sources:
