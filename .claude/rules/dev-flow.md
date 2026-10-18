@@ -57,6 +57,14 @@ for why. CI's own flags stay exactly as they are:
   Clippy's lint set grows between releases — an outdated local stable passed
   clean while CI failed on `clippy::type_complexity` (PR #197).
 - `cargo fmt --all --check`
+- `cargo machete` — unused dependencies (install once: `cargo install
+  cargo-machete`). CI runs it as a step inside the `clippy / rustfmt` job, so
+  a miss fails that check, not one named after machete. **It fires on a
+  dependency the diff stopped using, not only on one it added**: #927 replaced
+  a `#[derive(Deserialize)]` with hand-written parsing, left `serde` in
+  `llm-choice`'s `Cargo.toml`, and passed every local check while CI failed.
+  Seconds, no build. False positives are suppressed per
+  [dependency-hygiene](../../ai-docs/development/dependency-hygiene.md).
 - `bash scripts/arch-lint.sh` — workspace dependency-boundary fitness function
   (plugins → protocol/sdk only, protocol is a leaf, no cycles). Cheap
   (`cargo metadata --no-deps`, seconds); especially relevant when a
