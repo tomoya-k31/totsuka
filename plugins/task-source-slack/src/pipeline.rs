@@ -30,8 +30,8 @@ use crate::repo_resolver::{Resolution, resolve};
 use crate::slack_api::{PostEphemeral, SlackApi, SlackFile};
 use crate::socket_mode::SocketEvent;
 use crate::transport::SlackTransport;
+use llm_choice::HttpTransport;
 use plugin_sdk::template;
-use repo_classifier::HttpTransport;
 
 /// Slack coordinates a task needs again at `result/publish` time (where the
 /// approved reply goes). Keyed by task id; in-memory, lost on restart —

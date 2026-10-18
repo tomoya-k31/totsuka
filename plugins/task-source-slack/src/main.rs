@@ -15,12 +15,12 @@ struct ReqwestFactory;
 
 impl TransportFactory for ReqwestFactory {
     type Transport = ReqwestTransport;
-    type Chat = repo_classifier::ReqwestTransport;
+    type Chat = llm_choice::ReqwestTransport;
     fn build(&self, settings: TransportSettings<'_>) -> Self::Transport {
         ReqwestTransport::new(settings)
     }
     fn build_chat(&self) -> Self::Chat {
-        repo_classifier::ReqwestTransport::new()
+        llm_choice::ReqwestTransport::new()
     }
 }
 

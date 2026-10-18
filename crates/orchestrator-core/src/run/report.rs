@@ -115,7 +115,7 @@ pub struct DryRunEntry {
     pub already_ingested: Option<String>,
 }
 
-impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
+impl<G: GitRunner, L: ChoiceClassifier + 'static> Engine<G, L> {
     /// Report what a run would do, with zero side effects (§5.1 `--dry-run`).
     ///
     /// Since 0.2.0 every task_source is push-only: nothing is fetched ahead

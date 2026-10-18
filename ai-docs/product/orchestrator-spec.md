@@ -3,7 +3,7 @@ type: Spec
 title: totsuka — Local AI-Agent Orchestrator Requirements (v1)
 description: Requirements specification for the totsuka orchestrator CLI — task-source/agent-IDE/notifier plugins, git-worktree lifecycle, workflows, parallel execution control, and v1 scope.
 tags: [orchestrator, requirements, plugin, worktree, cli, rust]
-generated: { by: claude-code/opus-5.5, at: 2026-10-01T22:41:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-18T20:16:02+09:00 }
 status: draft
 owner: tomoya-k31
 ---
@@ -347,7 +347,7 @@ The path to a surface that is **always in view**, such as the macOS menu bar. No
 | Language | Rust (edition 2024, stable toolchain) |
 | Main crates (proposal) | tokio, clap, serde, toml, toml_edit, tracing, rusqlite, reqwest, keyring |
 | Dependency policy | Not minimalist, but avoid bloat. Anything likely to be swapped (JSON-RPC layer, persistence, secret store) must sit behind ports traits so crate choices can change later. The JSON-RPC layer starts as a thin hand-rolled serde_json + tokio implementation, migrating to a library as requirements dictate |
-| Architecture | Hexagonal. `core` (domain, state machine) / `ports` (TaskSource, AgentIde, RepoClassifier, SecretStore traits) / `adapters` (JSON-RPC plugin bridge, SQLite, Keychain) |
+| Architecture | Hexagonal. `core` (domain, state machine) / `ports` (TaskSource, AgentIde, ChoiceClassifier, SecretStore traits) / `adapters` (JSON-RPC plugin bridge, SQLite, Keychain) |
 | Workspace layout | `orchestrator-core` / `orchestrator-cli` / `plugin-protocol` (type-definition crate published for plugin developers) / each official plugin crate |
 | Plugin management | Binary + manifest in `$XDG_DATA_HOME/totsuka/plugins/{name}/`. enable/disable via config-side flags |
 | AI gateway | Assumes OpenAI-compatible `/chat/completions`; `base_url` / `model` / `api_key_ref` configurable |

@@ -305,7 +305,7 @@ bw get item 'totsuka/e2e' >/dev/null 2>&1 || \
 
 ## S10. decisions モデルでのリポジトリ分類（#723 / ADR-0084）🤖🙋
 
-**`[llm].api = "decisions"` の経路・`repo-classifier` の decisions 実装・OpenRouter の
+**`[llm].api = "decisions"` の経路・`llm-choice` の decisions 実装・OpenRouter の
 Decisions API（alpha）に手を入れたら回す。** CI は canned な応答までしか見ないので、
 **本物の OpenRouter が今もこの本文を受け付け、`probabilities` を返し、リポジトリ名を
 そのまま選択肢のキーとして通すか**はここでしか分からない。
@@ -316,7 +316,7 @@ Decisions API（alpha）に手を入れたら回す。** CI は canned な応答
 
 ```bash
 OPENROUTER_API_KEY="$(op read 'op://Dev/Openrouter/api_key')" \
-  cargo test -p repo-classifier --test live_openrouter -- --ignored --test-threads=1 --nocapture
+  cargo test -p llm-choice --test live_openrouter -- --ignored --test-threads=1 --nocapture
 ```
 
 | 検証点 | 期待 |

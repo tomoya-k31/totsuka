@@ -1,16 +1,15 @@
 //! The Orchestrator's side of repository classification (F-12, F-13, F-110,
 //! F-111).
 //!
-//! The classifiers themselves live in the shared `repo-classifier` crate;
+//! The classifiers themselves live in the shared `llm-choice` crate;
 //! this module builds the one `[llm]` asks for ([`gateway_classifier`]) and
 //! wraps it in [`MonitoredClassifier`], which keeps [`LlmHealth`] current.
 
 use std::time::Duration;
 
-use repo_classifier::{
-    ApiKey, ChatClassifier, ChatSettings, Classification, ClassifyError, ClassifyRequest,
-    ConfiguredClassifier, DecisionsClassifier, DecisionsSettings, RepoClassifier, ReqwestTransport,
-    scrub_urls,
+use llm_choice::{
+    Answer, ApiKey, ChatClassifier, ChatSettings, ChoiceClassifier, ChoiceRequest, ClassifyError,
+    ConfiguredClassifier, DecisionsClassifier, DecisionsSettings, ReqwestTransport, scrub_urls,
 };
 
 use crate::config::{LlmApi, LlmConfig};
@@ -199,13 +198,13 @@ fn short_reason(e: &ClassifyError) -> String {
         }
         ClassifyError::Timeout(secs) => format!("no answer within {secs}s"),
         ClassifyError::Status { status, .. } => format!("HTTP {status}"),
-        ClassifyError::InvalidResponse(_) | ClassifyError::UnknownRepo(_) => {
+        ClassifyError::InvalidResponse(_) | ClassifyError::UnknownChoice(_) => {
             "unusable response".to_string()
         }
     }
 }
 
-/// A [`RepoClassifier`] decorator that keeps [`LlmHealth`] current (F-110 /
+/// A [`ChoiceClassifier`] decorator that keeps [`LlmHealth`] current (F-110 /
 /// F-111).
 ///
 /// Wrapping rather than checking at the call site is deliberate — every LLM
@@ -231,9 +230,9 @@ impl<L> MonitoredClassifier<L> {
     }
 }
 
-impl<L: RepoClassifier> RepoClassifier for MonitoredClassifier<L> {
-    async fn classify(&self, request: &ClassifyRequest) -> Result<Classification, ClassifyError> {
-        let result = self.inner.classify(request).await;
+impl<L: ChoiceClassifier> ChoiceClassifier for MonitoredClassifier<L> {
+    async fn choose(&self, request: &ChoiceRequest) -> Result<Answer, ClassifyError> {
+        let result = self.inner.choose(request).await;
         self.health.record(&result);
         result
     }
@@ -264,13 +263,10 @@ impl<L: RepoClassifier> RepoClassifier for MonitoredClassifier<L> {
 mod monitored_classifier_tests {
     use super::*;
 
-    struct Scripted(std::sync::Mutex<Vec<Result<Classification, ClassifyError>>>);
+    struct Scripted(std::sync::Mutex<Vec<Result<Answer, ClassifyError>>>);
 
-    impl RepoClassifier for Scripted {
-        async fn classify(
-            &self,
-            _request: &ClassifyRequest,
-        ) -> Result<Classification, ClassifyError> {
+    impl ChoiceClassifier for Scripted {
+        async fn choose(&self, _request: &ChoiceRequest) -> Result<Answer, ClassifyError> {
             self.0.lock().unwrap().remove(0)
         }
 
@@ -280,25 +276,23 @@ mod monitored_classifier_tests {
         }
     }
 
-    fn request() -> ClassifyRequest {
-        ClassifyRequest {
+    fn request() -> ChoiceRequest {
+        llm_choice::repo::choice_request(&llm_choice::repo::ClassifyRequest {
             subject: Vec::new(),
             candidates: Vec::new(),
             chat_prompt: None,
-        }
+        })
     }
 
-    fn verdict() -> Classification {
-        Classification::Repo {
-            repo: "r".into(),
+    fn verdict() -> Answer {
+        Answer::Chosen {
+            key: "r".into(),
             confidence: 1.0,
             reason: String::new(),
         }
     }
 
-    fn scripted(
-        script: Vec<Result<Classification, ClassifyError>>,
-    ) -> MonitoredClassifier<Scripted> {
+    fn scripted(script: Vec<Result<Answer, ClassifyError>>) -> MonitoredClassifier<Scripted> {
         MonitoredClassifier::new(Scripted(std::sync::Mutex::new(script)))
     }
 
@@ -312,10 +306,10 @@ mod monitored_classifier_tests {
         let health = router.health();
         assert!(!health.key_rejected(), "starts clear");
 
-        let _ = router.classify(&request()).await;
+        let _ = router.choose(&request()).await;
         assert!(health.key_rejected(), "401 latches");
 
-        let _ = router.classify(&request()).await;
+        let _ = router.choose(&request()).await;
         assert!(
             !health.key_rejected(),
             "a success clears it, so rotating the key makes the warning go away"
@@ -333,13 +327,13 @@ mod monitored_classifier_tests {
         ]);
         let health = router.health();
 
-        let _ = router.classify(&request()).await;
+        let _ = router.choose(&request()).await;
         assert!(!health.key_rejected(), "a timeout raises nothing");
 
-        let _ = router.classify(&request()).await;
+        let _ = router.choose(&request()).await;
         assert!(health.key_rejected(), "403 latches");
 
-        let _ = router.classify(&request()).await;
+        let _ = router.choose(&request()).await;
         assert!(
             health.key_rejected(),
             "a later transport error must not clear a real rejection"
@@ -361,19 +355,19 @@ mod monitored_classifier_tests {
         let health = router.health();
         assert_eq!(health.unreachable(), None, "starts clear");
 
-        let _ = router.classify(&request()).await;
+        let _ = router.choose(&request()).await;
         assert_eq!(
             health.unreachable().as_deref(),
             Some("transport error: dns error: no such host")
         );
 
-        let _ = router.classify(&request()).await;
+        let _ = router.choose(&request()).await;
         assert_eq!(
             health.unreachable().as_deref(),
             Some("no answer within 30s")
         );
 
-        let _ = router.classify(&request()).await;
+        let _ = router.choose(&request()).await;
         let reason = health.unreachable().expect("5xx latches");
         assert_eq!(reason, "HTTP 502");
         assert!(!reason.contains("sk-live"), "{reason}");
@@ -392,9 +386,9 @@ mod monitored_classifier_tests {
         ] {
             let router = scripted(vec![Err(ClassifyError::Timeout(30)), answer]);
             let health = router.health();
-            let _ = router.classify(&request()).await;
+            let _ = router.choose(&request()).await;
             assert!(health.unreachable().is_some(), "the outage latched first");
-            let _ = router.classify(&request()).await;
+            let _ = router.choose(&request()).await;
             assert_eq!(health.unreachable(), None, "an answer clears it");
         }
     }
@@ -404,7 +398,7 @@ mod monitored_classifier_tests {
     async fn throttling_is_not_an_outage_and_not_a_bad_key() {
         let router = scripted(vec![Err(status(429))]);
         let health = router.health();
-        let _ = router.classify(&request()).await;
+        let _ = router.choose(&request()).await;
         assert!(!health.key_rejected());
         assert_eq!(health.unreachable(), None);
     }
@@ -425,7 +419,7 @@ mod monitored_classifier_tests {
         assert!(health.unreachable().is_some(), "a failed probe latches");
         let first = health.last_contact().expect("a probe is contact");
 
-        let _ = router.classify(&request()).await;
+        let _ = router.choose(&request()).await;
         assert_eq!(health.unreachable(), None, "a real call clears it");
         assert!(health.last_contact().expect("a call is contact") >= first);
 
@@ -458,11 +452,8 @@ mod monitored_classifier_tests {
         struct Gated {
             release: tokio::sync::Notify,
         }
-        impl RepoClassifier for Gated {
-            async fn classify(
-                &self,
-                _request: &ClassifyRequest,
-            ) -> Result<Classification, ClassifyError> {
+        impl ChoiceClassifier for Gated {
+            async fn choose(&self, _request: &ChoiceRequest) -> Result<Answer, ClassifyError> {
                 Ok(verdict())
             }
             async fn probe(&self) -> Result<(), ClassifyError> {
@@ -480,7 +471,7 @@ mod monitored_classifier_tests {
             async move { router.probe().await }
         });
         tokio::task::yield_now().await;
-        let _ = router.classify(&request()).await;
+        let _ = router.choose(&request()).await;
         assert!(
             health.last_contact().is_some(),
             "the real call was recorded"

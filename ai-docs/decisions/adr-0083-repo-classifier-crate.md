@@ -4,7 +4,7 @@ title: ADR-0083 リポジトリ分類を「分類」で切った共有クレー�
 description: core の LlmRouter（chat_json）は通信手段で切った抽象で、プロンプト・スキーマ・回答の解釈が repo_select に埋まり、Slack プラグインは同じ仕事を別実装で持っていた。trait を「タスクと候補を渡すと検証済みの判定が返る」RepoClassifier に切り直し、HTTP・再試行・エラー整形・chat 実装を leaf クレート repo-classifier に集めて core と plugins の両方から使う決定。chat の回答契約を出力モード（JsonSchema / Prose）で表す理由、閾値と訊き直しの方針を呼び出し側に残す理由、plugin-sdk に置かない理由を記録する。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/repo-classifier
 tags: [decision, adr, llm, repo-select, architecture, workspace, slack, refactor]
-generated: { by: claude-code/opus-5, at: 2026-09-19T12:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-18T20:16:02+09:00 }
 status: stable
 owner: tomoya-k31
 sources:
@@ -98,3 +98,7 @@ pub trait RepoClassifier: Send + Sync {
 - Slack の分類は信頼度の範囲検査（`[0, 1]`）が加わった。従来は 1.5 のような値も閾値を通過していた
 - `[llm].max_tokens` を省略したときは送らない、という実際の挙動に合わせて設定リファレンスの既定値表記を直した（従来「256」と書いていたが、`SelectConfig::default()` の 256 はテストでしか使われていなかった）
 - trait と型は `repo-classifier` にあり、core の `ports::llm` はそれを再輸出するだけになった。ports が外部クレートの trait を指すのは初めてだが、ヘキサゴナルの意味（domain は trait 越しにしか外界を見ない）は変わらない
+
+# Amendment（2026-10-18、ADR-0118）
+
+クレートは `llm-choice` に改名され、trait は `RepoClassifier` から問いを外から受け取る `ChoiceClassifier` になった（[ADR-0118](/decisions/adr-0118-llm-choice-crate.md)）。本 ADR の「trait は分類で切る」「方針は呼び出し側に残す」「leaf クレート」「seam は HTTP の 1 往復」はそのまま有効で、リポジトリ分類は `llm_choice::repo` の問いの 1 つとして残る。

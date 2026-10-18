@@ -1,11 +1,11 @@
 [package]
-name = "repo-classifier"
+name = "llm-choice"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Repository classification for totsuka: which configured repository a task belongs to, over an OpenAI-compatible chat gateway."
+description = "Asking an LLM to choose one option for totsuka (which repository, does a mention need a reply), over an OpenAI-compatible chat gateway or a decisions model."
 # Internal crate, shared by orchestrator-core and the task_source plugins.
 publish = false
 
@@ -14,7 +14,6 @@ workspace = true
 
 [dependencies]
 reqwest.workspace = true
-serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true

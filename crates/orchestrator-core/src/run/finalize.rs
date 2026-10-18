@@ -9,7 +9,7 @@ use crate::domain::TaskId;
 use crate::domain::event_detail::{AgentStateChange, EventDetail, Publish};
 use serde::Deserialize;
 
-impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
+impl<G: GitRunner, L: ChoiceClassifier + 'static> Engine<G, L> {
     /// Terminal processing for a task whose agent finished: run the workflow's
     /// output policy (#65), then either complete or fail.
     ///

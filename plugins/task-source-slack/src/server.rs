@@ -34,10 +34,10 @@ use crate::reaction::{ReactionTriggers, WorkflowTrigger};
 use crate::slack_api::SlackApi;
 use crate::socket_mode::{self, SocketModeOptions};
 use crate::transport::{SlackTransport, TransportSettings};
-use repo_classifier::HttpTransport;
+use llm_choice::HttpTransport;
 
 /// Builds the plugin's outbound clients: the Slack Web API transport and the
-/// repo-classifier chat transport. Abstracted so the server can be tested
+/// llm-choice chat transport. Abstracted so the server can be tested
 /// with recorded fakes.
 pub trait TransportFactory {
     /// The Slack transport this factory produces.

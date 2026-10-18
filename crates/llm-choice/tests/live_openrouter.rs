@@ -6,7 +6,7 @@
 //!
 //! ```bash
 //! OPENROUTER_API_KEY="$(op read 'op://Dev/Openrouter/api_key')" \
-//!   cargo test -p repo-classifier --test live_openrouter -- --ignored --test-threads=1
+//!   cargo test -p llm-choice --test live_openrouter -- --ignored --test-threads=1
 //! ```
 //!
 //! They go through [`ReqwestTransport`], so they exercise the exact request and
@@ -14,9 +14,9 @@
 //! cannot: that OpenRouter still accepts the body, still returns
 //! `probabilities`, and still takes repository names verbatim as option keys.
 
-use repo_classifier::{
-    ApiKey, Candidate, Classification, ClassifyRequest, DecisionsClassifier, DecisionsSettings,
-    RepoClassifier, ReqwestTransport, RetryPolicy,
+use llm_choice::repo::{Candidate, Classification, ClassifyRequest, classify};
+use llm_choice::{
+    ApiKey, ChoiceClassifier, DecisionsClassifier, DecisionsSettings, ReqwestTransport, RetryPolicy,
 };
 
 const MODEL: &str = "~typesafe/jev-latest";
@@ -73,14 +73,16 @@ fn request(title: &str, body: &str) -> ClassifyRequest {
 #[tokio::test]
 #[ignore = "calls the real OpenRouter Decisions API; needs OPENROUTER_API_KEY"]
 async fn a_clear_task_is_classified_into_its_repository() {
-    let verdict = classifier(key())
-        .classify(&request(
+    let verdict = classify(
+        &classifier(key()),
+        &request(
             "Slack reaction trigger should ignore bot posts",
             "The task-source-slack plugin picks up reactions on bot messages; add a from_bot \
              filter in the Rust plugin.",
-        ))
-        .await
-        .expect("the live call succeeds");
+        ),
+    )
+    .await
+    .expect("the live call succeeds");
     eprintln!("verdict: {verdict:?}");
     match verdict {
         Classification::Repo {
@@ -96,10 +98,12 @@ async fn a_clear_task_is_classified_into_its_repository() {
 #[tokio::test]
 #[ignore = "calls the real OpenRouter Decisions API; needs OPENROUTER_API_KEY"]
 async fn an_unrelated_task_is_none_fits() {
-    let verdict = classifier(key())
-        .classify(&request("Book a dentist appointment for Tuesday", ""))
-        .await
-        .expect("the live call succeeds");
+    let verdict = classify(
+        &classifier(key()),
+        &request("Book a dentist appointment for Tuesday", ""),
+    )
+    .await
+    .expect("the live call succeeds");
     eprintln!("verdict: {verdict:?}");
     assert!(
         matches!(verdict, Classification::NoneFits { .. }),

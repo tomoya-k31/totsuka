@@ -4,14 +4,14 @@
 //! final `repo_hint` (F-10 decides instantly, never falling back to core
 //! selection).
 //!
-//! The classifier itself is the shared `repo-classifier` crate. What stays
+//! The classifier itself is the shared `llm-choice` crate. What stays
 //! here is Slack's side of it: the configurable prompt templates, reading
 //! candidate READMEs, and the confidence threshold.
 
-use repo_classifier::{
-    ApiKey, Candidate, ChatClassifier, ChatOutput, ChatPrompt, ChatSettings, Classification,
-    ClassifyRequest, ConfiguredClassifier, DecisionsClassifier, DecisionsSettings, HttpTransport,
-    RepoClassifier, RetryPolicy,
+use llm_choice::repo::{Candidate, Classification, ClassifyRequest};
+use llm_choice::{
+    ApiKey, ChatClassifier, ChatOutput, ChatPrompt, ChatSettings, ConfiguredClassifier,
+    DecisionsClassifier, DecisionsSettings, HttpTransport, RetryPolicy,
 };
 
 use crate::config::{LlmBackend, LlmConfig, RepoInfo, SlackPrompts};
@@ -40,7 +40,7 @@ const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 pub enum ClassifyError {
     /// The HTTP call failed (network, non-2xx, timeout).
     #[error("LLM request failed: {0}")]
-    Request(repo_classifier::ClassifyError),
+    Request(llm_choice::ClassifyError),
     /// The response did not contain a readable verdict, even after the
     /// correction retry.
     #[error("LLM returned an unusable response: {0}")]
@@ -74,11 +74,11 @@ impl ClassifyError {
     }
 }
 
-impl From<repo_classifier::ClassifyError> for ClassifyError {
-    fn from(e: repo_classifier::ClassifyError) -> Self {
+impl From<llm_choice::ClassifyError> for ClassifyError {
+    fn from(e: llm_choice::ClassifyError) -> Self {
         match e {
-            repo_classifier::ClassifyError::InvalidResponse(why) => Self::InvalidResponse(why),
-            repo_classifier::ClassifyError::UnknownRepo(repo) => Self::UnknownRepo(repo),
+            llm_choice::ClassifyError::InvalidResponse(why) => Self::InvalidResponse(why),
+            llm_choice::ClassifyError::UnknownChoice(repo) => Self::UnknownRepo(repo),
             request => Self::Request(request),
         }
     }
@@ -114,13 +114,13 @@ pub async fn classify<T: HttpTransport>(
         })
         .await
         .map_err(|e| {
-            ClassifyError::Request(repo_classifier::ClassifyError::Transport(format!(
+            ClassifyError::Request(llm_choice::ClassifyError::Transport(format!(
                 "request build failed: {e}"
             )))
         })?
     };
 
-    match classifier(transport, config).classify(&request).await? {
+    match llm_choice::repo::classify(&classifier(transport, config), &request).await? {
         Classification::Repo { confidence, .. } if confidence < config.confidence_threshold => {
             Err(ClassifyError::LowConfidence {
                 confidence,
@@ -243,10 +243,10 @@ fn readme_head(path: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use repo_classifier::HttpRequest;
+    use llm_choice::HttpRequest;
     use serde_json::{Value, json};
 
-    type WireError = repo_classifier::ClassifyError;
+    type WireError = llm_choice::ClassifyError;
 
     fn repo(name: &str) -> RepoInfo {
         RepoInfo {

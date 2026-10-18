@@ -9,7 +9,7 @@ use super::*;
 use crate::domain::event_detail::{AgentStateChange, EventDetail};
 use crate::domain::{SourceTaskId, TaskId};
 
-impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
+impl<G: GitRunner, L: ChoiceClassifier + 'static> Engine<G, L> {
     /// Handle one plugin event.
     pub(super) async fn on_event(&mut self, event: PluginEvent) -> Result<(), EngineError> {
         match event {

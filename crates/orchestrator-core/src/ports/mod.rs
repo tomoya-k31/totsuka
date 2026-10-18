@@ -2,7 +2,7 @@
 //!
 //! The swap-prone boundaries live here so their implementations can be
 //! replaced — or faked in tests — without touching the domain. There are
-//! eight: [`AgentSession`], [`Clock`], [`GitRunner`], [`RepoClassifier`],
+//! eight: [`AgentSession`], [`Clock`], [`GitRunner`], [`ChoiceClassifier`],
 //! [`SecretStore`], [`SignalPort`], [`ControlPort`] and [`ProcessProbe`].
 //!
 //! Plugins (`task_source` / `agent_ide` / `notifier`) and persistence have no
@@ -21,7 +21,7 @@ pub mod signal_ingress;
 pub use agent_session::{AgentSession, AgentSessionError, AttachOutcome};
 pub use clock::Clock;
 pub use git::{GitOutput, GitRunner};
-pub use llm::{ClassifyError, RepoClassifier};
+pub use llm::{ChoiceClassifier, ClassifyError};
 pub use process::ProcessProbe;
 pub use secret::{SecretError, SecretRef, SecretStore, SecretString, is_secret_reference};
 pub use signal_ingress::{

@@ -800,6 +800,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47d9d19d1d6efa0109d2f65ff4c85cddd50bd572e5a00127ab10987290bcefae"
 
 [[package]]
+name = "llm-choice"
+version = "0.10.12"
+dependencies = [
+ "reqwest",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "log"
 version = "0.4.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -974,9 +985,9 @@ dependencies = [
  "apple-native-keyring-store",
  "keyring-core",
  "libc",
+ "llm-choice",
  "plugin-protocol",
  "regex",
- "repo-classifier",
  "rusqlite",
  "schemars",
  "semver",
@@ -1151,18 +1162,6 @@ name = "regex-syntax"
 version = "0.8.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
-
-[[package]]
-name = "repo-classifier"
-version = "0.10.12"
-dependencies = [
- "reqwest",
- "serde",
- "serde_json",
- "thiserror",
- "tokio",
- "tracing",
-]
 
 [[package]]
 name = "reqwest"
@@ -1633,10 +1632,10 @@ name = "task-source-slack"
 version = "0.10.12"
 dependencies = [
  "futures-util",
+ "llm-choice",
  "plugin-conformance",
  "plugin-protocol",
  "plugin-sdk",
- "repo-classifier",
  "reqwest",
  "schemars",
  "semver",

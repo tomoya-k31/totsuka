@@ -3,12 +3,11 @@
 
 use std::time::Duration;
 
-use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::{
-    ApiKey, Candidate, Classification, ClassifyError, ClassifyRequest, HttpRequest, HttpTransport,
-    RepoClassifier, RetryPolicy, validated,
+    Answer, ApiKey, ChoiceClassifier, ChoiceRequest, ClassifyError, HttpRequest, HttpTransport,
+    Question, RetryPolicy, validated,
 };
 
 /// A fully rendered chat prompt.
@@ -16,10 +15,10 @@ use crate::{
 pub struct ChatPrompt {
     /// The system message (the output contract).
     pub system: String,
-    /// The user message (the work + the candidates).
+    /// The user message (what is judged + the options).
     pub user: String,
     /// When set, an unreadable answer is retried **once** inside
-    /// [`classify`](RepoClassifier::classify): the malformed answer is echoed
+    /// [`choose`](ChoiceClassifier::choose): the malformed answer is echoed
     /// back as the assistant turn and this text appended as a user turn.
     /// Resending an identical body at temperature 0 would only repeat the
     /// failure. `None` returns the unreadable answer as
@@ -79,7 +78,7 @@ impl ChatSettings {
     }
 }
 
-/// A [`RepoClassifier`] over `/chat/completions`.
+/// A [`ChoiceClassifier`] over `/chat/completions`.
 #[derive(Debug)]
 pub struct ChatClassifier<T> {
     transport: T,
@@ -124,9 +123,9 @@ impl<T: HttpTransport> ChatClassifier<T> {
             .await
     }
 
-    /// The request body for `prompt`, constraining the answer to `candidates`
-    /// when the output mode asks for a schema.
-    fn body(&self, prompt: &ChatPrompt, candidates: &[Candidate]) -> Value {
+    /// The request body for `prompt`, constraining the answer to the
+    /// question's options when the output mode asks for a schema.
+    fn body(&self, prompt: &ChatPrompt, question: &Question) -> Value {
         let mut body = json!({
             "model": self.settings.model,
             "messages": [
@@ -135,19 +134,25 @@ impl<T: HttpTransport> ChatClassifier<T> {
             ],
         });
         if self.settings.output == ChatOutput::JsonSchema {
-            let names: Vec<&str> = candidates.iter().map(|c| c.name.as_str()).collect();
+            let keys: Vec<&str> = question.options.iter().map(|o| o.key.as_str()).collect();
+            let mut properties = serde_json::Map::new();
+            properties.insert(
+                question.id.clone(),
+                json!({ "type": "string", "enum": keys }),
+            );
+            properties.insert(
+                "confidence".into(),
+                json!({ "type": "number", "minimum": 0, "maximum": 1 }),
+            );
+            properties.insert("reason".into(), json!({ "type": "string" }));
             body["response_format"] = json!({
                 "type": "json_schema",
                 "json_schema": {
                     "name": "structured_output",
                     "schema": {
                         "type": "object",
-                        "properties": {
-                            "repo": { "type": "string", "enum": names },
-                            "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
-                            "reason": { "type": "string" },
-                        },
-                        "required": ["repo", "confidence", "reason"],
+                        "properties": properties,
+                        "required": [question.id, "confidence", "reason"],
                         "additionalProperties": false,
                     },
                     "strict": true,
@@ -167,7 +172,7 @@ impl<T: HttpTransport> ChatClassifier<T> {
     ///
     /// The error side carries the raw content, so a correction retry can echo
     /// it back.
-    fn verdict(&self, response: &Value) -> Result<RawVerdict, (String, ClassifyError)> {
+    fn verdict(&self, response: &Value, id: &str) -> Result<RawVerdict, (String, ClassifyError)> {
         let Some(content) = response["choices"][0]["message"]["content"].as_str() else {
             return Err((
                 String::new(),
@@ -175,8 +180,8 @@ impl<T: HttpTransport> ChatClassifier<T> {
             ));
         };
         let parsed = match self.settings.output {
-            ChatOutput::JsonSchema => strict_verdict(content),
-            ChatOutput::Prose => extract_verdict(content).ok_or_else(|| {
+            ChatOutput::JsonSchema => strict_verdict(content, id),
+            ChatOutput::Prose => extract_verdict(content, id).ok_or_else(|| {
                 ClassifyError::InvalidResponse(format!(
                     "no JSON verdict in content: {content:.200}"
                 ))
@@ -186,16 +191,14 @@ impl<T: HttpTransport> ChatClassifier<T> {
     }
 }
 
-impl<T: HttpTransport> RepoClassifier for ChatClassifier<T> {
-    async fn classify(&self, request: &ClassifyRequest) -> Result<Classification, ClassifyError> {
-        let prompt = request
-            .chat_prompt
-            .clone()
-            .unwrap_or_else(|| default_prompt(request));
-        let mut body = self.body(&prompt, &request.candidates);
+impl<T: HttpTransport> ChoiceClassifier for ChatClassifier<T> {
+    async fn choose(&self, request: &ChoiceRequest) -> Result<Answer, ClassifyError> {
+        let question = &request.question;
+        let prompt = &request.chat_prompt;
+        let mut body = self.body(prompt, question);
 
         let response = self.complete(&body).await?;
-        let raw = match (self.verdict(&response), &prompt.correction) {
+        let raw = match (self.verdict(&response, &question.id), &prompt.correction) {
             (Ok(raw), _) => raw,
             (Err((_, e)), None) => return Err(e),
             (Err((content, e)), Some(correction)) => {
@@ -205,10 +208,10 @@ impl<T: HttpTransport> RepoClassifier for ChatClassifier<T> {
                     messages.push(json!({ "role": "user", "content": correction }));
                 }
                 let response = self.complete(&body).await?;
-                self.verdict(&response).map_err(|(_, e)| e)?
+                self.verdict(&response, &question.id).map_err(|(_, e)| e)?
             }
         };
-        validated(raw.repo, raw.confidence, raw.reason, &request.candidates)
+        validated(raw.choice, raw.confidence, raw.reason, question)
     }
 
     /// One minimal request asking only whether the gateway accepts our key
@@ -246,61 +249,32 @@ impl<T: HttpTransport> RepoClassifier for ChatClassifier<T> {
     }
 }
 
-/// The built-in prompt: the labelled subject, then each candidate with its
-/// summary and README head.
-fn default_prompt(request: &ClassifyRequest) -> ChatPrompt {
-    let mut user = String::new();
-    for (label, text) in &request.subject {
-        user.push_str(&format!("{label}: {text}\n"));
-    }
-    user.push_str("\nCandidate repositories:\n");
-    for c in &request.candidates {
-        user.push_str(&format!("- {}", c.name));
-        if let Some(s) = &c.summary {
-            user.push_str(&format!(": {s}"));
-        }
-        if let Some(r) = &c.readme_head {
-            user.push_str(&format!("\n  README: {}", r.replace('\n', " ")));
-        }
-        user.push('\n');
-    }
-    user.push_str("\nChoose the single most appropriate repository.");
-    ChatPrompt {
-        system: "You route a software task to the correct repository. Respond only with the \
-                 structured JSON. Pick from the candidate names exactly."
-            .to_string(),
-        user,
-        correction: None,
-    }
-}
-
-/// A verdict as the model wrote it, before candidate/range validation.
-#[derive(Debug, Deserialize)]
+/// An answer as the model wrote it, before option/range validation.
+#[derive(Debug)]
 struct RawVerdict {
-    repo: String,
+    choice: String,
     confidence: f64,
-    #[serde(default)]
     reason: String,
 }
 
 /// [`ChatOutput::JsonSchema`]: the content is the verdict object, nothing
 /// else, and every schema field is present. A missing `reason` is a schema
 /// deviation, not an empty rationale.
-fn strict_verdict(content: &str) -> Result<RawVerdict, ClassifyError> {
-    let invalid = |why: &str| ClassifyError::InvalidResponse(why.to_string());
+fn strict_verdict(content: &str, id: &str) -> Result<RawVerdict, ClassifyError> {
+    let invalid = |why: String| ClassifyError::InvalidResponse(why);
     let value: Value =
         serde_json::from_str(content).map_err(|e| ClassifyError::InvalidResponse(e.to_string()))?;
     Ok(RawVerdict {
-        repo: value["repo"]
+        choice: value[id]
             .as_str()
-            .ok_or_else(|| invalid("missing `repo`"))?
+            .ok_or_else(|| invalid(format!("missing `{id}`")))?
             .to_string(),
         confidence: value["confidence"]
             .as_f64()
-            .ok_or_else(|| invalid("missing/invalid `confidence`"))?,
+            .ok_or_else(|| invalid("missing/invalid `confidence`".into()))?,
         reason: value["reason"]
             .as_str()
-            .ok_or_else(|| invalid("missing/invalid `reason`"))?
+            .ok_or_else(|| invalid("missing/invalid `reason`".into()))?
             .to_string(),
     })
 }
@@ -309,11 +283,26 @@ fn strict_verdict(content: &str) -> Result<RawVerdict, ClassifyError> {
 /// JSON object and return the first that reads as a verdict. Anchoring on the
 /// *first* brace only would let prose like `the {Button} component` shadow a
 /// valid verdict later in the answer.
-fn extract_verdict(text: &str) -> Option<RawVerdict> {
+fn extract_verdict(text: &str, id: &str) -> Option<RawVerdict> {
     text.char_indices()
         .filter(|(_, c)| *c == '{')
         .filter_map(|(start, _)| balanced_object(&text[start..]))
-        .find_map(|candidate| serde_json::from_str(candidate).ok())
+        .find_map(|candidate| loose_verdict(candidate, id))
+}
+
+/// A prose verdict: `id` and `confidence` required, `reason` optional — but a
+/// present `reason` must be a string.
+fn loose_verdict(candidate: &str, id: &str) -> Option<RawVerdict> {
+    let value: Value = serde_json::from_str(candidate).ok()?;
+    let reason = match value.get("reason") {
+        None => String::new(),
+        Some(r) => r.as_str()?.to_string(),
+    };
+    Some(RawVerdict {
+        choice: value.get(id)?.as_str()?.to_string(),
+        confidence: value.get("confidence")?.as_f64()?,
+        reason,
+    })
 }
 
 /// The balanced `{…}` block at the start of `text`, if any.
@@ -345,6 +334,7 @@ fn balanced_object(text: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::repo::{Candidate, Classification, ClassifyRequest, classify};
     use std::collections::VecDeque;
     use std::sync::Mutex;
 
@@ -435,7 +425,7 @@ mod tests {
                 r#"{"repo":"api","confidence":0.9,"reason":"backend"}"#,
             )],
         );
-        let verdict = c.classify(&request(None)).await.unwrap();
+        let verdict = classify(&c, &request(None)).await.unwrap();
         assert_eq!(chosen(&verdict), ("api", "backend"));
 
         let bodies = c.transport.bodies.lock().unwrap();
@@ -448,8 +438,31 @@ mod tests {
              Choose the single most appropriate repository."
         );
         assert_eq!(
-            body["response_format"]["json_schema"]["schema"]["properties"]["repo"]["enum"],
-            json!(["web", "api"])
+            body["messages"][0]["content"],
+            "You route a software task to the correct repository. Respond only with the \
+             structured JSON. Pick from the candidate names exactly."
+        );
+        // The whole schema, now built from the question rather than spelled
+        // out: every field the strict contract relies on, not just the enum.
+        assert_eq!(
+            body["response_format"],
+            json!({
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "structured_output",
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "repo": { "type": "string", "enum": ["web", "api"] },
+                            "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+                            "reason": { "type": "string" },
+                        },
+                        "required": ["repo", "confidence", "reason"],
+                        "additionalProperties": false,
+                    },
+                    "strict": true,
+                },
+            })
         );
         assert!(body.get("max_tokens").is_none(), "unset → not sent");
         assert!(body.get("temperature").is_none(), "unset → not sent");
@@ -467,7 +480,7 @@ mod tests {
             ("I think api", "expected"),
         ] {
             let c = classifier(ChatOutput::JsonSchema, vec![content(answer)]);
-            let err = c.classify(&request(None)).await.unwrap_err();
+            let err = classify(&c, &request(None)).await.unwrap_err();
             assert!(err.is_bad_answer(), "{answer}: {err}");
             assert!(err.to_string().contains(needle), "{answer}: {err}");
             assert_eq!(c.transport.bodies.lock().unwrap().len(), 1, "no retry");
@@ -481,8 +494,8 @@ mod tests {
             vec![content(r#"{"repo":"ghost","confidence":0.9,"reason":"x"}"#)],
         );
         assert!(matches!(
-            c.classify(&request(None)).await.unwrap_err(),
-            ClassifyError::UnknownRepo(r) if r == "ghost"
+            classify(&c, &request(None)).await.unwrap_err(),
+            ClassifyError::UnknownChoice(r) if r == "ghost"
         ));
     }
 
@@ -494,7 +507,7 @@ mod tests {
                 "Sure! ```json\n{\"repo\": \"web\", \"confidence\": 0.8}\n```",
             )],
         );
-        let verdict = c.classify(&request(Some(prose_prompt()))).await.unwrap();
+        let verdict = classify(&c, &request(Some(prose_prompt()))).await.unwrap();
         assert_eq!(chosen(&verdict), ("web", ""));
         let body = &c.transport.bodies.lock().unwrap()[0];
         assert!(body.get("response_format").is_none());
@@ -511,7 +524,7 @@ mod tests {
                 content(r#"{"repo":"api","confidence":0.7,"reason":"r"}"#),
             ],
         );
-        let verdict = c.classify(&request(Some(prose_prompt()))).await.unwrap();
+        let verdict = classify(&c, &request(Some(prose_prompt()))).await.unwrap();
         assert_eq!(chosen(&verdict).0, "api");
 
         let bodies = c.transport.bodies.lock().unwrap();
@@ -531,8 +544,7 @@ mod tests {
             ChatOutput::Prose,
             vec![content("nope"), content("still nope")],
         );
-        let err = c
-            .classify(&request(Some(prose_prompt())))
+        let err = classify(&c, &request(Some(prose_prompt())))
             .await
             .unwrap_err();
         assert!(matches!(err, ClassifyError::InvalidResponse(_)), "{err}");
@@ -551,12 +563,54 @@ mod tests {
             ChatOutput::Prose,
             vec![content(r#"{"repo":"ghost","confidence":0.9}"#)],
         );
-        let err = c
-            .classify(&request(Some(prose_prompt())))
+        let err = classify(&c, &request(Some(prose_prompt())))
             .await
             .unwrap_err();
-        assert!(matches!(err, ClassifyError::UnknownRepo(_)), "{err}");
+        assert!(matches!(err, ClassifyError::UnknownChoice(_)), "{err}");
         assert_eq!(c.transport.bodies.lock().unwrap().len(), 1);
+    }
+
+    /// A question of the caller's own: the schema and the parser both key on
+    /// its id, so `{"reply": …}` is read where a repo question reads `repo`.
+    #[tokio::test]
+    async fn the_answer_field_is_the_question_id() {
+        let c = classifier(
+            ChatOutput::JsonSchema,
+            vec![content(
+                r#"{"reply":"no_reply","confidence":0.8,"reason":"FYI"}"#,
+            )],
+        );
+        let request = ChoiceRequest {
+            subject: vec![("Mention".into(), "FYI".into())],
+            question: Question {
+                id: "reply".into(),
+                instructions: String::new(),
+                options: ["reply", "no_reply"]
+                    .map(|key| crate::ChoiceOption {
+                        key: key.into(),
+                        description: None,
+                    })
+                    .to_vec(),
+                none: Some("ignored by chat".into()),
+            },
+            chat_prompt: ChatPrompt {
+                system: "sys".into(),
+                user: "usr".into(),
+                correction: None,
+            },
+        };
+        let answer = c.choose(&request).await.unwrap();
+        assert!(
+            matches!(&answer, Answer::Chosen { key, reason, .. } if key == "no_reply" && reason == "FYI"),
+            "{answer:?}"
+        );
+        let body = &c.transport.bodies.lock().unwrap()[0];
+        let schema = &body["response_format"]["json_schema"]["schema"];
+        assert_eq!(
+            schema["properties"]["reply"]["enum"],
+            json!(["reply", "no_reply"])
+        );
+        assert_eq!(schema["required"], json!(["reply", "confidence", "reason"]));
     }
 
     #[tokio::test]
@@ -567,7 +621,7 @@ mod tests {
         );
         c.settings.max_tokens = Some(256);
         c.settings.temperature = Some(0.0);
-        c.classify(&request(None)).await.unwrap();
+        classify(&c, &request(None)).await.unwrap();
         let body = &c.transport.bodies.lock().unwrap()[0];
         assert_eq!(body["max_tokens"], 256);
         assert_eq!(body["temperature"], 0.0);
@@ -602,9 +656,12 @@ mod tests {
 
     #[test]
     fn extraction_skips_prose_braces_before_the_verdict() {
-        let verdict =
-            extract_verdict(r#"the {Button} component → {"repo":"web","confidence":0.9}"#).unwrap();
-        assert_eq!(verdict.repo, "web");
-        assert!(extract_verdict("no json here").is_none());
+        let verdict = extract_verdict(
+            r#"the {Button} component → {"repo":"web","confidence":0.9}"#,
+            "repo",
+        )
+        .unwrap();
+        assert_eq!(verdict.choice, "web");
+        assert!(extract_verdict("no json here", "repo").is_none());
     }
 }

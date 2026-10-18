@@ -8,7 +8,7 @@ use super::*;
 use crate::domain::TaskId;
 use crate::domain::event_detail::{Dispatch, EventDetail, Reopen};
 
-impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
+impl<G: GitRunner, L: ChoiceClassifier + 'static> Engine<G, L> {
     /// Select a repository for every queued task that has none (F-10–F-14).
     pub(super) async fn select_repos(&mut self) -> Result<(), EngineError> {
         let queued = self.db.tasks_in_state(TaskState::Queued)?;

@@ -16,26 +16,9 @@ use std::time::Duration;
 use serde_json::{Map, Value, json};
 
 use crate::{
-    ApiKey, Candidate, Classification, ClassifyError, ClassifyRequest, HttpRequest, HttpTransport,
-    RepoClassifier, RetryPolicy, validated,
+    Answer, ApiKey, ChoiceClassifier, ChoiceRequest, ClassifyError, HttpRequest, HttpTransport,
+    Question, RetryPolicy, validated,
 };
-
-/// The question id in `questions` / `answers`.
-const QUESTION: &str = "repo";
-
-/// What the model is asked, naming the "nothing fits" option by its actual
-/// key (see [`none_key`]). Fixed wording on purpose: the answer set carries
-/// the meaning, and a configurable question would only be one more way to make
-/// it disagree with its options.
-fn instructions(none: &str) -> String {
-    format!(
-        "Which repository should this work be done in? \
-         Choose `{none}` only when no repository fits."
-    )
-}
-
-/// The description of the "nothing fits" option.
-const NONE_FITS: &str = "None of the repositories fits this work";
 
 /// Where and how to call the decisions endpoint.
 #[derive(Debug, Clone)]
@@ -69,7 +52,7 @@ impl DecisionsSettings {
     }
 }
 
-/// A [`RepoClassifier`] over a Decisions API.
+/// A [`ChoiceClassifier`] over a Decisions API.
 #[derive(Debug)]
 pub struct DecisionsClassifier<T> {
     transport: T,
@@ -100,26 +83,34 @@ impl<T: HttpTransport> DecisionsClassifier<T> {
     }
 }
 
-impl<T: HttpTransport> RepoClassifier for DecisionsClassifier<T> {
-    async fn classify(&self, request: &ClassifyRequest) -> Result<Classification, ClassifyError> {
-        let none = none_key(&request.candidates);
+impl<T: HttpTransport> ChoiceClassifier for DecisionsClassifier<T> {
+    async fn choose(&self, request: &ChoiceRequest) -> Result<Answer, ClassifyError> {
+        let question = &request.question;
+        let none = question.none.as_ref().map(|_| none_key(question));
+        let instructions = match &none {
+            Some(key) => question.instructions.replace("{none}", key),
+            None => question.instructions.clone(),
+        };
+        let mut questions = Map::new();
+        questions.insert(
+            question.id.clone(),
+            json!({
+                "type": "choice",
+                "instructions": instructions,
+                "criteria": criteria(question, none.as_deref()),
+            }),
+        );
         let body = json!({
             "model": self.settings.model,
             "state": state(&request.subject),
-            "questions": {
-                QUESTION: {
-                    "type": "choice",
-                    "instructions": instructions(&none),
-                    "criteria": criteria(&request.candidates, &none),
-                },
-            },
+            "questions": questions,
         });
         let response = self
             .settings
             .retry
             .run(|| self.transport.post_json(self.request(&body)))
             .await?;
-        verdict(&response, &none, &request.candidates)
+        verdict(&response, none.as_deref(), question)
     }
 
     /// The cheapest question the endpoint answers: one yes/no about a
@@ -153,49 +144,36 @@ fn state(subject: &[(String, String)]) -> Value {
     )
 }
 
-/// One option per candidate, keyed by its name (verified to accept `/`, `.`
-/// and `_`), described by its summary and README head; plus the `none`
-/// option.
-fn criteria(candidates: &[Candidate], none: &str) -> Value {
-    let mut options: Map<String, Value> = candidates
+/// One entry per option, described by its description (`null`, which the
+/// API allows as "no description", when there is none); plus the "nothing
+/// fits" option when the question offers one.
+fn criteria(question: &Question, none: Option<&str>) -> Value {
+    let mut options: Map<String, Value> = question
+        .options
         .iter()
-        .map(|c| (c.name.clone(), description(c)))
+        .map(|o| {
+            let description = o.description.clone().map_or(Value::Null, Value::String);
+            (o.key.clone(), description)
+        })
         .collect();
-    options.insert(none.to_string(), Value::String(NONE_FITS.to_string()));
+    if let (Some(key), Some(description)) = (none, &question.none) {
+        options.insert(key.to_string(), Value::String(description.clone()));
+    }
     Value::Object(options)
 }
 
-/// A candidate's option description; `null` (allowed by the API: "no
-/// description") when there is nothing to say.
-fn description(c: &Candidate) -> Value {
-    let parts: Vec<String> = [
-        c.summary.clone(),
-        c.readme_head
-            .as_ref()
-            .map(|r| format!("README (head):\n{r}")),
-    ]
-    .into_iter()
-    .flatten()
-    .collect();
-    if parts.is_empty() {
-        Value::Null
-    } else {
-        Value::String(parts.join("\n\n"))
-    }
-}
-
-/// The key of the "nothing fits" option: `none`, unless a repository is
+/// The key of the "nothing fits" option: `none`, unless an option is
 /// literally called that, in which case underscores are prepended until it is
 /// unique.
-fn none_key(candidates: &[Candidate]) -> String {
+fn none_key(question: &Question) -> String {
     let mut key = "none".to_string();
-    while candidates.iter().any(|c| c.name == key) {
+    while question.options.iter().any(|o| o.key == key) {
         key.insert(0, '_');
     }
     key
 }
 
-/// Read the answer to [`QUESTION`].
+/// Read the answer to `question`.
 ///
 /// The value compared against thresholds is the chosen option's own
 /// probability, which reads like a chat model's self-reported confidence
@@ -205,27 +183,28 @@ fn none_key(candidates: &[Candidate]) -> String {
 /// OpenRouter's schema allows.
 fn verdict(
     response: &Value,
-    none: &str,
-    candidates: &[Candidate],
-) -> Result<Classification, ClassifyError> {
+    none: Option<&str>,
+    question: &Question,
+) -> Result<Answer, ClassifyError> {
     let invalid = |why: String| ClassifyError::InvalidResponse(why);
-    let answer = &response["answers"][QUESTION];
+    let id = question.id.as_str();
+    let answer = &response["answers"][id];
     // `type` is optional to read but, when present, must be the question we
     // asked: a `noul` or `score` answer has no `choice` to trust.
     if let Some(kind) = answer["type"].as_str()
         && kind != "choice"
     {
         return Err(invalid(format!(
-            "`answers.{QUESTION}` is a `{kind}` answer, not a `choice`"
+            "`answers.{id}` is a `{kind}` answer, not a `choice`"
         )));
     }
     let choice = answer["choice"]
         .as_str()
-        .ok_or_else(|| invalid(format!("no `answers.{QUESTION}.choice` in the response")))?;
+        .ok_or_else(|| invalid(format!("no `answers.{id}.choice` in the response")))?;
     let probabilities = answer["probabilities"].as_object();
     let reason = explain(response["model"].as_str(), choice, probabilities);
-    if choice == none {
-        return Ok(Classification::NoneFits { reason });
+    if Some(choice) == none {
+        return Ok(Answer::NoneFits { reason });
     }
     let confidence = probabilities
         .and_then(|p| p.get(choice))
@@ -236,7 +215,7 @@ fn verdict(
                 "neither a probability nor a confidence for `{choice}`"
             ))
         })?;
-    validated(choice.to_string(), confidence, reason, candidates)
+    validated(choice.to_string(), confidence, reason, question)
 }
 
 /// A decisions model gives no rationale, so the reason is the distribution:
@@ -267,6 +246,8 @@ fn explain(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ChoiceOption;
+    use crate::repo::{Candidate, Classification, ClassifyRequest, NONE_FITS, classify};
     use std::collections::VecDeque;
     use std::sync::Mutex;
 
@@ -356,7 +337,7 @@ mod tests {
             json!({ "tomoya-k31/totsuka": 1, "dotfiles.nvim": 0, "bare": 0, "none": 0 }),
             1.0,
         )]);
-        c.classify(&request()).await.unwrap();
+        classify(&c, &request()).await.unwrap();
 
         let requests = c.transport.requests.lock().unwrap();
         let (url, body) = &requests[0];
@@ -368,6 +349,11 @@ mod tests {
         );
         let question = &body["questions"]["repo"];
         assert_eq!(question["type"], "choice");
+        assert_eq!(
+            question["instructions"],
+            "Which repository should this work be done in? \
+             Choose `none` only when no repository fits."
+        );
         assert_eq!(
             question["criteria"],
             json!({
@@ -387,7 +373,7 @@ mod tests {
             0.6,
         )]);
         assert_eq!(
-            c.classify(&request()).await.unwrap(),
+            classify(&c, &request()).await.unwrap(),
             Classification::Repo {
                 repo: "tomoya-k31/totsuka".into(),
                 confidence: 0.84,
@@ -403,7 +389,7 @@ mod tests {
             "model": "m",
             "answers": { "repo": { "type": "choice", "choice": "bare", "confidence": 0.7 } },
         }))]);
-        let verdict = c.classify(&request()).await.unwrap();
+        let verdict = classify(&c, &request()).await.unwrap();
         assert!(
             matches!(verdict, Classification::Repo { confidence, .. } if (confidence - 0.7).abs() < 1e-9),
             "{verdict:?}"
@@ -415,7 +401,7 @@ mod tests {
         let c = classifier(vec![Ok(json!({
             "answers": { "repo": { "type": "choice", "choice": "bare" } },
         }))]);
-        assert!(c.classify(&request()).await.unwrap_err().is_bad_answer());
+        assert!(classify(&c, &request()).await.unwrap_err().is_bad_answer());
     }
 
     #[tokio::test]
@@ -426,7 +412,7 @@ mod tests {
             0.97,
         )]);
         assert_eq!(
-            c.classify(&request()).await.unwrap(),
+            classify(&c, &request()).await.unwrap(),
             Classification::NoneFits {
                 reason: "typesafe/jev-1.13-20260917: none p=0.98 (next: tomoya-k31/totsuka 0.02)"
                     .into()
@@ -438,11 +424,11 @@ mod tests {
     async fn an_answer_outside_the_candidates_is_rejected() {
         let c = classifier(vec![answer("ghost", json!({ "ghost": 1 }), 1.0)]);
         assert!(matches!(
-            c.classify(&request()).await.unwrap_err(),
-            ClassifyError::UnknownRepo(r) if r == "ghost"
+            classify(&c, &request()).await.unwrap_err(),
+            ClassifyError::UnknownChoice(r) if r == "ghost"
         ));
         let c = classifier(vec![Ok(json!({ "answers": {} }))]);
-        assert!(c.classify(&request()).await.unwrap_err().is_bad_answer());
+        assert!(classify(&c, &request()).await.unwrap_err().is_bad_answer());
     }
 
     /// When a repository is literally called `none`, the question must point
@@ -454,7 +440,7 @@ mod tests {
             .push(candidate("none", Some("a real repository"), None));
         let c = classifier(vec![answer("_none", json!({ "_none": 1 }), 1.0)]);
         assert!(matches!(
-            c.classify(&req).await.unwrap(),
+            classify(&c, &req).await.unwrap(),
             Classification::NoneFits { .. }
         ));
         let body = c.transport.requests.lock().unwrap()[0].1.clone();
@@ -475,7 +461,7 @@ mod tests {
         let c = classifier(vec![Ok(json!({
             "answers": { "repo": { "type": "noul", "noul": 0.9, "choice": "bare" } },
         }))]);
-        let err = c.classify(&request()).await.unwrap_err();
+        let err = classify(&c, &request()).await.unwrap_err();
         assert!(
             err.is_bad_answer() && err.to_string().contains("noul"),
             "{err}"
@@ -484,13 +470,63 @@ mod tests {
 
     #[test]
     fn the_none_key_never_collides_with_a_repository() {
-        assert_eq!(none_key(&[candidate("web", None, None)]), "none");
+        let question = |names: &[&str]| {
+            let candidates: Vec<Candidate> =
+                names.iter().map(|n| candidate(n, None, None)).collect();
+            crate::repo::question(&candidates)
+        };
+        assert_eq!(none_key(&question(&["web"])), "none");
+        assert_eq!(none_key(&question(&["none", "_none"])), "__none");
+    }
+
+    /// A question of the caller's own: its id keys the request and the
+    /// answer, its instructions go out verbatim, and without `none` no
+    /// "nothing fits" option is offered.
+    #[tokio::test]
+    async fn any_question_rides_the_same_wire_format() {
+        let c = classifier(vec![Ok(json!({
+            "model": "m",
+            "answers": { "reply": {
+                "type": "choice",
+                "choice": "no_reply",
+                "probabilities": { "reply": 0.2, "no_reply": 0.8 },
+            } },
+        }))]);
+        let request = ChoiceRequest {
+            subject: vec![("Mention".into(), "FYI".into())],
+            question: Question {
+                id: "reply".into(),
+                instructions: "Does this need a reply?".into(),
+                options: vec![
+                    ChoiceOption {
+                        key: "reply".into(),
+                        description: Some("needs one".into()),
+                    },
+                    ChoiceOption {
+                        key: "no_reply".into(),
+                        description: None,
+                    },
+                ],
+                none: None,
+            },
+            chat_prompt: crate::ChatPrompt {
+                system: String::new(),
+                user: String::new(),
+                correction: None,
+            },
+        };
+        let answer = c.choose(&request).await.unwrap();
+        assert!(
+            matches!(&answer, Answer::Chosen { key, confidence, .. }
+                if key == "no_reply" && (confidence - 0.8).abs() < 1e-9),
+            "{answer:?}"
+        );
+        let body = c.transport.requests.lock().unwrap()[0].1.clone();
+        let question = &body["questions"]["reply"];
+        assert_eq!(question["instructions"], "Does this need a reply?");
         assert_eq!(
-            none_key(&[
-                candidate("none", None, None),
-                candidate("_none", None, None)
-            ]),
-            "__none"
+            question["criteria"],
+            json!({ "reply": "needs one", "no_reply": null })
         );
     }
 

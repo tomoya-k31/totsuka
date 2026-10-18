@@ -48,7 +48,7 @@ use crate::adapters::plugin_host::{CallStats, HostError, Liveness, Plugin};
 use crate::domain::EventDetail;
 use crate::domain::TaskId;
 use crate::ports::git::GitRunner;
-use crate::ports::llm::RepoClassifier;
+use crate::ports::llm::ChoiceClassifier;
 use plugin_protocol::manifest::PluginKind as ManifestKind;
 use plugin_protocol::methods::{NotifierEvent, NotifyParams};
 
@@ -280,7 +280,7 @@ pub(super) fn wire_liveness(name: &str, plugin: &Plugin, tx: &mpsc::UnboundedSen
     });
 }
 
-impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
+impl<G: GitRunner, L: ChoiceClassifier + 'static> Engine<G, L> {
     /// A plugin process exited on its own (§5.3, #495).
     ///
     /// Kind-specific teardown first, relaunch second. **The order is

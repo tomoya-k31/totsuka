@@ -110,7 +110,7 @@ install を「古い」と誤判定もする。
    ここだけ**である。核心は `BW_SESSION` 無しで**ハングせず即エラーになる**ことで、
    ここが効いていないと常駐運用が無言で止まる
 9. **decisions モデルでの分類（S10、#723）** — `[llm].api = "decisions"` や
-   `repo-classifier` の decisions 実装に手を入れたとき。**API 単体の実キー検査を最初に回す**
+   `llm-choice` の decisions 実装に手を入れたとき。**API 単体の実キー検査を最初に回す**
    （Slack 不要・数秒・数セント未満）。OpenRouter の Decisions API は **alpha** なので、
    404 や形の変化はまずここで出る
 

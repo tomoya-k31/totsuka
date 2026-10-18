@@ -4,7 +4,7 @@ title: ADR-0084 リポジトリ分類に decisions モデル（TypeSafe Jev）�
 description: 文章を生成せず、候補から 1 つを選んで全候補の確率を返す判定専用モデル（TypeSafe Jev、OpenRouter 経由）を、[llm].api = "decisions" で chat と並ぶ分類方式として加えた決定。設定は raw → 型付き enum へ try_from で変換して API に合わないキーを読み込みエラーにする。閾値と比べるのは API の confidence ではなく選ばれた候補の確率であること、「どれも当てはまらない」の選択肢を必ず足すこと、質問文を設定可能にしないこと、alpha の endpoint を上書き可能にするだけで仕様変更には備えないこと、プラグインへは decisions のとき空の base_url で渡して古いプラグインに chat として誤用させないこと、[llm].api を env で切り替えられないことを記録する。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/repo-classifier/src/decisions.rs
 tags: [decision, adr, llm, repo-select, classifier, jev, openrouter, protocol, config]
-generated: { by: claude-code/opus-5, at: 2026-09-19T22:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-18T20:16:02+09:00 }
 status: stable
 owner: tomoya-k31
 sources:
@@ -94,3 +94,7 @@ task_source プラグインは orchestrator の `[llm]` を `InitializeParams.ll
 [^openrouter-decisions]: OpenRouter — Submit a Decisions (questions and answers) request
 [^live-check]: 実キーでの検証結果（2026-09-19、OpenRouter /api/alpha/decisions）
 [^typesafe-confidence]: TypeSafe — Confidence
+
+# Amendment（2026-10-18、ADR-0118）
+
+`DecisionsClassifier` は [ADR-0118](/decisions/adr-0118-llm-choice-crate.md) で問いを外から受け取る形になった。質問 id・質問文・`none` の有無は `Question` が持ち、リポジトリ分類の固定文と `none` は `llm_choice::repo::question` に移った。送る本文は変わらない。

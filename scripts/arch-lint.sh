@@ -6,7 +6,7 @@
 #
 # チェック内容:
 #   [E] plugin-deps   : plugins/* の [dependencies] は plugin-protocol / plugin-sdk /
-#                       repo-classifier / routine-schedule のみ
+#                       llm-choice / routine-schedule のみ
 #   [E] plugin-dev    : plugins/* の [dev-dependencies] は 上記 + test-support / plugin-conformance のみ
 #   [E] plugin-build  : plugins/* の [build-dependencies] にワークスペース内依存なし
 #   [E] sdk-deps      : plugin-sdk の依存は plugin-protocol（dev は + test-support）のみ、
@@ -14,7 +14,7 @@
 #   [E] conformance-deps : plugin-conformance の依存は [dependencies] の plugin-protocol のみ
 #                       （plugin-sdk を含め、検査対象の側には寄らない）
 #   [E] protocol-leaf : plugin-protocol はワークスペース内クレートに一切依存しない
-#   [E] classifier-leaf : repo-classifier はワークスペース内クレートに一切依存しない
+#   [E] classifier-leaf : llm-choice はワークスペース内クレートに一切依存しない
 #                       （core と plugins の双方が使う共有部品なので、どちらにも寄らない）
 #   [E] routine-leaf  : routine-schedule はワークスペース内クレートに一切依存しない
 #                       （task-source-routine と cli の双方が使う共有部品、#918）
@@ -51,8 +51,8 @@ set -euo pipefail
 # 区別できるようにするためにある。理由なしで足さないこと。
 DECLARATION_EXEMPT=""
 
-PLUGIN_ALLOWED_NORMAL="plugin-protocol plugin-sdk repo-classifier routine-schedule"
-PLUGIN_ALLOWED_DEV="plugin-protocol plugin-sdk repo-classifier routine-schedule test-support plugin-conformance"
+PLUGIN_ALLOWED_NORMAL="plugin-protocol plugin-sdk llm-choice routine-schedule"
+PLUGIN_ALLOWED_DEV="plugin-protocol plugin-sdk llm-choice routine-schedule test-support plugin-conformance"
 SDK_ALLOWED_NORMAL="plugin-protocol"
 SDK_ALLOWED_DEV="plugin-protocol test-support"
 # plugin-conformance はプラグインを外（stdio）から検査するキット。検査対象の
@@ -138,7 +138,7 @@ while IFS="$(printf '\t')" read -r pkg kind dep manifest; do
       [ "$kind" = normal ] && allowed "$CONFORMANCE_ALLOWED_NORMAL" "$dep" ||
         error conformance-deps "$pkg" "許可外のワークスペース内依存 '$dep'（種別: ${kind}。許可: [dependencies] の ${CONFORMANCE_ALLOWED_NORMAL} のみ）"
       ;;
-    repo-classifier)
+    llm-choice)
       error classifier-leaf "$pkg" "leaf クレートがワークスペース内クレート '$dep' に依存（種別: ${kind}）"
       ;;
     routine-schedule)
