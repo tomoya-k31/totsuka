@@ -4,7 +4,7 @@ title: プラグイン開発ガイド
 description: totsuka プラグインの作り方。plugin-protocol クレートの型、JSON-RPC(NDJSON/stdio) メソッド、plugin.toml マニフェスト、capability 宣言、開発ループ（plugin install --from-source）・適合テスト（plugin-conformance）とビルド手順（bin 名 = plugin.toml の name という不変条件）、install/enable の流れ、参照実装。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/plugin-protocol
 tags: [plugin, protocol, json-rpc, manifest, guide]
-generated: { by: claude-code/opus-5.5, at: 2026-10-18T12:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-18T15:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -81,6 +81,7 @@ Orchestrator は起動前に `protocol_version` の互換性を検査し（F-54�
 | `config/validate` | O→P | プラグイン設定を検証（F-59）。`initialize` と同じ `workflows` / `projects` / `repositories` も届く（0.6.0）— 記憶ではなく「今聞かれているもの」を検証させるため。**`warnings` は「設定は正しいが伝えたいこと」の口**（0.7.3、[ADR-0073](/decisions/adr-0073-plugin-config-warnings.md)）。`valid` に影響せず、`doctor` が黄色のチェックとして描き `--json` にも出る。`errors` と同じ「原因 → 次のアクション」の形にすること —— 行動できない警告は雑音で、雑音は診断が読まれなくなる経路そのものである。省略可能なので、送らないプラグインの `doctor` 出力は 1 バイトも変わらない |
 | `config/schema` | O→P | 自分の設定テーブルを JSON Schema（draft 2020-12）で返す（`{}` → `{ schema, project?, workflow? }`、0.7.7、[ADR-0113](/decisions/adr-0113-native-menubar-app.md)）。**サブスキーマはすべてインラインで書き、`$ref` を使わないこと** —— ホストは答えを大きな文書の中に埋め込むので、`#/$defs/…` のような参照は別の根に対して解決されてしまう。`$ref` を含むスキーマは生の TOML 欄になる。**`initialize` より前に答えること** —— `totsuka config schema` は機密がまだ無い状態でも尋ねる。マニフェストで `config_schema = true` を宣言したプラグインにだけ送られ、宣言しなければそのテーブルは `config schema` の出力で `x-raw`（生の TOML として扱う）になる（エラーにはならない）。各プロパティに `x-title` / `x-help` / `x-category`（いずれも英語の文字列）と、機密の参照を持つフィールドには `x-secret: true` を付けると、スキーマを読む側（設定画面など）がラベル・ヘルプ・カテゴリ分け・パスワード入力欄に使える（同梱のメニューバーアプリは設定画面を持たず、これを使っていない）。**task_source は任意で `project`**（自分が `source` の `[[projects]]` 要素に読むキー）と **`workflow`**（`[[workflows]]` に読むキー: `trigger` と、claim する平置きのオプション）のスキーマも返せる。agent プラグインは `workflow` に claim するオプションだけを載せる。どちらも同じ規則（インライン、同じ拡張キーワード）で、省略すれば「説明なし」の意味になる **既定値はヘルプに書かない** —— serde の `default` から導出される値はスキーマの `default` に出るので、コードの定数で決まる既定値だけ `x-placeholder`（文字列）に書く。読む側はどちらも空欄の placeholder に出せる |
 | `shutdown` | O→P | 猶予付き終了要求 |
+| `plugin/degraded` | P→O notification | 実行中に気づいた異常を報告・解除する（`{key, message, active}`、0.7.9、[ADR-0119](/decisions/adr-0119-plugin-degraded-notification.md)）。Orchestrator はプラグイン×`key` で 1 件だけ保持し、`status` / メニューバーに `plugin_degraded` として出す。同じ `key` の後の通知が前を置き換え、`active: false` かプロセスの終了で消える。`message` は運用者向けの 1 文で、そのまま表示されるので資格情報や本文を入れないこと。**変化したときだけ送る** —— `plugin_sdk::DegradedReporter` がそれをやる。応答は無く、古い Orchestrator は読まずに捨てる |
 
 ## task_source
 

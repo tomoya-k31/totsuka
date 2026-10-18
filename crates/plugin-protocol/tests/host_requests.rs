@@ -22,7 +22,11 @@ const COMMON: &[&str] = &[
 /// P→O requests: the plugin sends them, the host answers.
 const PLUGIN_TO_HOST: &[&str] = &[method::TASK_SUBMIT, method::TASK_LOOKUP];
 /// Notifications: never answered, so there is nothing to refuse.
-const NOTIFICATIONS: &[&str] = &[method::STATE_NOTIFICATION, method::NOTIFY];
+const NOTIFICATIONS: &[&str] = &[
+    method::STATE_NOTIFICATION,
+    method::NOTIFY,
+    method::PLUGIN_DEGRADED,
+];
 
 /// The string values of every `pub const` inside `pub mod method { … }`.
 fn declared_methods() -> BTreeSet<String> {

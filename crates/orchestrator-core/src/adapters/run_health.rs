@@ -85,6 +85,17 @@ pub enum Degradation {
         /// within 30s`, `HTTP 502`). Never a response body.
         reason: String,
     },
+    /// A plugin reported a runtime problem of its own over `plugin/degraded`
+    /// (ADR-0119) — its LLM rejecting the key, say.
+    PluginDegraded {
+        /// Plugin instance name.
+        plugin: String,
+        /// The plugin's name for the kind of problem (`llm`).
+        key: String,
+        /// The plugin's own sentence, capped in length. Never a credential or
+        /// a message body (the plugin's contract).
+        message: String,
+    },
     /// A `kind` this build does not know. Naming it beats dropping it: a
     /// dropped row reads as "not degraded".
     #[serde(other)]
@@ -100,6 +111,7 @@ impl Degradation {
             Degradation::SpoolBacklog { .. } => "spool_backlog",
             Degradation::LlmKeyRejected => "llm_key_rejected",
             Degradation::LlmUnreachable { .. } => "llm_unreachable",
+            Degradation::PluginDegraded { .. } => "plugin_degraded",
             Degradation::Unknown => "unknown",
         }
     }
@@ -134,6 +146,11 @@ impl Degradation {
                  classification fail until it is back; check the network and `[llm].base_url` / `[llm].endpoint`, \
                  or run `totsuka doctor --online`"
             ),
+            Degradation::PluginDegraded {
+                plugin, message, ..
+            } => {
+                format!("plugin `{plugin}`: {message}")
+            }
             Degradation::Unknown => {
                 "this build does not recognise the reported degradation → check `totsuka logs`"
                     .to_string()

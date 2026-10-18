@@ -1,7 +1,7 @@
 > 🌐 [English](plugin-dev-guide.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:4a95b01a85066e15fa4ce8cb93e20ca84e041a2e24bad4e72be371f88b64044d -->
+<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:e58fbafd4df83fe38425c0c95cc0bf6c3477885aad98967ad04c25ffe186255d -->
 
 # プラグイン開発ガイド
 
@@ -77,6 +77,7 @@ Orchestrator は起動前に `protocol_version` の互換性を検査し、宣�
 | `config/validate` | O→P | プラグイン設定を検証する。`initialize` と同じ workflows / projects / repositories も一緒に届くので、記憶ではなく「今聞かれているもの」を検証する。**`warnings` は「設定は正しいが伝えたいこと」の口**で、`valid` には影響せず、`totsuka doctor` が黄色のチェックとして描き `--json` にも出る。`errors` と同じ「原因 → 次のアクション」の形で書くこと —— 行動できない警告は雑音で、雑音は診断が読まれなくなる原因そのものである。省略できるので、送らないプラグインの `doctor` 出力は 1 バイトも変わらない |
 | `config/schema` | O→P | 自分の設定テーブルを JSON Schema（draft 2020-12）で返す（`{}` → `{ schema, project?, workflow? }`）。**サブスキーマはすべてインラインで書き、`$ref` を使わないこと** —— 答えは大きな文書の中に埋め込まれるので、`#/$defs/…` のような参照は別の根に対して解決されてしまう。`$ref` を含むスキーマは生の TOML 欄になる。**`initialize` より前に答えること** —— `totsuka config schema` は機密がまだ無い状態でも尋ねる。マニフェストで `config_schema = true` を宣言したときだけ送られ、宣言しなければそのテーブルは `config schema` の出力で `x-raw`（生の TOML として扱う）になる（エラーにはならない）。各プロパティに `x-title` / `x-help` / `x-category`（いずれも英語の文字列）と、機密の参照を持つフィールドには `x-secret: true` を付けると、スキーマを読む側（設定画面など）がラベル・ヘルプ・カテゴリ分け・パスワード入力欄に使える（同梱のメニューバーアプリは設定画面を持たず、これを使っていない）。**task_source は任意で `project`**（自分が `source` の `[[projects]]` 要素に読むキー）と **`workflow`**（`[[workflows]]` に読むキー: `trigger` と、claim する平置きのオプション）のスキーマも返せる。agent プラグインは `workflow` に claim するオプションだけを載せる。どちらも同じ規則（インライン、同じ拡張キーワード）で、省略すれば「説明なし」の意味になる **既定値はヘルプに書かない** —— serde の `default` から導出される値はスキーマの `default` に出るので、コードの定数で決まる既定値だけ `x-placeholder`（文字列）に書く。読む側はどちらも空欄の placeholder に出せる |
 | `shutdown` | O→P | 猶予付きで終了を要求する |
+| `plugin/degraded` | P→O notification | 実行中に気づいた異常を報告・解除する（`{key, message, active}`）。Orchestrator はプラグイン×`key` で 1 件だけ保持し、`totsuka status` とメニューバーに出す。同じ `key` の後の通知が前を置き換え、`active: false` かプロセスの終了で消える。`message` は運用者向けの 1 文でそのまま表示されるので、資格情報や本文を入れないこと。**変化したときだけ送る** —— `plugin_sdk::DegradedReporter` がそれをやる。応答は無く、古い Orchestrator は読まずに捨てる |
 
 `initialize` は `task_source` に対して、二重に設定せずに済むものをいくつか渡す。いずれも任意なので、使わないなら無視してよい。
 

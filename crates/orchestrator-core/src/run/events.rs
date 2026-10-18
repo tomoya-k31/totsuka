@@ -36,6 +36,10 @@ impl<G: GitRunner, L: ChoiceClassifier + 'static> Engine<G, L> {
                     .await;
                 self.isolate_task(task_id, applied)
             }
+            PluginEvent::Degraded(plugin, degraded) => {
+                self.on_plugin_degraded(plugin, degraded);
+                Ok(())
+            }
             PluginEvent::Closed(plugin) => self.on_plugin_closed(&plugin).await,
             // A booked relaunch came due (#495, `run::supervise`).
             PluginEvent::RestartDue(plugin) => {
@@ -315,5 +319,19 @@ impl<G: GitRunner, L: ChoiceClassifier + 'static> Engine<G, L> {
             }
         }
         Ok(())
+    }
+
+    /// Record or clear what a plugin said about itself (`plugin/degraded`,
+    /// ADR-0119). Logged once per transition, like the core's own LLM latch.
+    fn on_plugin_degraded(&mut self, plugin: String, degraded: PluginDegradedParams) {
+        let slot = (plugin.clone(), degraded.key.clone());
+        if degraded.active {
+            if self.plugin_degraded.get(&slot) != Some(&degraded.message) {
+                tracing::warn!(plugin, key = %degraded.key, "plugin degraded: {}", degraded.message);
+                self.plugin_degraded.insert(slot, degraded.message);
+            }
+        } else if self.plugin_degraded.remove(&slot).is_some() {
+            tracing::info!(plugin, key = %degraded.key, "plugin recovered");
+        }
     }
 }

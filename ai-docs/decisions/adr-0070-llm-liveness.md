@@ -4,7 +4,7 @@ title: ADR-0070 LLM ゲートウェイの生存確認 — 起動時・復帰時�
 description: "「LLM が生きているか」を run が自分で確かめる方式の決定。LlmRouter に probe / reset_connections を足し、最後の接触から 10 分（不到達中は 60 秒）沈黙したら doctor --online と同じ最小リクエストを spawn して投げ、到達不能（transport / timeout / 5xx）を health.json の llm_unreachable として公開する。接触が無ければ即時 = 起動時に必ず 1 回。復帰検知は壁時計と単調時計の差（30 秒以上）で行い、HTTP 接続プールを捨てて即プローブする。設定キーは足さず、起動も止めない。定期の無条件プローブ・同期の起動時プローブ・OS のスリープ通知・pool_idle_timeout・プラグイン側 LLM の連携は不採用または後続。"
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/orchestrator-core/src/adapters/llm.rs
 tags: [decision, llm, health, liveness, run, resume, adr]
-generated: { by: claude-code/fable-5-1, at: 2026-09-12T03:10:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-18T15:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -90,3 +90,7 @@ F-110 の「毎サイクル問い直せる事実」の 5 つ目。`kind` は `ll
 - **`pool_idle_timeout` を短くして復帰直後の半開き接続を避ける**。hyper のプールは単調時計で idle を測るので、スリープ中に時間は進まず効かない。クライアントを作り直すしかない。
 - **`[llm].probe_interval_secs` 等の設定キー**。上記 6 のとおり不採用。
 - **Slack プラグインのラッチを initialize 応答や通知で core へ届ける**。必要だが今回のスコープ外。プロトコル変更を伴うので単独の ADR にする。
+
+# Amendment（2026-10-18、ADR-0119）
+
+範囲外としていた「task_source プラグイン自身の LLM の健全性」は、P→O notification `plugin/degraded` で core に届くようになった（[ADR-0119](/decisions/adr-0119-plugin-degraded-notification.md)）。core はそれを `plugin_degraded` として health.json に載せる。core の `LlmHealth` とプローブは変えていない。プラグインの報告は最後の呼び出しの結果で、定期プローブは持たない。

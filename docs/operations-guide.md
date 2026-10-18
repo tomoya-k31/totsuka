@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](operations-guide.ja.md)
 
-<!-- generated-from: ai-docs/operations/operations-guide.md sha256:b0932bd455f95514478b0e3c18ef96a8a8c4623252399ddd4d1a495636862ff1 -->
+<!-- generated-from: ai-docs/operations/operations-guide.md sha256:f74dd2428a43ce596bae0e66f1cf0d806bd349b1837323f3b6d0a0df011fc429 -->
 
 # Operations guide
 
@@ -89,7 +89,7 @@ totsuka status              # a `degraded:` block under the first line
 totsuka status --json | jq '.health // "not running"'
 ```
 
-Five things show up there, and each one clears on its own once you fix it:
+Six things show up there, and each one clears on its own once you fix it:
 
 | Reported | What it means |
 |---|---|
@@ -97,6 +97,7 @@ Five things show up there, and each one clears on its own once you fix it:
 | A plugin is down | Tasks that need it stay queued. If it says it will not be relaunched, waiting will not help — fix it and restart |
 | Hook signals stuck in the spool | Deliveries are failing. Check the socket path and the token with `doctor` |
 | The LLM gateway rejected the API key | Repository selection falls back to asking you for every new conversation. Reissue the key and update `[llm].api_key_ref` |
+| A plugin reports a problem of its own | The plugin wrote the line itself. The Slack plugin reports here when its own LLM (the reply check and repository classification) rejects the key or does not answer, and the line disappears on its next successful call. If the plugin goes down, its lines go with it — being down is reported on its own |
 | The LLM gateway is not answering | It could not be reached, timed out, or returned a server error — the line says which. Tasks that need the classifier fail until it is back. Check the network and `[llm].base_url`, or run `totsuka doctor --online` (it sends the same request, so the two agree on what "alive" means). totsuka checks this itself: once at startup, right after the Mac wakes from sleep, and after ten minutes without any call to the gateway (every minute while it is down). The line disappears as soon as the gateway answers anything, a 401 included |
 
 **A stopped orchestrator has no health, only a lock.** If `run` was killed, its last report is left on disk but ignored — you get "not running", never "degraded".

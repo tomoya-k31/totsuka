@@ -42,7 +42,7 @@ use tokio::time::Instant;
 use super::ingest::{PluginRequestBudgets, forward_plugin_request};
 use super::{
     Engine, EngineError, LOOKUP_IN_FLIGHT_BUDGET, MethodReport, PluginEvent, PluginReport,
-    SUBMIT_IN_FLIGHT_BUDGET, StatusMoment, deliver_notification, state_event,
+    SUBMIT_IN_FLIGHT_BUDGET, StatusMoment, deliver_notification, plugin_event,
 };
 use crate::adapters::plugin_host::{CallStats, HostError, Liveness, Plugin};
 use crate::domain::EventDetail;
@@ -213,7 +213,7 @@ pub(super) async fn wire_agent(
     let tx = tx.clone();
     tokio::spawn(async move {
         while let Some(note) = notifications.recv().await {
-            if let Some(event) = state_event(&name, note)
+            if let Some(event) = plugin_event(&name, note)
                 && tx.send(event).is_err()
             {
                 return;
@@ -227,12 +227,26 @@ pub(super) async fn wire_agent(
 }
 
 /// Consume a task source's plugin-initiated requests (`task/submit`,
-/// `task/lookup`) with a fresh per-plugin in-flight budget.
+/// `task/lookup`) with a fresh per-plugin in-flight budget, and its
+/// notifications (`plugin/degraded`, ADR-0119).
 pub(super) async fn wire_source(
     name: &str,
     plugin: &Plugin,
     tx: &mpsc::UnboundedSender<PluginEvent>,
 ) {
+    if let Some(mut notifications) = plugin.take_notifications().await {
+        let name = name.to_string();
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            while let Some(note) = notifications.recv().await {
+                if let Some(event @ PluginEvent::Degraded(..)) = plugin_event(&name, note)
+                    && tx.send(event).is_err()
+                {
+                    return;
+                }
+            }
+        });
+    }
     let Some(mut incoming) = plugin.take_incoming_requests().await else {
         return;
     };
@@ -289,6 +303,9 @@ impl<G: GitRunner, L: ChoiceClassifier + 'static> Engine<G, L> {
     /// or a fresh id could be matched against a task belonging to the dead one.
     pub(super) async fn on_plugin_closed(&mut self, plugin: &str) -> Result<(), EngineError> {
         tracing::warn!(plugin, "plugin process exited");
+        // Being down is reported on its own (`plugin_down`); what the dead
+        // process last said about itself is no longer anyone's current state.
+        self.plugin_degraded.retain(|(p, _), _| p != plugin);
         // Counted before anything decides what to do about it: a crash that
         // was repaired is still a crash, and an operator who only ever sees
         // `plugin_restarts` cannot tell "never died" from "died and stayed

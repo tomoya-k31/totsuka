@@ -459,7 +459,18 @@ use semver::{Version, VersionReq};
 /// variant it cannot parse. The capability follows the 0.6.1 reason. As with
 /// 0.7.5 and 0.7.6, the new fields are a **source** break for code that builds
 /// `Task`, `InitializeParams` or `Capabilities` with a struct literal.
-pub const PROTOCOL_VERSION: &str = "0.7.8";
+///
+/// 0.7.9 (#927, ADR-0119): [`method::PLUGIN_DEGRADED`](crate::method::PLUGIN_DEGRADED)
+/// (P→O notification) with
+/// [`PluginDegradedParams`](crate::methods::PluginDegradedParams): a plugin
+/// reports a runtime problem it noticed (its own LLM rejecting the key, or
+/// not answering), and the Orchestrator lists it with its own health.
+///
+/// **Patch and additive, and no manifest moves.** Only the plugin sends it,
+/// and an Orchestrator predating it reads a source's notifications not at all
+/// (an agent's it drops as not `state/notification`), so an old host loses
+/// the report and nothing else. Nothing is newly required of any plugin.
+pub const PROTOCOL_VERSION: &str = "0.7.9";
 
 /// [`PROTOCOL_VERSION`] parsed into a [`Version`].
 pub fn protocol_version() -> Version {
@@ -483,7 +494,7 @@ mod tests {
 
     #[test]
     fn current_version_parses() {
-        assert_eq!(protocol_version(), Version::new(0, 7, 8));
+        assert_eq!(protocol_version(), Version::new(0, 7, 9));
     }
 
     #[test]
