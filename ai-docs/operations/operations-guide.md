@@ -4,7 +4,7 @@ title: 運用ガイド（doctor / worktree 掃除 / FAQ）
 description: totsuka 日常運用の手引き。doctor の読み方、ランタイム health（縮退）の読み方と doctor との守備範囲の違い、worktree 掃除ポリシーと孤児掃除、run 停止・回復と SSH keepalive の推奨設定、メニューバー表示（SwiftBar）の導入と読み方、よくある問題の切り分け。
 resource: https://github.com/tomoya-k31/totsuka
 tags: [operations, doctor, health, worktree, menu, swiftbar, faq, troubleshooting]
-generated: { by: claude-code/opus-5.5, at: 2026-10-18T15:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-18T20:19:24+09:00 }
 status: stable
 owner: tomoya-k31
 ---

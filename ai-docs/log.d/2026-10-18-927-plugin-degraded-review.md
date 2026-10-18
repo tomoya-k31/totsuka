@@ -1,0 +1,1 @@
+* **Update**: [ADR-0119](/decisions/adr-0119-plugin-degraded-notification.md) の `message()` の形を実装に合わせ、閉じたプラグインから遅れて届いた `plugin/degraded` を捨てることを追記した（PR #929 のレビュー指摘）。2/3 で触った concept の `generated.at` も直した。

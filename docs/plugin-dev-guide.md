@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](plugin-dev-guide.ja.md)
 
-<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:e58fbafd4df83fe38425c0c95cc0bf6c3477885aad98967ad04c25ffe186255d -->
+<!-- generated-from: ai-docs/development/plugin-dev-guide.md sha256:7d4a259b23fff2b5fdbd9a8b238f6c4cc1446a73b307270ea12724085b39654c -->
 
 # Plugin development guide
 

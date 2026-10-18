@@ -4,7 +4,7 @@ title: ADR-0070 LLM ゲートウェイの生存確認 — 起動時・復帰時�
 description: "「LLM が生きているか」を run が自分で確かめる方式の決定。LlmRouter に probe / reset_connections を足し、最後の接触から 10 分（不到達中は 60 秒）沈黙したら doctor --online と同じ最小リクエストを spawn して投げ、到達不能（transport / timeout / 5xx）を health.json の llm_unreachable として公開する。接触が無ければ即時 = 起動時に必ず 1 回。復帰検知は壁時計と単調時計の差（30 秒以上）で行い、HTTP 接続プールを捨てて即プローブする。設定キーは足さず、起動も止めない。定期の無条件プローブ・同期の起動時プローブ・OS のスリープ通知・pool_idle_timeout・プラグイン側 LLM の連携は不採用または後続。"
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/orchestrator-core/src/adapters/llm.rs
 tags: [decision, llm, health, liveness, run, resume, adr]
-generated: { by: claude-code/opus-5.5, at: 2026-10-18T15:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-18T20:19:24+09:00 }
 status: stable
 owner: tomoya-k31
 ---

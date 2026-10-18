@@ -325,6 +325,21 @@ impl<G: GitRunner, L: ChoiceClassifier + 'static> Engine<G, L> {
     /// ADR-0119). Logged once per transition, like the core's own LLM latch.
     fn on_plugin_degraded(&mut self, plugin: String, degraded: PluginDegradedParams) {
         let slot = (plugin.clone(), degraded.key.clone());
+        // The notification stream and the exit watch are separate tasks, so a
+        // report sent just before the process died can land after its
+        // `Closed` cleared the table. Nothing would ever clear it again (a
+        // relaunched process only clears what it reported itself), so a dead
+        // process's last word is dropped here instead.
+        let closed = self
+            .plugins
+            .sources
+            .get(&plugin)
+            .or_else(|| self.plugins.agents.get(&plugin))
+            .is_some_and(|p| p.is_closed());
+        if degraded.active && closed {
+            tracing::debug!(plugin, key = %degraded.key, "dropping a report from a plugin that has exited");
+            return;
+        }
         if degraded.active {
             if self.plugin_degraded.get(&slot) != Some(&degraded.message) {
                 tracing::warn!(plugin, key = %degraded.key, "plugin degraded: {}", degraded.message);
