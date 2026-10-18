@@ -36,6 +36,10 @@ impl<G: GitRunner, L: ChoiceClassifier + 'static> Engine<G, L> {
                     .await;
                 self.isolate_task(task_id, applied)
             }
+            PluginEvent::Degraded(plugin, degraded) => {
+                self.on_plugin_degraded(plugin, degraded);
+                Ok(())
+            }
             PluginEvent::Closed(plugin) => self.on_plugin_closed(&plugin).await,
             // A booked relaunch came due (#495, `run::supervise`).
             PluginEvent::RestartDue(plugin) => {
@@ -315,5 +319,72 @@ impl<G: GitRunner, L: ChoiceClassifier + 'static> Engine<G, L> {
             }
         }
         Ok(())
+    }
+
+    /// Record or clear what a plugin said about itself (`plugin/degraded`,
+    /// ADR-0119).
+    fn on_plugin_degraded(&mut self, plugin: String, degraded: PluginDegradedParams) {
+        let closed = self
+            .plugins
+            .sources
+            .get(&plugin)
+            .or_else(|| self.plugins.agents.get(&plugin))
+            .is_some_and(|p| p.is_closed());
+        apply_plugin_report(&mut self.plugin_degraded, plugin, degraded, closed);
+    }
+}
+
+/// Apply one `plugin/degraded` report to the per-`(plugin, key)` table.
+/// Logged once per transition, like the core's own LLM latch.
+///
+/// `closed` is whether the plugin's process has exited. The notification
+/// stream and the exit watch are separate tasks, so a report sent just before
+/// the process died can land after its `Closed` cleared the table. Nothing
+/// would ever clear it again (a relaunched process only clears what it
+/// reported itself), so a dead process's last word is dropped instead.
+fn apply_plugin_report(
+    table: &mut BTreeMap<(String, String), String>,
+    plugin: String,
+    degraded: PluginDegradedParams,
+    closed: bool,
+) {
+    let slot = (plugin.clone(), degraded.key.clone());
+    if degraded.active && closed {
+        tracing::debug!(plugin, key = %degraded.key, "dropping a report from a plugin that has exited");
+    } else if degraded.active {
+        if table.get(&slot) != Some(&degraded.message) {
+            tracing::warn!(plugin, key = %degraded.key, "plugin degraded: {}", degraded.message);
+            table.insert(slot, degraded.message);
+        }
+    } else if table.remove(&slot).is_some() {
+        tracing::info!(plugin, key = %degraded.key, "plugin recovered");
+    }
+}
+
+#[cfg(test)]
+mod plugin_report_tests {
+    use super::*;
+
+    fn report(active: bool) -> PluginDegradedParams {
+        PluginDegradedParams {
+            key: "llm".into(),
+            message: "down".into(),
+            active,
+        }
+    }
+
+    /// A report that lands after its plugin exited is dropped — the exit
+    /// already cleared the table, and nothing would clear it again — while a
+    /// late *clear* is still applied.
+    #[test]
+    fn a_report_from_an_exited_plugin_is_dropped() {
+        let mut table = BTreeMap::new();
+        apply_plugin_report(&mut table, "slack".into(), report(true), true);
+        assert!(table.is_empty(), "dropped: {table:?}");
+
+        apply_plugin_report(&mut table, "slack".into(), report(true), false);
+        assert_eq!(table.len(), 1);
+        apply_plugin_report(&mut table, "slack".into(), report(false), true);
+        assert!(table.is_empty(), "a clear is never harmful: {table:?}");
     }
 }

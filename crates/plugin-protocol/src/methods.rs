@@ -34,6 +34,12 @@ pub mod method {
     ///
     /// [`Capabilities`]: crate::Capabilities
     pub const CONFIG_SCHEMA: &str = "config/schema";
+    /// Report or clear a runtime degradation the plugin noticed (P→O,
+    /// notification, 0.7.9, ADR-0119) — its LLM rejecting the key, say. The
+    /// Orchestrator shows it with its own health (`status`, the menu bar) and
+    /// answers nothing. Read from task_source and agent_ide plugins only; a
+    /// notifier's is dropped.
+    pub const PLUGIN_DEGRADED: &str = "plugin/degraded";
 
     // task_source.
     /// Submit one task for ingestion (P→O request, 0.1.6). The Orchestrator
@@ -1033,6 +1039,25 @@ pub struct StateNotification {
     pub log_chunk: Option<String>,
 }
 
+/// `plugin/degraded` params (P→O, notification, 0.7.9, ADR-0119).
+///
+/// The Orchestrator keeps **one entry per `(plugin, key)`**: a later
+/// notification with the same `key` replaces the earlier one, `active: false`
+/// removes it, and the plugin's process exiting removes all of its entries
+/// (being down is then reported on its own). Plugins should send on change,
+/// not on every call.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginDegradedParams {
+    /// A short, stable name for the kind of problem (`llm`), unique within
+    /// the plugin.
+    pub key: String,
+    /// One operator-facing sentence: what is broken and what it costs. Shown
+    /// as-is, so it must carry no credential or message body.
+    pub message: String,
+    /// `true` reports the problem, `false` clears it.
+    pub active: bool,
+}
+
 /// `diagnostics/snapshot` params (O→P, R-10): capture the pane screen for a
 /// session, used for timeout/escalation diagnostics. Additive since protocol
 /// 0.1.3 (`diagnostics_snapshot` capability).
@@ -1511,6 +1536,11 @@ mod tests {
             session_id: "sess-1".into(),
             state: AgentState::Running,
             log_chunk: Some("compiling...".into()),
+        });
+        round_trip(&PluginDegradedParams {
+            key: "llm".into(),
+            message: "the LLM rejected the API key".into(),
+            active: true,
         });
         round_trip(&DiagnosticsSnapshotParams {
             session_id: "sess-1".into(),

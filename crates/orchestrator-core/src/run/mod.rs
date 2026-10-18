@@ -28,18 +28,18 @@
 
 pub mod hooks;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 use plugin_protocol::method;
 use plugin_protocol::methods::{
-    AgentState, ExecutionMode, NotReleased, NotifierEvent, NotifyParams, ResultPublishParams,
-    SessionReleaseParams, StateNotification, TaskClaimOutcome, TaskClaimParams, TaskClaimResult,
-    TaskDispatchParams, TaskDispatchResult, TaskLookupParams, TaskLookupResult, TaskSubmitParams,
-    TaskSubmitResult, TaskSubmitStatus, TaskTriggerParams, TaskUpdateLabelsParams,
-    TaskUpdateStatusParams,
+    AgentState, ExecutionMode, NotReleased, NotifierEvent, NotifyParams, PluginDegradedParams,
+    ResultPublishParams, SessionReleaseParams, StateNotification, TaskClaimOutcome,
+    TaskClaimParams, TaskClaimResult, TaskDispatchParams, TaskDispatchResult, TaskLookupParams,
+    TaskLookupResult, TaskSubmitParams, TaskSubmitResult, TaskSubmitStatus, TaskTriggerParams,
+    TaskUpdateLabelsParams, TaskUpdateStatusParams,
 };
 use plugin_protocol::{Notification, Task, jsonrpc, rpc};
 use serde_json::Value;
@@ -166,6 +166,10 @@ const RESUME_GAP: Duration = Duration::from_secs(30);
 pub(crate) enum PluginEvent {
     /// A `state/notification` from an agent plugin.
     State(String, StateNotification),
+    /// A `plugin/degraded` from a source or agent plugin (P→O, 0.7.9,
+    /// ADR-0119; a notifier's notifications are not read): a runtime
+    /// problem it noticed, or that the problem is over.
+    Degraded(String, PluginDegradedParams),
     /// A plugin process exited without being asked to (§5.3, #495). Emitted
     /// for **every** kind, from the child's own exit rather than from any one
     /// stream.
@@ -386,6 +390,11 @@ pub struct Engine<G: GitRunner, L: ChoiceClassifier + 'static> {
     /// from `last_signal_at` as before; persist it next to that column if
     /// restarts mid-prompt start escalating real waits.
     awaiting_approval: HashSet<TaskId>,
+    /// What plugins reported over `plugin/degraded` (ADR-0119), keyed by
+    /// `(plugin, key)`: one entry per problem, replaced by a later report with
+    /// the same key and dropped by `active: false` or the plugin exiting.
+    /// Ordered so health.json lists them the same way every cycle.
+    plugin_degraded: BTreeMap<(String, String), String>,
     /// Session rows whose pane has been released — or is known to be
     /// unreleasable — so a repeated cleanup never re-sends `session/release`
     /// for the same dispatch (#210).
@@ -522,6 +531,7 @@ impl<G: GitRunner, L: ChoiceClassifier + 'static> Engine<G, L> {
             readme_cache,
             agent_output: HashMap::new(),
             awaiting_approval: HashSet::new(),
+            plugin_degraded: BTreeMap::new(),
             released_panes: HashSet::new(),
             gone_worktree_branches: HashSet::new(),
             last_worktree_sweep: None,
@@ -1019,6 +1029,14 @@ impl<G: GitRunner, L: ChoiceClassifier + 'static> Engine<G, L> {
             }
         }
 
+        out.extend(self.plugin_degraded.iter().map(|((plugin, key), message)| {
+            Degradation::PluginDegraded {
+                plugin: plugin.clone(),
+                key: key.clone(),
+                message: message.clone(),
+            }
+        }));
+
         out
     }
 
@@ -1147,19 +1165,41 @@ fn workflows_by_name(workflows: &[Workflow]) -> HashMap<&str, &Workflow> {
 }
 
 /// Convert a raw plugin notification into a run-loop event, if relevant.
-fn state_event(plugin: &str, note: Notification) -> Option<PluginEvent> {
-    if note.method != method::STATE_NOTIFICATION {
-        return None;
-    }
+fn plugin_event(plugin: &str, note: Notification) -> Option<PluginEvent> {
     let params = note.params?;
-    match serde_json::from_value::<StateNotification>(params) {
-        Ok(state) => Some(PluginEvent::State(plugin.to_string(), state)),
-        Err(e) => {
-            tracing::warn!(plugin, "malformed state/notification: {e}");
-            None
-        }
+    match note.method.as_str() {
+        method::STATE_NOTIFICATION => match serde_json::from_value::<StateNotification>(params) {
+            Ok(state) => Some(PluginEvent::State(plugin.to_string(), state)),
+            Err(e) => {
+                tracing::warn!(plugin, "malformed state/notification: {e}");
+                None
+            }
+        },
+        method::PLUGIN_DEGRADED => match serde_json::from_value::<PluginDegradedParams>(params) {
+            Ok(mut degraded) => {
+                // The plugin wrote this sentence; health.json and the menu bar
+                // show it verbatim. Keep it a sentence.
+                if degraded.message.chars().count() > DEGRADED_MESSAGE_MAX_CHARS {
+                    degraded.message = degraded
+                        .message
+                        .chars()
+                        .take(DEGRADED_MESSAGE_MAX_CHARS)
+                        .chain(std::iter::once('…'))
+                        .collect();
+                }
+                Some(PluginEvent::Degraded(plugin.to_string(), degraded))
+            }
+            Err(e) => {
+                tracing::warn!(plugin, "malformed plugin/degraded: {e}");
+                None
+            }
+        },
+        _ => None,
     }
 }
+
+/// How much of a `plugin/degraded` message is kept.
+const DEGRADED_MESSAGE_MAX_CHARS: usize = 300;
 
 /// A ready-to-drive engine for the module tests.
 ///
@@ -1285,6 +1325,82 @@ mod health_tests {
             published(&dir).degraded,
             vec![Degradation::HookReceiverDown { socket }]
         );
+    }
+
+    /// ADR-0119: what a plugin says about itself is listed until it says it
+    /// is over, a newer report with the same key replaces the older one, and
+    /// the plugin exiting takes all of its reports with it.
+    #[tokio::test]
+    async fn plugin_reports_are_listed_until_cleared_or_the_plugin_exits() {
+        let dir = test_support::scratch("health_plugin_degraded");
+        let mut engine = engine_with_health(&dir).await;
+        let degraded = |key: &str, message: &str, active| {
+            PluginEvent::Degraded(
+                "slack".into(),
+                PluginDegradedParams {
+                    key: key.into(),
+                    message: message.into(),
+                    active,
+                },
+            )
+        };
+        let listed = |engine: &Engine<_, _>| -> Vec<String> {
+            engine
+                .degradations()
+                .iter()
+                .filter(|d| d.kind() == "plugin_degraded")
+                .map(Degradation::message)
+                .collect()
+        };
+
+        engine
+            .on_event(degraded("llm", "down", true))
+            .await
+            .unwrap();
+        engine
+            .on_event(degraded("llm", "key rejected", true))
+            .await
+            .unwrap();
+        engine
+            .on_event(degraded("gw", "never delivered", true))
+            .await
+            .unwrap();
+        assert_eq!(
+            listed(&engine),
+            vec![
+                "plugin `slack`: never delivered",
+                "plugin `slack`: key rejected"
+            ]
+        );
+
+        engine.on_event(degraded("llm", "", false)).await.unwrap();
+        assert_eq!(listed(&engine), vec!["plugin `slack`: never delivered"]);
+
+        engine.on_plugin_closed("slack").await.unwrap();
+        assert!(listed(&engine).is_empty());
+    }
+
+    #[test]
+    fn a_degraded_notification_is_parsed_and_its_message_capped() {
+        let note = |method: &str, message: String| {
+            Notification::new(
+                method,
+                Some(serde_json::json!({ "key": "llm", "message": message, "active": true })),
+            )
+        };
+        let long = "x".repeat(DEGRADED_MESSAGE_MAX_CHARS + 50);
+        let Some(PluginEvent::Degraded(plugin, params)) =
+            plugin_event("slack", note(method::PLUGIN_DEGRADED, long))
+        else {
+            panic!("a plugin/degraded becomes a Degraded event");
+        };
+        assert_eq!(plugin, "slack");
+        assert_eq!(
+            params.message.chars().count(),
+            DEGRADED_MESSAGE_MAX_CHARS + 1
+        );
+        assert!(params.message.ends_with('…'));
+        assert!(plugin_event("slack", note("plugin/unknown", "x".into())).is_none());
     }
 
     #[tokio::test]

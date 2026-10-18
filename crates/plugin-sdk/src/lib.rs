@@ -45,6 +45,7 @@
 pub mod agent_ide;
 pub mod assignee;
 pub mod config_schema;
+pub mod degraded;
 pub mod dispatch;
 pub mod lookup;
 pub mod poll;
@@ -57,6 +58,7 @@ pub mod watch;
 
 pub use agent_ide::{AgentIdeHandler, AgentIdeServer};
 pub use assignee::{AssigneeFilter, check as check_assignee_triggers};
+pub use degraded::DegradedReporter;
 pub use dispatch::{
     Reply, TaskSourceHandler, TaskSourceServer, not_initialized, parse_params, request_id,
 };
