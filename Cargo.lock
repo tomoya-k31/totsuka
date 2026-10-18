@@ -804,7 +804,6 @@ name = "llm-choice"
 version = "0.10.12"
 dependencies = [
  "reqwest",
- "serde",
  "serde_json",
  "thiserror",
  "tokio",
