@@ -57,6 +57,14 @@ for why. CI's own flags stay exactly as they are:
   Clippy's lint set grows between releases — an outdated local stable passed
   clean while CI failed on `clippy::type_complexity` (PR #197).
 - `cargo fmt --all --check`
+- `cargo machete` — unused dependencies (install once: `cargo install
+  cargo-machete`). CI runs it as a step inside the `clippy / rustfmt` job, so
+  a miss fails that check, not one named after machete. **It fires on a
+  dependency the diff stopped using, not only on one it added**: #927 replaced
+  a `#[derive(Deserialize)]` with hand-written parsing, left `serde` in
+  `llm-choice`'s `Cargo.toml`, and passed every local check while CI failed.
+  Seconds, no build. False positives are suppressed per
+  [dependency-hygiene](../../ai-docs/development/dependency-hygiene.md).
 - `bash scripts/arch-lint.sh` — workspace dependency-boundary fitness function
   (plugins → protocol/sdk only, protocol is a leaf, no cycles). Cheap
   (`cargo metadata --no-deps`, seconds); especially relevant when a
@@ -277,6 +285,10 @@ opening the PR, when the diff contains code):
   change only**: `git diff --staged` before a commit, `git diff main...HEAD`
   before a PR. Scanning the whole repository is `/ponytail-audit`, a different
   skill, and its findings are not this PR's to fix.
+  **The `main...HEAD` pass is required even when every commit had its staged
+  one**: a cut that looked wrong inside one commit can look right across the
+  branch, and a fix commit added after the last pass was reviewed by nobody.
+  For a stacked PR, once per layer on that layer's own range.
 - **Stage everything that belongs in the commit first, and re-stage after
   applying a cut.** `git diff --staged` is the pass's whole input, so anything
   outside it is reviewed by nobody. One check covers every way that happens:
@@ -313,6 +325,38 @@ opening the PR, when the diff contains code):
   or re-run the groups the cuts touched.
 - `ponytail` is a user-installed plugin this repository does not declare. If
   the skill is missing, say so and move on — it must not block the PR.
+
+**Security pass — `/security-review`** (right before opening the PR, when the
+diff contains code — required, like the over-engineering pass):
+
+- **Order**: the final over-engineering pass on `main...HEAD` first, then this
+  one — so the cuts are reviewed for security too. If this pass's fixes change
+  code, run `/ponytail-review` once more on just those fix commits.
+- Run the `/security-review` skill **inline in the main session**. It takes no
+  range argument: it reviews the current branch against `main`. **For a
+  stacked PR, run it once on the top layer before `gh stack submit`**, which
+  covers every layer (each finding names its file, so you know whose it is).
+- **Fix each finding before opening the PR**, in a **new** commit on the layer
+  that introduced it (never amend → git-conventions) — for a lower layer, the
+  steps under "Fixing a lower layer" in the stacked-PR section — then re-run
+  the scoped checks that commit touches. A finding judged not exploitable is
+  recorded, with the reason, in the PR body — not silently dropped.
+- Why it is required here: this repository carries untrusted text across
+  trust boundaries by design — Slack / Discord / GitHub content into prompts,
+  LLM output into Slack posts and DMs, plugin-written strings into
+  `status` / the menu bar. Reviews for correctness are not looking for that:
+  in #927 a `<url|label>` that a crafted mention could plant in an app DM,
+  through the model's echoed reason, was found by a security review, after
+  the change had been written, tested and committed.
+- When the `security-guidance` plugin is installed, it also reviews in the
+  background (on commits and pushes, and possibly at other points the plugin
+  decides). **Its findings get the same handling as this pass's** — fix in a
+  new commit, or record why not in the PR body — whether they arrive before
+  or after the PR is open. It is a second net, not a substitute: run this pass
+  yourself either way.
+- Same 10-minute ceiling as the pre-PR review below. If the skill is missing
+  or stalls, say so in the PR body and proceed — the background review and
+  `/code-review --comment` (step 5) still run.
 
 **Pre-PR review** (optional, best-effort — must NEVER block the PR):
 
