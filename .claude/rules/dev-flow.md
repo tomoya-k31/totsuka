@@ -313,6 +313,34 @@ opening the PR, when the diff contains code):
   or re-run the groups the cuts touched.
 - `ponytail` is a user-installed plugin this repository does not declare. If
   the skill is missing, say so and move on — it must not block the PR.
+- **Run it once more on `git diff main...HEAD` right before opening the PR**,
+  even when every commit already had its staged pass: a cut that looked wrong
+  inside one commit can look right across the whole branch, and a fix commit
+  added after the last pass was reviewed by nobody. For a stacked PR, once per
+  layer on that layer's own range.
+
+**Security pass — `/security-review`** (right before opening the PR, when the
+diff contains code — required, like the over-engineering pass):
+
+- Run the `/security-review` skill **inline in the main session** on the
+  branch's changes (`main...HEAD`; for a stacked PR, the whole stack is fine —
+  the skill reviews the current branch's changes and a finding names its file).
+- **Fix each finding before opening the PR**, in a **new** commit on the layer
+  that introduced it (never amend → git-conventions), then re-run the scoped
+  checks that commit touches. A finding judged not exploitable is recorded,
+  with the reason, in the PR body — not silently dropped.
+- Why it is required here: this repository carries untrusted text across
+  trust boundaries by design — Slack / Discord / GitHub content into prompts,
+  LLM output into Slack posts and DMs, plugin-written strings into
+  `status` / the menu bar. `/code-review` and Copilot look for correctness; a
+  `<url|label>` planted in an app DM through a model's echoed reason (#927)
+  passed both and was caught only by a security pass.
+- It also runs after the commit, as a background review on commits and pushes
+  when the `security-guidance` plugin is installed. That one is a safety net
+  and may arrive after the PR is open; the pre-PR pass is the gate.
+- Same 10-minute ceiling as the pre-PR review below. If the skill is missing
+  or stalls, say so in the PR body and proceed — the background review and
+  `/code-review --comment` (step 5) still run.
 
 **Pre-PR review** (optional, best-effort — must NEVER block the PR):
 
