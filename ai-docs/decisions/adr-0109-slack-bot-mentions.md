@@ -4,7 +4,7 @@ title: ADR-0109 Slack のメンション経路で bot と人間を区別しな�
 description: bot 投稿の個人メンション・グループメンションも人間の投稿と同じくタスクにする決定。判定表①は「bot_message 以外の subtype」と「自アプリの bot」だけを落とし、user の無い古典的 bot 投稿は bot_id を送信者にする。ADR-0079 が退けた「メンション経路を緩める」案を採り直すもので、Gateway も同じ緩和を入れるが wire schema は据え置く。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/plugins/task-source-slack/src/mention.rs
 tags: [decision, slack, mention, bot, gateway, adr]
-generated: { by: claude-code/opus-5.5, at: 2026-10-03T12:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-18T20:22:27+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -51,3 +51,7 @@ Gateway は自アプリの `bot_id` を知らないので、自アプリの投�
 - ADR-0079 が挙げた代償を受け入れる: bot 投稿で pane が無人で立ち上がる。第三者（bot の投稿元）が書いた本文がエージェントの入力になる。止めたいときは、その bot がメンションするグループの `to_group` route を外すか、グループから抜ける
 - bot 同士の応酬（別の totsuka の bot が互いにメンションし合う等）は、`channel:ts` の dedup と workflow の承認ゲートに任せる
 - チャンネル監視経路は bot 投稿を引き続き落とす。監視結果は自アプリの bot が投稿するので、その除外が監視のループ防止そのものだからである（ADR-0068）
+
+# Amendment（2026-10-18、ADR-0120）
+
+bot のメンションは今もメンション判定表を通るが、そのあと返信要否判定（[ADR-0120](/decisions/adr-0120-slack-reply-check.md)）にかかる。判定は送信者が bot であることを知っており、組み込みの基準では bot の依頼・お願い・確認依頼は返信不要としてタスクにならない（人間の依頼を bot が代理投稿した場合は文面で判断させる）。

@@ -32,6 +32,10 @@ use crate::slack_api::{SlackFile, parse_files};
 /// idempotent ingest instead.
 const PROCESSED_CAP: usize = 1024;
 
+/// Bound on keys handed back for a reaction (ADR-0120). A drop the operator
+/// never reacts to stays here until newer ones push it out.
+const READMIT_CAP: usize = 256;
+
 /// A message event that passed every filter: a fresh mention of the operator.
 #[derive(Debug, Clone)]
 pub struct Mention {
@@ -95,6 +99,15 @@ pub struct Mention {
     /// agent with a Slack tool of its own fetches the file from it. Empty for
     /// a message with no attachment.
     pub files: Vec<SlackFile>,
+    /// The `bot_id` when a bot wrote the message (ADR-0120). Not readable
+    /// from [`user`](Self::user): an app's bot posts with both a `bot_id` and
+    /// a `U…` user, so the id's first letter misses it.
+    pub bot_id: Option<String>,
+    /// Whether this task is asked "does this need a reply?" before anything
+    /// else (ADR-0120). True on the mention path only: a reaction is the
+    /// operator asking for the task outright, and a channel watch is not a
+    /// conversation with anyone.
+    pub reply_check: bool,
 }
 
 impl Mention {
@@ -185,6 +198,9 @@ pub struct MentionFilter {
     mention_routes: Vec<MentionRoute>,
     processed: HashSet<String>,
     processed_order: VecDeque<String>,
+    /// Processed keys a reaction may claim once more (ADR-0120).
+    readmitted: HashSet<String>,
+    readmitted_order: VecDeque<String>,
 }
 
 impl MentionFilter {
@@ -199,6 +215,8 @@ impl MentionFilter {
             mention_routes,
             processed: HashSet::new(),
             processed_order: VecDeque::new(),
+            readmitted: HashSet::new(),
+            readmitted_order: VecDeque::new(),
         }
     }
 
@@ -244,16 +262,6 @@ impl MentionFilter {
     /// cost every operator a re-install (the scope it needs is granted).
     pub(crate) fn is_self_dm_channel(&self, channel: &str) -> bool {
         self.self_dm_channel.as_deref() == Some(channel)
-    }
-
-    /// Whether `key` was already processed, **without** recording it.
-    ///
-    /// The reaction trigger (#319) needs this because its work is split
-    /// across an API call: it can skip a known duplicate before paying for
-    /// the round trip, while still deferring [`remember`](Self::remember)
-    /// until the message actually converted.
-    pub(crate) fn already_processed(&self, key: &str) -> bool {
-        self.processed.contains(key)
     }
 
     /// The user groups `text` names that the operator belongs to, in the
@@ -384,7 +392,51 @@ impl MentionFilter {
             // whole premise of this plugin.
             post_as_bot: false,
             files: parse_files(event),
+            bot_id: bot_id.map(str::to_string),
+            reply_check: true,
         })
+    }
+
+    /// Let the operator's reaction claim `key` once more although it was
+    /// processed (ADR-0120): the reply check dropped that mention, rightly or
+    /// not, and the reaction is the way back.
+    ///
+    /// **The reaction only.** The key stays spent for every other path: a
+    /// redelivery of the mention is still a duplicate, and a channel watch
+    /// re-reading history (the startup backfill, the gateway's poll) must not
+    /// turn the dropped mention into a task posted as the bot.
+    pub(crate) fn readmit_for_reaction(&mut self, key: String) {
+        if !self.processed.contains(&key) || self.readmitted.contains(&key) {
+            return;
+        }
+        if self.readmitted_order.len() >= READMIT_CAP
+            && let Some(evicted) = self.readmitted_order.pop_front()
+        {
+            self.readmitted.remove(&evicted);
+        }
+        self.readmitted.insert(key.clone());
+        self.readmitted_order.push_back(key);
+    }
+
+    /// Whether a reaction may still claim `key`: never seen, or handed back
+    /// by [`readmit_for_reaction`](Self::readmit_for_reaction), **without**
+    /// recording anything. The reaction trigger (#319) needs this because its
+    /// work is split across an API call: it can skip a known duplicate before
+    /// paying for the round trip, while still deferring
+    /// [`claim_for_reaction`](Self::claim_for_reaction) until the message
+    /// actually converted.
+    pub(crate) fn reaction_may_claim(&self, key: &str) -> bool {
+        !self.processed.contains(key) || self.readmitted.contains(key)
+    }
+
+    /// Claim `key` for a reaction: spend a hand-back if there is one, else
+    /// [`remember`](Self::remember) it. `false` when neither applies.
+    pub(crate) fn claim_for_reaction(&mut self, key: String) -> bool {
+        if self.readmitted.remove(&key) {
+            self.readmitted_order.retain(|k| *k != key);
+            return true;
+        }
+        self.remember(key)
     }
 
     /// Record `key` as processed; `false` when it already was.
@@ -425,6 +477,8 @@ mod tests {
             task_id_prefix: prefix.map(str::to_string),
             instructions_kind: None,
             files: Vec::new(),
+            bot_id: None,
+            reply_check: false,
         }
     }
 
@@ -874,6 +928,40 @@ mod tests {
         }
         assert!(f.processed.len() <= PROCESSED_CAP);
         assert_eq!(f.processed.len(), f.processed_order.len());
+    }
+
+    /// ADR-0120: a key handed back after the reply check dropped a mention
+    /// admits the operator's reaction — once — and nothing else: the mention
+    /// redelivered, or the same post re-read by a channel watch, is still a
+    /// duplicate. A bot's post carries its `bot_id` even with a `U…` user.
+    #[test]
+    fn a_handed_back_key_admits_one_reaction_and_nothing_else() {
+        let mut f = filter();
+        let event = mention_event();
+        let mention = f.assess(&event).unwrap();
+        assert!(mention.reply_check && mention.bot_id.is_none());
+        let key = mention.message_key();
+        assert!(!f.reaction_may_claim(&key));
+
+        f.readmit_for_reaction(key.clone());
+        assert!(
+            f.assess(&event).is_none(),
+            "the mention is still a duplicate"
+        );
+        assert!(
+            !f.remember(key.clone()),
+            "a watch re-read is still a duplicate"
+        );
+        assert!(f.reaction_may_claim(&key));
+        assert!(f.claim_for_reaction(key.clone()), "the reaction claims it");
+        assert!(!f.reaction_may_claim(&key), "once");
+        assert!(!f.claim_for_reaction(key));
+
+        let mut app_bot = mention_event();
+        app_bot["ts"] = json!("200.0");
+        app_bot["subtype"] = json!("bot_message");
+        app_bot["bot_id"] = json!("B0APP");
+        assert_eq!(f.assess(&app_bot).unwrap().bot_id.as_deref(), Some("B0APP"));
     }
 
     #[test]

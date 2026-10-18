@@ -60,7 +60,7 @@ Only when the request names none of these, summarise what the file has (plugins,
 2. Ask which task sources the user wants (github, notion, slack, discord, routine for scheduled prompts; one or more) and which agent IDE (herdr or orca). Install each with `totsuka plugin install --bundled <name> --yes`, then register it: `set /plugins/<name> '{"kind":"task_source","enabled":true}'` (`"agent_ide"` for herdr / orca). Done when `totsuka plugin list` shows each one installed.
 3. The agent IDE's own table needs no keys; add one only if the user asks (layout and so on, from the schema). Remind them that herdr 0.7.5+ or the Orca app must be running when totsuka starts.
 4. For each task source in turn, follow its file: [github.md](references/github.md), [notion.md](references/notion.md), [slack.md](references/slack.md), [discord.md](references/discord.md) or [routine.md](references/routine.md). Each runs the human prerequisites, then `[<source>]`, `[[projects]]`, the repositories, and the workflows, with `validate --offline` after each. For the workflows, also read [workflows.md](references/workflows.md).
-5. With Slack and two or more repositories, an LLM picks the repository for each message, so add `[llm]` (see slack.md).
+5. With Slack answering mentions, or two or more repositories, add `[llm]`: each mention is first checked for whether it needs a reply, and the LLM also picks the repository (see slack.md).
 6. Only if the user wants an AI tool other than Claude: `[tools.<name>]` and `default_tool` from the schema.
 7. Finish with **6. Hand-off**.
 
@@ -71,7 +71,7 @@ Install and register a missing plugin first, exactly as in step 3.2. Then follow
 - **A task source** → its file (as in step 3.4), then offer to add a workflow for it.
 - **A project** (another board, another database) → the project entry from the source's file. A GitHub or Notion project with no repository linked to it fails at Start, so link a repository in the same sitting, then offer a workflow.
 - **A repository** → `{"name", "path"}` (check the path is a git checkout: `git -C <path> rev-parse --show-toplevel`), plus `"project"` to link it. A repository links to one project. Linking one that already points at a GitHub or Notion board would leave that board without a repository, so offer a repository that is not linked yet. Then offer a workflow. If `[slack]` exists without `[[slack.repos]]`, every repository is a Slack candidate: when this one makes two and neither `[llm]` nor `[slack.llm]` exists, Slack refuses to start, so add `[llm]` in the same sitting (see slack.md).
-- **A workflow** → follow the order in [workflows.md](references/workflows.md), with the questions, recipes and trigger keys from the source's file.
+- **A workflow** → follow the order in [workflows.md](references/workflows.md), with the questions, recipes and trigger keys from the source's file. A Slack workflow with `"mention": true` needs `[llm]` or `[slack.llm]` even with a single repository (each mention is first checked for whether it needs a reply); without one, Slack refuses to start, so add it in the same sitting (see slack.md).
 
 Finish with **6. Hand-off**. The running app does not reload the file: the user needs Stop then Start.
 

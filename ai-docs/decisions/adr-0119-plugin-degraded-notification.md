@@ -4,7 +4,7 @@ title: ADR-0119 プラグインが実行中の異常を plugin/degraded 通知�
 description: task_source プラグインが実行中に気づいた異常（Slack プラグインの LLM のキー拒否・到達不能など）を、P→O の notification plugin/degraded {key, message, active} で core に届け、health.json の Degradation::PluginDegraded として status / menu / Mac アプリの Degraded 行に出す決定。core はプラグイン×key で 1 件だけ保持し、active=false・プラグインの終了で消す。ADR-0070 が範囲外として残した「プラグイン自身の LLM の健全性」の答え。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/plugin-protocol/src/methods.rs
 tags: [decision, protocol, health, plugin, llm, macos, adr]
-generated: { by: claude-code/opus-5.5, at: 2026-10-18T20:19:24+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-18T20:22:27+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -21,7 +21,7 @@ core は自分の `[llm]` の健全性を `LlmHealth` で追い、health.json �
 - source プラグインが notification を送っても、core は `wire_source` で読まずに捨てている（unbounded channel に積もる）
 - `doctor --online` が probe するのも core の `[llm]` だけ
 
-ADR-0120（#927 の 3/3）で Slack プラグインは判定に失敗すると処理を中断するようになる。LLM が壊れている間、メンションは 1 件もタスクにならないので、運用者が気づける場所が要る。
+[ADR-0120](/decisions/adr-0120-slack-reply-check.md) で Slack プラグインは判定に失敗すると処理を中断するようになる。LLM が壊れている間、メンションは 1 件もタスクにならないので、運用者が気づける場所が要る。
 
 # Decision
 
@@ -51,7 +51,7 @@ notification を送るのはプラグイン側だけで、古い core は読ま�
 
 # Consequences
 
-- 送り手は #927 の 3/3 で入る Slack プラグインが最初で、LLM 呼び出し（返信要否判定・repo 分類）の 401/403 と到達不能（transport・timeout・5xx）を key `llm` で active、成功で inactive にする
+- 送り手は Slack プラグインが最初で（`llm::Reported`、[ADR-0120](/decisions/adr-0120-slack-reply-check.md)）、LLM 呼び出し（返信要否判定・repo 分類）の 401/403 と到達不能（transport・timeout・5xx）を key `llm` で active、成功で inactive にする
 - core は source と agent の notification を読む。notifier の notification は今も読まない
 - 文は 300 文字で切る（health.json と menu に載る文の長さを、送り手の誤りで無制限にしないため）
 - SDK の `DegradedReporter` は key ごとに最後に送った文を覚え、変化したときだけ書く

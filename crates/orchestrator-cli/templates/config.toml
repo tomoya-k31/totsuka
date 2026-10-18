@@ -373,6 +373,10 @@
 #                                           #   noticeable
 # target_user_id = "U0000000000"            # your Slack user id; mentions of it become tasks
 # thread_context_limit = 6                  # recent thread messages included in the task body
+# reply_check_threshold = 0.7               # every mention is first asked "does it need a reply?";
+#                                           #   only a "no" at least this sure drops it (an app DM
+#                                           #   tells you, and your reaction still makes it a task).
+#                                           #   Needs an [llm] (this table's or the orchestrator's)
 # mention_groups = ["S0123ABC"]             # only these user groups' mentions become tasks (any workflow).
 #                                           #   Absent = every group you are in; [] = personal mentions only
 # reply_style = "Concise, plain, no honorifics"   # tone instruction injected into the task body
@@ -431,6 +435,11 @@
 # classifier_system = "..."                 # repository-classification system prompt. {repo_names}
 # classifier_user = "..."                   # …user message. {mention_text} {thread_context} {catalog}
 # classifier_correction = "..."             # the retry turn when the reply was not valid JSON
+# reply_check_criteria = "..."              # when a mention needs no reply — name your team's
+#                                           #   "react with this emoji when done" convention here
+# reply_check_system = "..."                # reply-check system prompt (chat backend). {criteria}
+# reply_check_user = "..."                  # …user message. {sender} {mention_text} {thread_context}
+# reply_check_correction = "..."            # the retry turn when the check's answer was not valid JSON
 
 # totsuka:section plugin=discord label=Discord threads and channels
 # ============================================================================

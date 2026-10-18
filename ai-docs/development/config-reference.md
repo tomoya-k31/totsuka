@@ -1266,7 +1266,8 @@ kind = "task_source"
 | `drain_max_age_hours` | int? | 24 | `gateway` 方式で、キューに溜まったイベントを起票する時間窓（#652）。Pub/Sub 側の保持は 7 日あるので長期不在でも失われないが、復帰した瞬間に 1 週間ぶんのメンションが一斉にタスクになるのは望まれない。**窓を totsuka 側に置いているので、出張明けに拾いたければ設定を一時的に上げるだけでよく、クラウドの再デプロイが要らない。** 窓の外は ack して捨てる。**`0` は拒否される** —— 「全部捨てる」を無言の 0 で表さないため。`socket` 方式では読まれない |
 | `drain_limit` | int? | 100 | 同、1 回の取り込みで起票する件数の上限。**`0` は拒否される**。`socket` 方式では読まれない |
 | `watch_poll_interval_secs` | int? | 60 | `gateway` 方式での[チャンネル監視](/glossary/channel-watch.md)のポーリング間隔（秒）。**監視はゲートウェイに載せられない** —— ADR-0072 決定 4 で publish 対象を「自分に関係しうるもの」に絞ったため、監視チャンネルへの（メンションを含まない）投稿はそもそも流れてこない。ゲートウェイに監視チャンネル一覧を持たせると設定が 2 箇所に分かれ、ずれたときの症状が「監視が黙って効かない」になるので採らなかった。代わりに `conversations.history` を定期ポーリングする（[ADR-0068](/decisions/adr-0068-channel-watch-trigger.md) の起動時バックフィルを周期実行に広げるだけ）。**遅くなるのは監視経路だけ**で、メンション・リアクション・承認ボタンはキューの取り込みのままである。ただし**そちらも「1〜2 秒」の保証ではない** —— REST の `pull` は「メッセージが得られるまで**有界時間だけ待つことがある**」という規定で、待つことは保証されておらず、空応答が続くと取り込み側がバックオフする。**`0` は拒否される**。`socket` 方式では読まれない（Slack が push してくる） |
-| `thread_context_limit` | int | 6 | タスク本文に含めるスレッド直近メッセージ数 |
+| `thread_context_limit` | int | 6 | タスク本文に含めるスレッド直近メッセージ数（返信要否判定とリポジトリ分類にも同じ件数を渡す） |
+| `reply_check_threshold` | float | 0.7 | **返信要否判定**（[ADR-0120](/decisions/adr-0120-slack-reply-check.md)）の閾値。メンション経路のタスク（catch-all・`to_group`・既知スレッドへの追いメンション）は、repo の解決より前に「返信が要るか」を `[llm]` に訊かれ、**この値以上の確信度で「不要」のときだけ**タスクにならずに終わる（アプリ DM に送信者・理由・本文の抜粋が届く）。迷った答えはタスクにする側に倒す。判定に**失敗した**（API エラー・401・読めない応答）メンションも中断して DM で知らせる。どちらの場合も、本人がリアクション起動の絵文字を付ければタスクになる（リアクションとチャンネル監視は判定しない。**bot の投稿は、その bot を `from_bot` で名指すリアクション trigger があるときだけ**）。**このため、メンションに答える workflow があれば `[llm]`（`[slack.llm]` か core の `[llm]`）が必須**で、無ければ `initialize` が `CONFIG_INVALID` になる。`0.0`〜`1.0` の範囲外は拒否 |
 | `mention_groups` | string[]? | なし | **反応するユーザーグループを workflow と無関係に限定する**（[ADR-0110](/decisions/adr-0110-slack-mention-groups.md)）。書いたグループ（`S…`）宛のメンションだけがタスクになり、それ以外の所属グループ宛はどの workflow にも渡らず捨てられる。**省略時は所属する全グループ**（従来どおり）、`[]` は**グループメンション無効**（個人メンションのみ）。個人メンション（`<@自分>`）には効かない。`S…` の形をしていない値（ハンドル `@oncall`・`U…`）は `config validate` で拒否、**所属していないグループ**と、**ここに無いグループを名指す `to_group`** は `initialize` で `CONFIG_INVALID`（どちらも黙って効かない設定になるため）。非空のときは所属照合のため `usergroups:read` が必須 |
 | `reply_style` | string? | なし | 返信トーンの指示（タスク本文へ注入、例 `"丁寧語で簡潔に"`） |
 | `[prompts]` | テーブル | — | このプラグインが送るプロンプト文の上書き（下記、#318） |
@@ -1274,7 +1275,7 @@ kind = "task_source"
 | `[[repos]]` | 配列 | なし（省略可、#109） | リポジトリ候補。`name`（config.toml の `[[repositories]].name` と一致必須）/ `summary`?（LLM 分類の材料）/ `path`?（README 先頭を分類材料に追加）。**省略時は config.toml の `[[repositories]]`（name/summary/path）がそのまま候補になる**ため通常は書かなくてよい。明示した場合はそちらが優先（候補の絞り込み・summary の上書きに使う） |
 | `[[channel_groups]]` | 配列 | なし | チャンネル名 prefix → 候補 repos の絞り込みルール（定義順 first-match）。`prefix` / `repos`（`[[repos]]` に存在する名前のみ）。マッチは**前方一致だけ**で、`*` はリテラル文字として扱われる（glob・正規表現は無い）。`prefix` は**文字列と文字列配列のどちらでも書ける**（`prefix = "dev-"` / `prefix = ["dev-", "team-"]`）。配列にすると 1 本の `repos` を複数 prefix で共有でき、prefix ごとに同じ `repos` を書き写す必要がなくなる —— 書き写しは片方だけ古くなったときに設定エラーではなく無言の誤ルーティングになるので、共有できるならしたほうがよい。配列内はどれか 1 つ当たれば hit で、**外側の定義順 first-match は変わらない**。**空文字は単体でも配列内でも拒否される**（`prefix = ""` も `prefix = ["dev-", ""]` も）。空文字は全チャンネルに当たるので、そのグループが黙って catch-all になってしまうため。空配列 `[]` も拒否される（何も名指していない死んだ設定）。配列内の空文字は**見つかった全件が一度に報告される** —— 1 件ずつだと修正のたびに再起動が要り、しかも直すと残りの番号がずれる。したがって**全チャンネルに当てる catch-all はここには書けない** —— それは `fallback_repo` の仕事 |
 | `fallback_repo` | string? | なし | `[[channel_groups]]` がどれもマッチしないチャンネルの行き先リポジトリ（`[[repos]]` に存在する名前）。**候補 1 件になるので LLM 分類を経由せず即確定**する。組織横断の質問のように特定のコードリポジトリに属さないメンションの受け口を 1 つ決めるためのキー。**省略時は従来どおり全リポジトリが候補**になり分類 LLM に渡る（候補が多いと精度もトークンも悪化する）。マッチしたグループが候補ゼロに縮んだ場合（`repos` が空／存在しない名前だけ）も「マッチしなかった」扱いでここへ落ちる。**このキーを置いても `[llm]` は省略できない** —— 必須判定は**宣言された候補数の素朴なカウント**（`config.repos.len() > 1`）で、このキーも `[[channel_groups]]` も読まない。したがって「全グループが 1 件ずつ挙げ、かつこのキーも設定済み」のように**分類器に到達しえない構成でも必須判定は成立する**。緩めるには到達可能な経路の証明が必要になるので、判定は意図的にそれより粗い。**存在しない名前を指すと起動しない** —— `initialize` がマージ後の候補一覧に対して検査するので `CONFIG_INVALID` になる（`[[channel_groups]]` の参照整合と同じ扱い）。`config validate` も同じ検査を持つが、`[[repos]]` 省略時は候補が確定しないため initialize まで保留される。空文字も拒否される（「フォールバックを置いたつもり」を黙って無効にしないため） |
-| `[llm]` | テーブル | なし（省略可、#119） | リポジトリ分類。`api`（`"chat"` 既定 / `"decisions"`、#723）/ `base_url`（chat）/ `endpoint`（decisions。省略時は OpenRouter の Decisions API）/ `model` / `api_key` / `confidence_threshold`（既定 0.6、未満はエフェメラル選択へ。decisions で「どれも当てはまらない」が選ばれたときもエフェメラル選択へ）。**省略時は config.toml の `[llm]`（initialize で供給）が default になる**（`api_key_ref` 必須 — キーなし供給は採用されない。`confidence_threshold` は既定 0.6）。明示した場合はそちらが優先。候補 2 件以上でどちらにも無ければ initialize が `CONFIG_INVALID` |
+| `[llm]` | テーブル | なし（省略可、#119） | リポジトリ分類。`api`（`"chat"` 既定 / `"decisions"`、#723）/ `base_url`（chat）/ `endpoint`（decisions。省略時は OpenRouter の Decisions API）/ `model` / `api_key` / `confidence_threshold`（既定 0.6、未満はエフェメラル選択へ。decisions で「どれも当てはまらない」が選ばれたときもエフェメラル選択へ）。**省略時は config.toml の `[llm]`（initialize で供給）が default になる**（`api_key_ref` 必須 — キーなし供給は採用されない。`confidence_threshold` は既定 0.6）。明示した場合はそちらが優先。**返信要否判定（`reply_check_threshold` の行）にも同じ設定を使う**。メンションに答える workflow がある、または候補 2 件以上で、どちらにも無ければ initialize が `CONFIG_INVALID` |
 | `api_url` | string | `https://slack.com/api` | Web API ベース URL（テスト用上書き） |
 | `max_retries` | int | 3 | リトライ可能な API 失敗の最大再試行回数。**ただし 1 回の呼び出しで眠れる合計は 90 秒**で、次の待ち時間がそれを超えるなら再試行せず本当の原因を返す（スロットルの `retry-after` が長いときに「ハングしたように見える」のを避けるため）。したがって `max_retries` を大きくしても待ち時間の合計はこの予算で頭打ちになる |
 
@@ -1298,6 +1299,10 @@ kind = "task_source"
 | `classifier_system` | リポジトリ分類 LLM の system プロンプト | `{repo_names}` |
 | `classifier_user` | 同 user メッセージ | `{mention_text}` `{thread_context}` `{catalog}` |
 | `classifier_correction` | 応答が JSON として壊れていたときの再試行ターン | — |
+| `reply_check_criteria` | **返信要否判定の基準**（[ADR-0120](/decisions/adr-0120-slack-reply-check.md)）。両方の backend が読む —— chat は `reply_check_system` の `{criteria}` に、decisions はそのまま質問文になる。組み込みは「共有・FYI・Cc・お知らせ・会議の案内・お礼だけ・軽い依頼・完了報告をリアクションで求める作業依頼・bot の依頼や確認依頼は `no_reply`、人間の依頼・質問・確認依頼はすべて `reply`、迷ったら `reply`」。**組織固有の絵文字名（完了報告に使うもの）はここに書き足す** —— 組み込みはそれを知らない | — |
+| `reply_check_system` | 返信要否判定の system プロンプト（chat のみ）。回答形は `{"reply": "reply" \| "no_reply", "confidence", "reason"}` で、`reason` はメンションと同じ言語の 1 文（DM に載る） | `{criteria}` |
+| `reply_check_user` | 同 user メッセージ（chat のみ）。`{sender}` は `bot` / `human` | `{sender}` `{mention_text}` `{thread_context}` |
+| `reply_check_correction` | 返信要否判定の応答が JSON として壊れていたときの再試行ターン（chat のみ） | — |
 
 注意点:
 
@@ -1305,6 +1310,7 @@ kind = "task_source"
 - **`{text}` `{thread_context}` `{catalog}` は Slack の投稿者が内容を決められる。** 展開はシングルパスなので、本文に `{catalog}` と書かれたメンションはその文字列として挿入されるだけで、候補リスト差し込みにはならない。
 - `classifier_system` の既定値は JSON 出力形の `{"repo": string, ...}` をリテラルに含む。プレースホルダ名は識別子（`[A-Za-z_][A-Za-z0-9_]*`）に限られるので、これは中身として素通しされる。
 - 未知のプレースホルダはそのまま出力され、`initialize` 時に警告としてログに出る。**エラーにしないのは意図的である**（このプラグインは `config/validate` フックを持っているのでエラーにもできる）— 未知キーはそのまま描画されるので症状はドラフト中に見える `{token}` である。core 側の `rubric` がこれをエラーにするのは、あちらが llm 検収の判定条件で、壊れた症状が「検収が緩くなる」だけだからである。
+- **`reply_check_criteria` の悪い上書きは、メンションを黙って落とす方向に効く。** 返信不要と判定されたメンションはタスクにならない（DM は届き、リアクションで救える）。基準を広げすぎたと思ったら、まず DM の理由を読むこと。
 - ここは **LLM 向けのプロンプトのみ**である。悪い上書きは分類の劣化（スレッド内ピッカーへフォールバックする）や返信案の質低下に留まり、完了検知は壊せない。この危険度の違いが、core 側の上書き面を #465 で削除しつつ**このテーブルを残した**理由である。
 
 # `[discord]`（task-source-discord、#618）

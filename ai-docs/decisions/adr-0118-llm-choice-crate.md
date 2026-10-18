@@ -15,7 +15,7 @@ owner: tomoya-k31
 
 # Context
 
-Slack プラグインに「このメンションは返信が要るか」を LLM で判定する処理を足す（ADR-0120、#927 の 3/3 で追加）。chat と decisions（TypeSafe Jev）の両方で、候補から 1 つ選ばせて確信度を返す、という形は repo 分類とまったく同じである。
+Slack プラグインに「このメンションは返信が要るか」を LLM で判定する処理を足す（[ADR-0120](/decisions/adr-0120-slack-reply-check.md)）。chat と decisions（TypeSafe Jev）の両方で、候補から 1 つ選ばせて確信度を返す、という形は repo 分類とまったく同じである。
 
 ところが repo-classifier は問いを 4 か所で固定している。
 

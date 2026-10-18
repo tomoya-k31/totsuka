@@ -36,6 +36,7 @@ fn init_params() -> Value {
             "app_token": "xapp-1-A1-test",
             "user_token": "xoxp-user-test",
             "target_user_id": "U_ME",
+            "llm": { "base_url": "https://llm.test/v1", "model": "m", "api_key": "k" },
             "thread_context_limit": 3,
             "repos": [{ "name": "web-app", "summary": "customer web app" }]
         }
@@ -368,4 +369,69 @@ async fn a_mention_and_a_reaction_on_one_message_make_one_task() {
     // Reacting to the same message afterwards adds nothing.
     send_and_await_ack(&mut ws, reaction_envelope("e2", "U_ME", "eyes", "100.0")).await;
     harness.assert_no_task(Duration::from_millis(300)).await;
+}
+
+/// ADR-0120: a mention the reply check finds needs no reply is not a task —
+/// but its dedup key is handed back, so the operator's reaction still makes
+/// it one, and that reaction is not asked again.
+#[tokio::test]
+async fn a_mention_needing_no_reply_is_dropped_but_a_reaction_still_makes_it_a_task() {
+    let (listener, url) = ws_listener().await;
+    let shared = Shared::default();
+    canned_web_api(&shared, &url);
+    shared.push_reply_check(Ok(common::chat_answer(
+        r#"{"reply":"no_reply","confidence":0.95,"reason":"FYI です"}"#,
+    )));
+    let (mut srv, mut harness) = server(&shared);
+    call(
+        &mut srv,
+        1,
+        "initialize",
+        init_params_with_workflow_trigger(),
+    )
+    .await;
+    let mut ws = accept_with_hello(&listener).await;
+
+    send_and_await_ack(&mut ws, mention_envelope_in("e1", "100.0", None)).await;
+    harness.assert_no_task(Duration::from_millis(300)).await;
+    let checks = shared.reply_check_requests();
+    assert_eq!(checks.len(), 1, "the mention was asked once");
+    let user = checks[0]["messages"][1]["content"].as_str().unwrap();
+    assert!(user.contains("## Sender\nhuman"), "{user}");
+
+    send_and_await_ack(&mut ws, reaction_envelope("e2", "U_ME", "eyes", "100.0")).await;
+    let task = harness.next_task().await;
+    assert_eq!(task["id"], "C1:100.0");
+    assert_eq!(
+        shared.reply_check_requests().len(),
+        1,
+        "a reaction is the operator asking outright; it is not checked"
+    );
+}
+
+/// ADR-0120: a check that cannot be made stops the mention rather than
+/// guessing — and leaves the same way back as a drop.
+#[tokio::test]
+async fn a_reply_check_that_cannot_be_made_stops_the_mention() {
+    let (listener, url) = ws_listener().await;
+    let shared = Shared::default();
+    canned_web_api(&shared, &url);
+    shared.push_reply_check(Err(llm_choice::ClassifyError::Transport(
+        "connection refused".into(),
+    )));
+    let (mut srv, mut harness) = server(&shared);
+    call(
+        &mut srv,
+        1,
+        "initialize",
+        init_params_with_workflow_trigger(),
+    )
+    .await;
+    let mut ws = accept_with_hello(&listener).await;
+
+    send_and_await_ack(&mut ws, mention_envelope_in("e1", "100.0", None)).await;
+    harness.assert_no_task(Duration::from_millis(300)).await;
+
+    send_and_await_ack(&mut ws, reaction_envelope("e2", "U_ME", "eyes", "100.0")).await;
+    assert_eq!(harness.next_task().await["id"], "C1:100.0");
 }

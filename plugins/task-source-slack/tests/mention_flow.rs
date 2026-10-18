@@ -51,6 +51,7 @@ fn init_params() -> Value {
             "app_token": "xapp-1-A1-test",
             "user_token": "xoxp-user-test",
             "target_user_id": "U_ME",
+            "llm": { "base_url": "https://llm.test/v1", "model": "m", "api_key": "k" },
             "thread_context_limit": 3,
             "reply_style": "丁寧語で簡潔に",
             "repos": [{ "name": "web-app", "summary": "customer web app" }]

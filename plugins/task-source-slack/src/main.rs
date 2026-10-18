@@ -29,6 +29,7 @@ async fn main() {
     plugin_sdk::runtime::init_tracing();
 
     let stdio = plugin_sdk::runtime::stdio();
-    let server = Server::new(ReqwestFactory, stdio.submit.clone(), stdio.lookup.clone());
+    let server = Server::new(ReqwestFactory, stdio.submit.clone(), stdio.lookup.clone())
+        .with_degraded(plugin_sdk::DegradedReporter::new(stdio.writer.clone()));
     plugin_sdk::runtime::serve(server, &stdio).await;
 }

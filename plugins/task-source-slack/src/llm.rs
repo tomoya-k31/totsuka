@@ -31,6 +31,64 @@ pub struct Verdict {
     pub reason: String,
 }
 
+/// The LLM transport, reporting its own health to the Orchestrator as it goes
+/// (`plugin/degraded` key `llm`, ADR-0119 / ADR-0120).
+///
+/// Wrapped around the one transport every call of this plugin shares — the
+/// reply check and repository classification alike — so there is one place
+/// that decides what a result says about the gateway, and no call site can
+/// forget to. Same reading as the core's own latch: a 401/403 or no answer at
+/// all is reported; any other answer, a malformed one included, proves the
+/// gateway is there and clears it.
+pub struct Reported<C> {
+    inner: C,
+    degraded: plugin_sdk::DegradedReporter,
+}
+
+/// The `plugin/degraded` key for this plugin's LLM.
+const DEGRADED_KEY: &str = "llm";
+
+impl<C> Reported<C> {
+    /// Wrap `inner`, reporting through `degraded`.
+    pub fn new(inner: C, degraded: plugin_sdk::DegradedReporter) -> Self {
+        Self { inner, degraded }
+    }
+}
+
+impl<C: HttpTransport> HttpTransport for Reported<C> {
+    async fn post_json(
+        &self,
+        request: llm_choice::HttpRequest<'_>,
+    ) -> Result<serde_json::Value, llm_choice::ClassifyError> {
+        let outcome = self.inner.post_json(request).await;
+        match &outcome {
+            Err(e) if e.is_auth_failure() => self.degraded.report(
+                DEGRADED_KEY,
+                &format!(
+                    "the LLM at {} rejected the API key → mentions do not become tasks (the \
+                     reply check stops them); reissue the key and update `[slack.llm].api_key` \
+                     or `[llm].api_key_ref`",
+                    llm_choice::scrub_urls(request.url)
+                ),
+            ),
+            Err(e) if e.is_unreachable() => self.degraded.report(
+                DEGRADED_KEY,
+                &format!(
+                    "the LLM at {} is not answering ({e}) → mentions do not become tasks until \
+                     it is back; check the network and the endpoint",
+                    llm_choice::scrub_urls(request.url)
+                ),
+            ),
+            _ => self.degraded.clear(DEGRADED_KEY),
+        }
+        outcome
+    }
+
+    fn reset_connections(&self) {
+        self.inner.reset_connections();
+    }
+}
+
 /// How long one classification request may take.
 const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
@@ -143,7 +201,7 @@ pub async fn classify<T: HttpTransport>(
 /// The plugin's call shape, whichever the backend: one attempt with a
 /// generous timeout. A chat prompt asks for JSON in prose (no
 /// `response_format`, which not every model accepts) at temperature 0.
-fn classifier<'a, T: HttpTransport>(
+pub(crate) fn classifier<'a, T: HttpTransport>(
     transport: &'a T,
     config: &LlmConfig,
 ) -> ConfiguredClassifier<&'a T> {
@@ -587,5 +645,53 @@ mod tests {
             .expect("the plugin renders its own prompt");
         assert!(prompt.user.contains("### design-system"), "{}", prompt.user);
         assert!(prompt.correction.is_some());
+    }
+
+    /// ADR-0119: the shared transport tells the Orchestrator when the LLM
+    /// rejects the key or does not answer, and that it is over on the next
+    /// answer — any answer, a status the gateway chose included.
+    #[tokio::test]
+    async fn the_transport_reports_the_llms_health_on_change() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let reported = Reported::new(
+            FakeChat::new(vec![
+                Err(WireError::status(401, "")),
+                Err(WireError::status(401, "")),
+                Err(WireError::Timeout(60)),
+                Err(WireError::status(400, "bad request")),
+                Ok(json!({})),
+            ]),
+            plugin_sdk::DegradedReporter::new(plugin_sdk::Writer::from_channel(tx)),
+        );
+        let key = llm_choice::ApiKey::new("k");
+        for _ in 0..5 {
+            let _ = reported
+                .post_json(HttpRequest {
+                    url: "https://user:secret@llm.test/v1/chat/completions?key=x",
+                    api_key: &key,
+                    body: &json!({}),
+                    timeout: std::time::Duration::from_secs(1),
+                })
+                .await;
+        }
+        let mut sent: Vec<Value> = Vec::new();
+        while let Ok(line) = rx.try_recv() {
+            sent.push(serde_json::from_str::<Value>(&line).unwrap()["params"].clone());
+        }
+        // 401, 401 (unchanged → not resent), timeout, 400 (clears), 200 (nothing to clear).
+        assert_eq!(sent.len(), 3, "{sent:?}");
+        let rejected = sent[0]["message"].as_str().unwrap();
+        assert!(rejected.contains("rejected the API key"), "{rejected}");
+        assert!(
+            !rejected.contains("secret"),
+            "credentials are scrubbed: {rejected}"
+        );
+        assert!(
+            sent[1]["message"]
+                .as_str()
+                .unwrap()
+                .contains("not answering")
+        );
+        assert_eq!(sent[2]["active"], false);
     }
 }

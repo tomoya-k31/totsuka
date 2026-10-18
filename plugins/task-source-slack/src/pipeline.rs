@@ -355,6 +355,18 @@ impl<S: Clone> Clone for Orchestrator<S> {
     }
 }
 
+/// What the reply check needs beyond the mention (ADR-0120).
+#[derive(Clone)]
+struct ReplyCheckCtx {
+    /// Hands a dropped mention's dedup key back to the event loop, which owns
+    /// the filter, so the operator's reaction — and only that — may still
+    /// claim it.
+    readmit: mpsc::UnboundedSender<String>,
+    /// The reaction triggers, for naming an emoji in the drop notice that
+    /// would actually take this post (a bot's needs `from_bot`).
+    triggers: ReactionTriggers,
+}
+
 /// Run the pipeline over `events` until the channel closes: filter each
 /// message event, enrich + resolve + normalize fresh mentions, push results
 /// via `submitter` (`task/submit`, 0.1.6), and answer `block_actions`
@@ -492,6 +504,11 @@ where
             submit: submitter,
             lookup,
         };
+        let (readmit_tx, mut readmit_rx) = mpsc::unbounded_channel::<String>();
+        let reply_check = ReplyCheckCtx {
+            readmit: readmit_tx,
+            triggers: trigger_reactions.clone(),
+        };
         // Watched channels: verify each name, then recover what was posted
         // while the plugin was down. Both happen before the event loop opens,
         // so a clip posted during a restart is picked up in submission order
@@ -545,6 +562,12 @@ where
                     Some(event) => event,
                     None => return,
                 },
+                // The reply check dropped a mention (ADR-0120): let the
+                // operator's reaction — only that — still make it a task.
+                Some(key) = readmit_rx.recv() => {
+                    filter.readmit_for_reaction(key);
+                    continue;
+                }
                 // `watch_poll` is `None` under Socket Mode, where Slack
                 // pushes these posts; `pending()` then parks this arm forever
                 // instead of it needing a second `select!`.
@@ -612,6 +635,7 @@ where
                         Arc::clone(&awaiting),
                         enriched,
                         orchestrator.clone(),
+                        reply_check.clone(),
                     ));
                 }
                 // #319: a trigger reaction the operator added becomes a task
@@ -657,7 +681,7 @@ where
                     // too. The trigger would be unrecoverable until a restart
                     // cleared the LRU.
                     let dedup_key = target.dedup_key();
-                    if filter.already_processed(&dedup_key) {
+                    if !filter.reaction_may_claim(&dedup_key) {
                         tracing::debug!(
                             dedup_key,
                             "reaction ignored: this message already produced a task \
@@ -704,7 +728,7 @@ where
                     // actually records it, and returning early on `false`
                     // keeps the mention path's contract (one message, one
                     // task) even if the two ever race.
-                    if !filter.remember(dedup_key) {
+                    if !filter.claim_for_reaction(dedup_key) {
                         tracing::debug!("reaction ignored: the task was claimed by another path");
                         continue;
                     }
@@ -718,6 +742,7 @@ where
                         Arc::clone(&awaiting),
                         enriched,
                         orchestrator.clone(),
+                        reply_check.clone(),
                     ));
                 }
                 SocketEvent::BlockActions(payload) => {
@@ -748,6 +773,7 @@ where
 /// Resolve the repository for an enriched mention and either submit the task
 /// or park it behind an ephemeral selection. Runs as its own task (spawned
 /// per mention), so slow LLM calls never stall the event loop.
+#[allow(clippy::too_many_arguments)]
 async fn handle_mention<T: SlackTransport, C: HttpTransport, S: Submitter>(
     api: Arc<SlackApi<T>>,
     chat: Arc<C>,
@@ -756,7 +782,25 @@ async fn handle_mention<T: SlackTransport, C: HttpTransport, S: Submitter>(
     awaiting: Arc<Mutex<AwaitingSelection>>,
     enriched: EnrichedMention,
     orchestrator: Orchestrator<S>,
+    reply_check: ReplyCheckCtx,
 ) {
+    // First of all: does this need a reply at all (ADR-0120)? Before the pin
+    // and the lookup, because a mention that needs none should cost nothing
+    // further — not a round trip, not a classification, not a task.
+    if enriched.mention.reply_check
+        && !passes_reply_check(
+            api.as_ref(),
+            chat.as_ref(),
+            &config,
+            &state,
+            &enriched,
+            &reply_check,
+        )
+        .await
+    {
+        return;
+    }
+
     // A trigger that pins its repository settles it in config — a watched
     // channel (#617) or a group mention route (ADR-0081) — so there is nothing
     // to look up and nothing to classify: skipping straight to submit is the
@@ -900,6 +944,150 @@ async fn handle_mention<T: SlackTransport, C: HttpTransport, S: Submitter>(
             }
         }
     }
+}
+
+/// Ask the reply check (ADR-0120). `true` lets the mention go on; `false`
+/// means it was dropped — needing no reply, or the check could not be made —
+/// after telling the operator over the bot DM and handing its dedup key back,
+/// so a reaction still turns it into a task.
+async fn passes_reply_check<T: SlackTransport, C: HttpTransport>(
+    api: &SlackApi<T>,
+    chat: &C,
+    config: &SlackConfig,
+    state: &SharedState,
+    enriched: &EnrichedMention,
+    reply_check: &ReplyCheckCtx,
+) -> bool {
+    use crate::reply_check::{Subject, Verdict, check};
+
+    let context_text = enriched.context_lines.as_deref().unwrap_or(&[]).join("\n");
+    let subject = Subject {
+        text: &enriched.mention.text,
+        from_bot: enriched.mention.bot_id.is_some(),
+        thread_context: &context_text,
+    };
+    let outcome = match config.llm.as_ref() {
+        Some(llm) => check(chat, llm, config, &subject)
+            .await
+            .map_err(|e| e.to_string()),
+        // `initialize` refuses a mention route without one; kept as a stop
+        // rather than a pass so a gap here cannot turn into "check skipped".
+        None => Err("no `[llm]` is configured".to_string()),
+    };
+    let message_key = enriched.mention.message_key();
+    // Every piece of the headline is someone else's text: the sender chose
+    // their display name, and a chat model's reason (like an error) can echo
+    // the mention it read — so a crafted mention could otherwise plant a
+    // `<https://…|label>` link in a DM the operator trusts as the app's own.
+    let sender = escape_mrkdwn(&clip(&enriched.sender_name, HEADLINE_FIELD_CHARS));
+    let headline = match outcome {
+        Ok(Verdict::Reply) => return true,
+        Ok(Verdict::NoReply { reason }) => {
+            tracing::info!(
+                message_key,
+                reason,
+                "the reply check found no reply needed; not making it a task"
+            );
+            format!(
+                "{sender} さんのメンションを返信不要と判断しました（{}）",
+                escape_mrkdwn(&clip(&reason, HEADLINE_FIELD_CHARS))
+            )
+        }
+        Err(error) => {
+            tracing::warn!(
+                message_key,
+                error,
+                "the reply check could not be made; the mention is stopped"
+            );
+            format!(
+                "{sender} さんのメンションの返信要否を判定できず、処理を中断しました（{}）",
+                escape_mrkdwn(&clip(&error, HEADLINE_FIELD_CHARS))
+            )
+        }
+    };
+    // The event loop may already be gone (shutdown); then so is the filter.
+    let _ = reply_check.readmit.send(message_key);
+    let _ = crate::notify::send_nudge(
+        api,
+        state,
+        &headline,
+        enriched.permalink.as_deref(),
+        Some(vec![dropped_block(
+            &enriched.mention.text,
+            &retrigger_hint(&reply_check.triggers, enriched.mention.bot_id.as_deref()),
+        )]),
+    )
+    .await;
+    false
+}
+
+/// How much of each untrusted field (sender name, reason, error) the drop
+/// notice's headline keeps.
+const HEADLINE_FIELD_CHARS: usize = 200;
+
+/// `text` cut to `max` characters, with `…` when it was longer.
+fn clip(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let mut out: String = text.chars().take(max).collect();
+    out.push('…');
+    out
+}
+
+/// Slack's three control characters as entities, so `text` renders as
+/// written: no `<@U…>` mention, no `<url|label>` link, no `<!here>`.
+fn escape_mrkdwn(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+/// How much of a dropped mention the notice quotes.
+const DROPPED_EXCERPT_LINES: usize = 3;
+const DROPPED_EXCERPT_CHARS: usize = 200;
+
+/// How to make a dropped mention a task anyway, if any way exists: a trigger
+/// emoji that takes this post — for a bot's post, one whose `from_bot` names
+/// it, or else what to add.
+fn retrigger_hint(triggers: &ReactionTriggers, bot_id: Option<&str>) -> Option<String> {
+    match (triggers.emoji_for(bot_id), bot_id) {
+        (Some(emoji), _) => Some(format!(
+            "タスクにするには、このメンションに :{emoji}: を付けてください。"
+        )),
+        (None, Some(bot)) if !triggers.is_empty() => Some(format!(
+            "bot の投稿なので、リアクションでタスクにするにはリアクション起動の trigger の \
+             `from_bot` に `{}` を足してください。",
+            escape_mrkdwn(bot)
+        )),
+        (None, _) => None,
+    }
+}
+
+/// The dropped mention's notice body: an excerpt, and how to make it a task
+/// anyway.
+///
+/// The excerpt is escaped, not rendered: a `<@U…>` in it would otherwise
+/// become a live mention in the operator's DM.
+fn dropped_block(text: &str, retrigger_hint: &Option<String>) -> Value {
+    let excerpt = clip(
+        &text
+            .lines()
+            .take(DROPPED_EXCERPT_LINES)
+            .collect::<Vec<_>>()
+            .join("\n"),
+        DROPPED_EXCERPT_CHARS,
+    );
+    let quoted: Vec<String> = escape_mrkdwn(&excerpt)
+        .lines()
+        .map(|line| format!("> {line}"))
+        .collect();
+    let mut body = quoted.join("\n");
+    if let Some(hint) = retrigger_hint {
+        body.push_str("\n\n");
+        body.push_str(hint);
+    }
+    json!({ "type": "section", "text": { "type": "mrkdwn", "text": body } })
 }
 
 /// Answer a Block Kit interaction: repository picks and skips are consumed
@@ -1729,6 +1917,74 @@ async fn thread_context<T: SlackTransport>(
 
 #[cfg(test)]
 mod tests {
+    /// ADR-0120: for a bot's post with no trigger naming that bot, the hint
+    /// says what to add instead of naming an emoji that would do nothing.
+    #[test]
+    fn a_bot_post_without_a_trigger_for_it_gets_the_from_bot_hint() {
+        let set = ReactionTriggers::resolve(&[crate::reaction::WorkflowTrigger {
+            workflow: "wf".into(),
+            reaction: Some("eyes".into()),
+            task_id_prefix: None,
+            instructions_kind: None,
+            from_bot: Vec::new(),
+            to_group: Vec::new(),
+            repo: None,
+            mention: false,
+        }])
+        .expect("valid");
+        assert!(retrigger_hint(&set, None).unwrap().contains(":eyes:"));
+        let bot = retrigger_hint(&set, Some("B_CI")).unwrap();
+        assert!(bot.contains("`from_bot`") && bot.contains("B_CI"), "{bot}");
+        assert_eq!(
+            retrigger_hint(&ReactionTriggers::default(), Some("B_CI")),
+            None
+        );
+    }
+
+    /// The drop notice's headline carries other people's text (a display
+    /// name, a model's reason that may echo the mention): it must not become
+    /// a link, a mention or a broadcast in the operator's DM.
+    #[test]
+    fn untrusted_headline_fields_are_escaped_and_capped() {
+        let crafted = "<https://evil.test|再ログイン> <!here> & <@U_BOSS>";
+        let escaped = escape_mrkdwn(crafted);
+        assert!(
+            !escaped.contains('<') && !escaped.contains('>'),
+            "{escaped}"
+        );
+        assert!(
+            escaped.contains("&lt;https://evil.test|再ログイン&gt;"),
+            "{escaped}"
+        );
+        assert!(escaped.contains("&amp;"), "{escaped}");
+        let long = "x".repeat(HEADLINE_FIELD_CHARS + 10);
+        assert_eq!(
+            clip(&long, HEADLINE_FIELD_CHARS).chars().count(),
+            HEADLINE_FIELD_CHARS + 1
+        );
+        assert_eq!(clip("short", HEADLINE_FIELD_CHARS), "short");
+    }
+
+    /// ADR-0120: the drop notice quotes the mention without letting its
+    /// `<@U…>` ping anyone, and names the emoji that makes it a task.
+    #[test]
+    fn the_drop_notice_quotes_safely_and_says_how_to_retrigger() {
+        let hint = Some("タスクにするには、このメンションに :eyes: を付けてください。".to_string());
+        let block = dropped_block("<@U_ME> 共有です & よろしく\n2\n3\n4", &hint);
+        let text = block["text"]["text"].as_str().unwrap();
+        assert!(
+            text.starts_with("> &lt;@U_ME&gt; 共有です &amp; よろしく\n> 2\n> 3"),
+            "{text}"
+        );
+        assert!(!text.contains("> 4"), "three lines at most: {text}");
+        assert!(text.ends_with(":eyes: を付けてください。"), "{text}");
+        let plain = dropped_block("FYI", &None);
+        assert_eq!(
+            plain["text"]["text"], "> FYI",
+            "no reaction trigger, no hint"
+        );
+    }
+
     use super::*;
     use crate::error::SlackError;
     use crate::transport::TokenKind;
@@ -1834,6 +2090,8 @@ mod tests {
             task_id_prefix: prefix.map(str::to_string),
             instructions_kind: None,
             files: Vec::new(),
+            bot_id: None,
+            reply_check: false,
         }
     }
 
@@ -1852,6 +2110,8 @@ mod tests {
             task_id_prefix: None,
             instructions_kind: None,
             files: Vec::new(),
+            bot_id: None,
+            reply_check: false,
         }
     }
 
@@ -2187,6 +2447,8 @@ mod tests {
                 task_id_prefix: None,
                 instructions_kind: None,
                 files: Vec::new(),
+                bot_id: None,
+                reply_check: false,
             },
             sender_name: "alice".into(),
             channel_name: "general".into(),
