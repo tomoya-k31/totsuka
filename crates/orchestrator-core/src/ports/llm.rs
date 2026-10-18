@@ -5,8 +5,7 @@
 //! task_source plugins classify with the same code and may only depend on
 //! crates outside `orchestrator-core`. Re-exported here so the domain names its
 //! ports in one place; the concrete backends are built in
-//! [`adapters::llm`](crate::adapters::llm). The repository question itself is
-//! [`llm_choice::repo`].
+//! [`adapters::llm`](crate::adapters::llm).
 
-pub use llm_choice::repo::{Candidate, Classification, ClassifyRequest};
+pub use llm_choice::repo::{Candidate, Classification, ClassifyRequest, classify};
 pub use llm_choice::{Answer, ChoiceClassifier, ChoiceRequest, ClassifyError};

@@ -438,8 +438,31 @@ mod tests {
              Choose the single most appropriate repository."
         );
         assert_eq!(
-            body["response_format"]["json_schema"]["schema"]["properties"]["repo"]["enum"],
-            json!(["web", "api"])
+            body["messages"][0]["content"],
+            "You route a software task to the correct repository. Respond only with the \
+             structured JSON. Pick from the candidate names exactly."
+        );
+        // The whole schema, now built from the question rather than spelled
+        // out: every field the strict contract relies on, not just the enum.
+        assert_eq!(
+            body["response_format"],
+            json!({
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "structured_output",
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "repo": { "type": "string", "enum": ["web", "api"] },
+                            "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+                            "reason": { "type": "string" },
+                        },
+                        "required": ["repo", "confidence", "reason"],
+                        "additionalProperties": false,
+                    },
+                    "strict": true,
+                },
+            })
         );
         assert!(body.get("max_tokens").is_none(), "unset → not sent");
         assert!(body.get("temperature").is_none(), "unset → not sent");

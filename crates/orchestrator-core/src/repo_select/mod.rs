@@ -18,8 +18,7 @@ use sha2::{Digest, Sha256};
 
 use plugin_protocol::Task;
 
-use crate::ports::llm::{Candidate, ChoiceClassifier, Classification, ClassifyRequest};
-use llm_choice::repo::classify;
+use crate::ports::llm::{Candidate, ChoiceClassifier, Classification, ClassifyRequest, classify};
 
 /// Tuning for the selection pipeline.
 #[derive(Debug, Clone)]
