@@ -21,6 +21,7 @@ pub mod notify;
 pub mod persist;
 pub mod pipeline;
 pub mod reaction;
+pub mod reply_check;
 pub mod repo_resolver;
 pub mod server;
 pub mod slack_api;

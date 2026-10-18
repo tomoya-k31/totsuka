@@ -4,7 +4,7 @@ title: Slack セットアップ Quickstart（task-source-slack）
 description: 受信方式（Socket Mode / Event Gateway）の選択から始まり、manifest からの Slack アプリ作成 → トークン発行 → トークン保管 → totsuka setup → config.toml の編集 → doctor → run --watch までの導入手順と、手で書く場合のフォールバック、トークン失効・スコープ変更時の対処。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-slack
 tags: [slack, setup, runbook, secrets, doctor]
-generated: { by: claude-code/opus-5.5, at: 2026-10-03T18:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-18T17:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -133,6 +133,7 @@ totsuka setup --plugins slack,herdr
 3. `[slack]` の `app_token` / `user_token` / `bot_token` / `target_user_id`（手順 2 で控えたメンバー ID）
 4. `[[projects]]` の slack エントリと `[[workflows]]` —— **ファイル末尾のレシピ集にある「Slack — reply as yourself」**を
    そのままコメント解除するのが早い
+5. `[llm]` —— **メンションに答えるなら必須**。すべてのメンションはタスクになる前に「返信が要るか」を LLM に訊かれ（返信要否判定、[ADR-0120](/decisions/adr-0120-slack-reply-check.md)）、無いと起動しない。core の `[llm]`（`api_key_ref` 付き）を書けば Slack にもそのまま渡る
 
 手順 2 のトークン保管がまだなら、`setup` が登録コマンドの一覧を印字しているので、それから登録する。
 
@@ -213,9 +214,10 @@ reply_style = "丁寧語で簡潔に"      # 任意
 # name = "web-app"                  # config.toml の [[repositories]].name と一致させる
 # summary = "顧客向け Web アプリ"   # 候補が複数あるときの LLM 分類の材料
 
-# 候補が 2 件以上なら分類用 LLM が必要。config.toml の [llm]（api_key_ref 付き）が
-# あれば initialize で供給され default になるため省略可（#119）。プラグイン専用の
-# モデル・閾値を使いたいときだけ明示する（明示時はこちらが優先）:
+# メンションに答える workflow があれば LLM が必要（返信要否判定、ADR-0120）。
+# 候補が 2 件以上ならリポジトリ分類にも使う。config.toml の [llm]（api_key_ref
+# 付き）があれば initialize で供給され default になるため省略可（#119）。
+# プラグイン専用のモデル・閾値を使いたいときだけ明示する（明示時はこちらが優先）:
 # [llm]
 # base_url = "https://openrouter.ai/api/v1"
 # model = "…"
@@ -223,6 +225,8 @@ reply_style = "丁寧語で簡潔に"      # 任意
 ```
 
 # 4. 検証 → 常駐実行
+
+**返信の要らないメンションはタスクにならない。** 共有・FYI・お知らせ・会議の案内・お礼だけ・完了をリアクションで報告する作業依頼・bot の依頼は、repo の解決より前に LLM が「返信不要」と判定し、エージェントは動かない。代わりに `bot_token` があればアプリ DM に送信者・理由・本文の抜粋が届く。判定が誤っていたら、そのメンションにリアクション起動の絵文字（例 `:eyes:`）を付ければタスクになる（リアクションは判定しない）。判定そのものに失敗した場合も同じで、DM で知らせて止まる。基準は `[slack.prompts] reply_check_criteria`、閾値は `[slack] reply_check_threshold`（既定 0.7）。
 
 ```sh
 totsuka config validate   # 静的検証（オフライン）
@@ -250,6 +254,8 @@ Gateway 方式では `gcloud auth application-default login` が済んでいる�
 | `doctor` が `invalid_auth` / `token_revoked` | トークン失効。エラーメッセージ内の再発行手順に従い、保管先（1Password / Keychain）を更新（→ [Revoke 手順](/security/slack-user-token.md)） |
 | `doctor` が identity mismatch（`target_user_id`） | 他人のトークン、または `target_user_id` の誤記。なりすまし防止で意図的に拒否している |
 | メンションがタスク化されない | ①メンション形式が `@自分` か（`user_events` は本人参加チャンネルのみ）②`run --watch` が起動中か ③編集（`message_changed` 等の subtype 付き）と totsuka 自身の bot の投稿は対象外。他の bot のメンションは対象（[ADR-0109](/decisions/adr-0109-slack-bot-mentions.md)） |
+| メンションがタスクにならず、アプリ DM に「返信不要と判断しました」が届く | 返信要否判定（[ADR-0120](/decisions/adr-0120-slack-reply-check.md)）が返信不要と判定した。DM の理由を読み、誤りならそのメンションにリアクション起動の絵文字を付ける（リアクションは判定しない）。同じ種類の誤りが続くなら `[slack.prompts] reply_check_criteria` を直すか `reply_check_threshold` を上げる |
+| アプリ DM に「返信要否を判定できず、処理を中断しました」が届く | LLM の呼び出しに失敗した（鍵の失効・ネットワーク・読めない応答）。`totsuka status` に `plugin_degraded` が出ているはず。直したら、そのメンションにリアクションを付けて救う |
 | リアクションを付けてもタスク化されない | ①`[[workflows]]` に `trigger = { reaction = "…" }` を持つ workflow があるか（**定義順は関係ない** — #554 以降はメンションとリアクションが別のイベント経路なので、catch-all より後ろに書いても隠れない）②絵文字名が一致しているか（👀 は `eyes`、👁 は `eye`。カスタム絵文字の alias は「実際に押された名前」で届くので alias を使うなら両方列挙）③**付けたのが自分か**（他人のリアクションでは起動しない。緩和する設定は無い — [ADR-0025](/decisions/adr-0025-reaction-task-trigger.md)）④`reactions:read` を含む manifest で再インストール済みか（スコープが無いとイベント自体が届かず、**エラーにもならない**）⑤同じメッセージを既に mention 経由で処理していないか（dedup は共有） |
 | リアクションを付け直しても再実行されない | 意図した挙動。dedup キーが `{channel}:{メッセージの ts}` なので、**成功したものは付け直しても再実行しない**（誤って外して付け直しただけで二重にエージェントが走る方が事故が大きい）。ただし**取得に失敗した場合は付け直しで再試行できる**（失敗時はキーを消費しない）。強制的に再実行するならプロセス再起動で LRU が消える |
 | 返信案は届くがボタンが失効 | TTL 24h 超過、または FIFO 追い出し（上限 1024 件）。`bot_token` を設定していれば通知 DM に返信案の本文が残っているので、そこから手動返信するか、再メンションで再実行（#122 以降、下書きは `~/.local/state/totsuka/plugins/{source_name}/drafts.json` に永続化されるため再起動ではボタンは失効しない） |

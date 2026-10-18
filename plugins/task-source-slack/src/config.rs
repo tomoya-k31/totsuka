@@ -357,6 +357,10 @@ struct EmbeddedPrompts {
     classifier_system: String,
     classifier_user: String,
     classifier_correction: String,
+    reply_check_criteria: String,
+    reply_check_system: String,
+    reply_check_user: String,
+    reply_check_correction: String,
 }
 
 /// Prompt text this plugin sends to the model (#318, epic #311).
@@ -479,6 +483,37 @@ pub struct SlackPrompts {
         "x-help" = "Sent when the classifier's answer could not be read. Remove the key to use the built-in text (an empty value is used as is)."
     ))]
     pub classifier_correction: String,
+    /// The reply check's decision rule (ADR-0120), shared by both backends:
+    /// `{criteria}` in [`reply_check_system`](Self::reply_check_system) for a
+    /// chat model, the question itself for a decisions model.
+    #[serde(default = "default_reply_check_criteria")]
+    #[schemars(extend(
+        "x-title" = "Reply check rule",
+        "x-help" = "When a mention needs no reply (it is then not made a task). Remove the key to use the built-in text (an empty value is used as is)."
+    ))]
+    pub reply_check_criteria: String,
+    /// Reply-check system prompt (chat backend). Placeholder: `{criteria}`.
+    #[serde(default = "default_reply_check_system")]
+    #[schemars(extend(
+        "x-title" = "Reply check system prompt",
+        "x-help" = "The reply check's system prompt; {criteria} is replaced. Remove the key to use the built-in text (an empty value is used as is)."
+    ))]
+    pub reply_check_system: String,
+    /// Reply-check user message (chat backend). Placeholders: `{sender}`
+    /// `{mention_text}` `{thread_context}`.
+    #[serde(default = "default_reply_check_user")]
+    #[schemars(extend(
+        "x-title" = "Reply check message",
+        "x-help" = "The reply check's message; {sender} {mention_text} {thread_context} are replaced. Remove the key to use the built-in text (an empty value is used as is)."
+    ))]
+    pub reply_check_user: String,
+    /// Retry turn after a malformed reply-check answer (chat backend).
+    #[serde(default = "default_reply_check_correction")]
+    #[schemars(extend(
+        "x-title" = "Reply check retry",
+        "x-help" = "Sent when the reply check's answer could not be read. Remove the key to use the built-in text (an empty value is used as is)."
+    ))]
+    pub reply_check_correction: String,
 }
 
 impl Default for SlackPrompts {
@@ -498,6 +533,10 @@ impl Default for SlackPrompts {
             classifier_system: DEFAULTS.classifier_system.clone(),
             classifier_user: DEFAULTS.classifier_user.clone(),
             classifier_correction: DEFAULTS.classifier_correction.clone(),
+            reply_check_criteria: DEFAULTS.reply_check_criteria.clone(),
+            reply_check_system: DEFAULTS.reply_check_system.clone(),
+            reply_check_user: DEFAULTS.reply_check_user.clone(),
+            reply_check_correction: DEFAULTS.reply_check_correction.clone(),
         }
     }
 }
@@ -527,6 +566,13 @@ impl SlackPrompts {
             &["mention_text", "thread_context", "catalog"],
         ),
         ("classifier_correction", &[]),
+        ("reply_check_criteria", &[]),
+        ("reply_check_system", &["criteria"]),
+        (
+            "reply_check_user",
+            &["sender", "mention_text", "thread_context"],
+        ),
+        ("reply_check_correction", &[]),
     ];
 
     /// `(key, unknown placeholder)` pairs across every template.
@@ -555,6 +601,10 @@ impl SlackPrompts {
             ("classifier_system", &self.classifier_system),
             ("classifier_user", &self.classifier_user),
             ("classifier_correction", &self.classifier_correction),
+            ("reply_check_criteria", &self.reply_check_criteria),
+            ("reply_check_system", &self.reply_check_system),
+            ("reply_check_user", &self.reply_check_user),
+            ("reply_check_correction", &self.reply_check_correction),
         ];
         let mut out = Vec::new();
         for (key, value) in values {
@@ -619,6 +669,18 @@ fn default_classifier_user() -> String {
 }
 fn default_classifier_correction() -> String {
     DEFAULTS.classifier_correction.clone()
+}
+fn default_reply_check_criteria() -> String {
+    DEFAULTS.reply_check_criteria.clone()
+}
+fn default_reply_check_system() -> String {
+    DEFAULTS.reply_check_system.clone()
+}
+fn default_reply_check_user() -> String {
+    DEFAULTS.reply_check_user.clone()
+}
+fn default_reply_check_correction() -> String {
+    DEFAULTS.reply_check_correction.clone()
 }
 
 /// Where Slack events reach this plugin from ([ADR-0072](/decisions/adr-0072-slack-event-gateway.md)
@@ -750,6 +812,15 @@ pub struct SlackConfig {
         "x-help" = "The user group IDs (S…) whose mentions are answered. Leave it out to answer every group you belong to; an empty list answers personal mentions only."
     ))]
     pub mention_groups: Option<Vec<String>>,
+    /// How sure a `no_reply` verdict must be before the reply check drops a
+    /// mention (ADR-0120). Below it the mention goes on as one that needs a
+    /// reply — an unsure check keeps the mention.
+    #[serde(default = "default_reply_check_threshold")]
+    #[schemars(extend(
+        "x-title" = "Reply check threshold",
+        "x-help" = "How sure (0.0-1.0) the check must be that a mention needs no reply before it is dropped."
+    ))]
+    pub reply_check_threshold: f64,
     /// How many recent thread messages to include as context.
     #[serde(default = "default_thread_context_limit")]
     #[schemars(extend(
@@ -1014,6 +1085,9 @@ fn default_pull_max_messages() -> u32 {
 pub(crate) fn default_confidence_threshold() -> f64 {
     0.6
 }
+fn default_reply_check_threshold() -> f64 {
+    0.7
+}
 
 /// Whether `id` has the shape Slack gives a user group id: `S` and then
 /// alphanumerics.
@@ -1090,6 +1164,12 @@ pub fn static_config_errors(config: &SlackConfig) -> Vec<String> {
              Copy member ID)"
                 .into(),
         );
+    }
+    if !(0.0..=1.0).contains(&config.reply_check_threshold) {
+        errors.push(format!(
+            "`reply_check_threshold` is {} → use a value between 0.0 and 1.0",
+            config.reply_check_threshold
+        ));
     }
     if config.thread_context_limit == 0 {
         errors.push("`thread_context_limit` is 0 → set it to 1 or more".into());

@@ -583,6 +583,10 @@ pub struct Server<F: TransportFactory> {
     /// The `task/lookup` client the pipeline asks before resolving a
     /// repository (0.2.4, #242).
     lookup: LookupClient,
+    /// Where the LLM's health is reported (`plugin/degraded`, ADR-0119).
+    /// A sink nobody reads unless [`with_degraded`](Self::with_degraded)
+    /// connects it.
+    degraded: plugin_sdk::DegradedReporter,
     /// Whether `initialize` starts the resident runtime (Socket Mode
     /// connection + mention pipeline). On for production; protocol-level
     /// tests turn it off so canned transports are not consumed by the
@@ -632,9 +636,19 @@ where
             factory,
             submit,
             lookup,
+            degraded: plugin_sdk::DegradedReporter::new(plugin_sdk::Writer::from_channel(
+                tokio::sync::mpsc::unbounded_channel().0,
+            )),
             start_runtime: true,
             session: None,
         }
+    }
+
+    /// Report the LLM's health through `degraded` (`plugin/degraded`,
+    /// ADR-0119) — production passes one over the stdio writer.
+    pub fn with_degraded(mut self, degraded: plugin_sdk::DegradedReporter) -> Self {
+        self.degraded = degraded;
+        self
     }
 
     /// A server whose `initialize` does not start the Socket Mode runtime.
@@ -737,20 +751,28 @@ where
                     .into(),
             );
         }
-        if config.repos.len() > 1 && config.llm.is_none() {
-            errors.push(
-                "`[llm]` is required when more than one repository candidate is declared (it \
-                 classifies which repository a mention concerns) → add an `[llm]` table \
-                 (base_url / model / api_key) to `[slack]` in config.toml, or configure the \
-                 orchestrator's `[llm]` with an `api_key_ref` in config.toml"
-                    .into(),
-            );
-        }
         // Reaction triggers arrive on this call as `[[workflows]].trigger.reaction`
         // (#396), so this is where they are resolved — shared with
         // `config/validate` so the two cannot disagree.
         let (reaction_triggers, mut trigger_errors) = resolve_trigger_shape(&init.workflows);
         errors.append(&mut trigger_errors);
+        // Every mention is asked whether it needs a reply before it becomes
+        // a task (ADR-0120), and a check that cannot be made stops the
+        // mention. Starting without an `[llm]` would therefore stop *every*
+        // mention, silently — refuse instead. Reactions and channel watches
+        // are not checked, so a setup with neither mentions nor a choice of
+        // repository still needs none.
+        let answers_mentions = !reaction_triggers.mention_routes().is_empty();
+        if config.llm.is_none() && (answers_mentions || config.repos.len() > 1) {
+            errors.push(
+                "`[llm]` is required when a workflow answers mentions (every mention is first \
+                 asked whether it needs a reply) or more than one repository candidate is \
+                 declared (it classifies which repository a mention concerns) → add an `[llm]` \
+                 table to `[slack]` in config.toml, or configure the orchestrator's `[llm]` with \
+                 an `api_key_ref` in config.toml"
+                    .into(),
+            );
+        }
         // A mention route's `repo` is checked here rather than by the SDK,
         // which only knows the watch shape.
         let repo_names: Vec<&str> = config.repos.iter().map(|r| r.name.as_str()).collect();
@@ -1025,7 +1047,10 @@ where
             };
             let pipeline = pipeline::spawn(
                 Arc::clone(&api),
-                Arc::new(self.factory.build_chat()),
+                Arc::new(crate::llm::Reported::new(
+                    self.factory.build_chat(),
+                    self.degraded.clone(),
+                )),
                 Arc::new(config.clone()),
                 reaction_triggers,
                 watch_triggers,

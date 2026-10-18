@@ -395,6 +395,7 @@ async fn initialize_falls_back_to_supplied_repositories() {
         "app_token": "xapp-1-A1-test",
         "user_token": "xoxp-user-test",
         "target_user_id": "U_ME",
+        "llm": { "base_url": "https://llm.test/v1", "model": "m", "api_key": "k" },
         "channel_groups": [{ "prefix": "dev-", "repos": ["web-app"] }],
     });
     let params = init_params_with_repos(
@@ -438,6 +439,7 @@ async fn initialize_prefers_explicit_repos_over_supplied() {
         "app_token": "xapp-1-A1-test",
         "user_token": "xoxp-user-test",
         "target_user_id": "U_ME",
+        "llm": { "base_url": "https://llm.test/v1", "model": "m", "api_key": "k" },
         "repos": [{ "name": "web-app" }],
         "channel_groups": [{ "prefix": "dev-", "repos": ["web-app"] }],
     });
@@ -508,6 +510,25 @@ fn config_without_llm() -> Value {
         "user_token": "xoxp-user-test",
         "target_user_id": "U_ME",
     })
+}
+
+/// ADR-0120: every mention is checked for whether it needs a reply, so a
+/// workflow answering mentions cannot start without an `[llm]` — even with a
+/// single repository, where classification never needed one.
+#[tokio::test]
+async fn initialize_requires_an_llm_when_a_workflow_answers_mentions() {
+    let shared = Shared::default();
+    let (mut srv, _harness) = server(&shared);
+    let mut params = init_params_with_repos(config_without_llm(), json!([{ "name": "only" }]));
+    let response = call(&mut srv, 1, "initialize", params.clone()).await;
+    let (code, message) = error_of(&response);
+    assert_eq!(code, error_code::CONFIG_INVALID);
+    assert!(message.contains("answers mentions"), "{message}");
+
+    // Without a mention route nothing is checked, so nothing is required.
+    push_guard_ok(&shared);
+    params["workflows"] = json!([{ "workflow": "slack-eyes", "trigger": { "reaction": "eyes" } }]);
+    result_of(call(&mut srv, 2, "initialize", params).await);
 }
 
 #[tokio::test]

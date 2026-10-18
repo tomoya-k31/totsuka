@@ -355,6 +355,18 @@ impl<S: Clone> Clone for Orchestrator<S> {
     }
 }
 
+/// What the reply check needs beyond the mention (ADR-0120).
+#[derive(Clone)]
+struct ReplyCheckCtx {
+    /// Hands a dropped mention's dedup key back to the event loop, which owns
+    /// the filter: the operator's reaction is the way back from a drop, and a
+    /// spent key would silence it.
+    forget: mpsc::UnboundedSender<String>,
+    /// A trigger emoji to name in the drop notice; `None` when reactions
+    /// trigger nothing.
+    retrigger_emoji: Option<String>,
+}
+
 /// Run the pipeline over `events` until the channel closes: filter each
 /// message event, enrich + resolve + normalize fresh mentions, push results
 /// via `submitter` (`task/submit`, 0.1.6), and answer `block_actions`
@@ -492,6 +504,11 @@ where
             submit: submitter,
             lookup,
         };
+        let (forget_tx, mut forget_rx) = mpsc::unbounded_channel::<String>();
+        let reply_check = ReplyCheckCtx {
+            forget: forget_tx,
+            retrigger_emoji: trigger_reactions.any_emoji().map(str::to_string),
+        };
         // Watched channels: verify each name, then recover what was posted
         // while the plugin was down. Both happen before the event loop opens,
         // so a clip posted during a restart is picked up in submission order
@@ -545,6 +562,12 @@ where
                     Some(event) => event,
                     None => return,
                 },
+                // The reply check dropped a mention (ADR-0120): un-spend its
+                // key so the operator's reaction can still make it a task.
+                Some(key) = forget_rx.recv() => {
+                    filter.forget(&key);
+                    continue;
+                }
                 // `watch_poll` is `None` under Socket Mode, where Slack
                 // pushes these posts; `pending()` then parks this arm forever
                 // instead of it needing a second `select!`.
@@ -612,6 +635,7 @@ where
                         Arc::clone(&awaiting),
                         enriched,
                         orchestrator.clone(),
+                        reply_check.clone(),
                     ));
                 }
                 // #319: a trigger reaction the operator added becomes a task
@@ -718,6 +742,7 @@ where
                         Arc::clone(&awaiting),
                         enriched,
                         orchestrator.clone(),
+                        reply_check.clone(),
                     ));
                 }
                 SocketEvent::BlockActions(payload) => {
@@ -748,6 +773,7 @@ where
 /// Resolve the repository for an enriched mention and either submit the task
 /// or park it behind an ephemeral selection. Runs as its own task (spawned
 /// per mention), so slow LLM calls never stall the event loop.
+#[allow(clippy::too_many_arguments)]
 async fn handle_mention<T: SlackTransport, C: HttpTransport, S: Submitter>(
     api: Arc<SlackApi<T>>,
     chat: Arc<C>,
@@ -756,7 +782,25 @@ async fn handle_mention<T: SlackTransport, C: HttpTransport, S: Submitter>(
     awaiting: Arc<Mutex<AwaitingSelection>>,
     enriched: EnrichedMention,
     orchestrator: Orchestrator<S>,
+    reply_check: ReplyCheckCtx,
 ) {
+    // First of all: does this need a reply at all (ADR-0120)? Before the pin
+    // and the lookup, because a mention that needs none should cost nothing
+    // further — not a round trip, not a classification, not a task.
+    if enriched.mention.reply_check
+        && !passes_reply_check(
+            api.as_ref(),
+            chat.as_ref(),
+            &config,
+            &state,
+            &enriched,
+            &reply_check,
+        )
+        .await
+    {
+        return;
+    }
+
     // A trigger that pins its repository settles it in config — a watched
     // channel (#617) or a group mention route (ADR-0081) — so there is nothing
     // to look up and nothing to classify: skipping straight to submit is the
@@ -900,6 +944,111 @@ async fn handle_mention<T: SlackTransport, C: HttpTransport, S: Submitter>(
             }
         }
     }
+}
+
+/// Ask the reply check (ADR-0120). `true` lets the mention go on; `false`
+/// means it was dropped — needing no reply, or the check could not be made —
+/// after telling the operator over the bot DM and handing its dedup key back,
+/// so a reaction still turns it into a task.
+async fn passes_reply_check<T: SlackTransport, C: HttpTransport>(
+    api: &SlackApi<T>,
+    chat: &C,
+    config: &SlackConfig,
+    state: &SharedState,
+    enriched: &EnrichedMention,
+    reply_check: &ReplyCheckCtx,
+) -> bool {
+    use crate::reply_check::{Subject, Verdict, check};
+
+    let context_text = enriched.context_lines.as_deref().unwrap_or(&[]).join("\n");
+    let subject = Subject {
+        text: &enriched.mention.text,
+        from_bot: enriched.mention.from_bot,
+        thread_context: &context_text,
+    };
+    let outcome = match config.llm.as_ref() {
+        Some(llm) => check(chat, llm, config, &subject)
+            .await
+            .map_err(|e| e.to_string()),
+        // `initialize` refuses a mention route without one; kept as a stop
+        // rather than a pass so a gap here cannot turn into "check skipped".
+        None => Err("no `[llm]` is configured".to_string()),
+    };
+    let message_key = enriched.mention.message_key();
+    let headline = match outcome {
+        Ok(Verdict::Reply) => return true,
+        Ok(Verdict::NoReply { reason }) => {
+            tracing::info!(
+                message_key,
+                reason,
+                "the reply check found no reply needed; not making it a task"
+            );
+            format!(
+                "{} さんのメンションを返信不要と判断しました（{reason}）",
+                enriched.sender_name
+            )
+        }
+        Err(error) => {
+            tracing::warn!(
+                message_key,
+                error,
+                "the reply check could not be made; the mention is stopped"
+            );
+            format!(
+                "{} さんのメンションの返信要否を判定できず、処理を中断しました（{error}）",
+                enriched.sender_name
+            )
+        }
+    };
+    // The event loop may already be gone (shutdown); then so is the filter.
+    let _ = reply_check.forget.send(message_key);
+    let _ = crate::notify::send_nudge(
+        api,
+        state,
+        &headline,
+        enriched.permalink.as_deref(),
+        Some(vec![dropped_block(
+            &enriched.mention.text,
+            reply_check.retrigger_emoji.as_deref(),
+        )]),
+    )
+    .await;
+    false
+}
+
+/// How much of a dropped mention the notice quotes.
+const DROPPED_EXCERPT_LINES: usize = 3;
+const DROPPED_EXCERPT_CHARS: usize = 200;
+
+/// The dropped mention's notice body: an excerpt, and how to make it a task
+/// anyway.
+///
+/// The excerpt is escaped, not rendered: a `<@U…>` in it would otherwise
+/// become a live mention in the operator's DM.
+fn dropped_block(text: &str, retrigger_emoji: Option<&str>) -> Value {
+    let mut excerpt: String = text
+        .lines()
+        .take(DROPPED_EXCERPT_LINES)
+        .collect::<Vec<_>>()
+        .join("\n");
+    if excerpt.chars().count() > DROPPED_EXCERPT_CHARS {
+        excerpt = excerpt.chars().take(DROPPED_EXCERPT_CHARS).collect();
+        excerpt.push('…');
+    }
+    let quoted: Vec<String> = excerpt
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .lines()
+        .map(|line| format!("> {line}"))
+        .collect();
+    let mut body = quoted.join("\n");
+    if let Some(emoji) = retrigger_emoji {
+        body.push_str(&format!(
+            "\n\nタスクにするには、このメンションに :{emoji}: を付けてください。"
+        ));
+    }
+    json!({ "type": "section", "text": { "type": "mrkdwn", "text": body } })
 }
 
 /// Answer a Block Kit interaction: repository picks and skips are consumed
@@ -1729,6 +1878,25 @@ async fn thread_context<T: SlackTransport>(
 
 #[cfg(test)]
 mod tests {
+    /// ADR-0120: the drop notice quotes the mention without letting its
+    /// `<@U…>` ping anyone, and names the emoji that makes it a task.
+    #[test]
+    fn the_drop_notice_quotes_safely_and_says_how_to_retrigger() {
+        let block = dropped_block("<@U_ME> 共有です & よろしく\n2\n3\n4", Some("eyes"));
+        let text = block["text"]["text"].as_str().unwrap();
+        assert!(
+            text.starts_with("> &lt;@U_ME&gt; 共有です &amp; よろしく\n> 2\n> 3"),
+            "{text}"
+        );
+        assert!(!text.contains("> 4"), "three lines at most: {text}");
+        assert!(text.ends_with(":eyes: を付けてください。"), "{text}");
+        let plain = dropped_block("FYI", None);
+        assert_eq!(
+            plain["text"]["text"], "> FYI",
+            "no reaction trigger, no hint"
+        );
+    }
+
     use super::*;
     use crate::error::SlackError;
     use crate::transport::TokenKind;
@@ -1834,6 +2002,8 @@ mod tests {
             task_id_prefix: prefix.map(str::to_string),
             instructions_kind: None,
             files: Vec::new(),
+            from_bot: false,
+            reply_check: false,
         }
     }
 
@@ -1852,6 +2022,8 @@ mod tests {
             task_id_prefix: None,
             instructions_kind: None,
             files: Vec::new(),
+            from_bot: false,
+            reply_check: false,
         }
     }
 
@@ -2187,6 +2359,8 @@ mod tests {
                 task_id_prefix: None,
                 instructions_kind: None,
                 files: Vec::new(),
+                from_bot: false,
+                reply_check: false,
             },
             sender_name: "alice".into(),
             channel_name: "general".into(),

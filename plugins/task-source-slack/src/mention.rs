@@ -95,6 +95,15 @@ pub struct Mention {
     /// agent with a Slack tool of its own fetches the file from it. Empty for
     /// a message with no attachment.
     pub files: Vec<SlackFile>,
+    /// Whether a bot wrote the message (it carries a `bot_id`; ADR-0120).
+    /// Not readable from [`user`](Self::user): an app's bot posts with both a
+    /// `bot_id` and a `U…` user, so the id's first letter misses it.
+    pub from_bot: bool,
+    /// Whether this task is asked "does this need a reply?" before anything
+    /// else (ADR-0120). True on the mention path only: a reaction is the
+    /// operator asking for the task outright, and a channel watch is not a
+    /// conversation with anyone.
+    pub reply_check: bool,
 }
 
 impl Mention {
@@ -384,7 +393,18 @@ impl MentionFilter {
             // whole premise of this plugin.
             post_as_bot: false,
             files: parse_files(event),
+            from_bot: bot_id.is_some(),
+            reply_check: true,
         })
+    }
+
+    /// Forget that `key` was processed, so a later trigger on the same message
+    /// (the operator's reaction) is admitted (ADR-0120): the reply check
+    /// dropped it, rightly or not, and the reaction is the way back.
+    pub(crate) fn forget(&mut self, key: &str) {
+        if self.processed.remove(key) {
+            self.processed_order.retain(|k| k != key);
+        }
     }
 
     /// Record `key` as processed; `false` when it already was.
@@ -425,6 +445,8 @@ mod tests {
             task_id_prefix: prefix.map(str::to_string),
             instructions_kind: None,
             files: Vec::new(),
+            from_bot: false,
+            reply_check: false,
         }
     }
 
@@ -874,6 +896,27 @@ mod tests {
         }
         assert!(f.processed.len() <= PROCESSED_CAP);
         assert_eq!(f.processed.len(), f.processed_order.len());
+    }
+
+    /// ADR-0120: a forgotten key admits the same message again (the
+    /// operator's reaction after the reply check dropped it), and a bot's
+    /// post is marked as one even when it also carries a `U…` user.
+    #[test]
+    fn a_forgotten_key_is_admitted_again_and_bots_are_marked() {
+        let mut f = filter();
+        let event = mention_event();
+        let mention = f.assess(&event).unwrap();
+        assert!(mention.reply_check && !mention.from_bot);
+        assert!(f.assess(&event).is_none(), "deduplicated");
+        f.forget(&mention.message_key());
+        assert!(f.assess(&event).is_some(), "admitted again");
+        assert_eq!(f.processed.len(), f.processed_order.len());
+
+        let mut app_bot = mention_event();
+        app_bot["ts"] = json!("200.0");
+        app_bot["subtype"] = json!("bot_message");
+        app_bot["bot_id"] = json!("B0APP");
+        assert!(f.assess(&app_bot).unwrap().from_bot);
     }
 
     #[test]

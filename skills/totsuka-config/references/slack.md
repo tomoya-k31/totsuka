@@ -34,9 +34,13 @@ Each Slack task needs a repository, picked in this order:
 
 1. `"repo": "<name>"` in a mention trigger (`{"mention": true, "repo": "web-app"}`) fixes it for that workflow; nothing else runs. `repo` is not allowed next to `reaction` (Start fails with "has `repo` in its trigger but no `channel`"): a reaction task takes the repository its thread already has, or goes through the steps below. A channel watch always names its `repo`.
 2. `[[slack.channel_groups]]` (`{"prefix": "dev-", "repos": [...]}`) narrows the candidates by channel name, and `fallback_repo` catches the channels no group matches.
-3. With two or more candidates left, an LLM picks. That needs `[slack.llm]` or the top-level `[llm]` whenever the file lists more than one repository, even if every path above is fixed. Without it, the plugin refuses to start. Ask which OpenAI-compatible API the user has, then write `set /llm '{"base_url": "<API base URL>", "model": "<model>", "api_key_ref": "secret:llm.api_key_ref"}'` (`model` is required; other keys are in the schema).
+3. With two or more candidates left, an LLM picks.
 
-Ask which repositories questions are about. With a single candidate, no LLM is involved and nothing needs pinning.
+Ask which repositories questions are about. With a single candidate, no repository is classified and nothing needs pinning.
+
+## The LLM
+
+Every mention is first asked whether it needs a reply at all: an FYI, an announcement, a bare thank-you, a "react when done" request or a bot's ask is dropped with a note in the app DM instead of becoming a task, and the user's reaction still turns it into one. So **a workflow answering mentions needs `[slack.llm]` or the top-level `[llm]`** — with a single repository too — as does a file listing more than one repository. Without it, the plugin refuses to start. Ask which API the user has, then write `set /llm '{"base_url": "<API base URL>", "model": "<model>", "api_key_ref": "secret:llm.api_key_ref"}'` (`model` is required; other keys are in the schema). If the user's team marks finished work with a specific emoji reaction, offer to name it in `[slack.prompts].reply_check_criteria`.
 
 ## Workflows
 

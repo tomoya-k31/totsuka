@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](slack-setup.ja.md)
 
-<!-- generated-from: ai-docs/operations/slack-quickstart.md sha256:8dd0d71e06cc666da3d8a73c835240a96af253acbf8319ed437ce0da4d31e94c -->
+<!-- generated-from: ai-docs/operations/slack-quickstart.md sha256:50d4506e4962b50c12d150c85585986930b07d301bd10db3a3bdea19f0546fe9 -->
 
 # Setting up the Slack source
 
@@ -126,6 +126,7 @@ Open the file and uncomment at least the following. The `[slack]` section is eas
 2. `[plugins.slack] enabled = true` and `[plugins.herdr] enabled = true`
 3. `[slack]`'s `app_token`, `user_token`, `bot_token` and `target_user_id` (the member id from step 1)
 4. the slack entry under `[[projects]]`, and `[[workflows]]` — the quickest route is to uncomment **"Slack — reply as yourself" in the recipe section at the end of the file**
+5. `[llm]` — **required if you answer mentions**. Every mention is asked "does this need a reply?" by the LLM before it becomes a task, and totsuka refuses to start without one. A core `[llm]` (with `api_key_ref`) is handed to the Slack plugin as-is
 
 If you have not stored the tokens yet, `setup` has already printed the exact commands to run.
 
@@ -205,9 +206,11 @@ reply_style = "Keep it short and polite"  # optional
 # name = "web-app"
 # summary = "The customer-facing web app"
 
-# With two or more candidates a classifier LLM is required. If config.toml has
-# an `[llm]` section with a key, it is supplied automatically. Set this only to
-# use a different model or threshold for this plugin:
+# An LLM is required when a workflow answers mentions (the reply check), and is
+# also used to classify the repository when there are two or more candidates.
+# If config.toml has an `[llm]` section with a key, it is supplied
+# automatically. Set this only to use a different model or threshold for this
+# plugin:
 # [llm]
 # base_url = "https://openrouter.ai/api/v1"
 # model = "…"
@@ -217,6 +220,8 @@ reply_style = "Keep it short and polite"  # optional
 Every key is described in the [configuration reference](config-reference.md).
 
 ## 4. Verify, then run
+
+**A mention that needs no reply does not become a task.** Sharing, an FYI, an announcement, a meeting invitation, a bare thank-you, a work request that asks for an emoji reaction to report it done, and a bot's request are judged "no reply needed" by the LLM before the repository is resolved, and no agent runs. Instead, with a `bot_token`, the app DM gets the sender, the reason and an excerpt. If the judgment was wrong, add your reaction-trigger emoji (`:eyes:`, say) to the mention and it becomes a task — reactions are not checked. A check that fails is handled the same way: it stops and tells you in the DM. The rule is `[slack.prompts] reply_check_criteria`; the threshold is `[slack] reply_check_threshold` (default 0.7).
 
 ```sh
 totsuka config validate   # offline checks
@@ -245,6 +250,8 @@ To try it end to end, have someone mention you. After the agent finishes, a draf
 | `doctor` reports `invalid_auth` or `token_revoked` | The token was revoked. Reissue it and update wherever you stored it |
 | `doctor` reports an identity mismatch | The token belongs to someone else, or `target_user_id` is wrong. This is refused on purpose, to prevent posting as another person |
 | Mentions do not become tasks | Check that the mention is `@you` (only channels you are in are visible), that `run --watch` is running, and that the message is a plain post — edits and totsuka's own bot posts are ignored (other bots' mentions do count) |
+| A mention does not become a task, and the app DM says it needs no reply | The reply check judged it so. Read the reason in the DM; if it is wrong, add your reaction-trigger emoji to the mention (reactions are not checked). If the same kind of mistake keeps happening, adjust `[slack.prompts] reply_check_criteria` or raise `reply_check_threshold` |
+| The app DM says the reply check could not be made | The LLM call failed (an expired key, the network, an unreadable answer). `totsuka status` should show a degraded line from the plugin. Once fixed, rescue the mention with a reaction |
 | Reacting does not create a task | Check that a workflow has `trigger = { reaction = "…" }` (**order in the file does not matter** — mentions and reactions arrive on separate event paths, so a reaction workflow written after the catch-all is not hidden by it), that the emoji name matches (👀 is `eyes`, 👁 is `eye`; a custom emoji arrives under the name actually clicked, so list aliases too), that **you** were the one who reacted, that the app was reinstalled with a manifest containing `reactions:read` — without that scope the event never arrives **and nothing reports an error** — and that the message was not **already handled as a mention**: both paths share one set of processed messages, so reacting to a message that already became a task does nothing |
 | Re-adding a reaction does not re-run it | Intended. A message that was handled successfully is not handled again, so removing and re-adding a reaction cannot start a second agent. A message whose fetch **failed** can be retried this way |
 | The draft arrives but the buttons no longer work | They expire after 24 hours, or were evicted once more than 1024 drafts accumulated. If you configured `bot_token`, the notification DM still holds a copy of the reply text — reply by hand from that, or mention again. Drafts survive a restart |

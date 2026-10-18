@@ -53,6 +53,11 @@ pub struct Shared {
     posted_urls: Arc<Mutex<Vec<PostedUrl>>>,
     chat_responses: Arc<Mutex<VecDeque<Result<Value, ClassifyError>>>>,
     chat_requests: Arc<Mutex<Vec<Value>>>,
+    /// Reply-check answers (ADR-0120), kept apart from the classifier's queue
+    /// so a test about classification need not know the check exists. Empty
+    /// answers "needs a reply", which is what lets the mention go on.
+    reply_checks: Arc<Mutex<VecDeque<Result<Value, ClassifyError>>>>,
+    reply_check_requests: Arc<Mutex<Vec<Value>>>,
     /// What `granted_scopes` reports. `None` (the default) is the real
     /// transport-cannot-see-headers case, which the scope check must ignore.
     scopes: Arc<Mutex<Option<Vec<String>>>>,
@@ -109,6 +114,13 @@ impl Shared {
     }
     pub fn chat_requests(&self) -> Vec<Value> {
         self.chat_requests.lock().unwrap().clone()
+    }
+    /// Queue one reply-check outcome (ADR-0120).
+    pub fn push_reply_check(&self, outcome: Result<Value, ClassifyError>) {
+        self.reply_checks.lock().unwrap().push_back(outcome);
+    }
+    pub fn reply_check_requests(&self) -> Vec<Value> {
+        self.reply_check_requests.lock().unwrap().clone()
     }
 }
 
@@ -192,16 +204,44 @@ impl HttpTransport for FakeChat {
         &self,
         request: HttpRequest<'_>,
     ) -> impl Future<Output = Result<Value, ClassifyError>> + Send {
-        self.shared
-            .chat_requests
-            .lock()
-            .unwrap()
-            .push(request.body.clone());
-        let next = self.shared.chat_responses.lock().unwrap().pop_front();
+        let next = if is_reply_check(request.body) {
+            self.shared
+                .reply_check_requests
+                .lock()
+                .unwrap()
+                .push(request.body.clone());
+            let queued = self.shared.reply_checks.lock().unwrap().pop_front();
+            Some(queued.unwrap_or_else(|| {
+                Ok(chat_answer(
+                    r#"{"reply":"reply","confidence":1.0,"reason":"a question"}"#,
+                ))
+            }))
+        } else {
+            self.shared
+                .chat_requests
+                .lock()
+                .unwrap()
+                .push(request.body.clone());
+            self.shared.chat_responses.lock().unwrap().pop_front()
+        };
         async move {
             next.unwrap_or_else(|| Err(ClassifyError::Transport("no canned chat response".into())))
         }
     }
+}
+
+/// Whether a chat or decisions body is the reply check rather than the
+/// repository classifier.
+fn is_reply_check(body: &Value) -> bool {
+    body.pointer("/questions/reply").is_some()
+        || body["messages"][0]["content"]
+            .as_str()
+            .is_some_and(|system| system.contains("needs a written reply"))
+}
+
+/// A chat-completions response whose content is `text`.
+pub fn chat_answer(text: &str) -> Value {
+    json!({ "choices": [{ "message": { "content": text } }] })
 }
 
 /// A transport over (a clone of) `shared`.

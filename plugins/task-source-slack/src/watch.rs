@@ -211,6 +211,9 @@ impl WatchTriggers {
             // A clipped article is exactly the kind of post that carries a
             // file, so this path needs the metadata as much as a mention does.
             files: post.files.to_vec(),
+            // Row 1 already dropped every bot post.
+            from_bot: false,
+            reply_check: false,
         })
     }
 }

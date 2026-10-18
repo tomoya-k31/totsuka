@@ -4,7 +4,7 @@ title: 設定例集（config.toml）
 description: そのまま貼って動く config.toml の完全版注釈付き例と、選択肢を持つキー（kind・mode・output・verification・cleanup・trigger・シークレット参照・並列上限）の選び分け基準、TOTSUKA_* 環境変数オーバーライドの対応表、および最小構成／GitHub Projects／Slack／設計→実装ハンドオフのシナリオ別レシピ。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/crates/orchestrator-cli/templates/config.toml
 tags: [config, toml, examples, recipes, workflow, secrets, slack, github, herdr, environment]
-generated: { by: claude-code/opus-5.5, at: 2026-09-26T12:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-18T17:00:00+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -643,8 +643,9 @@ trigger = { channel = "C0123ABCDEF", channel_name = "clip", repo = "my-docs" }
   候補を絞りたい、または Slack 文脈用に別の `summary` を与えたいときだけ書く。
 - `[llm]` — 省略すると `config.toml` の `[llm]` が `initialize` 経由で供給される。
   書く場合はキー名が `api_key_ref` ではなく **`api_key`** である点に注意（`base_url` / `model` / `api_key` が必須、
-  `confidence_threshold` は既定 0.6）。両方に無い場合、**リポジトリ候補が 2 件以上あるときだけ** `initialize` が
-  `CONFIG_INVALID` で失敗する（候補が 0 件か 1 件なら分類の必要が無いので起動する）。
+  `confidence_threshold` は既定 0.6）。両方に無い場合、**メンションに答える workflow があるか、リポジトリ候補が
+  2 件以上あるとき** `initialize` が `CONFIG_INVALID` で失敗する。すべてのメンションは返信要否判定にかかるため
+  （[ADR-0120](/decisions/adr-0120-slack-reply-check.md)）、候補が 1 件でもメンションに答えるなら要る。
 
 `poll_interval_secs` は使わない。Socket Mode のイベント駆動で即 push するため（[ADR-0008](/decisions/adr-0008-task-submit-push-ingestion.md)）。
 

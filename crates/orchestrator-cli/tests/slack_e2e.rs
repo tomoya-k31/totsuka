@@ -238,6 +238,14 @@ fn percent_decode(input: &[u8]) -> String {
 fn respond(path: &str, ws_url: &str) -> Value {
     match path {
         "/auth.test" => json!({ "ok": true, "user_id": "U_ME", "user": "me" }),
+        // The plugin's `[slack.llm]` points here too. The only question it
+        // asks with one repository is the reply check (ADR-0120), and this
+        // mention needs a reply.
+        "/llm/chat/completions" => json!({
+            "choices": [{ "message": {
+                "content": r#"{"reply":"reply","confidence":1.0,"reason":"a question"}"#
+            } }]
+        }),
         "/apps.connections.open" => json!({ "ok": true, "url": ws_url }),
         "/conversations.open" => json!({ "ok": true, "channel": { "id": "D_SELF" } }),
         "/users.info" => json!({
@@ -511,12 +519,18 @@ output = "source"
 
 # Deliberately no `[[slack.repos]]`: the orchestrator supplies its single
 # `[[repositories]]` entry at initialize (#109), and one candidate resolves
-# without any LLM — the acceptance path for the fallback.
+# without classification — the acceptance path for the fallback. The `[llm]`
+# is for the reply check every mention goes through first (ADR-0120).
 [slack]
 app_token = "xapp-1-A1-e2e"
 user_token = "xoxp-e2e-user"
 target_user_id = "U_ME"
 api_url = "{mock_api_url}"
+
+[slack.llm]
+base_url = "{mock_api_url}/llm"
+model = "m"
+api_key = "sk-e2e"
 
 [mock_agent]
 stream_states = ["running", "done"]

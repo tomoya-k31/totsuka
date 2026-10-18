@@ -273,3 +273,64 @@ classifier_user = """
 classifier_correction = """
 That response was not a parseable JSON verdict. Answer again with ONLY the JSON object — no prose, no code fences.\
 """
+
+# The reply check (ADR-0120): asked of every mention before anything else,
+# "does the operator need to write a reply to this?". A `no_reply` verdict at
+# or above `reply_check_threshold` drops the mention with an app DM instead of
+# making it a task; the operator's reaction still turns it into one.
+#
+# The decision rule, shared by both backends: a chat model reads it inside
+# `reply_check_system` (as `{criteria}`), a decisions model reads it verbatim
+# as the question. Name your own organisation's "report completion with this
+# emoji" reaction here if it has one — the built-in text cannot know it.
+#
+# Placeholders: none.
+reply_check_criteria = """
+Decide whether the operator has to write a reply to this Slack mention.
+
+Answer `no_reply` when the mention is only one of these:
+- sharing, FYI, "for your reference", a CC, an announcement, or a meeting invitation;
+- a thank-you and nothing else;
+- a light request such as "have a look when you can" that needs no written answer;
+- a work request that asks for an emoji reaction, rather than a reply, to report it done;
+- a request, ask or confirmation posted by a bot (Sender: bot).
+
+Answer `reply` for everything else, including every request, ask, question or confirmation from a human (Sender: human). When unsure, answer `reply`.\
+"""
+
+# System prompt for the reply check on a chat backend.
+#
+# Placeholders: {criteria}
+#
+# The literal `{"reply": …}` below is JSON output shape, not a placeholder.
+reply_check_system = """
+You judge whether a Slack mention needs a written reply from the operator.
+
+{criteria}
+
+Answer with ONLY a JSON object of the exact shape {"reply": "reply" | "no_reply", "confidence": number, "reason": string} — no prose, no code fences. `confidence` is 0.0-1.0, your own estimate of how sure you are. `reason` is one short sentence, written in the same language as the mention.\
+"""
+
+# User message for the reply check on a chat backend.
+#
+# Placeholders: {sender} {mention_text} {thread_context}
+#
+# `{sender}` is `bot` or `human`. The other two are attacker-controllable
+# Slack content; single-pass rendering keeps them from expanding further.
+reply_check_user = """
+## Sender
+{sender}
+
+## Mention
+{mention_text}
+
+## Thread context
+{thread_context}\
+"""
+
+# Retry turn appended after a malformed reply-check answer.
+#
+# Placeholders: none.
+reply_check_correction = """
+That response was not a parseable JSON verdict. Answer again with ONLY the JSON object — no prose, no code fences.\
+"""

@@ -48,6 +48,7 @@ fn init_params_in(state_dir: &std::path::Path) -> Value {
             "app_token": "xapp-1-A1-test",
             "user_token": "xoxp-user-test",
             "target_user_id": "U_ME",
+            "llm": { "base_url": "https://llm.test/v1", "model": "m", "api_key": "k" },
             "thread_context_limit": 3,
             "repos": [{ "name": "web-app" }]
         }

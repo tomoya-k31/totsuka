@@ -338,6 +338,13 @@ impl ReactionTriggers {
         self.emojis.is_empty()
     }
 
+    /// One configured trigger emoji, for telling the operator how to turn a
+    /// dropped mention into a task anyway (ADR-0120). `None` when reactions
+    /// trigger nothing.
+    pub fn any_emoji(&self) -> Option<&str> {
+        self.emojis.first().map(|e| e.name.as_str())
+    }
+
     /// The mention routes, in the order they are tried.
     pub fn mention_routes(&self) -> &[MentionRoute] {
         &self.mention_routes
@@ -567,6 +574,8 @@ pub fn to_mention(target: &ReactionTarget, message: SlackMessage) -> Option<Ment
         // only reads this to resolve a display name, and that lookup already
         // falls back to printing the id when it fails, so a `B…` here degrades
         // to a `B…` in the pane rather than to a broken task.
+        from_bot: message.bot_id.is_some(),
+        reply_check: false,
         user: message.user.or(message.bot_id)?,
         text: message.text,
         ts: message.ts,
