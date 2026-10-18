@@ -277,6 +277,10 @@ opening the PR, when the diff contains code):
   change only**: `git diff --staged` before a commit, `git diff main...HEAD`
   before a PR. Scanning the whole repository is `/ponytail-audit`, a different
   skill, and its findings are not this PR's to fix.
+  **The `main...HEAD` pass is required even when every commit had its staged
+  one**: a cut that looked wrong inside one commit can look right across the
+  branch, and a fix commit added after the last pass was reviewed by nobody.
+  For a stacked PR, once per layer on that layer's own range.
 - **Stage everything that belongs in the commit first, and re-stage after
   applying a cut.** `git diff --staged` is the pass's whole input, so anything
   outside it is reviewed by nobody. One check covers every way that happens:
@@ -313,31 +317,35 @@ opening the PR, when the diff contains code):
   or re-run the groups the cuts touched.
 - `ponytail` is a user-installed plugin this repository does not declare. If
   the skill is missing, say so and move on — it must not block the PR.
-- **Run it once more on `git diff main...HEAD` right before opening the PR**,
-  even when every commit already had its staged pass: a cut that looked wrong
-  inside one commit can look right across the whole branch, and a fix commit
-  added after the last pass was reviewed by nobody. For a stacked PR, once per
-  layer on that layer's own range.
 
 **Security pass — `/security-review`** (right before opening the PR, when the
 diff contains code — required, like the over-engineering pass):
 
-- Run the `/security-review` skill **inline in the main session** on the
-  branch's changes (`main...HEAD`; for a stacked PR, the whole stack is fine —
-  the skill reviews the current branch's changes and a finding names its file).
+- **Order**: the final over-engineering pass on `main...HEAD` first, then this
+  one — so the cuts are reviewed for security too. If this pass's fixes change
+  code, run `/ponytail-review` once more on just those fix commits.
+- Run the `/security-review` skill **inline in the main session**. It takes no
+  range argument: it reviews the current branch against `main`. **For a
+  stacked PR, run it once on the top layer before `gh stack submit`**, which
+  covers every layer (each finding names its file, so you know whose it is).
 - **Fix each finding before opening the PR**, in a **new** commit on the layer
-  that introduced it (never amend → git-conventions), then re-run the scoped
-  checks that commit touches. A finding judged not exploitable is recorded,
-  with the reason, in the PR body — not silently dropped.
+  that introduced it (never amend → git-conventions) — for a lower layer, the
+  steps under "Fixing a lower layer" in the stacked-PR section — then re-run
+  the scoped checks that commit touches. A finding judged not exploitable is
+  recorded, with the reason, in the PR body — not silently dropped.
 - Why it is required here: this repository carries untrusted text across
   trust boundaries by design — Slack / Discord / GitHub content into prompts,
   LLM output into Slack posts and DMs, plugin-written strings into
-  `status` / the menu bar. `/code-review` and Copilot look for correctness; a
-  `<url|label>` planted in an app DM through a model's echoed reason (#927)
-  passed both and was caught only by a security pass.
-- It also runs after the commit, as a background review on commits and pushes
-  when the `security-guidance` plugin is installed. That one is a safety net
-  and may arrive after the PR is open; the pre-PR pass is the gate.
+  `status` / the menu bar. Reviews for correctness are not looking for that:
+  in #927 a `<url|label>` that a crafted mention could plant in an app DM,
+  through the model's echoed reason, was found by a security review, after
+  the change had been written, tested and committed.
+- When the `security-guidance` plugin is installed, it also reviews in the
+  background (on commits and pushes, and possibly at other points the plugin
+  decides). **Its findings get the same handling as this pass's** — fix in a
+  new commit, or record why not in the PR body — whether they arrive before
+  or after the PR is open. It is a second net, not a substitute: run this pass
+  yourself either way.
 - Same 10-minute ceiling as the pre-PR review below. If the skill is missing
   or stalls, say so in the PR body and proceed — the background review and
   `/code-review --comment` (step 5) still run.
