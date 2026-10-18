@@ -338,11 +338,19 @@ impl ReactionTriggers {
         self.emojis.is_empty()
     }
 
-    /// One configured trigger emoji, for telling the operator how to turn a
-    /// dropped mention into a task anyway (ADR-0120). `None` when reactions
-    /// trigger nothing.
-    pub fn any_emoji(&self) -> Option<&str> {
-        self.emojis.first().map(|e| e.name.as_str())
+    /// A trigger emoji that would turn a post by `bot_id` (`None` = a
+    /// human) into a task, for telling the operator how to rescue a mention
+    /// the reply check dropped (ADR-0120). A bot's post needs a trigger whose
+    /// `from_bot` names it, exactly as [`to_mention`] requires. `None` when no
+    /// trigger would take it.
+    pub fn emoji_for(&self, bot_id: Option<&str>) -> Option<&str> {
+        self.emojis
+            .iter()
+            .find(|e| match bot_id {
+                None => true,
+                Some(id) => e.from_bot.iter().any(|b| b == id),
+            })
+            .map(|e| e.name.as_str())
     }
 
     /// The mention routes, in the order they are tried.
@@ -574,7 +582,7 @@ pub fn to_mention(target: &ReactionTarget, message: SlackMessage) -> Option<Ment
         // only reads this to resolve a display name, and that lookup already
         // falls back to printing the id when it fails, so a `B…` here degrades
         // to a `B…` in the pane rather than to a broken task.
-        from_bot: message.bot_id.is_some(),
+        bot_id: message.bot_id.clone(),
         reply_check: false,
         user: message.user.or(message.bot_id)?,
         text: message.text,
@@ -822,6 +830,29 @@ mod tests {
         // The catch-all keys on the conversation, so it carries no prefix —
         // that is what lets a second message in the thread continue it.
         assert_eq!(plain.task_id_prefix_for(None), None);
+    }
+
+    /// ADR-0120: the drop notice names an emoji that would actually take the
+    /// post — any trigger for a human's, only one whose `from_bot` names the
+    /// bot for a bot's.
+    #[test]
+    fn the_rescue_emoji_is_one_that_takes_the_post() {
+        let trigger = |emoji: &str, bots: &[&str]| WorkflowTrigger {
+            workflow: format!("wf-{emoji}"),
+            reaction: Some(emoji.into()),
+            task_id_prefix: None,
+            instructions_kind: None,
+            from_bot: bots.iter().map(|b| (*b).to_string()).collect(),
+            to_group: Vec::new(),
+            repo: None,
+            mention: false,
+        };
+        let set = ReactionTriggers::resolve(&[trigger("eyes", &[]), trigger("hammer", &["B_CI"])])
+            .expect("valid");
+        assert_eq!(set.emoji_for(None), Some("eyes"));
+        assert_eq!(set.emoji_for(Some("B_CI")), Some("hammer"));
+        assert_eq!(set.emoji_for(Some("B_OTHER")), None);
+        assert_eq!(ReactionTriggers::default().emoji_for(None), None);
     }
 
     /// A resolved trigger set holding `eyes`.

@@ -212,7 +212,7 @@ impl WatchTriggers {
             // file, so this path needs the metadata as much as a mention does.
             files: post.files.to_vec(),
             // Row 1 already dropped every bot post.
-            from_bot: false,
+            bot_id: None,
             reply_check: false,
         })
     }

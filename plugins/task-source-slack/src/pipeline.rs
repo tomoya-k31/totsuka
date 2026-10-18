@@ -359,12 +359,12 @@ impl<S: Clone> Clone for Orchestrator<S> {
 #[derive(Clone)]
 struct ReplyCheckCtx {
     /// Hands a dropped mention's dedup key back to the event loop, which owns
-    /// the filter: the operator's reaction is the way back from a drop, and a
-    /// spent key would silence it.
-    forget: mpsc::UnboundedSender<String>,
-    /// A trigger emoji to name in the drop notice; `None` when reactions
-    /// trigger nothing.
-    retrigger_emoji: Option<String>,
+    /// the filter, so the operator's reaction — and only that — may still
+    /// claim it.
+    readmit: mpsc::UnboundedSender<String>,
+    /// The reaction triggers, for naming an emoji in the drop notice that
+    /// would actually take this post (a bot's needs `from_bot`).
+    triggers: ReactionTriggers,
 }
 
 /// Run the pipeline over `events` until the channel closes: filter each
@@ -504,10 +504,10 @@ where
             submit: submitter,
             lookup,
         };
-        let (forget_tx, mut forget_rx) = mpsc::unbounded_channel::<String>();
+        let (readmit_tx, mut readmit_rx) = mpsc::unbounded_channel::<String>();
         let reply_check = ReplyCheckCtx {
-            forget: forget_tx,
-            retrigger_emoji: trigger_reactions.any_emoji().map(str::to_string),
+            readmit: readmit_tx,
+            triggers: trigger_reactions.clone(),
         };
         // Watched channels: verify each name, then recover what was posted
         // while the plugin was down. Both happen before the event loop opens,
@@ -562,10 +562,10 @@ where
                     Some(event) => event,
                     None => return,
                 },
-                // The reply check dropped a mention (ADR-0120): un-spend its
-                // key so the operator's reaction can still make it a task.
-                Some(key) = forget_rx.recv() => {
-                    filter.forget(&key);
+                // The reply check dropped a mention (ADR-0120): let the
+                // operator's reaction — only that — still make it a task.
+                Some(key) = readmit_rx.recv() => {
+                    filter.readmit_for_reaction(key);
                     continue;
                 }
                 // `watch_poll` is `None` under Socket Mode, where Slack
@@ -681,7 +681,7 @@ where
                     // too. The trigger would be unrecoverable until a restart
                     // cleared the LRU.
                     let dedup_key = target.dedup_key();
-                    if filter.already_processed(&dedup_key) {
+                    if !filter.reaction_may_claim(&dedup_key) {
                         tracing::debug!(
                             dedup_key,
                             "reaction ignored: this message already produced a task \
@@ -728,7 +728,7 @@ where
                     // actually records it, and returning early on `false`
                     // keeps the mention path's contract (one message, one
                     // task) even if the two ever race.
-                    if !filter.remember(dedup_key) {
+                    if !filter.claim_for_reaction(dedup_key) {
                         tracing::debug!("reaction ignored: the task was claimed by another path");
                         continue;
                     }
@@ -963,7 +963,7 @@ async fn passes_reply_check<T: SlackTransport, C: HttpTransport>(
     let context_text = enriched.context_lines.as_deref().unwrap_or(&[]).join("\n");
     let subject = Subject {
         text: &enriched.mention.text,
-        from_bot: enriched.mention.from_bot,
+        from_bot: enriched.mention.bot_id.is_some(),
         thread_context: &context_text,
     };
     let outcome = match config.llm.as_ref() {
@@ -1006,7 +1006,7 @@ async fn passes_reply_check<T: SlackTransport, C: HttpTransport>(
         }
     };
     // The event loop may already be gone (shutdown); then so is the filter.
-    let _ = reply_check.forget.send(message_key);
+    let _ = reply_check.readmit.send(message_key);
     let _ = crate::notify::send_nudge(
         api,
         state,
@@ -1014,7 +1014,7 @@ async fn passes_reply_check<T: SlackTransport, C: HttpTransport>(
         enriched.permalink.as_deref(),
         Some(vec![dropped_block(
             &enriched.mention.text,
-            reply_check.retrigger_emoji.as_deref(),
+            &retrigger_hint(&reply_check.triggers, enriched.mention.bot_id.as_deref()),
         )]),
     )
     .await;
@@ -1047,12 +1047,29 @@ fn escape_mrkdwn(text: &str) -> String {
 const DROPPED_EXCERPT_LINES: usize = 3;
 const DROPPED_EXCERPT_CHARS: usize = 200;
 
+/// How to make a dropped mention a task anyway, if any way exists: a trigger
+/// emoji that takes this post — for a bot's post, one whose `from_bot` names
+/// it, or else what to add.
+fn retrigger_hint(triggers: &ReactionTriggers, bot_id: Option<&str>) -> Option<String> {
+    match (triggers.emoji_for(bot_id), bot_id) {
+        (Some(emoji), _) => Some(format!(
+            "タスクにするには、このメンションに :{emoji}: を付けてください。"
+        )),
+        (None, Some(bot)) if !triggers.is_empty() => Some(format!(
+            "bot の投稿なので、リアクションでタスクにするにはリアクション起動の trigger の \
+             `from_bot` に `{}` を足してください。",
+            escape_mrkdwn(bot)
+        )),
+        (None, _) => None,
+    }
+}
+
 /// The dropped mention's notice body: an excerpt, and how to make it a task
 /// anyway.
 ///
 /// The excerpt is escaped, not rendered: a `<@U…>` in it would otherwise
 /// become a live mention in the operator's DM.
-fn dropped_block(text: &str, retrigger_emoji: Option<&str>) -> Value {
+fn dropped_block(text: &str, retrigger_hint: &Option<String>) -> Value {
     let excerpt = clip(
         &text
             .lines()
@@ -1066,10 +1083,9 @@ fn dropped_block(text: &str, retrigger_emoji: Option<&str>) -> Value {
         .map(|line| format!("> {line}"))
         .collect();
     let mut body = quoted.join("\n");
-    if let Some(emoji) = retrigger_emoji {
-        body.push_str(&format!(
-            "\n\nタスクにするには、このメンションに :{emoji}: を付けてください。"
-        ));
+    if let Some(hint) = retrigger_hint {
+        body.push_str("\n\n");
+        body.push_str(hint);
     }
     json!({ "type": "section", "text": { "type": "mrkdwn", "text": body } })
 }
@@ -1901,6 +1917,30 @@ async fn thread_context<T: SlackTransport>(
 
 #[cfg(test)]
 mod tests {
+    /// ADR-0120: for a bot's post with no trigger naming that bot, the hint
+    /// says what to add instead of naming an emoji that would do nothing.
+    #[test]
+    fn a_bot_post_without_a_trigger_for_it_gets_the_from_bot_hint() {
+        let set = ReactionTriggers::resolve(&[crate::reaction::WorkflowTrigger {
+            workflow: "wf".into(),
+            reaction: Some("eyes".into()),
+            task_id_prefix: None,
+            instructions_kind: None,
+            from_bot: Vec::new(),
+            to_group: Vec::new(),
+            repo: None,
+            mention: false,
+        }])
+        .expect("valid");
+        assert!(retrigger_hint(&set, None).unwrap().contains(":eyes:"));
+        let bot = retrigger_hint(&set, Some("B_CI")).unwrap();
+        assert!(bot.contains("`from_bot`") && bot.contains("B_CI"), "{bot}");
+        assert_eq!(
+            retrigger_hint(&ReactionTriggers::default(), Some("B_CI")),
+            None
+        );
+    }
+
     /// The drop notice's headline carries other people's text (a display
     /// name, a model's reason that may echo the mention): it must not become
     /// a link, a mention or a broadcast in the operator's DM.
@@ -1929,7 +1969,8 @@ mod tests {
     /// `<@U…>` ping anyone, and names the emoji that makes it a task.
     #[test]
     fn the_drop_notice_quotes_safely_and_says_how_to_retrigger() {
-        let block = dropped_block("<@U_ME> 共有です & よろしく\n2\n3\n4", Some("eyes"));
+        let hint = Some("タスクにするには、このメンションに :eyes: を付けてください。".to_string());
+        let block = dropped_block("<@U_ME> 共有です & よろしく\n2\n3\n4", &hint);
         let text = block["text"]["text"].as_str().unwrap();
         assert!(
             text.starts_with("> &lt;@U_ME&gt; 共有です &amp; よろしく\n> 2\n> 3"),
@@ -1937,7 +1978,7 @@ mod tests {
         );
         assert!(!text.contains("> 4"), "three lines at most: {text}");
         assert!(text.ends_with(":eyes: を付けてください。"), "{text}");
-        let plain = dropped_block("FYI", None);
+        let plain = dropped_block("FYI", &None);
         assert_eq!(
             plain["text"]["text"], "> FYI",
             "no reaction trigger, no hint"
@@ -2049,7 +2090,7 @@ mod tests {
             task_id_prefix: prefix.map(str::to_string),
             instructions_kind: None,
             files: Vec::new(),
-            from_bot: false,
+            bot_id: None,
             reply_check: false,
         }
     }
@@ -2069,7 +2110,7 @@ mod tests {
             task_id_prefix: None,
             instructions_kind: None,
             files: Vec::new(),
-            from_bot: false,
+            bot_id: None,
             reply_check: false,
         }
     }
@@ -2406,7 +2447,7 @@ mod tests {
                 task_id_prefix: None,
                 instructions_kind: None,
                 files: Vec::new(),
-                from_bot: false,
+                bot_id: None,
                 reply_check: false,
             },
             sender_name: "alice".into(),

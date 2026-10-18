@@ -1,1 +1,2 @@
 * **Update**: [ADR-0120](/decisions/adr-0120-slack-reply-check.md) の結果の表を実装（`plugin/degraded` を立てるのは 401/403 と到達不能だけ）に合わせ、判定中に付けたリアクションは無視されることを明記した。[Slack Quickstart](/operations/slack-quickstart.md) のトラブルシューティングにも足した（PR #930 のレビュー指摘）。3/3 で触った concept の `generated.at` も直した。
+* **Update**: [ADR-0120](/decisions/adr-0120-slack-reply-check.md)・[task-source-slack](/components/task-source-slack.md) を、キーを消さず「リアクションにだけ再取得を許す」方式と、bot の投稿の救い方（`from_bot` の要否）に合わせた。[運用ガイド](/operations/operations-guide.md) に Slack が `plugin_degraded` を出す条件を書いた（PR #930 の代替レビュー指摘）。

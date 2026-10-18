@@ -4,7 +4,7 @@ title: 運用ガイド（doctor / worktree 掃除 / FAQ）
 description: totsuka 日常運用の手引き。doctor の読み方、ランタイム health（縮退）の読み方と doctor との守備範囲の違い、worktree 掃除ポリシーと孤児掃除、run 停止・回復と SSH keepalive の推奨設定、メニューバー表示（SwiftBar）の導入と読み方、よくある問題の切り分け。
 resource: https://github.com/tomoya-k31/totsuka
 tags: [operations, doctor, health, worktree, menu, swiftbar, faq, troubleshooting]
-generated: { by: claude-code/opus-5.5, at: 2026-10-18T21:11:28+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-18T21:18:02+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -105,7 +105,7 @@ health に入るのは **「今もそうか」を毎サイクル問い直せる�
 | `plugin_down` | プラグインが落ちている。`abandoned` なら supervisor が再起動を諦めた後で、待っても戻らない |
 | `spool_backlog` | `replay_spool` が drain できなかった `*.jsonl` が残っている |
 | `llm_key_rejected` | ゲートウェイが鍵を 401/403 で拒否した。**成功した呼び出しで自動的に解除される** |
-| `plugin_degraded` | プラグインが自分で報告した異常（`plugin/degraded`、[ADR-0119](/decisions/adr-0119-plugin-degraded-notification.md)）。文はプラグインが書き、そのプラグインが解除するまで残る。**プラグインが落ちると、そのプラグインの報告はまとめて消える**（落ちたことは `plugin_down` が言う） |
+| `plugin_degraded` | プラグインが自分で報告した異常（`plugin/degraded`、[ADR-0119](/decisions/adr-0119-plugin-degraded-notification.md)）。文はプラグインが書き、そのプラグインが解除するまで残る。Slack プラグインは自分の LLM（返信要否判定・リポジトリ分類）が鍵を拒否したとき・答えないときに出し、次に答えが返ると消す（[ADR-0120](/decisions/adr-0120-slack-reply-check.md)）。**プラグインが落ちると、そのプラグインの報告はまとめて消える**（落ちたことは `plugin_down` が言う） |
 | `llm_unreachable` | ゲートウェイが答えない（接続不可・タイムアウト・5xx）。理由の短文つき。**ゲートウェイから何か答えが返れば（401 でも）自動的に解除される**。`run` は起動直後・スリープ復帰直後・最後の接触から 10 分の沈黙で自分からプローブし（不到達中は 60 秒おき）、タスクが 1 つ失敗するのを待たずにここへ出す（F-111、[ADR-0070](/decisions/adr-0070-llm-liveness.md)）。`totsuka doctor --online` の `llm-online` と同じリクエストなので、両者の「生きている」は一致する |
 
 入らないもの: `notify delivery failed` / `worktree cleanup failed` のような一過性の失敗（再評価できないので永久に残る）と、**隔離済みの `*.jsonl.corrupt`**（自動回収されないので数えると `⚠` が永久化する。あちらは `doctor` の `hook-spool` チェックの担当）。

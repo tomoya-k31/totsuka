@@ -842,14 +842,15 @@ pub struct SlackConfig {
         "x-help" = "This source's name on tasks. Change it only to run two of this plugin."
     ))]
     pub source_name: String,
-    /// Repository-selection LLM. Required when more than one repository
-    /// candidate ends up declared (with a single candidate there is nothing
-    /// to classify) — but optional since #119: when omitted, the
+    /// The LLM for the reply check (ADR-0120) and repository selection.
+    /// Required when a workflow answers mentions (every mention is first
+    /// asked whether it needs a reply) or more than one repository candidate
+    /// ends up declared — but optional since #119: when omitted, the
     /// orchestrator's `[llm]` (supplied at `initialize`) fills in.
     #[serde(default)]
     #[schemars(extend(
-        "x-title" = "Repository classification",
-        "x-help" = "An LLM for this source only. Empty uses the global repository classification."
+        "x-title" = "LLM",
+        "x-help" = "An LLM for this source only: the reply check and repository classification. Empty uses the global LLM."
     ))]
     #[schemars(with = "Option<RawLlmConfig>")]
     pub llm: Option<LlmConfig>,
