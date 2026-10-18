@@ -166,7 +166,8 @@ const RESUME_GAP: Duration = Duration::from_secs(30);
 pub(crate) enum PluginEvent {
     /// A `state/notification` from an agent plugin.
     State(String, StateNotification),
-    /// A `plugin/degraded` from any plugin (P→O, 0.7.9, ADR-0119): a runtime
+    /// A `plugin/degraded` from a source or agent plugin (P→O, 0.7.9,
+    /// ADR-0119; a notifier's notifications are not read): a runtime
     /// problem it noticed, or that the problem is over.
     Degraded(String, PluginDegradedParams),
     /// A plugin process exited without being asked to (§5.3, #495). Emitted

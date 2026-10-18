@@ -30,7 +30,7 @@
 //!
 //! | Kind | Methods |
 //! |---|---|
-//! | common | [`initialize`](method::INITIALIZE), [`shutdown`](method::SHUTDOWN), [`config/validate`](method::CONFIG_VALIDATE), [`config/schema`](method::CONFIG_SCHEMA) (0.7.7, capability-gated), [`plugin/degraded`](method::PLUGIN_DEGRADED) (P→O notification, 0.7.9) |
+//! | common | [`initialize`](method::INITIALIZE), [`shutdown`](method::SHUTDOWN), [`config/validate`](method::CONFIG_VALIDATE), [`config/schema`](method::CONFIG_SCHEMA) (0.7.7, capability-gated), [`plugin/degraded`](method::PLUGIN_DEGRADED) (P→O notification, 0.7.9; read from task_source and agent_ide only) |
 //! | `task_source` | [`task/submit`](method::TASK_SUBMIT) (P→O, 0.1.6), [`task/update_status`](method::TASK_UPDATE_STATUS), [`task/update_labels`](method::TASK_UPDATE_LABELS), [`task/trigger`](method::TASK_TRIGGER) (0.7.8, capability-gated), [`result/publish`](method::RESULT_PUBLISH) |
 //! | `agent_ide` | [`task/dispatch`](method::TASK_DISPATCH), [`task/cancel`](method::TASK_CANCEL), [`session/attach`](method::SESSION_ATTACH), [`state/subscribe`](method::STATE_SUBSCRIBE) → [`state/notification`](method::STATE_NOTIFICATION), [`diagnostics/snapshot`](method::DIAGNOSTICS_SNAPSHOT) |
 //! | `notifier` | [`notify`](method::NOTIFY) |

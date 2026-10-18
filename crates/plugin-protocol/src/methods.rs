@@ -37,7 +37,8 @@ pub mod method {
     /// Report or clear a runtime degradation the plugin noticed (P→O,
     /// notification, 0.7.9, ADR-0119) — its LLM rejecting the key, say. The
     /// Orchestrator shows it with its own health (`status`, the menu bar) and
-    /// answers nothing.
+    /// answers nothing. Read from task_source and agent_ide plugins only; a
+    /// notifier's is dropped.
     pub const PLUGIN_DEGRADED: &str = "plugin/degraded";
 
     // task_source.

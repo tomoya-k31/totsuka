@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](operations-guide.ja.md)
 
-<!-- generated-from: ai-docs/operations/operations-guide.md sha256:74d66500421aaa86938b662eebf567fffc936bad272800e11c244c86271f405d -->
+<!-- generated-from: ai-docs/operations/operations-guide.md sha256:de1bb0ee880ce8e9de44394b2d62f5690184fe4a6fe6f647bf34ae9aa7744a5d -->
 
 # Operations guide
 
@@ -97,7 +97,7 @@ Six things show up there, and each one clears on its own once you fix it:
 | A plugin is down | Tasks that need it stay queued. If it says it will not be relaunched, waiting will not help — fix it and restart |
 | Hook signals stuck in the spool | Deliveries are failing. Check the socket path and the token with `doctor` |
 | The LLM gateway rejected the API key | Repository selection falls back to asking you for every new conversation. Reissue the key and update `[llm].api_key_ref` |
-| A plugin reports a problem of its own | The plugin wrote the line itself. The Slack plugin reports here when its own LLM (the reply check and repository classification) rejects the key or does not answer, and the line disappears on its next successful call. If the plugin goes down, its lines go with it — being down is reported on its own |
+| A plugin reports a problem of its own | The plugin wrote the line itself, and it stays until the plugin clears it. If the plugin goes down, its lines go with it — being down is reported on its own |
 | The LLM gateway is not answering | It could not be reached, timed out, or returned a server error — the line says which. Tasks that need the classifier fail until it is back. Check the network and `[llm].base_url`, or run `totsuka doctor --online` (it sends the same request, so the two agree on what "alive" means). totsuka checks this itself: once at startup, right after the Mac wakes from sleep, and after ten minutes without any call to the gateway (every minute while it is down). The line disappears as soon as the gateway answers anything, a 401 included |
 
 **A stopped orchestrator has no health, only a lock.** If `run` was killed, its last report is left on disk but ignored — you get "not running", never "degraded".

@@ -1,1 +1,2 @@
 * **Update**: [ADR-0119](/decisions/adr-0119-plugin-degraded-notification.md) の `message()` の形を実装に合わせ、閉じたプラグインから遅れて届いた `plugin/degraded` を捨てることを追記した（PR #929 のレビュー指摘）。2/3 で触った concept の `generated.at` も直した。
+* **Update**: [orchestrator-spec](/product/orchestrator-spec.md)（英日）の F-110 に `plugin_degraded` を加え、[プラグイン開発ガイド](/development/plugin-dev-guide.md) に「読むのは task_source と agent_ide の通知だけ」を明記し、[運用ガイド](/operations/operations-guide.md) からこの層ではまだ居ない送り手の記述を外した（PR #929 の代替レビュー指摘）。
