@@ -4,7 +4,7 @@ title: ADR-0120 Slack のメンションは返信要否を LLM で判定し、�
 description: task-source-slack が、メンション（追いメンション・グループ宛を含む）を workflow に割り当てた直後、repo 解決と task/submit より前に、本文・送信者種別・スレッド文脈から返信が要るかを [llm]（chat / decisions）で判定する決定。返信不要（専用閾値 0.7 以上）ならアプリ DM に理由と抜粋を送って終わり、判定に失敗したら中断して DM で知らせる。どちらも重複防止キーを戻し、本人のリアクションで必ずタスク化できる。設定なしで常に有効で、メンションに答える workflow があれば [llm] が必須になる。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/plugins/task-source-slack/src/reply_check.rs
 tags: [decision, slack, llm, mention, noise, adr]
-generated: { by: claude-code/opus-5.5, at: 2026-10-18T12:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-18T20:22:27+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -60,7 +60,7 @@ bot かどうかは `SlackMessage.bot_id` を `Mention` に運んで判定する
 |---|---|
 | 返信必要 | 従来どおり repo 解決 → `task/submit` |
 | 返信不要 | アプリ DM を送って終了 |
-| 判定失敗（API エラー・401/403・読めない応答） | 中断してアプリ DM で知らせる。`plugin/degraded` key `llm` を active にする |
+| 判定失敗（API エラー・401/403・読めない応答） | 中断してアプリ DM で知らせる。401/403 と到達不能（transport・timeout・5xx）なら `plugin/degraded` key `llm` を active にする（読めない応答はゲートウェイが答えた証拠なので解除側。→ 決定 7） |
 
 返信不要・失敗のどちらでも、**重複防止キーを戻す**。リアクション起動は判定を通らないので、本人がリアクションを付ければ必ずタスクになる。これが誤判定と障害の両方の回復手段である。アプリ DM は ADR-0021 のとおり通知専用で、ボタンは置かない。Gateway のレコードは従来どおり ack する（回復はリアクションで行う）。
 
@@ -75,6 +75,7 @@ DM には送信者・理由・本文の抜粋（先頭数行の引用）・「:�
 - **対象の印**: `Mention.reply_check` はメンション判定表を通ったときだけ立つ（リアクションとチャンネル監視が作る `Mention` は偽）。`Mention.from_bot` は `bot_id` の有無
 - **キーを戻す**: 重複防止の集合（`MentionFilter`）はイベントループが持っている。判定は spawn した `handle_mention` の中で走るので、そこからチャネルでキーをループへ送り、ループが `forget` する
 - **健全性**: 返信要否判定とリポジトリ分類は 1 本の LLM トランスポートを共有している。それを `llm::Reported` で包み、401/403 と到達不能を `plugin/degraded` key `llm` で報告し、それ以外の答えで消す。呼び出し側が報告を忘れる余地を作らない
+- **判定中のリアクション**: 判定の LLM 呼び出し中（数秒）に本人がリアクションを付けると、その時点ではキーが使用中なので無視される。その後に返信不要で落ちた場合は付け直しが要る。窓は判定の往復ぶんで、防ぐには「判定中のメッセージ」を別に追う状態が要るため、入れていない
 - **DM の本文**: 抜粋は最大 3 行・200 文字で、`<` `>` `&` をエスケープする。`<@U…>` が DM の中で生きたメンションにならないため。**見出しの送信者名・理由・エラー文も同じくエスケープし、200 文字で切る** —— 表示名は相手が決められ、chat の理由は読んだメンションをなぞりうるので、細工したメンションがアプリ自身の DM に `<https://…|ラベル>` のリンクを置けてしまうため
 
 # Consequences

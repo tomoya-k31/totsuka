@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](slack-setup.ja.md)
 
-<!-- generated-from: ai-docs/operations/slack-quickstart.md sha256:50d4506e4962b50c12d150c85585986930b07d301bd10db3a3bdea19f0546fe9 -->
+<!-- generated-from: ai-docs/operations/slack-quickstart.md sha256:741ac44308ba1d25302ee22ed58b5fe6406a5a92c66d194e5954ea76bc849ab7 -->
 
 # Setting up the Slack source
 
@@ -251,6 +251,7 @@ To try it end to end, have someone mention you. After the agent finishes, a draf
 | `doctor` reports an identity mismatch | The token belongs to someone else, or `target_user_id` is wrong. This is refused on purpose, to prevent posting as another person |
 | Mentions do not become tasks | Check that the mention is `@you` (only channels you are in are visible), that `run --watch` is running, and that the message is a plain post — edits and totsuka's own bot posts are ignored (other bots' mentions do count) |
 | A mention does not become a task, and the app DM says it needs no reply | The reply check judged it so. Read the reason in the DM; if it is wrong, add your reaction-trigger emoji to the mention (reactions are not checked). If the same kind of mistake keeps happening, adjust `[slack.prompts] reply_check_criteria` or raise `reply_check_threshold` |
+| A reaction added after "needs no reply" did not make a task | It was added while the check was still running (the few seconds before the DM arrived), when the message was still being handled and the reaction was ignored. Add it again after the DM arrives |
 | The app DM says the reply check could not be made | The LLM call failed (an expired key, the network, an unreadable answer). `totsuka status` should show a degraded line from the plugin. Once fixed, rescue the mention with a reaction |
 | Reacting does not create a task | Check that a workflow has `trigger = { reaction = "…" }` (**order in the file does not matter** — mentions and reactions arrive on separate event paths, so a reaction workflow written after the catch-all is not hidden by it), that the emoji name matches (👀 is `eyes`, 👁 is `eye`; a custom emoji arrives under the name actually clicked, so list aliases too), that **you** were the one who reacted, that the app was reinstalled with a manifest containing `reactions:read` — without that scope the event never arrives **and nothing reports an error** — and that the message was not **already handled as a mention**: both paths share one set of processed messages, so reacting to a message that already became a task does nothing |
 | Re-adding a reaction does not re-run it | Intended. A message that was handled successfully is not handled again, so removing and re-adding a reaction cannot start a second agent. A message whose fetch **failed** can be retried this way |

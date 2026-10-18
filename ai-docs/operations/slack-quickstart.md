@@ -4,7 +4,7 @@ title: Slack セットアップ Quickstart（task-source-slack）
 description: 受信方式（Socket Mode / Event Gateway）の選択から始まり、manifest からの Slack アプリ作成 → トークン発行 → トークン保管 → totsuka setup → config.toml の編集 → doctor → run --watch までの導入手順と、手で書く場合のフォールバック、トークン失効・スコープ変更時の対処。
 resource: https://github.com/tomoya-k31/totsuka/tree/main/plugins/task-source-slack
 tags: [slack, setup, runbook, secrets, doctor]
-generated: { by: claude-code/opus-5.5, at: 2026-10-18T17:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-18T20:22:27+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -255,6 +255,7 @@ Gateway 方式では `gcloud auth application-default login` が済んでいる�
 | `doctor` が identity mismatch（`target_user_id`） | 他人のトークン、または `target_user_id` の誤記。なりすまし防止で意図的に拒否している |
 | メンションがタスク化されない | ①メンション形式が `@自分` か（`user_events` は本人参加チャンネルのみ）②`run --watch` が起動中か ③編集（`message_changed` 等の subtype 付き）と totsuka 自身の bot の投稿は対象外。他の bot のメンションは対象（[ADR-0109](/decisions/adr-0109-slack-bot-mentions.md)） |
 | メンションがタスクにならず、アプリ DM に「返信不要と判断しました」が届く | 返信要否判定（[ADR-0120](/decisions/adr-0120-slack-reply-check.md)）が返信不要と判定した。DM の理由を読み、誤りならそのメンションにリアクション起動の絵文字を付ける（リアクションは判定しない）。同じ種類の誤りが続くなら `[slack.prompts] reply_check_criteria` を直すか `reply_check_threshold` を上げる |
+| 返信不要の DM の後にリアクションを付けたのにタスクにならない | 付けたのが判定の最中（DM が届く前の数秒）だった。そのときのリアクションはまだ使用中のキーに当たって無視される。DM が届いた後にもう一度付け直す |
 | アプリ DM に「返信要否を判定できず、処理を中断しました」が届く | LLM の呼び出しに失敗した（鍵の失効・ネットワーク・読めない応答）。`totsuka status` に `plugin_degraded` が出ているはず。直したら、そのメンションにリアクションを付けて救う |
 | リアクションを付けてもタスク化されない | ①`[[workflows]]` に `trigger = { reaction = "…" }` を持つ workflow があるか（**定義順は関係ない** — #554 以降はメンションとリアクションが別のイベント経路なので、catch-all より後ろに書いても隠れない）②絵文字名が一致しているか（👀 は `eyes`、👁 は `eye`。カスタム絵文字の alias は「実際に押された名前」で届くので alias を使うなら両方列挙）③**付けたのが自分か**（他人のリアクションでは起動しない。緩和する設定は無い — [ADR-0025](/decisions/adr-0025-reaction-task-trigger.md)）④`reactions:read` を含む manifest で再インストール済みか（スコープが無いとイベント自体が届かず、**エラーにもならない**）⑤同じメッセージを既に mention 経由で処理していないか（dedup は共有） |
 | リアクションを付け直しても再実行されない | 意図した挙動。dedup キーが `{channel}:{メッセージの ts}` なので、**成功したものは付け直しても再実行しない**（誤って外して付け直しただけで二重にエージェントが走る方が事故が大きい）。ただし**取得に失敗した場合は付け直しで再試行できる**（失敗時はキーを消費しない）。強制的に再実行するならプロセス再起動で LRU が消える |

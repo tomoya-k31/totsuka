@@ -1,0 +1,1 @@
+* **Update**: [ADR-0120](/decisions/adr-0120-slack-reply-check.md) の結果の表を実装（`plugin/degraded` を立てるのは 401/403 と到達不能だけ）に合わせ、判定中に付けたリアクションは無視されることを明記した。[Slack Quickstart](/operations/slack-quickstart.md) のトラブルシューティングにも足した（PR #930 のレビュー指摘）。3/3 で触った concept の `generated.at` も直した。

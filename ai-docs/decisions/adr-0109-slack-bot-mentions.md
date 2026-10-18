@@ -4,7 +4,7 @@ title: ADR-0109 Slack のメンション経路で bot と人間を区別しな�
 description: bot 投稿の個人メンション・グループメンションも人間の投稿と同じくタスクにする決定。判定表①は「bot_message 以外の subtype」と「自アプリの bot」だけを落とし、user の無い古典的 bot 投稿は bot_id を送信者にする。ADR-0079 が退けた「メンション経路を緩める」案を採り直すもので、Gateway も同じ緩和を入れるが wire schema は据え置く。
 resource: https://github.com/tomoya-k31/totsuka/blob/main/plugins/task-source-slack/src/mention.rs
 tags: [decision, slack, mention, bot, gateway, adr]
-generated: { by: claude-code/opus-5.5, at: 2026-10-18T17:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-18T20:22:27+09:00 }
 status: stable
 owner: tomoya-k31
 ---
