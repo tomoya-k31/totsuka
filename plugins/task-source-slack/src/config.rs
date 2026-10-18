@@ -72,7 +72,7 @@ impl LlmConfig {
             },
             LlmApiKind::Decisions => LlmBackend::Decisions {
                 endpoint: llm.endpoint.filter(|e| !e.is_empty()).unwrap_or_else(|| {
-                    repo_classifier::DecisionsSettings::OPENROUTER_ENDPOINT.to_string()
+                    llm_choice::DecisionsSettings::OPENROUTER_ENDPOINT.to_string()
                 }),
             },
             _ => return None,
@@ -165,7 +165,7 @@ impl TryFrom<RawLlmConfig> for LlmConfig {
                 }
                 LlmBackend::Decisions {
                     endpoint: raw.endpoint.unwrap_or_else(|| {
-                        repo_classifier::DecisionsSettings::OPENROUTER_ENDPOINT.to_string()
+                        llm_choice::DecisionsSettings::OPENROUTER_ENDPOINT.to_string()
                     }),
                 }
             }

@@ -11,7 +11,7 @@ use orchestrator_core::adapters::StateError;
 use orchestrator_core::adapters::git::SystemGitRunner;
 use orchestrator_core::adapters::llm::gateway_classifier;
 use orchestrator_core::adapters::plugin_host;
-use orchestrator_core::ports::RepoClassifier;
+use orchestrator_core::ports::ChoiceClassifier;
 // Aliased on purpose: `plugin_protocol::manifest::PluginKind` (the manifest's
 // declaration) also appears in this file, and the two are different types.
 // This one is the config roster's, which is readable without touching the

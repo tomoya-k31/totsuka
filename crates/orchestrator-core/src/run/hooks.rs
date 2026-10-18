@@ -33,10 +33,10 @@ use crate::domain::signal::{AgentSignal, SignalEvent, StopStatus};
 use crate::domain::state::{TaskEvent, TaskState};
 use crate::domain::{Task, TaskId};
 use crate::ports::git::GitRunner;
-use crate::ports::llm::RepoClassifier;
+use crate::ports::llm::ChoiceClassifier;
 use crate::ports::signal_ingress::{FocusOutcome, TaskControlOutcome, TaskOp};
 
-impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
+impl<G: GitRunner, L: ChoiceClassifier + 'static> Engine<G, L> {
     /// Interpret one normalized hook signal (#138): resolve its task, record it
     /// idempotently, then drive the state machine per the signal's event.
     ///

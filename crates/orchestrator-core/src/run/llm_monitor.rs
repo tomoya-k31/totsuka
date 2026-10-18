@@ -8,7 +8,7 @@
 //! owns — there is no second handle to keep in step.
 //!
 //! Per ADR-0103 this calls no plugin, DB or git. It does spawn the probe:
-//! the classifier sits behind the [`RepoClassifier`] port, and owning the
+//! the classifier sits behind the [`ChoiceClassifier`] port, and owning the
 //! handle here is what keeps "at most one probe" and "abort it on resume" in
 //! one place.
 
@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::adapters::llm::{LlmHealth, MonitoredClassifier};
-use crate::ports::llm::RepoClassifier;
+use crate::ports::llm::ChoiceClassifier;
 
 pub(super) struct LlmMonitor<L> {
     /// The repository classifier, wrapped so every call and probe updates
@@ -27,7 +27,7 @@ pub(super) struct LlmMonitor<L> {
     probe: Option<tokio::task::JoinHandle<()>>,
 }
 
-impl<L: RepoClassifier + 'static> LlmMonitor<L> {
+impl<L: ChoiceClassifier + 'static> LlmMonitor<L> {
     pub(super) fn new(classifier: L) -> Self {
         Self {
             classifier: Arc::new(MonitoredClassifier::new(classifier)),
@@ -109,7 +109,7 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use super::*;
-    use crate::ports::llm::{Classification, ClassifyError, ClassifyRequest};
+    use crate::ports::llm::{Answer, ChoiceRequest, ClassifyError};
 
     const LONG: Duration = Duration::from_secs(3600);
 
@@ -124,8 +124,8 @@ mod tests {
         down: Arc<AtomicBool>,
     }
 
-    impl RepoClassifier for Gateway {
-        async fn classify(&self, _: &ClassifyRequest) -> Result<Classification, ClassifyError> {
+    impl ChoiceClassifier for Gateway {
+        async fn choose(&self, _: &ChoiceRequest) -> Result<Answer, ClassifyError> {
             Err(ClassifyError::InvalidResponse("not under test".into()))
         }
 

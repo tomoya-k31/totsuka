@@ -2,6 +2,9 @@
 
 ## 2026-10-18
 
+* **Creation**: [ADR-0118](/decisions/adr-0118-llm-choice-crate.md) と [llm-choice](/components/llm-choice.md) を追加（#927 の 1/3）。共有クレート repo-classifier を llm-choice に改名し、問いを `ChoiceRequest`（`Question` の id・instructions・選択肢・none）で外から渡す `ChoiceClassifier` に作り替えた。リポジトリ分類は `llm_choice::repo` の問いの 1 つで、送る本文は従来とバイト単位で同じ。
+* **Deprecation**: [repo-classifier](/components/repo-classifier.md) を deprecated にし、後継 [llm-choice](/components/llm-choice.md) へリンクした。
+* **Update**: [ADR-0083](/decisions/adr-0083-repo-classifier-crate.md)・[ADR-0084](/decisions/adr-0084-decisions-classifier.md) に ADR-0118 の Amendment を追記し、[依存境界ルール](/architecture/workspace-dependency-rules.md)・[orchestrator-core](/components/orchestrator-core.md)・[orchestrator-cli](/components/orchestrator-cli.md)・[task-source-slack](/components/task-source-slack.md) のクレート名と trait 名を更新した。
 * **Update**: [Totsuka.app](/components/macos-app.md) — `⋯` に「Routines」のサブメニュー。`routine list --json` を 10 秒ごとに読み、選んだ routine のファイルを Settings… と同じ方法で開く（新規作成はしない。routine が無ければ出さない）
 * **Update**: [orchestrator-cli](/components/orchestrator-cli.md) — `totsuka routine list [--json]`（routine-schedule でファイルを読み、次回・前回・走れない理由を出す）と `totsuka routine run <name>`（`POST /routine/run`、断られたら非ゼロ終了）
 * **Update**: [運用ガイド](/operations/operations-guide.md) — doctor の `routines` チェックと routine コマンド

@@ -8,7 +8,7 @@ use super::*;
 use crate::domain::event_detail::{EventDetail, Reopen, WorkflowHandoff};
 use crate::domain::{SourceTaskId, TaskId};
 
-impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
+impl<G: GitRunner, L: ChoiceClassifier + 'static> Engine<G, L> {
     /// Persist one normalized task under `wf`, idempotently (F-73), appending
     /// the delivery to the conversation's message ledger. Returns
     /// `(row id, outcome)`. Every ingest since 0.2.0 arrives via `task/submit`
@@ -370,7 +370,7 @@ impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
     }
 }
 
-impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
+impl<G: GitRunner, L: ChoiceClassifier + 'static> Engine<G, L> {
     /// Answer a `POST /routine/run` (#918): ask the one source that declares
     /// `task_trigger` for the task of `key`, and ingest the answer exactly as
     /// a `task/submit` from that source.

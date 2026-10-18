@@ -2,13 +2,13 @@
 //!
 //! 1. If the task carries a `repo_hint` that resolves to a configured
 //!    repository, use it (F-10).
-//! 2. Otherwise ask the [`RepoClassifier`], giving it each repository's
+//! 2. Otherwise ask the [`ChoiceClassifier`], giving it each repository's
 //!    summary + README head as candidates (F-11). Low confidence or an
 //!    unusable answer (after one retry) falls back to `pending` for a human to
 //!    confirm (F-14); a permanent API failure fails the task (§5.3).
 //!
 //! How the classifier is asked — prompt, schema, wire format — is the
-//! classifier's business (`repo-classifier`). What happens with its answer is
+//! classifier's business (`llm-choice`). What happens with its answer is
 //! decided here.
 
 use std::fs;
@@ -18,7 +18,8 @@ use sha2::{Digest, Sha256};
 
 use plugin_protocol::Task;
 
-use crate::ports::llm::{Candidate, Classification, ClassifyRequest, RepoClassifier};
+use crate::ports::llm::{Candidate, ChoiceClassifier, Classification, ClassifyRequest};
+use llm_choice::repo::classify;
 
 /// Tuning for the selection pipeline.
 #[derive(Debug, Clone)]
@@ -64,7 +65,7 @@ pub enum RepoDecision {
 }
 
 /// Select the repository for `task` among `candidates` (F-10–F-14).
-pub async fn select_repo<C: RepoClassifier>(
+pub async fn select_repo<C: ChoiceClassifier>(
     task: &Task,
     candidates: &[Candidate],
     classifier: &C,
@@ -99,7 +100,7 @@ pub async fn select_repo<C: RepoClassifier>(
     let request = classify_request(task, candidates);
     let mut last_error = String::new();
     for _ in 0..2 {
-        match classifier.classify(&request).await {
+        match classify(classifier, &request).await {
             Ok(Classification::Repo {
                 repo,
                 confidence,
@@ -213,7 +214,7 @@ fn head_lines(text: &str, lines: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ports::llm::ClassifyError;
+    use crate::ports::llm::{Answer, ChoiceRequest, ClassifyError};
     use std::sync::Mutex;
 
     fn task(repo_hint: Option<&str>) -> Task {
@@ -262,7 +263,7 @@ mod tests {
     /// Answers from a queue of canned results and records every request.
     struct Canned {
         results: Mutex<std::collections::VecDeque<Result<Classification, ClassifyError>>>,
-        requests: Mutex<Vec<ClassifyRequest>>,
+        requests: Mutex<Vec<ChoiceRequest>>,
     }
 
     impl Canned {
@@ -274,11 +275,8 @@ mod tests {
         }
     }
 
-    impl RepoClassifier for Canned {
-        async fn classify(
-            &self,
-            request: &ClassifyRequest,
-        ) -> Result<Classification, ClassifyError> {
+    impl ChoiceClassifier for Canned {
+        async fn choose(&self, request: &ChoiceRequest) -> Result<Answer, ClassifyError> {
             self.requests.lock().unwrap().push(request.clone());
             self.results
                 .lock()
@@ -287,6 +285,7 @@ mod tests {
                 .unwrap_or(Err(ClassifyError::InvalidResponse(
                     "no more canned results".into(),
                 )))
+                .map(Answer::from)
         }
     }
 
@@ -345,8 +344,15 @@ mod tests {
                 ),
             ]
         );
-        assert_eq!(requests[0].candidates, candidates());
-        assert!(requests[0].chat_prompt.is_none(), "the built-in prompt");
+        assert_eq!(
+            requests[0].question,
+            llm_choice::repo::question(&candidates())
+        );
+        assert_eq!(
+            requests[0].chat_prompt,
+            llm_choice::repo::default_prompt(&requests[0].subject, &candidates()),
+            "the built-in prompt"
+        );
     }
 
     #[tokio::test]
@@ -406,7 +412,7 @@ mod tests {
     #[tokio::test]
     async fn two_bad_answers_become_pending_not_failed() {
         let decision = select(vec![
-            Err(ClassifyError::UnknownRepo("nope".into())),
+            Err(ClassifyError::UnknownChoice("nope".into())),
             Err(ClassifyError::InvalidResponse("not json".into())),
         ])
         .await;
@@ -420,7 +426,7 @@ mod tests {
     async fn one_bad_answer_is_asked_again() {
         assert_eq!(
             select(vec![
-                Err(ClassifyError::UnknownRepo("nope".into())),
+                Err(ClassifyError::UnknownChoice("nope".into())),
                 verdict("web", 0.8, "frontend task"),
             ])
             .await,

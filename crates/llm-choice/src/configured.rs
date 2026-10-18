@@ -1,13 +1,13 @@
 //! [`ConfiguredClassifier`]: whichever backend the configuration named, as one
 //! type.
 //!
-//! [`RepoClassifier`] uses `impl Future` returns, so it cannot be a trait
+//! [`ChoiceClassifier`] uses `impl Future` returns, so it cannot be a trait
 //! object; callers that pick the backend at runtime (from `[llm].api`) hold
 //! this enum instead.
 
 use crate::{
-    ChatClassifier, Classification, ClassifyError, ClassifyRequest, DecisionsClassifier,
-    HttpTransport, RepoClassifier,
+    Answer, ChatClassifier, ChoiceClassifier, ChoiceRequest, ClassifyError, DecisionsClassifier,
+    HttpTransport,
 };
 
 /// A chat or a decisions classifier.
@@ -29,11 +29,11 @@ impl<T: HttpTransport> ConfiguredClassifier<T> {
     }
 }
 
-impl<T: HttpTransport> RepoClassifier for ConfiguredClassifier<T> {
-    async fn classify(&self, request: &ClassifyRequest) -> Result<Classification, ClassifyError> {
+impl<T: HttpTransport> ChoiceClassifier for ConfiguredClassifier<T> {
+    async fn choose(&self, request: &ChoiceRequest) -> Result<Answer, ClassifyError> {
         match self {
-            Self::Chat(c) => c.classify(request).await,
-            Self::Decisions(d) => d.classify(request).await,
+            Self::Chat(c) => c.choose(request).await,
+            Self::Decisions(d) => d.choose(request).await,
         }
     }
 

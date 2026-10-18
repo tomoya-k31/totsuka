@@ -9,7 +9,7 @@ use super::*;
 use crate::domain::EventDetail;
 use crate::domain::TaskId;
 
-impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
+impl<G: GitRunner, L: ChoiceClassifier + 'static> Engine<G, L> {
     /// Read `HEAD` in the worktree of every in-flight task and record the
     /// branch the agent put it on.
     ///

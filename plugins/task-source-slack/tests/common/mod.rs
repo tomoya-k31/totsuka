@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
 
-use repo_classifier::{ClassifyError, HttpRequest, HttpTransport};
+use llm_choice::{ClassifyError, HttpRequest, HttpTransport};
 use task_source_slack::error::SlackError;
 use task_source_slack::server::TransportFactory;
 use task_source_slack::transport::{SlackTransport, TokenKind, TransportSettings};

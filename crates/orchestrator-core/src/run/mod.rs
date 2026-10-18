@@ -65,9 +65,7 @@ use crate::paths::Paths;
 use crate::ports::agent_session::AttachOutcome;
 use crate::ports::clock::Clock;
 use crate::ports::git::GitRunner;
-use crate::ports::llm::{
-    Candidate, Classification, ClassifyError, ClassifyRequest, RepoClassifier,
-};
+use crate::ports::llm::{Answer, Candidate, ChoiceClassifier, ChoiceRequest, ClassifyError};
 use crate::ports::secret::SecretString;
 use crate::ports::signal_ingress::{FocusOutcome, TaskControlOutcome, TaskOp, TriggerOutcome};
 use crate::recovery::{self, RecoveryReport, RetryPlan};
@@ -301,8 +299,8 @@ impl IngestOutcome {
 /// reason instead of failing the task.
 pub(crate) struct NoClassifier;
 
-impl RepoClassifier for NoClassifier {
-    async fn classify(&self, _request: &ClassifyRequest) -> Result<Classification, ClassifyError> {
+impl ChoiceClassifier for NoClassifier {
+    async fn choose(&self, _request: &ChoiceRequest) -> Result<Answer, ClassifyError> {
         Err(ClassifyError::InvalidResponse(
             "no [llm] configured → set [llm] in config.toml, add a repo hint to the task, \
              or register a single repository"
@@ -331,7 +329,7 @@ enum HookReceiver {
 /// `L: 'static` because the liveness probe (F-111) runs on a spawned task
 /// holding an `Arc` of the classifier, so the loop never blocks on a gateway
 /// that takes its whole timeout to not answer.
-pub struct Engine<G: GitRunner, L: RepoClassifier + 'static> {
+pub struct Engine<G: GitRunner, L: ChoiceClassifier + 'static> {
     db: StateDb,
     settings: EngineSettings,
     plugins: PluginSet,
@@ -413,7 +411,7 @@ pub struct Engine<G: GitRunner, L: RepoClassifier + 'static> {
     stats: RunStats,
 }
 
-impl<G: GitRunner, L: RepoClassifier + 'static> Engine<G, L> {
+impl<G: GitRunner, L: ChoiceClassifier + 'static> Engine<G, L> {
     /// Where a new project item goes, per repository (#542).
     ///
     /// Rebuilt on each call from the live plugin set rather than cached at
@@ -1181,7 +1179,7 @@ pub(crate) async fn test_engine(
 #[cfg(test)]
 /// [`test_engine`] with a classifier and a clock of the caller's choosing —
 /// the two seams the liveness tests (F-111) drive.
-pub(crate) async fn test_engine_with<L: RepoClassifier + 'static>(
+pub(crate) async fn test_engine_with<L: ChoiceClassifier + 'static>(
     interval: Duration,
     llm: Option<L>,
     clock: Arc<dyn Clock>,
@@ -1454,11 +1452,8 @@ mod liveness_tests {
         gate: Arc<tokio::sync::Notify>,
     }
 
-    impl RepoClassifier for ProbeScript {
-        async fn classify(
-            &self,
-            _request: &ClassifyRequest,
-        ) -> Result<Classification, ClassifyError> {
+    impl ChoiceClassifier for ProbeScript {
+        async fn choose(&self, _request: &ChoiceRequest) -> Result<Answer, ClassifyError> {
             Err(ClassifyError::InvalidResponse("not under test".into()))
         }
 

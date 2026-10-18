@@ -801,8 +801,7 @@ pub enum LlmApi {
 
 impl LlmApi {
     /// OpenRouter's Decisions API, the endpoint when `[llm].endpoint` is unset.
-    pub const DEFAULT_DECISIONS_ENDPOINT: &str =
-        repo_classifier::DecisionsSettings::OPENROUTER_ENDPOINT;
+    pub const DEFAULT_DECISIONS_ENDPOINT: &str = llm_choice::DecisionsSettings::OPENROUTER_ENDPOINT;
 
     /// The value written as `[llm].api`.
     pub fn name(&self) -> &'static str {

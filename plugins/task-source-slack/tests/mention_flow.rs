@@ -14,7 +14,7 @@ use common::{
     block_actions_envelope, call, mention_envelope, mention_envelope_in, scratch_state_dir,
     send_and_await_ack, wait_until, ws_listener,
 };
-use repo_classifier::ClassifyError;
+use llm_choice::ClassifyError;
 use task_source_slack::server::Server;
 use task_source_slack::transport::TokenKind;
 

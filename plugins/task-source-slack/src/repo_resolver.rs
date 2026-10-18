@@ -17,7 +17,7 @@
 
 use crate::config::{RepoInfo, SlackConfig};
 use crate::llm::classify;
-use repo_classifier::HttpTransport;
+use llm_choice::HttpTransport;
 
 /// The outcome of stages ① + ②.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -201,13 +201,13 @@ mod tests {
     }
 
     /// A transport that always fails the same way.
-    struct FailingChat(repo_classifier::ClassifyError);
+    struct FailingChat(llm_choice::ClassifyError);
 
     impl HttpTransport for FailingChat {
         async fn post_json(
             &self,
-            _request: repo_classifier::HttpRequest<'_>,
-        ) -> Result<serde_json::Value, repo_classifier::ClassifyError> {
+            _request: llm_choice::HttpRequest<'_>,
+        ) -> Result<serde_json::Value, llm_choice::ClassifyError> {
             Err(self.0.clone())
         }
     }
@@ -233,11 +233,8 @@ mod tests {
         // guesses at the mention.
         let config = config_with_llm();
         for error in [
-            repo_classifier::ClassifyError::status(
-                401,
-                r#"{"error":{"message":"User not found."}}"#,
-            ),
-            repo_classifier::ClassifyError::Transport("connection refused".into()),
+            llm_choice::ClassifyError::status(401, r#"{"error":{"message":"User not found."}}"#),
+            llm_choice::ClassifyError::Transport("connection refused".into()),
         ] {
             let chat = FailingChat(error);
             assert_eq!(
@@ -442,7 +439,7 @@ mod tests {
         // skipped — which is what makes the fallback cost nothing.
         let mut config = config_with_llm();
         config.fallback_repo = Some("backend-api".into());
-        let chat = FailingChat(repo_classifier::ClassifyError::Transport(
+        let chat = FailingChat(llm_choice::ClassifyError::Transport(
             "must not be called".into(),
         ));
         assert_eq!(

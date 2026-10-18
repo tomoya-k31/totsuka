@@ -32,9 +32,9 @@ pub enum ClassifyError {
     /// The backend answered, but not with a verdict we can read.
     #[error("unusable response: {0}")]
     InvalidResponse(String),
-    /// The verdict named a repository that is not among the candidates.
-    #[error("unknown repository `{0}` (not a candidate)")]
-    UnknownRepo(String),
+    /// The answer named something that is not among the question's options.
+    #[error("unknown choice `{0}` (not an option)")]
+    UnknownChoice(String),
 }
 
 impl ClassifyError {
@@ -104,7 +104,7 @@ impl ClassifyError {
     /// Whether the backend answered with something unusable — a verdict that
     /// asking again may fix (F-14), as opposed to a transport failure.
     pub fn is_bad_answer(&self) -> bool {
-        matches!(self, Self::InvalidResponse(_) | Self::UnknownRepo(_))
+        matches!(self, Self::InvalidResponse(_) | Self::UnknownChoice(_))
     }
 }
 
@@ -184,7 +184,7 @@ mod tests {
     #[test]
     fn only_unusable_verdicts_are_bad_answers() {
         assert!(ClassifyError::InvalidResponse("x".into()).is_bad_answer());
-        assert!(ClassifyError::UnknownRepo("x".into()).is_bad_answer());
+        assert!(ClassifyError::UnknownChoice("x".into()).is_bad_answer());
         assert!(!ClassifyError::Timeout(1).is_bad_answer());
         assert!(!ClassifyError::status(400, "").is_bad_answer());
     }
