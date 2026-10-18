@@ -11,6 +11,29 @@ Note: the plugin protocol is versioned independently of the application (see
 `crates/plugin-protocol`); a totsuka release does not imply a protocol-version
 change.
 
+## [0.11.0](https://github.com/tomoya-k31/totsuka/compare/v0.10.12...v0.11.0) (2026-10-18)
+
+
+### ⚠ BREAKING CHANGES
+
+* **slack:** メンションに答える workflow があれば [llm]（[slack.llm] か core の [llm]）が必須になり、 無ければ initialize が CONFIG_INVALID になる。返信不要と判定されたメンションはタスクにならない。
+
+### Features
+
+* **macos:** ⋯ メニューに routine のファイルを開く Routines サブメニューを足す ([#925](https://github.com/tomoya-k31/totsuka/issues/925)) ([2428ad6](https://github.com/tomoya-k31/totsuka/commit/2428ad633eb5dc5ad6dc18535d99dde62c003b49))
+* **protocol:** plugin/degraded 通知でプラグインの実行時の異常を health に載せる ([#929](https://github.com/tomoya-k31/totsuka/issues/929)) ([416bccd](https://github.com/tomoya-k31/totsuka/commit/416bccd26454fe393b6c5887ce6724ec07e20eb2)), closes [#927](https://github.com/tomoya-k31/totsuka/issues/927)
+* **slack:** メンションの返信要否を LLM で判定し、不要ならタスクにしない ([#930](https://github.com/tomoya-k31/totsuka/issues/930)) ([8cd8754](https://github.com/tomoya-k31/totsuka/commit/8cd87549a51adfae48635648a305068fd697fb1a)), closes [#927](https://github.com/tomoya-k31/totsuka/issues/927)
+
+
+### Refactors
+
+* **llm-choice:** repo-classifier を問いを外から渡す llm-choice クレートへ汎用化する ([#928](https://github.com/tomoya-k31/totsuka/issues/928)) ([fb9b89d](https://github.com/tomoya-k31/totsuka/commit/fb9b89ddcaea097a540f22b09cc9c7bf1a052ce8)), closes [#927](https://github.com/tomoya-k31/totsuka/issues/927)
+
+
+### Documentation
+
+* **dev-flow:** PR 前に /ponytail-review と /security-review を必ず回す ([#932](https://github.com/tomoya-k31/totsuka/issues/932)) ([bb81967](https://github.com/tomoya-k31/totsuka/commit/bb8196706e2b7e45d086a2b7076f47bea9f6f100))
+
 ## [0.10.12](https://github.com/tomoya-k31/totsuka/compare/v0.10.11...v0.10.12) (2026-10-17)
 
 
