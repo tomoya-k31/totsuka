@@ -4,7 +4,7 @@ title: Totsuka.app（macOS メニューバーアプリ）
 description: "apps/macos/ の SwiftUI メニューバーアプリ（ADR-0113）。totsuka run --watch --events-jsonl（config に secret: があれば --secrets-stdin 付き）を子プロセスとして監督し（終了コードで再起動を判断）、通知をアプリ名義で出す。設定画面は持たず、config.toml を $TERMINAL の $EDITOR で開き、run の stderr を $TERMINAL で tail -F する。機密は Start 時に Keychain に無い secret:<名前> を尋ねる（[github].token の secret は、選べば Start のたびに gh auth token から取る。ADR-0114）。ロジックは SwiftPM の TotsukaKit（swift test）、出荷する .app は XcodeGen の project.yml から CI がビルドする。"
 resource: https://github.com/tomoya-k31/totsuka/tree/main/apps/macos
 tags: [macos, swift, swiftui, menubar, app, notifier, config]
-generated: { by: claude-code/opus-5.5, at: 2026-10-18T23:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-22T04:29:56+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -38,7 +38,7 @@ owner: tomoya-k31
 - **設定**: 設定画面は無い（ADR-0113 §5）。Settings… は `config get` が返す config.toml を `$TERMINAL -e $EDITOR <path>` で開く（どちらもログインシェルの環境の値をシェル断片として使う。どちらかが無ければ `open -t`）。ファイルがまだ無ければ `totsuka init` を案内する。`$TERMINAL` が見つからない（シェルが 126 / 127 で終わる）ときはメニューに出す。`$EDITOR` の失敗はシェルがターミナルに置き換わった後なので、ターミナルの中に出る。変更は次の起動から効く
 - **routine**: 10 秒ごと（エージェント IDE の稼働表示と同じ周期）に `routine list --json` を読み、routine があれば `⋯` に「Routines」のサブメニューを出す（#918。項目は routine 名だけで、CLI と同じファイル名順）。選ぶと `<dir>/<name>.md` を Settings… と同じ方法（`$TERMINAL -e $EDITOR`、無ければ `open -t`）で開く。**新規作成はしない** —— 前回の一覧から消えたファイルは開かずにメニューへ出す（エディタに無いパスを渡すと新しい routine ができてしまうため）。routine プラグインが無効・ファイルが 0 件・`routine list` を持たない古い CLI のどれでも、サブメニューごと出さない。読む場所の解決（`--config` の親か XDG、host key）は CLI に任せる
 - **ログ**: `run` の stderr を `$XDG_STATE_HOME/totsuka/app-run.log` に書き（起動ごとに見出し行、5 MB を超えたら次の起動で書き直す）、Logs は `$TERMINAL -e tail -n 200 -F` で開く（`$TERMINAL` が無ければ Console）
-- **パネル下段**: 左下にアプリの版（`CFBundleShortVersionString`。無ければ出さない）、右に `⋯` メニューと Quit。`⋯` には Settings… と Logs（routine があれば Routines のサブメニューも）、区切りの下にログイン項目のオン・オフと、Keychain のマップを空にする「Forget saved secrets…」（`githubTokenFromGh` の印も消し、次の起動でまた尋ねる）。`totsuka` の場所と `PATH` は `defaults write <bundle ID> totsukaPath` / `pathOverride` で上書きできる
+- **パネル下段**: 左下にアプリの版（`CFBundleShortVersionString`。無ければ出さない）、右に `⋯` メニューと Quit。`⋯` には Settings… と Logs（routine があれば Routines のサブメニューも）、区切りの下にログイン項目のオン・オフと、Keychain のマップを空にする「Forget saved secrets…」。**`⋯` はタスク行のものも含めて SwiftUI の `Menu` ではなく `PopUpMenuButton`**（`NSButton` から `NSMenu` を pop-up する `NSViewRepresentable`。項目はクリックのたびに組み立てる）—— `.window` スタイルの `MenuBarExtra` では、`Menu` の中に入れ子にした `Menu` が macOS 26 で開かず、「Retry in」と「Routines」の項目を一切クリックできなかった（置き換え後に実機で開くことを確認）。`NSMenu` の submenu は普通に開く。マウスオーバーの説明（`.help`）はこのとき無くなった（`githubTokenFromGh` の印も消し、次の起動でまた尋ねる）。`totsuka` の場所と `PATH` は `defaults write <bundle ID> totsukaPath` / `pathOverride` で上書きできる
 - **更新**: 自分のバンドルが消えたら（`brew upgrade` と cleanup）メニューに「更新済み・再起動」を出し、CLI の隣の `Totsuka.app` を開いて自分は終わる。起動時に、ログイン項目が有効なら登録し直して新しい場所へ移す
 
 # テスト

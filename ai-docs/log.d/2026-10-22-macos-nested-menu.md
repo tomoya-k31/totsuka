@@ -1,0 +1,1 @@
+* **Update**: [Totsuka.app](/components/macos-app.md) — `⋯` メニュー（パネル下段とタスク行）を SwiftUI の `Menu` から `NSMenu` の pop-up（`PopUpMenuButton`）に置き換えた。入れ子の `Menu` が macOS 26 で開かず、「Retry in」「Routines」のサブメニューをクリックできなかったため
