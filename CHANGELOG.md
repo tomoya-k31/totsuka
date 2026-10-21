@@ -11,6 +11,19 @@ Note: the plugin protocol is versioned independently of the application (see
 `crates/plugin-protocol`); a totsuka release does not imply a protocol-version
 change.
 
+## [0.11.1](https://github.com/tomoya-k31/totsuka/compare/v0.11.0...v0.11.1) (2026-10-21)
+
+
+### Features
+
+* **cli:** totsuka task submit — 外からタスクを投入して routine から PR ごとに fan-out する ([#941](https://github.com/tomoya-k31/totsuka/issues/941)) ([ffd4c62](https://github.com/tomoya-k31/totsuka/commit/ffd4c621d989744667a62e3541241adbd1353c9d))
+
+
+### Bug Fixes
+
+* **deps:** slack-event-gateway の rustls-webpki と webpki-root-certs を修正版へ上げる ([#943](https://github.com/tomoya-k31/totsuka/issues/943)) ([8766071](https://github.com/tomoya-k31/totsuka/commit/8766071b2e37f58441f7dd5e616358839f86d8f8))
+* **skills:** totsuka-submit の Codex レビュー例を verification = none の明示記法にする ([#944](https://github.com/tomoya-k31/totsuka/issues/944)) ([0b84721](https://github.com/tomoya-k31/totsuka/commit/0b847214a5151987af10ff0b590851bbc4059da7))
+
 ## [0.11.0](https://github.com/tomoya-k31/totsuka/compare/v0.10.12...v0.11.0) (2026-10-18)
 
 
