@@ -4,7 +4,7 @@ title: 運用ガイド（doctor / worktree 掃除 / FAQ）
 description: totsuka 日常運用の手引き。doctor の読み方、ランタイム health（縮退）の読み方と doctor との守備範囲の違い、worktree 掃除ポリシーと孤児掃除、run 停止・回復と SSH keepalive の推奨設定、メニューバー表示（SwiftBar）の導入と読み方、よくある問題の切り分け。
 resource: https://github.com/tomoya-k31/totsuka
 tags: [operations, doctor, health, worktree, menu, swiftbar, faq, troubleshooting]
-generated: { by: claude-code/opus-5.5, at: 2026-10-18T21:18:02+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-22T01:06:30+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -206,6 +206,7 @@ Host *
 - `totsuka task cancel <id>` / `retry <id>`: retry は failed/cancelled のみ。worktree/セッションを再利用して再開（F-44）
 - `totsuka routine list [--json]`: このマシンの routine と、次回・前回の実行、走れない routine の理由（#918）。`run` が止まっていても見える
 - `totsuka routine run <name>`: routine を今すぐ 1 回実行する（`run` が動いている必要がある）。前回の実行が終わっていなければ断られる。定期の回は消費しない
+- `totsuka task submit --workflow <name> --id <id> --title <title> --body <text>|--body-file <path|-> --repo <name> [--branch <b>] [--url <u>] [--series <s>] [--json]`: 実行中の totsuka にタスクを 1 件投入する（#940、[ADR-0121](/decisions/adr-0121-task-submit-control.md)）。タスクは workflow の source のものになる。結果は `accepted` / `duplicate`（同じ id が既にある）/ `busy`（同じ series が実行中）/ `rejected` で、非ゼロ終了は rejected と `run` 停止中だけ。routine から PR ごとに呼ぶ使い方はスキル `npx skills add tomoya-k31/totsuka --skill totsuka-submit`。**書き戻しを持つソース（github など）の workflow には入れない**こと — id がそのソースのものではないので `on_*` が壊れる
 - `totsuka logs [-f] [--task <id>] [--utc]`: JSON Lines ログの整形表示。時刻はローカル時刻で出す（`--utc` で UTC。ファイルは UTC）。機密は logging layer で無条件マスク（§5.2）
 
 # メニューバー表示（SwiftBar）

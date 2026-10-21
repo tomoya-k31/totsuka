@@ -1,6 +1,6 @@
 > 🌐 **English** · [日本語](operations-guide.ja.md)
 
-<!-- generated-from: ai-docs/operations/operations-guide.md sha256:c5e490735221fba830eed60b6972215db1d43074007cfc2e3b9d7e4d2932c3e3 -->
+<!-- generated-from: ai-docs/operations/operations-guide.md sha256:db55e39d95c49ed862132c4ed859ee35dfe2e7f41b6cdd14c96cdf8c999c60f0 -->
 
 # Operations guide
 
@@ -181,6 +181,7 @@ Host *
 | `totsuka task retry <id>` | Restart a failed or cancelled task, reusing its worktree and session |
 | `totsuka routine list [--json]` | This machine's routines, with each one's next and last run, or why it cannot run. Works while `run` is stopped |
 | `totsuka routine run <name>` | Run a routine now, once (`run` must be running). Refused while its previous run is unfinished. It does not use up a scheduled run |
+| `totsuka task submit --workflow <name> --id <id> --title <title> --body <text>\|--body-file <path\|-> --repo <name> [--branch <b>] [--url <u>] [--series <s>] [--json]` | Hand one task to the running totsuka; it belongs to the workflow's source. Prints `accepted`, `duplicate` (that id already exists), `busy` (a task of the same series is still running) or `rejected`; only `rejected` and a stopped `run` exit non-zero. To start one task per PR from a routine, install the skill with `npx skills add tomoya-k31/totsuka --skill totsuka-submit`. **Do not submit to a workflow of a source that writes back (GitHub and the like)** — the id is not that source's, so its status write-backs break |
 | `totsuka logs [-f] [--task <id>] [--utc]` | Formatted logs, with timestamps in local time (`--utc` shows them in UTC, as stored). Secrets are masked unconditionally |
 
 `retry` only accepts failed or cancelled tasks — a completed task cannot be re-run.

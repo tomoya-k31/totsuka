@@ -18,8 +18,8 @@ use routine_schedule::load_dir;
 use serde::Serialize;
 use time::OffsetDateTime;
 
-use crate::common::{CliError, Cx, JsonFlag, hook_socket_path, print_json, safe};
-use crate::focus_cmd::{is_socket, post_control};
+use crate::common::{CliError, Cx, JsonFlag, print_json, safe};
+use crate::focus_cmd::post_to_running;
 
 /// Routine subcommands.
 #[derive(Debug, Subcommand)]
@@ -264,30 +264,8 @@ fn list(cx: &Cx, json: bool) -> Result<(), CliError> {
 }
 
 fn run_now(cx: &Cx, name: &str) -> Result<(), CliError> {
-    let env: HashMap<String, String> = std::env::vars().collect();
-    let cfg = cx.load_config(&env)?;
-    let socket = hook_socket_path(cx, &cfg, &env)?;
-    if !is_socket(&socket) {
-        return Err(format!(
-            "totsuka is not running (no socket at {}) → start it from the app or with \
-             `totsuka run --watch`",
-            socket.display()
-        )
-        .into());
-    }
-    let token =
-        orchestrator_core::hooks::token::read(&orchestrator_core::hooks::token::path(&cx.paths))?;
     let body = serde_json::json!({ "key": name }).to_string();
-    let (status, reply) = post_control(
-        &socket,
-        token.as_ref().map(|t| t.expose()),
-        "/routine/run",
-        &body,
-    )
-    .map_err(|e| format!("could not reach totsuka at {}: {e}", socket.display()))?;
-    if status != 200 {
-        return Err(format!("totsuka answered {status} to the routine run request").into());
-    }
+    let reply = post_to_running(cx, "/routine/run", &body)?;
     let reply: serde_json::Value = serde_json::from_str(&reply).unwrap_or_default();
     match (reply["ok"].as_bool(), reply["task_id"].as_i64()) {
         (Some(true), Some(id)) => {

@@ -67,7 +67,9 @@ use crate::ports::clock::Clock;
 use crate::ports::git::GitRunner;
 use crate::ports::llm::{Answer, Candidate, ChoiceClassifier, ChoiceRequest, ClassifyError};
 use crate::ports::secret::SecretString;
-use crate::ports::signal_ingress::{FocusOutcome, TaskControlOutcome, TaskOp, TriggerOutcome};
+use crate::ports::signal_ingress::{
+    FocusOutcome, SubmitOutcome, TaskControlOutcome, TaskOp, TriggerOutcome,
+};
 use crate::recovery::{self, RecoveryReport, RetryPlan};
 use crate::repo_select::{ReadmeCache, RepoDecision, SelectConfig, select_repo};
 use crate::scheduler::{Limits, ReadyTask, SlotManager, counts_toward_slot, plan_dispatch};
@@ -217,6 +219,16 @@ pub(crate) enum PluginEvent {
         key: String,
         /// Where the adapter awaits the outcome.
         respond: tokio::sync::oneshot::Sender<TriggerOutcome>,
+    },
+    /// A `POST /task/submit` control request (#940): ingest the task into the
+    /// named workflow as if its source had submitted it, and answer the ack
+    /// over `respond`.
+    Submit {
+        /// The workflow and the task, in `task/submit`'s own shape.
+        /// Boxed for the same reason as [`Self::TaskSubmit`]'s task.
+        params: Box<TaskSubmitParams>,
+        /// Where the adapter awaits the outcome.
+        respond: tokio::sync::oneshot::Sender<SubmitOutcome>,
     },
     /// A `task/submit` from a task source (P→O, 0.1.6): persist the task and
     /// answer the ack over `respond` **after** the durable write committed

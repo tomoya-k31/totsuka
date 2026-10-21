@@ -19,8 +19,8 @@
 //!   send fixed-length `curl --data` POSTs). The method is **not** inspected
 //!   (deliberately — same-user 0600 + Bearer make method routing pure surface),
 //!   and the path only minimally: the exact paths `/focus`, `/task/cancel`,
-//!   `/task/retry` and `/routine/run` — whatever the method — are the control
-//!   endpoints (F-94, #760, #918, below); **every other path** is signal ingestion (E-08
+//!   `/task/retry`, `/routine/run` and `/task/submit` — whatever the method —
+//!   are the control endpoints (F-94, #760, #918, #940, below); **every other path** is signal ingestion (E-08
 //!   forward-compat for the hook scripts is unchanged).
 //! - **Auth** (E-03): `Authorization: Bearer <token>`, constant-time compared
 //!   to the token `run` generated ([`hooks::token`](crate::hooks::token)). A mismatch is `401` + a warning;
@@ -82,6 +82,15 @@
 //! `{"ok": bool, "task_id"?, "reason"?}`: an unknown key, a series still
 //! running, or no source able to trigger is `ok: false` with the advice in
 //! `reason`. Everything else is as for `/focus`.
+//!
+//! ## Control endpoint (`POST /task/submit`, #940)
+//!
+//! The body is `task/submit`'s own params, `{"workflow": …, "task": {…}}`;
+//! `task.source` is overwritten with the workflow's source. The engine ingests
+//! it as that source's submit. The reply is `200` with
+//! `{"status": "accepted"|"duplicate"|"busy"|"rejected", "task_id"?, "reason"?}`
+//! — every refusal is a status, never an error code. A body that is not that
+//! shape is `400`. Everything else is as for `/focus`.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -254,6 +263,7 @@ async fn handle_connection<P: SignalPort, C: ControlPort>(
             return handle_task(&mut stream, control, TaskOp::Retry, &request.body).await;
         }
         "/routine/run" => return handle_trigger(&mut stream, control, &request.body).await,
+        "/task/submit" => return handle_submit(&mut stream, control, &request.body).await,
         _ => {}
     }
 
@@ -359,6 +369,35 @@ async fn handle_trigger<C: ControlPort>(
         }
         Err(e) => {
             tracing::error!("routine run request failed: {e}");
+            write_response(stream, 503, "Service Unavailable").await
+        }
+    }
+}
+
+/// Answer a `POST /task/submit` control request (#940): parse
+/// `task/submit`'s params, hand them to the engine through the
+/// [`ControlPort`], and reply the
+/// [`SubmitOutcome`](crate::ports::SubmitOutcome) as JSON.
+async fn handle_submit<C: ControlPort>(
+    stream: &mut UnixStream,
+    control: &C,
+    body: &[u8],
+) -> io::Result<()> {
+    let params = match serde_json::from_slice::<plugin_protocol::methods::TaskSubmitParams>(body) {
+        Ok(params) => params,
+        Err(e) => {
+            tracing::warn!("task submit request rejected: {e}");
+            return write_response(stream, 400, "Bad Request").await;
+        }
+    };
+    match control.submit_task(params).await {
+        Ok(outcome) => {
+            let body = serde_json::to_string(&outcome)
+                .unwrap_or_else(|_| r#"{"status":"rejected"}"#.to_string());
+            write_json_response(stream, &body).await
+        }
+        Err(e) => {
+            tracing::error!("task submit request failed: {e}");
             write_response(stream, 503, "Service Unavailable").await
         }
     }
@@ -844,6 +883,7 @@ mod tests {
         asked: Arc<Mutex<Vec<i64>>>,
         tasks: Arc<Mutex<Vec<(TaskOp, i64)>>>,
         triggers: Arc<Mutex<Vec<String>>>,
+        submits: Arc<Mutex<Vec<String>>>,
     }
 
     impl ControlPort for RecordingControl {
@@ -902,6 +942,30 @@ mod tests {
                 TriggerOutcome::refused(format!("no routine named `{key}`"))
             };
             self.triggers.lock().unwrap().push(key);
+            async move { Ok(outcome) }
+        }
+
+        fn submit_task(
+            &self,
+            params: plugin_protocol::methods::TaskSubmitParams,
+        ) -> impl std::future::Future<
+            Output = Result<
+                crate::ports::signal_ingress::SubmitOutcome,
+                crate::ports::signal_ingress::SignalError,
+            >,
+        > + Send {
+            use crate::ports::signal_ingress::SubmitOutcome;
+            use plugin_protocol::methods::TaskSubmitStatus;
+            let outcome = if params.workflow == "review" {
+                SubmitOutcome {
+                    status: TaskSubmitStatus::Accepted,
+                    task_id: Some(TaskId(9)),
+                    reason: None,
+                }
+            } else {
+                SubmitOutcome::rejected("no workflow")
+            };
+            self.submits.lock().unwrap().push(params.task.id);
             async move { Ok(outcome) }
         }
     }
@@ -1243,6 +1307,53 @@ mod tests {
         assert_eq!(
             control.triggers.lock().unwrap().as_slice(),
             ["nightly", "nope"]
+        );
+        assert!(sink.signals().is_empty());
+        stop(stop_tx, handle).await;
+    }
+
+    #[tokio::test]
+    async fn task_submit_answers_the_status_and_needs_submit_params() {
+        let (socket, sink, control, stop_tx, handle) = spawn_server(None);
+        let task = r#""task":{"id":"pr:web#1@abc","source":"","title":"PR #1"}"#;
+        let accepted = send_raw_full(
+            &socket,
+            &control_post(
+                "/task/submit",
+                None,
+                &format!(r#"{{"workflow":"review",{task}}}"#),
+            ),
+        )
+        .await;
+        assert!(
+            accepted.ends_with(r#"{"status":"accepted","task_id":9}"#),
+            "response was {accepted:?}"
+        );
+        let rejected = send_raw_full(
+            &socket,
+            &control_post(
+                "/task/submit",
+                None,
+                &format!(r#"{{"workflow":"nope",{task}}}"#),
+            ),
+        )
+        .await;
+        assert!(
+            rejected.starts_with("HTTP/1.1 200")
+                && rejected.ends_with(r#"{"status":"rejected","reason":"no workflow"}"#),
+            "response was {rejected:?}"
+        );
+        for body in [
+            r#"{"workflow":"review"}"#,
+            r#"{"task":{"id":"x","source":"","title":"t"}}"#,
+            "not json",
+        ] {
+            let status = send_raw(&socket, &control_post("/task/submit", None, body)).await;
+            assert!(status.contains("400"), "{body}: status was {status:?}");
+        }
+        assert_eq!(
+            control.submits.lock().unwrap().as_slice(),
+            ["pr:web#1@abc", "pr:web#1@abc"]
         );
         assert!(sink.signals().is_empty());
         stop(stop_tx, handle).await;

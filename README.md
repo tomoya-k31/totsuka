@@ -175,6 +175,13 @@ files with you:
 npx skills add tomoya-k31/totsuka --skill totsuka-routine
 ```
 
+To have a routine start one task per item ("one review per labelled PR"),
+the `totsuka-submit` skill teaches the agent `totsuka task submit`:
+
+```sh
+npx skills add tomoya-k31/totsuka --skill totsuka-submit
+```
+
 ## Documentation
 
 - **What totsuka is**: [docs/orchestrator-spec.md](./docs/orchestrator-spec.md)

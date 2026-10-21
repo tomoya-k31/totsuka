@@ -176,9 +176,39 @@ impl TriggerOutcome {
     }
 }
 
+/// The engine's answer to a `POST /task/submit` control request (#940): the
+/// `task/submit` ack the task got, plus the row it landed in.
+///
+/// Unlike [`TriggerOutcome`] this keeps the four-way status: a fan-out caller
+/// submits the same task on every run, so `duplicate` and `busy` are the
+/// normal answers, not failures.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct SubmitOutcome {
+    /// `accepted` / `duplicate` / `busy` / `rejected`.
+    pub status: plugin_protocol::methods::TaskSubmitStatus,
+    /// The task's row id — the new one, or the one a `duplicate` already is.
+    /// `None` for `busy` / `rejected`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<TaskId>,
+    /// Why it was `busy` / `rejected`, and what to do instead.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+impl SubmitOutcome {
+    /// A refusal before ingest (unknown workflow, unknown repository).
+    pub fn rejected(reason: impl Into<String>) -> Self {
+        Self {
+            status: plugin_protocol::methods::TaskSubmitStatus::Rejected,
+            task_id: None,
+            reason: Some(reason.into()),
+        }
+    }
+}
+
 /// Accepts control requests from a driving adapter: `POST /focus` (F-94),
-/// `POST /task/cancel` / `POST /task/retry` (#760) and `POST /routine/run`
-/// (#918).
+/// `POST /task/cancel` / `POST /task/retry` (#760), `POST /routine/run`
+/// (#918) and `POST /task/submit` (#940).
 ///
 /// One port for all of them because they share everything but the verb: the
 /// same socket, the same auth, and the same request-response trip through the
@@ -204,4 +234,11 @@ pub trait ControlPort: Send + Sync {
         &self,
         key: String,
     ) -> impl Future<Output = Result<TriggerOutcome, SignalError>> + Send;
+
+    /// Ask the engine to ingest `params.task` into `params.workflow`, as if
+    /// that workflow's source had submitted it, and wait for the ack.
+    fn submit_task(
+        &self,
+        params: plugin_protocol::methods::TaskSubmitParams,
+    ) -> impl Future<Output = Result<SubmitOutcome, SignalError>> + Send;
 }

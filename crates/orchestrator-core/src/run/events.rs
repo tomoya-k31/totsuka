@@ -78,6 +78,12 @@ impl<G: GitRunner, L: ChoiceClassifier + 'static> Engine<G, L> {
                 let _ = respond.send(outcome);
                 Ok(())
             }
+            // A control-UDS submit (#940). Same failure handling as above.
+            PluginEvent::Submit { params, respond } => {
+                let outcome = self.submit_task(*params)?;
+                let _ = respond.send(outcome);
+                Ok(())
+            }
             // A pushed task (`task/submit`, 0.1.6): persist, ack only after
             // the commit, then run repo selection so the loop's dispatch pass
             // can pick the task up. A persistence error answers the plugin

@@ -1,7 +1,7 @@
 > 🌐 [English](operations-guide.md) · **日本語**
 > _英語版が正(canonical)です。差分がある場合は英語版を参照してください。_
 
-<!-- generated-from: ai-docs/operations/operations-guide.md sha256:c5e490735221fba830eed60b6972215db1d43074007cfc2e3b9d7e4d2932c3e3 -->
+<!-- generated-from: ai-docs/operations/operations-guide.md sha256:db55e39d95c49ed862132c4ed859ee35dfe2e7f41b6cdd14c96cdf8c999c60f0 -->
 
 # 運用ガイド
 
@@ -182,6 +182,7 @@ Host *
 | `totsuka task retry <id>` | 失敗・中止したタスクを、worktree とセッションを再利用して再開する |
 | `totsuka routine list [--json]` | このマシンの routine と、それぞれの次回・前回の実行、または走れない理由。`run` が止まっていても見える |
 | `totsuka routine run <name>` | routine を今すぐ 1 回実行する（`run` が動いている必要がある）。前回の実行が終わっていなければ断られる。定期の回は消費しない |
+| `totsuka task submit --workflow <name> --id <id> --title <title> --body <text>\|--body-file <path\|-> --repo <name> [--branch <b>] [--url <u>] [--series <s>] [--json]` | 実行中の totsuka にタスクを 1 件投入する。タスクは workflow の source のものになる。結果は `accepted` / `duplicate`（同じ id が既にある）/ `busy`（同じ series が実行中）/ `rejected` で、非ゼロ終了は `rejected` と `run` 停止中だけ。routine から PR ごとに呼ぶにはスキル `npx skills add tomoya-k31/totsuka --skill totsuka-submit` を入れる。**書き戻しを持つソース（GitHub など）の workflow には入れない**こと — id がそのソースのものではないので、ステータスの書き戻しが壊れる |
 | `totsuka logs [-f] [--task <id>] [--utc]` | ログの整形表示。時刻はローカル時刻で出る（`--utc` で保存どおり UTC）。機密は無条件にマスクされる |
 
 `retry` が受け付けるのは失敗・中止したタスクだけで、完了したタスクは再実行できない。

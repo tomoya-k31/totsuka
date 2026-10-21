@@ -174,6 +174,13 @@ PR を出す」など）は、スキル `totsuka-routine` が routine ファイ�
 npx skills add tomoya-k31/totsuka --skill totsuka-routine
 ```
 
+routine から項目ごとに 1 タスクずつ始めたいとき（「ラベルの付いた PR ごとにレビューする」など）は、
+スキル `totsuka-submit` がエージェントに `totsuka task submit` の使い方を教えます:
+
+```sh
+npx skills add tomoya-k31/totsuka --skill totsuka-submit
+```
+
 ## ドキュメント
 
 - **totsuka とは**: [docs/orchestrator-spec.ja.md](./docs/orchestrator-spec.ja.md)

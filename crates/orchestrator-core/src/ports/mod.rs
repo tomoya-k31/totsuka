@@ -25,6 +25,6 @@ pub use llm::{ChoiceClassifier, ClassifyError};
 pub use process::ProcessProbe;
 pub use secret::{SecretError, SecretRef, SecretStore, SecretString, is_secret_reference};
 pub use signal_ingress::{
-    ControlPort, FocusOutcome, SignalAck, SignalError, SignalPort, TaskControlOutcome, TaskOp,
-    TriggerOutcome,
+    ControlPort, FocusOutcome, SignalAck, SignalError, SignalPort, SubmitOutcome,
+    TaskControlOutcome, TaskOp, TriggerOutcome,
 };

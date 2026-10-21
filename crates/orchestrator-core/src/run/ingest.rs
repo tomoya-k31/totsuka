@@ -428,6 +428,55 @@ impl<G: GitRunner, L: ChoiceClassifier + 'static> Engine<G, L> {
             ),
         })
     }
+
+    /// Answer a `POST /task/submit` (#940): ingest `params.task` into the
+    /// named workflow exactly as a `task/submit` from that workflow's source.
+    ///
+    /// The source follows from the workflow, so nothing here is a reserved
+    /// source of the Orchestrator's own: the row, the status write-backs and
+    /// the `(source, id)` dedup are the source plugin's, as for its own tasks.
+    /// Which workflows may be submitted to is deliberately not restricted
+    /// (#940, ADR-0121).
+    ///
+    /// The one check `task/submit` does not make is the repository: a caller
+    /// names it outright, so an unknown name is refused here rather than
+    /// handed to repository selection as a hint that silently falls through.
+    pub fn submit_task(&mut self, params: TaskSubmitParams) -> Result<SubmitOutcome, EngineError> {
+        let TaskSubmitParams { workflow, task } = params;
+        let Some(source) = self
+            .settings
+            .workflows
+            .iter()
+            .find(|w| w.name == workflow)
+            .map(|w| w.source.clone())
+        else {
+            return Ok(SubmitOutcome::rejected(format!(
+                "no workflow named `{workflow}` → see `totsuka config show` for the [[workflows]] names"
+            )));
+        };
+        match task.repo_hint.as_deref() {
+            Some(repo) if self.settings.repos.iter().any(|r| r.name == repo) => {}
+            Some(repo) => {
+                return Ok(SubmitOutcome::rejected(format!(
+                    "no repository named `{repo}` → use a [[repositories]] name"
+                )));
+            }
+            None => {
+                return Ok(SubmitOutcome::rejected(
+                    "`repo_hint` (the repository) is required",
+                ));
+            }
+        }
+        let task_id = SourceTaskId(task.id.clone());
+        let result = self.on_task_submit(source.clone(), workflow, task)?;
+        // Busy / rejected left no row, so the lookup answers `None` for them.
+        let row = self.db.find_by_source(&source, &task_id)?;
+        Ok(SubmitOutcome {
+            status: result.status,
+            task_id: row.map(|row| row.id),
+            reason: result.reason,
+        })
+    }
 }
 
 /// The per-plugin in-flight budgets, one per plugin-initiated method.

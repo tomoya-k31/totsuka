@@ -4,7 +4,7 @@ title: Claude Code フック機構のセキュリティポリシー
 description: "フック完了判定の UDS Bearer トークン管理（run が生成する 0600 ファイル・socket 0600 第一層・定数時間比較・herdr env 配送）、スプールファイルの機密保持（N-05: last_assistant_message は機微・$XDG_STATE_HOME 配下・drain 後削除・隔離の注意）、フックアセットの改ざん耐性（N-02: 0700/0600・内容ハッシュ冪等修復・静的埋め込み）を定める。"
 resource: https://github.com/tomoya-k31/totsuka/tree/main/crates/orchestrator-core
 tags: [security, hook, claude-code, uds, token, keychain, spool, tamper, epic-131]
-generated: { by: claude-code/opus-5.5, at: 2026-09-26T12:00:00+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-22T01:06:30+09:00 }
 status: stable
 owner: tomoya-k31
 ---
@@ -30,6 +30,8 @@ Claude Code の完了判定は、pane 内の `claude` が発火するフック�
 - **人間が叩くシェル pane には載せない**（#356）。herdr は workspace とともに初期シェル pane を開き、その pane は `workspace.create` の `env` を継承する — つまり**エージェントの隣に、トークンを持ったシェルが常駐していた**（実測で確認）。dispatch はこの初期 pane を close し、`env` を継承しない `pane.split` でシェルを作り直すため、そこでは `TOTSUKA_HOOK_TOKEN` は空になる（[ADR-0030](/decisions/adr-0030-herdr-pane-layout.md)）。エージェント pane には従来どおり注入される（完了検知の幹線）。
 
 ローテーションはファイルを消して `totsuka run` を再起動する。`totsuka doctor` の `hook-token` チェック（ファイルの有無と 0600）と `hook-socket` チェック（自己 POST → 200）で疎通を確認する（[hook-troubleshooting](/operations/hook-troubleshooting.md)）。
+
+**トークンは制御エンドポイントの鍵でもある。** 同じソケット・同じトークンで `/focus`・`/task/cancel`・`/task/retry`・`/routine/run`・`/task/submit` も受け付ける（パス以外に区別は無い）。したがってエージェントの pane は、自分以外のタスクの cancel / retry に加え、**#940 からは任意の workflow への新しいタスクの投入**もできる。投入先は制限しない判断をした（[ADR-0121](/decisions/adr-0121-task-submit-control.md)）ので、信頼できないテキスト（PR 本文・Issue・Slack のメッセージ）を読ませる workflow では、それに従ってタスクを作らせないことをプロンプトとスキルの側で守る。
 
 # 2. スプールファイルの機密保持（N-05）
 
