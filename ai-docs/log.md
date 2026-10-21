@@ -5,6 +5,7 @@
 * **Creation**: 外から実行中の totsuka にタスクを 1 件投入する `totsuka task submit` → 制御 UDS の `POST /task/submit` を足し、routine から PR ごとに 1 タスクの fan-out をできるようにした決定を [ADR-0121](/decisions/adr-0121-task-submit-control.md) に記録（#940）
 * **Update**: [POST /agent-events](/apis/agent-events.md) に制御エンドポイント `POST /task/submit` の節を追加。[orchestrator-core](/components/orchestrator-core.md) に `ControlPort::submit_task` / `Engine::submit_task`、[orchestrator-cli](/components/orchestrator-cli.md) に `task submit` と `focus_cmd::post_to_running`、[運用ガイド](/operations/operations-guide.md) にコマンドを追記（#940）
 * **Update**: [フック機構のセキュリティポリシー](/security/hook-security.md) に、hook トークンで制御エンドポイント（`/task/submit` を含む）も叩けること、エージェントが任意の workflow にタスクを投入できることを追記（#940）
+* **Update**: [Totsuka.app](/components/macos-app.md) — `⋯` メニュー（パネル下段とタスク行）を SwiftUI の `Menu` から `NSMenu` の pop-up（`PopUpMenuButton`）に置き換えた。入れ子の `Menu` が macOS 26 で開かず、「Retry in」「Routines」のサブメニューをクリックできなかったため
 * **Update**: [ADR-0121](/decisions/adr-0121-task-submit-control.md) に、Codex のレビュー用 workflow は `profile = "unattended"` ではなく `verification = "none"` の明示記法にすること（unattended の llm 検収は Codex では人間の検収に落ち、`verifying` で止まる）を追記。スキル `totsuka-submit` の例も同じ形に直した
 
 ## 2026-10-18

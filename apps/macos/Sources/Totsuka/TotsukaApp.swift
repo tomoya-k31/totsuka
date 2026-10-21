@@ -179,38 +179,31 @@ struct MenuContent: View {
                     Text("v\(app.appVersion)").font(.caption2).foregroundStyle(.tertiary)
                 }
                 Spacer()
-                Menu {
-                    // No settings window: config.toml is edited in $EDITOR, and
-                    // the log followed in $TERMINAL (ADR-0113 §5).
-                    Button { app.openSettings() } label: { Label("Settings…", systemImage: "gearshape") }
-                        .help("Open config.toml in $EDITOR")
-                    Button { app.openLogs() } label: { Label("Logs", systemImage: "doc.text") }
-                        .help("Follow totsuka run's output in $TERMINAL")
+                // No settings window: config.toml is edited in $EDITOR, and
+                // the log followed in $TERMINAL (ADR-0113 §5). Built when
+                // clicked, so the routines and the login state are current.
+                PopUpMenuButton {
+                    var items: [PopUpMenuButton.Item] = [
+                        .action("Settings…", symbol: "gearshape") { app.openSettings() },
+                        .action("Logs", symbol: "doc.text") { app.openLogs() },
+                    ]
                     // Opening only: a new routine is written with the
                     // totsuka-routine skill or by hand (#918).
                     if let routines = app.routines {
-                        Menu {
-                            ForEach(routines.routines, id: \.name) { routine in
-                                Button(routine.name) { app.openRoutine(routine.name) }
-                            }
-                        } label: {
-                            Label("Routines", systemImage: "clock.arrow.circlepath")
-                        }
-                        .help("Open a routine file in $EDITOR")
+                        items.append(.submenu("Routines", symbol: "clock.arrow.circlepath",
+                            routines.routines.map { routine in
+                                .action(routine.name) { app.openRoutine(routine.name) }
+                            }))
                     }
-                    Divider()
-                    Toggle(isOn: Binding(
-                        get: { app.launchesAtLogin }, set: { app.launchesAtLogin = $0 })
-                    ) { Label("Open at login", systemImage: "person.badge.clock") }
-                    Button { app.forgetSecrets() } label: {
-                        Label("Forget saved secrets…", systemImage: "key.slash")
-                    }
-                } label: {
-                    Image(systemName: "ellipsis.circle")
+                    items += [
+                        .separator,
+                        .action("Open at login", symbol: "person.badge.clock", checked: app.launchesAtLogin) {
+                            app.launchesAtLogin.toggle()
+                        },
+                        .action("Forget saved secrets…", symbol: "key.slash") { app.forgetSecrets() },
+                    ]
+                    return items
                 }
-                // Menu items drop a Label's icon unless asked for it.
-                .labelStyle(.titleAndIcon)
-                .menuStyle(.borderlessButton)
                 .fixedSize()
                 Button { app.quit() } label: { Label("Quit", systemImage: "power") }
             }
@@ -321,28 +314,101 @@ struct TaskMenu: View {
             }
             .buttonStyle(.plain)
             .help("Focus")
-            Menu {
-                if row.retryable {
-                    Button("Retry") { app.retry(row.taskId) }
-                    let repos = app.retryRepos(row)
-                    if !repos.isEmpty {
-                        Menu("Retry in") {
-                            ForEach(repos, id: \.self) { repo in
-                                Button(repo) { app.retry(row.taskId, repo: repo) }
-                            }
-                        }
-                    }
-                } else {
-                    Button("Cancel…") { app.cancel(row) }
+            PopUpMenuButton {
+                guard row.retryable else {
+                    return [.action("Cancel…") { app.cancel(row) }]
                 }
-            } label: {
-                Image(systemName: "ellipsis.circle")
+                var items: [PopUpMenuButton.Item] = [.action("Retry") { app.retry(row.taskId) }]
+                let repos = app.retryRepos(row)
+                if !repos.isEmpty {
+                    items.append(.submenu("Retry in", repos.map { repo in
+                        .action(repo) { app.retry(row.taskId, repo: repo) }
+                    }))
+                }
+                return items
             }
-            .menuStyle(.borderlessButton)
             .fixedSize()
         }
         .padding(.horizontal, 4)
         .background(RoundedRectangle(cornerRadius: 4).fill(hovering ? Color.primary.opacity(0.08) : .clear))
         .onHover { hovering = $0 }
+    }
+}
+
+/// The `⋯` button, as an AppKit pop-up menu.
+///
+/// Not a SwiftUI `Menu`: in a `.window` menu bar extra a `Menu` nested in
+/// another never opened on macOS 26 — "Retry in" and "Routines" could not be
+/// clicked. An `NSMenu` popped up from an `NSButton` has real submenus. The
+/// items are built on every click, so they always reflect the current state.
+struct PopUpMenuButton: NSViewRepresentable {
+    enum Item {
+        case action(String, symbol: String? = nil, checked: Bool = false, () -> Void)
+        case submenu(String, symbol: String? = nil, [Item])
+        case separator
+    }
+
+    let items: () -> [Item]
+
+    init(_ items: @escaping () -> [Item]) { self.items = items }
+
+    func makeNSView(context: Context) -> NSButton {
+        let button = NSButton(
+            image: NSImage(systemSymbolName: "ellipsis.circle", accessibilityDescription: "More")!,
+            target: context.coordinator, action: #selector(Coordinator.popUp(_:)))
+        button.isBordered = false
+        return button
+    }
+
+    func updateNSView(_ button: NSButton, context: Context) {
+        context.coordinator.items = items
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(items: items) }
+
+    final class Coordinator: NSObject {
+        var items: () -> [Item]
+        init(items: @escaping () -> [Item]) { self.items = items }
+
+        @objc func popUp(_ sender: NSButton) {
+            menu(items()).popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.height + 4), in: sender)
+        }
+
+        private func menu(_ items: [Item]) -> NSMenu {
+            let menu = NSMenu()
+            for item in items {
+                switch item {
+                case .separator:
+                    menu.addItem(.separator())
+                case let .action(title, symbol, checked, run):
+                    let entry = ActionItem(title: title, run: run)
+                    entry.image = symbol.flatMap { NSImage(systemSymbolName: $0, accessibilityDescription: nil) }
+                    entry.state = checked ? .on : .off
+                    menu.addItem(entry)
+                case let .submenu(title, symbol, children):
+                    let entry = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+                    entry.image = symbol.flatMap { NSImage(systemSymbolName: $0, accessibilityDescription: nil) }
+                    entry.submenu = self.menu(children)
+                    menu.addItem(entry)
+                }
+            }
+            return menu
+        }
+    }
+
+    /// A menu item that runs a closure.
+    private final class ActionItem: NSMenuItem {
+        private let run: () -> Void
+
+        init(title: String, run: @escaping () -> Void) {
+            self.run = run
+            super.init(title: title, action: #selector(fire), keyEquivalent: "")
+            target = self
+        }
+
+        @available(*, unavailable)
+        required init(coder: NSCoder) { fatalError("not decoded from a nib") }
+
+        @objc private func fire() { run() }
     }
 }
