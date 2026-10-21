@@ -11,6 +11,13 @@ Note: the plugin protocol is versioned independently of the application (see
 `crates/plugin-protocol`); a totsuka release does not imply a protocol-version
 change.
 
+## [0.11.2](https://github.com/tomoya-k31/totsuka/compare/v0.11.1...v0.11.2) (2026-10-21)
+
+
+### Bug Fixes
+
+* **macos:** ⋯ メニューを NSMenu の pop-up にして、入れ子のサブメニューを開けるようにする ([#945](https://github.com/tomoya-k31/totsuka/issues/945)) ([1f36531](https://github.com/tomoya-k31/totsuka/commit/1f36531f1b19adb676756d771c19a0ea1d2a076a))
+
 ## [0.11.1](https://github.com/tomoya-k31/totsuka/compare/v0.11.0...v0.11.1) (2026-10-21)
 
 
