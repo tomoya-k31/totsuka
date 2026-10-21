@@ -1,0 +1,1 @@
+* **Update**: [ADR-0121](/decisions/adr-0121-task-submit-control.md) に、Codex のレビュー用 workflow は `profile = "unattended"` ではなく `verification = "none"` の明示記法にすること（unattended の llm 検収は Codex では人間の検収に落ち、`verifying` で止まる）を追記。スキル `totsuka-submit` の例も同じ形に直した

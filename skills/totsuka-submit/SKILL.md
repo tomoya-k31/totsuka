@@ -23,7 +23,7 @@ description: "Hand tasks to a running totsuka with `totsuka task submit`, one ta
 | `--title` | yes | one line |
 | `--body` / `--body-file <path\|->` | one of them | the full prompt the task's agent gets. It sees nothing else, so put every instruction here. Use `--body-file -` with a heredoc for long prompts |
 | `--repo` | yes | the `[[repositories]]` name to run in. An unknown name is rejected |
-| `--branch` | no | start the worktree on this branch of `origin` (must exist there, or the task fails). In a workflow with `profile = "unattended"` the agent can push to it, so say in the body whether it may |
+| `--branch` | no | start the worktree on this branch of `origin` (must exist there, or the task fails). In an implement-mode workflow (`profile = "unattended"`, or `mode = "implement"`) the agent can push to it, so say in the body whether it may |
 | `--url` | no | a link back to the item |
 | `--series` | no | while a task of this series is unfinished, a new id of the same series is `busy` and not started |
 | `--json` | no | print the reply as JSON |
@@ -64,12 +64,15 @@ name = "codex-review"
 projects = ["routines"]          # a project whose source is the routine plugin
 trigger = {}
 agent = "herdr"
-profile = "unattended"
+mode = "implement"
+output = "none"
+verification = "none"            # not profile = "unattended" with Codex: see below
 tool = "codex-review"
 cleanup = "immediate"            # remove the worktree when the review ends
 ```
 
-`cleanup = "immediate"` matters with `--branch`: an `unattended` workflow keeps its worktree by default, and a worktree still holding the PR branch stops the next review of that PR (a new head) from starting. A worktree with uncommitted changes is kept regardless, so the review must not leave files in it — write temporary files under `$TMPDIR`.
+- **No `profile = "unattended"` with a Codex tool.** Its verification is `llm`, which needs Claude's prompt-type Stop hook; with Codex every finished review falls back to human verification and parks in `verifying` until someone runs `totsuka task verify` — so the series stays busy and the next review of that PR never starts (`totsuka config validate` warns about it). The explicit `mode` / `output` / `verification = "none"` form has no approval step. It carries no Claude permission settings, which a Codex tool does not use: `--ask-for-approval never` in `mode_args` is what keeps Codex from asking. For a Claude tool, `profile = "unattended"` is the right choice.
+- `cleanup = "immediate"` matters with `--branch`: an implement-mode workflow keeps its worktree by default, and a worktree still holding the PR branch stops the next review of that PR (a new head) from starting. A worktree with uncommitted changes is kept regardless, so the review must not leave files in it — write temporary files under `$TMPDIR`.
 
 Inside the routine, for each PR:
 

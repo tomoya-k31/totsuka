@@ -4,7 +4,7 @@ title: ADR-0121 外からのタスク投入 — totsuka task submit と POST /ta
 description: 実行中の totsuka に外からタスクを 1 件投入する口（CLI totsuka task submit → 制御 UDS の POST /task/submit）を足し、routine のエージェントが PR ごとに呼んで 1 PR = 1 タスクの fan-out をできるようにする決定。タスクは指定した workflow の source のものとして既存の task/submit 経路で取り込み、予約 source もプロトコル変更も作らず、冪等性は呼び出し側が渡す id と series に任せ、投入先の workflow は制限しない。
 resource: https://github.com/tomoya-k31/totsuka/issues/940
 tags: [decision, control, uds, cli, routine, task-source, adr]
-generated: { by: claude-code/opus-5.5, at: 2026-10-22T01:06:30+09:00 }
+generated: { by: claude-code/opus-5.5, at: 2026-10-22T02:28:58+09:00 }
 status: stable
 owner: tomoya-k31
 sources:
@@ -40,3 +40,4 @@ PR ごとのタスクを作れる既存の仕組みは task-source-github のラ
 - 投入されたタスクは、どのソースのタスクとも同じく `totsuka task show` とメニューバーで追える。
 - `--branch` を付けると、mode が implement の workflow（`unattended` など）では worktree が PR のブランチ上にでき、push できる状態になる。「push しない」はプロンプトで守らせるしかない。
 - Codex でレビューを投稿させるには通信が要る。私たちの理解では workspace-write の sandbox は既定でネットワークを塞ぐので、レビュー用の `[tools.<name>] kind = "codex"` の `mode_args` にだけ `-c sandbox_workspace_write.network_access=true` を足す運用を想定している（**未実測**。実機で確かめたら `verified` を足すこと）。
+- **Codex のレビュー用 workflow に `profile = "unattended"` を使わない。** `unattended` の検収は `llm` で、Claude の prompt 型 Stop フックを要する。Codex では完了がすべて人間の検収に落ちて `verifying` に留まり（`config validate` が警告する）、series が `busy` のまま次の head のレビューが始まらない。`mode = "implement"` / `output = "none"` / `verification = "none"` の明示記法にする。明示記法には Claude の permissions ブロックが入らないが、Codex の許可は `mode_args` の `--ask-for-approval never` で決まるので影響しない（スキル `totsuka-submit` の例もこの形）。
