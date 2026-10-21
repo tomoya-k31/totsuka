@@ -2,7 +2,7 @@
 //! `POST /agent-events` from agent-CLI hooks (Claude Code today) and
 //! normalizes each request into an [`AgentSignal`] submitted through a
 //! [`SignalPort`]. The pre-rename `/claude-events` path (≤0.2.2, #196) is
-//! still accepted: every path but the three control endpoints is signal
+//! still accepted: every path but the control endpoints is signal
 //! ingestion (E-08).
 //!
 //! # Why a hand-rolled server
@@ -427,7 +427,7 @@ fn parse_task_id(body: &[u8]) -> Result<TaskId, String> {
 /// A parsed request: the request path, lower-cased header names, and the raw
 /// body bytes. Of the request line only the path is kept, and it is inspected
 /// only for the exact control endpoints (`/focus`, F-94; `/task/cancel` and
-/// `/task/retry`, #760; `/routine/run`, #918) — the method and any other path stay uninterpreted
+/// `/task/retry`, #760; `/routine/run`, #918; `/task/submit`, #940) — the method and any other path stay uninterpreted
 /// (E-08).
 struct Request {
     path: String,

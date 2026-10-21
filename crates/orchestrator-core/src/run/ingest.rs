@@ -430,7 +430,9 @@ impl<G: GitRunner, L: ChoiceClassifier + 'static> Engine<G, L> {
     }
 
     /// Answer a `POST /task/submit` (#940): ingest `params.task` into the
-    /// named workflow exactly as a `task/submit` from that workflow's source.
+    /// named workflow through the same `on_task_submit` as a `task/submit`
+    /// from that workflow's source. Repository selection is left to the
+    /// loop's next cycle, as for `/routine/run`.
     ///
     /// The source follows from the workflow, so nothing here is a reserved
     /// source of the Orchestrator's own: the row, the status write-backs and

@@ -116,7 +116,8 @@ pub(crate) fn is_socket(_path: &Path) -> bool {
 }
 
 /// POST a JSON `body` to the control endpoint `path` over the UDS and return
-/// `(status, body)` — `/focus` here, `/routine/run` for `totsuka routine run`.
+/// `(status, body)` — `/focus` here; `/routine/run` and `/task/submit` through
+/// [`post_to_running`].
 #[cfg(unix)]
 pub(crate) fn post_control(
     socket_path: &Path,
