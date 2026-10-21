@@ -137,10 +137,14 @@ pub async fn select_repo<C: ChoiceClassifier>(
 }
 
 /// Resolve a repo hint to a candidate: exact name, or the last `/`-segment
-/// (e.g. `owner/repo` → `repo`).
+/// (e.g. `owner/repo` → `repo`). An exact match wins wherever it is listed:
+/// with `web` before `team/web`, `team/web` must not land in `web` (#940).
 fn resolve_hint<'a>(hint: &str, candidates: &'a [Candidate]) -> Option<&'a Candidate> {
     let tail = hint.rsplit('/').next().unwrap_or(hint);
-    candidates.iter().find(|c| c.name == hint || c.name == tail)
+    candidates
+        .iter()
+        .find(|c| c.name == hint)
+        .or_else(|| candidates.iter().find(|c| c.name == tail))
 }
 
 /// The classification question for `task`.
@@ -320,6 +324,18 @@ mod tests {
             }
         );
         assert!(classifier.requests.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn an_exact_hint_wins_over_an_earlier_tail_match() {
+        let mut listed = candidates();
+        listed.push(Candidate {
+            name: "team/web".into(),
+            summary: None,
+            readme_head: None,
+        });
+        assert_eq!(resolve_hint("team/web", &listed).unwrap().name, "team/web");
+        assert_eq!(resolve_hint("other/web", &listed).unwrap().name, "web");
     }
 
     #[tokio::test]

@@ -66,7 +66,10 @@ trigger = {}
 agent = "herdr"
 profile = "unattended"
 tool = "codex-review"
+cleanup = "immediate"            # remove the worktree when the review ends
 ```
+
+`cleanup = "immediate"` matters with `--branch`: an `unattended` workflow keeps its worktree by default, and a worktree still holding the PR branch stops the next review of that PR (a new head) from starting. A worktree with uncommitted changes is kept regardless, so the review must not leave files in it — write temporary files under `$TMPDIR`.
 
 Inside the routine, for each PR:
 
@@ -79,8 +82,9 @@ totsuka task submit --workflow codex-review --repo <repo> \
   --branch <headRefName> --url <url> --title "Review PR #<number>" \
   --body-file - <<'EOF'
 Review pull request #<number> (<url>) with `gh pr diff <number>`.
-Post the review with `gh pr review <number> --comment --body-file <file>`.
-Do not commit or push.
+Write the review to a file under $TMPDIR (not in this worktree) and post it
+with `gh pr review <number> --comment --body-file <that file>`.
+Do not commit or push, and leave no files in the worktree.
 EOF
 ```
 
