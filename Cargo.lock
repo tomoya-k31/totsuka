@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "agent-ide-herdr"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "plugin-conformance",
  "plugin-protocol",
@@ -20,7 +20,7 @@ dependencies = [
 
 [[package]]
 name = "agent-ide-orca"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "libc",
  "plugin-conformance",
@@ -801,7 +801,7 @@ checksum = "47d9d19d1d6efa0109d2f65ff4c85cddd50bd572e5a00127ab10987290bcefae"
 
 [[package]]
 name = "llm-choice"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "reqwest",
  "serde_json",
@@ -861,7 +861,7 @@ dependencies = [
 
 [[package]]
 name = "notifier-macos"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "plugin-conformance",
  "plugin-protocol",
@@ -956,7 +956,7 @@ dependencies = [
 
 [[package]]
 name = "orchestrator-cli"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "clap",
  "clap_complete",
@@ -980,7 +980,7 @@ dependencies = [
 
 [[package]]
 name = "orchestrator-core"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "apple-native-keyring-store",
  "keyring-core",
@@ -1025,7 +1025,7 @@ checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
 
 [[package]]
 name = "plugin-conformance"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "plugin-protocol",
  "serde",
@@ -1034,7 +1034,7 @@ dependencies = [
 
 [[package]]
 name = "plugin-protocol"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "semver",
  "serde",
@@ -1046,7 +1046,7 @@ dependencies = [
 
 [[package]]
 name = "plugin-sdk"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "plugin-protocol",
  "schemars",
@@ -1201,7 +1201,7 @@ dependencies = [
 
 [[package]]
 name = "routine-schedule"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "time",
 ]
@@ -1556,7 +1556,7 @@ dependencies = [
 
 [[package]]
 name = "task-source-discord"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "futures-util",
  "plugin-conformance",
@@ -1575,7 +1575,7 @@ dependencies = [
 
 [[package]]
 name = "task-source-github"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "plugin-conformance",
  "plugin-protocol",
@@ -1593,7 +1593,7 @@ dependencies = [
 
 [[package]]
 name = "task-source-notion"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "plugin-conformance",
  "plugin-protocol",
@@ -1611,7 +1611,7 @@ dependencies = [
 
 [[package]]
 name = "task-source-routine"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "plugin-conformance",
  "plugin-protocol",
@@ -1629,7 +1629,7 @@ dependencies = [
 
 [[package]]
 name = "task-source-slack"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "futures-util",
  "llm-choice",
@@ -1663,7 +1663,7 @@ dependencies = [
 
 [[package]]
 name = "test-support"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "serde_json",
  "toml",
