@@ -76,6 +76,31 @@ fn skipped(reason: String) -> Result<(), CliError> {
     Ok(())
 }
 
+/// POST `body` to the control endpoint `path` of the running totsuka and
+/// return the `200` reply's body — for the commands that, unlike `focus`,
+/// fail loudly when totsuka is not there (`routine run`, `task submit`).
+pub(crate) fn post_to_running(cx: &Cx, path: &str, body: &str) -> Result<String, CliError> {
+    let env: HashMap<String, String> = std::env::vars().collect();
+    let cfg = cx.load_config(&env)?;
+    let socket = hook_socket_path(cx, &cfg, &env)?;
+    if !is_socket(&socket) {
+        return Err(format!(
+            "totsuka is not running (no socket at {}) → start it from the app or with \
+             `totsuka run --watch`",
+            socket.display()
+        )
+        .into());
+    }
+    let token =
+        orchestrator_core::hooks::token::read(&orchestrator_core::hooks::token::path(&cx.paths))?;
+    let (status, reply) = post_control(&socket, token.as_ref().map(|t| t.expose()), path, body)
+        .map_err(|e| format!("could not reach totsuka at {}: {e}", socket.display()))?;
+    if status != 200 {
+        return Err(format!("totsuka answered {status} to {path}").into());
+    }
+    Ok(reply)
+}
+
 /// Whether `path` is an existing Unix domain socket (a live receiver's).
 #[cfg(unix)]
 pub(crate) fn is_socket(path: &Path) -> bool {
@@ -91,7 +116,8 @@ pub(crate) fn is_socket(_path: &Path) -> bool {
 }
 
 /// POST a JSON `body` to the control endpoint `path` over the UDS and return
-/// `(status, body)` — `/focus` here, `/routine/run` for `totsuka routine run`.
+/// `(status, body)` — `/focus` here; `/routine/run` and `/task/submit` through
+/// [`post_to_running`].
 #[cfg(unix)]
 pub(crate) fn post_control(
     socket_path: &Path,

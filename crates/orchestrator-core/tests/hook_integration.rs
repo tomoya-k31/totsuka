@@ -33,6 +33,7 @@ use orchestrator_core::repo_select::SelectConfig;
 use orchestrator_core::run::{Engine, EngineSettings, HookRuntime, PluginSet, RepoSettings};
 use orchestrator_core::scheduler::Limits;
 use plugin_protocol::manifest::Manifest;
+use plugin_protocol::methods::{TaskSubmitParams, TaskSubmitStatus};
 use serde_json::json;
 use test_support::{bare_origin_and_clone as setup_repo, scratch};
 
@@ -838,6 +839,80 @@ async fn trigger_task_without_a_triggerable_source_is_refused() {
             .contains("routine plugin"),
         "{outcome:?}"
     );
+    engine.shutdown(GRACE).await;
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// #940: `POST /task/submit` → `Engine::submit_task` ingests the task as the
+/// named workflow's source — so a re-submit is `duplicate` with the same row,
+/// a new id of a running series is `busy`, and a workflow or repository that
+/// does not exist is refused before anything is written.
+#[tokio::test]
+async fn submit_task_ingests_into_the_workflows_source() {
+    let base = scratch("hook_submit");
+    let notify_log = base.join("notify.ndjson");
+    let mut engine = Engine::new(
+        StateDb::open(&base.join("state.db")).unwrap(),
+        engine_settings(workflows("none", "none"), None),
+        plugin_set(json!({}), &notify_log).await,
+        SystemGitRunner::default(),
+        no_llm(),
+    )
+    .await;
+    let params = |workflow: &str, id: &str, repo: &str| {
+        serde_json::from_value::<TaskSubmitParams>(json!({
+            "workflow": workflow,
+            "task": {
+                "id": id, "source": "ignored", "title": "PR #1",
+                "repo_hint": repo, "series": "clone#1",
+            },
+        }))
+        .unwrap()
+    };
+
+    let accepted = engine
+        .submit_task(params("wf", "pr:clone#1@a", "clone"))
+        .unwrap();
+    assert_eq!(accepted.status, TaskSubmitStatus::Accepted, "{accepted:?}");
+    let row = engine
+        .db()
+        .find_by_source("mock_src", &SourceTaskId("pr:clone#1@a".into()))
+        .unwrap()
+        .expect("ingested under the workflow's source");
+    assert_eq!(accepted.task_id, Some(row.id));
+
+    let again = engine
+        .submit_task(params("wf", "pr:clone#1@a", "clone"))
+        .unwrap();
+    assert_eq!(again.status, TaskSubmitStatus::Duplicate, "{again:?}");
+    assert_eq!(again.task_id, Some(row.id));
+
+    let busy = engine
+        .submit_task(params("wf", "pr:clone#1@b", "clone"))
+        .unwrap();
+    assert_eq!(busy.status, TaskSubmitStatus::Busy, "{busy:?}");
+
+    for (workflow, repo, says) in [
+        ("nope", "clone", "no workflow named `nope`"),
+        ("wf", "elsewhere", "no repository named `elsewhere`"),
+    ] {
+        let refused = engine
+            .submit_task(params(workflow, "pr:clone#2@a", repo))
+            .unwrap();
+        assert_eq!(refused.status, TaskSubmitStatus::Rejected);
+        assert!(
+            refused.reason.as_deref().unwrap().contains(says),
+            "{refused:?}"
+        );
+    }
+    assert!(
+        engine
+            .db()
+            .find_by_source("mock_src", &SourceTaskId("pr:clone#2@a".into()))
+            .unwrap()
+            .is_none()
+    );
+
     engine.shutdown(GRACE).await;
     let _ = std::fs::remove_dir_all(&base);
 }

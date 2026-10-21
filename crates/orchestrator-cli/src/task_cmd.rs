@@ -1,5 +1,6 @@
 //! `totsuka task ...` — per-task operations (§5.1): list / show / cancel /
-//! retry / export.
+//! retry / export, and `submit` (#940), which hands a new task to the running
+//! totsuka over the control UDS.
 //!
 //! `cancel` / `retry` are state-machine transitions on the DB (#48). A running
 //! `totsuka run` frees a cancelled task's slot on its next cycle; the agent
@@ -100,6 +101,48 @@ pub enum TaskCommand {
         #[arg(long)]
         reason: Option<String>,
     },
+    /// Hand a new task to the running totsuka, as if the workflow's source had
+    /// submitted it (#940) — e.g. one task per pull request from a routine.
+    ///
+    /// Prints accepted / duplicate / busy / rejected. Only rejected exits
+    /// non-zero: a fan-out that submits the same task every run expects
+    /// duplicate and busy.
+    Submit {
+        /// The `[[workflows]]` name to run it in; the task belongs to its source.
+        #[arg(long)]
+        workflow: String,
+        /// The task's id within that source — the dedup key. Same id again is
+        /// duplicate (e.g. `pr:<repo>#<number>@<head sha>`).
+        #[arg(long)]
+        id: String,
+        /// One-line title.
+        #[arg(long)]
+        title: String,
+        /// The prompt the agent gets.
+        #[arg(
+            long,
+            required_unless_present = "body_file",
+            conflicts_with = "body_file"
+        )]
+        body: Option<String>,
+        /// Read the prompt from this file (`-` = stdin).
+        #[arg(long, value_name = "PATH")]
+        body_file: Option<String>,
+        /// The `[[repositories]]` name to run it in.
+        #[arg(long)]
+        repo: String,
+        /// Start the worktree on this branch of origin (it must exist there).
+        #[arg(long)]
+        branch: Option<String>,
+        /// A link back to what the task is about.
+        #[arg(long)]
+        url: Option<String>,
+        /// While a task of this series is unfinished, a new id of it is busy.
+        #[arg(long)]
+        series: Option<String>,
+        #[command(flatten)]
+        json: JsonFlag,
+    },
 }
 
 impl TaskCommand {
@@ -113,7 +156,7 @@ impl TaskCommand {
         }
         matches!(
             self,
-            Self::List { json } | Self::Show { json, .. } if json.json
+            Self::List { json } | Self::Show { json, .. } | Self::Submit { json, .. } if json.json
         )
     }
 }
@@ -190,7 +233,59 @@ pub fn run(cx: &Cx, command: TaskCommand) -> Result<(), CliError> {
             fail,
             reason,
         } => verify(cx, TaskId(id), pass, fail, reason),
+        TaskCommand::Submit {
+            workflow,
+            id,
+            title,
+            body,
+            body_file,
+            repo,
+            branch,
+            url,
+            series,
+            json,
+        } => {
+            let body = match (body, body_file.as_deref()) {
+                (Some(body), _) => body,
+                (None, Some("-")) => std::io::read_to_string(std::io::stdin())?,
+                (None, Some(path)) => std::fs::read_to_string(path)
+                    .map_err(|e| format!("cannot read --body-file {path}: {e}"))?,
+                (None, None) => unreachable!("clap requires --body or --body-file"),
+            };
+            let params = serde_json::json!({
+                "workflow": workflow,
+                "task": {
+                    "id": id, "source": "", "title": title, "body": body,
+                    "repo_hint": repo, "branch_hint": branch, "url": url, "series": series,
+                },
+            });
+            submit(cx, &params.to_string(), json.json)
+        }
     }
+}
+
+/// `task submit`: POST to the running totsuka and report its ack.
+fn submit(cx: &Cx, params: &str, json: bool) -> Result<(), CliError> {
+    let reply = crate::focus_cmd::post_to_running(cx, "/task/submit", params)?;
+    let reply: Value = serde_json::from_str(&reply).unwrap_or_default();
+    let status = reply["status"].as_str().unwrap_or("rejected");
+    if json {
+        print_json(&reply)?;
+    } else {
+        match (reply["task_id"].as_i64(), reply["reason"].as_str()) {
+            (Some(id), _) => println!("{status}: task {id} → `totsuka task show {id}`"),
+            (None, Some(reason)) => println!("{status}: {}", safe(reason)),
+            (None, None) => println!("{status}"),
+        }
+    }
+    if status == "rejected" {
+        return Err(format!(
+            "task not submitted: {}",
+            reply["reason"].as_str().unwrap_or("no reason given")
+        )
+        .into());
+    }
+    Ok(())
 }
 
 fn list(cx: &Cx, json: bool) -> Result<(), CliError> {

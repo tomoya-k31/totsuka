@@ -1,5 +1,11 @@
 # Bundle Update Log
 
+## 2026-10-22
+
+* **Creation**: 外から実行中の totsuka にタスクを 1 件投入する `totsuka task submit` → 制御 UDS の `POST /task/submit` を足し、routine から PR ごとに 1 タスクの fan-out をできるようにした決定を [ADR-0121](/decisions/adr-0121-task-submit-control.md) に記録（#940）
+* **Update**: [POST /agent-events](/apis/agent-events.md) に制御エンドポイント `POST /task/submit` の節を追加。[orchestrator-core](/components/orchestrator-core.md) に `ControlPort::submit_task` / `Engine::submit_task`、[orchestrator-cli](/components/orchestrator-cli.md) に `task submit` と `focus_cmd::post_to_running`、[運用ガイド](/operations/operations-guide.md) にコマンドを追記（#940）
+* **Update**: [フック機構のセキュリティポリシー](/security/hook-security.md) に、hook トークンで制御エンドポイント（`/task/submit` を含む）も叩けること、エージェントが任意の workflow にタスクを投入できることを追記（#940）
+
 ## 2026-10-18
 
 * **Update**: [orchestrator-spec](/product/orchestrator-spec.md)（英日）の ports の一覧を `ChoiceClassifier` に改め、#927 の 1/3 で触った concept の `generated.at` を main より前に戻していたのを直した（PR #928 のレビュー指摘）。

@@ -13,8 +13,8 @@ use tokio::sync::oneshot;
 use crate::domain::TaskId;
 use crate::domain::signal::AgentSignal;
 use crate::ports::signal_ingress::{
-    ControlPort, FocusOutcome, SignalAck, SignalError, SignalPort, TaskControlOutcome, TaskOp,
-    TriggerOutcome,
+    ControlPort, FocusOutcome, SignalAck, SignalError, SignalPort, SubmitOutcome,
+    TaskControlOutcome, TaskOp, TriggerOutcome,
 };
 use crate::run::PluginEvent;
 
@@ -103,6 +103,25 @@ impl ControlPort for EngineSignalSink {
         let sent = self
             .tx
             .send(PluginEvent::Trigger { key, respond })
+            .map_err(|_| SignalError::Closed);
+        async move {
+            sent?;
+            outcome.await.map_err(|_| SignalError::Closed)
+        }
+    }
+
+    fn submit_task(
+        &self,
+        params: plugin_protocol::methods::TaskSubmitParams,
+    ) -> impl std::future::Future<Output = Result<SubmitOutcome, SignalError>> + Send {
+        // The same request-response trip as `focus` (#940).
+        let (respond, outcome) = oneshot::channel();
+        let sent = self
+            .tx
+            .send(PluginEvent::Submit {
+                params: Box::new(params),
+                respond,
+            })
             .map_err(|_| SignalError::Closed);
         async move {
             sent?;
