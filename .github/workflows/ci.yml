@@ -76,7 +76,7 @@ jobs:
       # rust-cache v2.9.1 の src/config.ts:74-88 は shared-key と key を排他に
       # 扱っており、shared-key があると key は読まれずに黙って捨てられる。
       - name: Cache cargo build
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: clippy-${{ hashFiles('Cargo.toml') }}
       - name: Check formatting
@@ -106,7 +106,7 @@ jobs:
       # 誤検知はクレートごとに `[package.metadata.cargo-machete] ignored = [...]`
       # で理由コメント付きに抑止する。
       - name: Install cargo-machete
-        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
         with:
           tool: cargo-machete
       - name: Run cargo-machete
@@ -126,7 +126,7 @@ jobs:
           toolchain: stable
       # shared-key にハッシュを畳み込む理由は clippy ジョブのコメントを参照 (#341)。
       - name: Cache cargo build
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: test-${{ hashFiles('Cargo.toml') }}
       # --all-targets はこのワークスペースでは --lib --bins --tests と等価。
@@ -175,7 +175,7 @@ jobs:
       # 専用の鍵空間: 古い rustc の成果物は stable のキャッシュと共有できない。
       # warm-cache には足さないので、PR ごとの初回 run は cold (ADR-0087)。
       - name: Cache cargo build
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: |
             .
@@ -261,7 +261,7 @@ jobs:
       # Its own key space: this crate shares no dependency graph with the
       # workspace, so mixing them would only evict entries both sides want.
       - name: Cache cargo build
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: services/slack-event-gateway
           shared-key: gateway-${{ hashFiles('services/slack-event-gateway/Cargo.toml') }}
@@ -355,11 +355,11 @@ jobs:
       # shared-key にハッシュを畳み込む理由は clippy ジョブのコメントを参照 (#341)。
       # 計装済み成果物は通常ビルドと混ぜられないので、鍵は独立のままにする。
       - name: Cache cargo build
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: coverage-${{ hashFiles('Cargo.toml') }}
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
         with:
           tool: cargo-llvm-cov
       # Coverage is measured and reported only; no threshold gate (per #45).
