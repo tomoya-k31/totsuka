@@ -2,7 +2,7 @@
 name = "slack-event-gateway"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.89"
 license = "MIT"
 repository = "https://github.com/tomoya-k31/totsuka"
 description = "Receives Slack Events API deliveries, projects them to coordinates, and publishes to Pub/Sub. Never stores, forwards or logs the message body."
