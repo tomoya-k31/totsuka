@@ -35,7 +35,7 @@ members = [
 exclude = ["services/slack-event-gateway"]
 
 [workspace.package]
-version = "0.11.2" # x-release-please-version
+version = "0.11.3" # x-release-please-version
 edition = "2024"
 # 1.89 is required by `rusqlite` 0.43, taken for its `libsqlite3-sys` 0.40
 # (RUSTSEC-2026-0459 is fixed from 0.39; ADR-0087 rule 5).

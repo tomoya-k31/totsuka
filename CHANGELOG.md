@@ -11,6 +11,13 @@ Note: the plugin protocol is versioned independently of the application (see
 `crates/plugin-protocol`); a totsuka release does not imply a protocol-version
 change.
 
+## [0.11.3](https://github.com/tomoya-k31/totsuka/compare/v0.11.2...v0.11.3) (2026-11-21)
+
+
+### Bug Fixes
+
+* **deps:** rusqlite を 0.43 に上げて RUSTSEC-2026-0459 を解消し、MSRV を 1.89 にする ([#950](https://github.com/tomoya-k31/totsuka/issues/950)) ([850f598](https://github.com/tomoya-k31/totsuka/commit/850f598148df85ab64227683abe3432a1fc0f0f3))
+
 ## [0.11.2](https://github.com/tomoya-k31/totsuka/compare/v0.11.1...v0.11.2) (2026-10-21)
 
 
