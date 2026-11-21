@@ -1,0 +1,1 @@
+* **Update**: `rusqlite` を 0.40 → 0.43 に上げ、同梱の `libsqlite3-sys` を 0.38.2 → 0.40.0 にして RUSTSEC-2026-0459 を解消（main の `cargo-audit` が日次で赤だった）。0.43 は Rust 1.89 を要求するので、[ADR-0087](/decisions/adr-0087-msrv-gate.md) の規則 5 に従い `rust-version`（workspace とゲートウェイ）と Renovate の `constraints.rust` を 1.89 に上げた（[ADR-0088](/decisions/adr-0088-renovate.md) の「同じ PR で両方直す」）
