@@ -106,7 +106,7 @@ jobs:
       # 誤検知はクレートごとに `[package.metadata.cargo-machete] ignored = [...]`
       # で理由コメント付きに抑止する。
       - name: Install cargo-machete
-        uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
+        uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
         with:
           tool: cargo-machete
       - name: Run cargo-machete
@@ -359,7 +359,7 @@ jobs:
         with:
           shared-key: coverage-${{ hashFiles('Cargo.toml') }}
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
+        uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
         with:
           tool: cargo-llvm-cov
       # Coverage is measured and reported only; no threshold gate (per #45).
